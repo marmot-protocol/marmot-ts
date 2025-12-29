@@ -1,12 +1,11 @@
 import { cbc } from "@noble/ciphers/aes.js";
-import { bytesToUtf8 } from "@noble/ciphers/utils.js";
 import { pbkdf2 } from "@noble/hashes/pbkdf2.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { utf8ToBytes } from "@noble/hashes/utils.js";
 import { KeyValueStoreBackend } from "../utils/key-value.js";
+import { utf8ToBytes } from "@noble/hashes/utils.js";
 
 const TEST_KEY = "__test__";
-const TEST_VALUE = "decryption test value";
+const TEST_VALUE = new TextEncoder().encode("decryption test value");
 
 /**
  * Apply PKCS#7 padding to bytes to make length a multiple of blockSize.
@@ -57,7 +56,7 @@ function unpad(bytes: Uint8Array): Uint8Array {
  * Wrapper around a {@link KeyValueStoreBackend} that encrypts and decrypts data using a password.
  * WARNING: THIS IS NOT SECURE AND SHOULD NOT BE USED IN PRODUCTION. IT IS ONLY FOR DEMONSTRATION PURPOSES.
  */
-export class EncryptedKeyValueStore implements KeyValueStoreBackend<string> {
+export class EncryptedKeyValueStore implements KeyValueStoreBackend<Uint8Array> {
   private key: Uint8Array | null = null;
   get unlocked() {
     return this.key !== null;
@@ -81,16 +80,13 @@ export class EncryptedKeyValueStore implements KeyValueStoreBackend<string> {
   // Encrypt and store data
   async setItem(
     key: string,
-    value: string,
+    value: Uint8Array,
     encryptionKey = this.key,
-  ): Promise<string> {
+  ): Promise<Uint8Array> {
     if (!encryptionKey) throw new Error("Storage locked");
 
-    // Convert value to UTF-8 bytes
-    const valueBytes = utf8ToBytes(value);
-
     // Apply PKCS#7 padding to make length a multiple of 16
-    const paddedBytes = pad(valueBytes);
+    const paddedBytes = pad(value);
 
     // Generate a random IV for CBC mode
     const iv = crypto.getRandomValues(new Uint8Array(16));
@@ -113,7 +109,10 @@ export class EncryptedKeyValueStore implements KeyValueStoreBackend<string> {
   }
 
   // Retrieve and decrypt data
-  async getItem(key: string, encryptionKey = this.key): Promise<string | null> {
+  async getItem(
+    key: string,
+    encryptionKey = this.key,
+  ): Promise<Uint8Array | null> {
     if (!encryptionKey) throw new Error("Storage locked");
 
     // Get encrypted data
@@ -148,10 +147,7 @@ export class EncryptedKeyValueStore implements KeyValueStoreBackend<string> {
       throw new Error("Decryption failed, invalid padding");
     }
 
-    // Convert unpadded bytes to UTF-8 string
-    const decryptedText = bytesToUtf8(unpaddedBytes);
-
-    return decryptedText;
+    return unpaddedBytes;
   }
 
   // Remove an item

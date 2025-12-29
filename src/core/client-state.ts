@@ -1,6 +1,10 @@
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { ClientConfig, defaultClientConfig } from "ts-mls/clientConfig.js";
-import { ClientState } from "ts-mls/clientState.js";
+import {
+  ClientState,
+  encodeGroupState,
+  decodeGroupState,
+} from "ts-mls/clientState.js";
 import { Extension } from "ts-mls/extension.js";
 import { marmotAuthService } from "./auth-service.js";
 import { decodeMarmotGroupData } from "./marmot-group-data.js";
@@ -24,15 +28,20 @@ export const defaultMarmotClientConfig = {
 export function extractMarmotGroupData(
   clientState: ClientState,
 ): MarmotGroupData | null {
-  const marmotExtension = clientState.groupContext.extensions.find(
-    (ext: Extension) =>
-      typeof ext.extensionType === "number" &&
-      ext.extensionType === MARMOT_GROUP_DATA_EXTENSION_TYPE,
-  );
+  try {
+    const marmotExtension = clientState.groupContext.extensions.find(
+      (ext: Extension) =>
+        typeof ext.extensionType === "number" &&
+        ext.extensionType === MARMOT_GROUP_DATA_EXTENSION_TYPE,
+    );
 
-  if (!marmotExtension) return null;
+    if (!marmotExtension) return null;
 
-  return decodeMarmotGroupData(marmotExtension.extensionData);
+    return decodeMarmotGroupData(marmotExtension.extensionData);
+  } catch (error) {
+    console.error("Failed to extract MarmotGroupData:", error);
+    return null;
+  }
 }
 
 /**
@@ -83,30 +92,29 @@ export function getMemberCount(clientState: ClientState): number {
 
 /**
  * The serialized form of ClientState for storage.
- * Uses JSON serialization with custom handling for Uint8Array, BigInt, and Map types.
+ * Uses binary TLS encoding provided by ts-mls library.
  */
-export type SerializedClientState = Record<string, unknown>;
+export type SerializedClientState = Uint8Array;
 
 /**
  * Serializes a ClientState object for storage.
- * Converts Uint8Array to hex strings and BigInt to strings.
- * Removes the 'config' field which contains non-serializable functions.
+ * Uses the ts-mls library's binary encoding (TLS format).
  *
  * @param state - The ClientState to serialize
- * @returns A JSON-serializable object
+ * @returns Binary representation of the state
  */
 export function serializeClientState(
   state: ClientState,
 ): SerializedClientState {
-  return JSON.parse(JSON.stringify(state, replacer));
+  return encodeGroupState(state);
 }
 
 /**
  * Deserializes a stored client state back into a ClientState object.
- * Reconstructs Uint8Array and BigInt from strings.
+ * Uses the ts-mls library's binary decoding (TLS format).
  * Re-injects the ClientConfig.
  *
- * @param stored - The stored state object
+ * @param stored - The stored binary state
  * @param config - The ClientConfig to inject (contains AuthenticationService)
  * @returns The reconstructed ClientState
  */
@@ -114,70 +122,19 @@ export function deserializeClientState(
   stored: SerializedClientState,
   config: ClientConfig,
 ): ClientState {
-  const state = JSON.parse(JSON.stringify(stored), reviver) as ClientState;
-  // Inject the config back into the state
-  state.clientConfig = config;
-  return state;
-}
-
-// --- Serization helpers ---
-const HEX_PREFIX = "hex:";
-const BIGINT_PREFIX = "bigint:";
-
-export function replacer(key: string, value: any): any {
-  // Exclude config from serialization
-  if (key === "clientConfig") {
-    return undefined;
-  }
-
-  // Handle Uint8Array
-  if (value instanceof Uint8Array) {
-    return `${HEX_PREFIX}${bytesToHex(value)}`;
-  }
-
-  // Handle BigInt
-  if (typeof value === "bigint") {
-    return `${BIGINT_PREFIX}${value.toString()}`;
-  }
-
-  // Handle Map (convert to array of entries)
-  if (value instanceof Map) {
-    return {
-      dataType: "Map",
-      value: Array.from(value.entries()),
-    };
-  }
-
-  return value;
-}
-
-function reviver(key: string, value: any): any {
-  if (typeof value === "string") {
-    // Restore Uint8Array
-    if (value.startsWith(HEX_PREFIX)) {
-      return hexToBytes(value.slice(HEX_PREFIX.length));
+  try {
+    const decoded = decodeGroupState(stored, 0);
+    if (!decoded) {
+      throw new Error(
+        "Failed to deserialize ClientState: decodeGroupState returned null",
+      );
     }
-
-    // Restore BigInt
-    if (value.startsWith(BIGINT_PREFIX)) {
-      return BigInt(value.slice(BIGINT_PREFIX.length));
+    // Inject the config back into the state
+    return { ...decoded[0], clientConfig: config };
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Failed to deserialize ClientState: ${error.message}`);
     }
+    throw new Error("Failed to deserialize ClientState: Unknown error");
   }
-
-  // Restore Map
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    value.dataType === "Map" &&
-    Array.isArray(value.value)
-  ) {
-    return new Map(value.value);
-  }
-
-  // Handle ratchetTree array - convert null blank nodes back to undefined
-  if (key === "ratchetTree" && Array.isArray(value)) {
-    return value.map((node) => (node === null ? undefined : node));
-  }
-
-  return value;
 }

@@ -6,11 +6,7 @@ import { ClientState } from "ts-mls/clientState.js";
 import { useObservable, useObservableMemo } from "../hooks/use-observable";
 import { groupStore$ } from "../lib/group-store";
 import ClientStateDataView from "./data-view/client-state";
-import {
-  extractMarmotGroupData,
-  getMemberCount,
-  replacer,
-} from "../../../src/core";
+import { extractMarmotGroupData, getMemberCount } from "../../../src/core";
 
 interface StoredGroupDetailsProps {
   clientState: ClientState;
@@ -37,14 +33,18 @@ function StoredGroupDetails({ clientState, index }: StoredGroupDetailsProps) {
     }
   };
 
-  // Helper function to format MarmotGroupData values for display using the existing replacer
+  // Helper function to format MarmotGroupData values for display
   const formatMarmotDataValue = (value: any): string => {
-    const serialized = JSON.stringify(value, replacer);
-    // Remove the prefixes added by the replacer for display
-    return serialized
-      .replace(/"hex:/g, '"')
-      .replace(/"bigint:/g, '"')
-      .replace(/"/g, "");
+    if (value instanceof Uint8Array) {
+      return bytesToHex(value);
+    }
+    if (typeof value === "bigint") {
+      return value.toString();
+    }
+    if (value instanceof Map) {
+      return JSON.stringify(Object.fromEntries(value));
+    }
+    return JSON.stringify(value);
   };
 
   return (

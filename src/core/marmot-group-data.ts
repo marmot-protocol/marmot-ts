@@ -151,7 +151,11 @@ export function decodeMarmotGroupData(
   const textDecoder = new TextDecoder();
 
   // Read version (2 bytes, big-endian)
-  const version = new DataView(extensionData.buffer).getUint16(offset, false);
+  const version = new DataView(
+    extensionData.buffer,
+    extensionData.byteOffset + offset,
+    2,
+  ).getUint16(0, false);
   offset += 2;
 
   // Validate version
@@ -304,7 +308,12 @@ function decodeVariableLengthField(
     throw new Error("Buffer too short to read length prefix");
   }
 
-  const length = new DataView(buffer.buffer).getUint16(offset, false);
+  // Create a DataView that accounts for the buffer's byteOffset
+  const length = new DataView(
+    buffer.buffer,
+    buffer.byteOffset + offset,
+    2,
+  ).getUint16(0, false);
   offset += 2;
 
   if (offset + length > buffer.length) {

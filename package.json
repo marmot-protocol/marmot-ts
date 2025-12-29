@@ -53,18 +53,18 @@
   },
   "dependencies": {
     "@hpke/core": "^1.7.5",
-    "@noble/ciphers": "^2.0.1",
+    "@noble/ciphers": "^2.1.1",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "applesauce-core": "^4.4.2",
     "applesauce-factory": "^4.0.0",
-    "nostr-tools": "^2.19.3",
-    "ts-mls": "^1.4.3"
+    "nostr-tools": "^2.19.4",
+    "ts-mls": "^1.5.0"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
+    "@types/node": "^24.10.4",
     "husky": "^9.1.7",
-    "prettier": "^3.7.3",
+    "prettier": "^3.7.4",
     "rimraf": "~6.0.1",
     "typescript": "~5.9.3",
     "vitest": "^3.2.4"

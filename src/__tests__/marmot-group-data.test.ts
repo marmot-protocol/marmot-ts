@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  CiphersuiteName,
+  ciphersuites,
+  createGroup,
+  getCiphersuiteFromName,
+  getCiphersuiteImpl,
+} from "ts-mls";
+import {
   createMarmotGroupData,
   decodeMarmotGroupData,
   encodeMarmotGroupData,
   isAdmin,
+  marmotGroupDataToExtension,
 } from "../core/marmot-group-data.js";
 import { MarmotGroupData } from "../core/protocol.js";
+import { generateKeyPackage } from "../core/key-package.js";
 
 describe("encodeMarmotGroupData and decodeMarmotGroupData", () => {
   it("should encode and decode group data correctly", () => {
@@ -244,5 +253,170 @@ describe("isAdmin", () => {
     };
 
     expect(isAdmin(groupData, "b".repeat(64))).toBe(false);
+  });
+});
+
+describe("serialization with byteOffset handling", () => {
+  it("should correctly decode extension data from a real MLS group", async () => {
+    // Use the first available ciphersuite
+    const cipherSuite = Object.keys(ciphersuites)[0] as CiphersuiteName;
+    const impl = await getCiphersuiteImpl(getCiphersuiteFromName(cipherSuite));
+
+    // Create a valid nostr credential (64 hex chars)
+    const alicePubkey = "a".repeat(64);
+    const aliceCredential = {
+      credentialType: "basic" as const,
+      identity: new TextEncoder().encode(alicePubkey),
+    };
+
+    // Use marmot-ts generateKeyPackage which ensures MIP-00 compliance
+    const alice = await generateKeyPackage({
+      credential: aliceCredential,
+      ciphersuiteImpl: impl,
+    });
+
+    const groupId = new TextEncoder().encode("test-group-byteoffset");
+
+    // Create Marmot group data
+    const marmotGroupData: MarmotGroupData = {
+      version: 1,
+      nostrGroupId: new Uint8Array(32).fill(42),
+      name: "Test Group with Real MLS",
+      description: "Testing byteOffset handling with real ClientState",
+      adminPubkeys: [alicePubkey],
+      relays: ["wss://relay.example.com"],
+      imageHash: null,
+      imageKey: null,
+      imageNonce: null,
+    };
+
+    // Create the Marmot extension
+    const marmotExtension = marmotGroupDataToExtension(marmotGroupData);
+
+    // Create group with Marmot extension
+    const clientState = await createGroup(
+      groupId,
+      alice.publicPackage,
+      alice.privatePackage,
+      [marmotExtension],
+      impl,
+    );
+
+    // Extract the Marmot extension from the created group
+    const originalExtension = clientState.groupContext.extensions.find(
+      (ext) =>
+        typeof ext.extensionType === "number" && ext.extensionType === 0xf2ee,
+    );
+
+    if (!originalExtension) {
+      throw new Error("Marmot extension not found in group");
+    }
+
+    // Decode the extension data - this should work regardless of byteOffset
+    const decoded = decodeMarmotGroupData(originalExtension.extensionData);
+
+    // Verify all fields match
+    expect(decoded.version).toBe(marmotGroupData.version);
+    expect(decoded.nostrGroupId).toEqual(marmotGroupData.nostrGroupId);
+    expect(decoded.name).toBe(marmotGroupData.name);
+    expect(decoded.description).toBe(marmotGroupData.description);
+    expect(decoded.adminPubkeys).toEqual(marmotGroupData.adminPubkeys);
+    expect(decoded.relays).toEqual(marmotGroupData.relays);
+    expect(decoded.imageHash).toBeNull();
+    expect(decoded.imageKey).toBeNull();
+    expect(decoded.imageNonce).toBeNull();
+  });
+
+  it("should correctly decode extension data after encodeGroupState/decodeGroupState round-trip", async () => {
+    // Import encodeGroupState and decodeGroupState
+    const { encodeGroupState, decodeGroupState } =
+      await import("ts-mls/clientState.js");
+
+    // Use the first available ciphersuite
+    const cipherSuite = Object.keys(ciphersuites)[0] as CiphersuiteName;
+    const impl = await getCiphersuiteImpl(getCiphersuiteFromName(cipherSuite));
+
+    // Create a valid nostr credential (64 hex chars)
+    const alicePubkey = "b".repeat(64);
+    const aliceCredential = {
+      credentialType: "basic" as const,
+      identity: new TextEncoder().encode(alicePubkey),
+    };
+
+    // Use marmot-ts generateKeyPackage which ensures MIP-00 compliance
+    const alice = await generateKeyPackage({
+      credential: aliceCredential,
+      ciphersuiteImpl: impl,
+    });
+
+    const groupId = new TextEncoder().encode("test-group-serialization");
+
+    // Create Marmot group data with long strings to test variable-length fields
+    const marmotGroupData: MarmotGroupData = {
+      version: 1,
+      nostrGroupId: new Uint8Array(32).fill(1),
+      name: "Very Long Group Name That Tests Variable Length Field Encoding with Serialization",
+      description:
+        "A very long description that ensures we properly handle variable-length fields when they span multiple bytes after binary serialization round-trip",
+      adminPubkeys: [alicePubkey, "c".repeat(64), "d".repeat(64)],
+      relays: [
+        "wss://relay1.example.com",
+        "wss://relay2.example.com",
+        "wss://relay3.example.com",
+      ],
+      imageHash: new Uint8Array(32).fill(2),
+      imageKey: new Uint8Array(32).fill(3),
+      imageNonce: new Uint8Array(12).fill(4),
+    };
+
+    // Create the Marmot extension
+    const marmotExtension = marmotGroupDataToExtension(marmotGroupData);
+
+    // Create group with Marmot extension
+    const originalState = await createGroup(
+      groupId,
+      alice.publicPackage,
+      alice.privatePackage,
+      [marmotExtension],
+      impl,
+    );
+
+    // Serialize the entire ClientState using ts-mls binary serialization
+    const serialized = encodeGroupState(originalState);
+
+    // Deserialize the ClientState
+    const deserializedResult = decodeGroupState(serialized, 0);
+    if (!deserializedResult) {
+      throw new Error("Failed to deserialize ClientState");
+    }
+    const [deserializedState, _bytesRead] = deserializedResult;
+
+    // Extract the Marmot extension from the deserialized group
+    const deserializedExtension =
+      deserializedState.groupContext.extensions.find(
+        (ext) =>
+          typeof ext.extensionType === "number" && ext.extensionType === 0xf2ee,
+      );
+
+    if (!deserializedExtension) {
+      throw new Error("Marmot extension not found in deserialized group");
+    }
+
+    // The extension data should have a non-zero byteOffset after deserialization
+    expect(deserializedExtension.extensionData.byteOffset).toBeGreaterThan(0);
+
+    // Decode the extension data - this is the critical test for byteOffset handling
+    const decoded = decodeMarmotGroupData(deserializedExtension.extensionData);
+
+    // Verify all fields match
+    expect(decoded.version).toBe(marmotGroupData.version);
+    expect(decoded.nostrGroupId).toEqual(marmotGroupData.nostrGroupId);
+    expect(decoded.name).toBe(marmotGroupData.name);
+    expect(decoded.description).toBe(marmotGroupData.description);
+    expect(decoded.adminPubkeys).toEqual(marmotGroupData.adminPubkeys);
+    expect(decoded.relays).toEqual(marmotGroupData.relays);
+    expect(decoded.imageHash).toEqual(marmotGroupData.imageHash);
+    expect(decoded.imageKey).toEqual(marmotGroupData.imageKey);
+    expect(decoded.imageNonce).toEqual(marmotGroupData.imageNonce);
   });
 });

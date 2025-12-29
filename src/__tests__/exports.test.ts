@@ -80,7 +80,6 @@ describe("exports", () => {
         "normalizeRelayUrl",
         "readGroupMessages",
         "replaceExtension",
-        "replacer",
         "serializeApplicationRumor",
         "serializeClientState",
         "sortGroupCommits",

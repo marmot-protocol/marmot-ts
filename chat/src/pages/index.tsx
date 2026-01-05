@@ -13,9 +13,11 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { ComponentExample } from "./components/component-example";
+import { ComponentExample } from "../components/component-example";
+import { Label } from "../components/ui/label";
+import { Switch } from "../components/ui/switch";
 
-export default function Page() {
+export default function HomePage() {
   return (
     <SidebarProvider
       style={
@@ -24,7 +26,15 @@ export default function Page() {
         } as React.CSSProperties
       }
     >
-      <AppSidebar />
+      <AppSidebar
+        title="MarmoTS Chat"
+        actions={
+          <Label className="flex items-center gap-2 text-sm">
+            <span>Unreads</span>
+            <Switch className="shadow-none" />
+          </Label>
+        }
+      />
       <SidebarInset>
         <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
           <SidebarTrigger className="-ml-1" />

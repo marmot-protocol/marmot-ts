@@ -44,7 +44,7 @@ const selectedKeyPackage$ = new BehaviorSubject<NostrEvent | null>(null);
 const error$ = new BehaviorSubject<string | null>(null);
 const result$ = new BehaviorSubject<{
   state: ClientState;
-  actionType: "propose" | "commit";
+  actionType: "propose" | "commit" | "invite";
 } | null>(null);
 const isAdding$ = new BehaviorSubject<boolean>(false);
 
@@ -185,6 +185,7 @@ interface ConfigurationFormProps {
   onKeyPackageSelect: (event: NostrEvent) => void;
   onPropose: () => void;
   onCommit: () => void;
+  onInvite: () => void;
 }
 
 function ConfigurationForm({
@@ -199,6 +200,7 @@ function ConfigurationForm({
   onKeyPackageSelect,
   onPropose,
   onCommit,
+  onInvite,
 }: ConfigurationFormProps) {
   const selectedGroup = groups.find((g) => g.groupId === selectedGroupKey);
 
@@ -360,6 +362,20 @@ function ConfigurationForm({
                   "Commit"
                 )}
               </button>
+              <button
+                className="btn btn-secondary btn-lg"
+                onClick={onInvite}
+                disabled={isAdding}
+              >
+                {isAdding ? (
+                  <>
+                    <span className="loading loading-spinner"></span>
+                    Inviting...
+                  </>
+                ) : (
+                  "Invite (with Welcome)"
+                )}
+              </button>
             </div>
           )}
         </div>
@@ -374,7 +390,7 @@ function ConfigurationForm({
 
 interface ResultsDisplayProps {
   result: { state: ClientState };
-  actionType: "propose" | "commit";
+  actionType: "propose" | "commit" | "invite";
   onReset: () => void;
 }
 
@@ -400,12 +416,20 @@ function ResultsDisplay({ result, actionType, onReset }: ResultsDisplayProps) {
           <div className="font-bold">
             {actionType === "propose"
               ? "Proposal sent successfully!"
-              : "Member added successfully!"}
+              : actionType === "invite"
+                ? "Invitation sent successfully!"
+                : "Member added successfully!"}
           </div>
           <div className="text-sm">
-            {actionType === "commit" &&
+            {(actionType === "commit" || actionType === "invite") &&
               `Group epoch advanced to ${result.state.groupContext.epoch}`}
           </div>
+          {actionType === "invite" && (
+            <div className="text-sm text-base-content/70 mt-1">
+              A Welcome message has been sent to the invitee via NIP-59 gift
+              wrap.
+            </div>
+          )}
         </div>
       </div>
 
@@ -518,6 +542,28 @@ async function commitMember(
   }
 }
 
+async function inviteMember(
+  group: MarmotGroup,
+  selectedKeyPackageEvent: NostrEvent,
+) {
+  try {
+    isAdding$.next(true);
+    error$.next(null);
+    result$.next(null);
+
+    // Use the new inviteByKeyPackageEvent method
+    await group.inviteByKeyPackageEvent(selectedKeyPackageEvent);
+
+    result$.next({ state: group.state, actionType: "invite" });
+    console.log("✅ Invitation sent successfully!");
+  } catch (err) {
+    console.error("Error inviting member:", err);
+    error$.next(err instanceof Error ? err.message : String(err));
+  } finally {
+    isAdding$.next(false);
+  }
+}
+
 function reset() {
   result$.next(null);
   error$.next(null);
@@ -568,7 +614,7 @@ export default withSignIn(function AddMember() {
   const error = useObservable(error$) as string | null;
   const result = useObservable(result$) as {
     state: ClientState;
-    actionType: "propose" | "commit";
+    actionType: "propose" | "commit" | "invite";
   } | null;
 
   // Fetch key packages for the selected user
@@ -688,6 +734,39 @@ export default withSignIn(function AddMember() {
     await commitMember(selectedGroup, selectedKeyPackage);
   };
 
+  const handleInvite = async () => {
+    if (!selectedGroupKey || !selectedKeyPackage || !selectedGroup) {
+      console.error("Please select a group and key package");
+      return;
+    }
+
+    const selectedGroupData = groups.find(
+      (g) => g.groupId === selectedGroupKey,
+    );
+    if (!selectedGroupData) {
+      console.error("Selected group not found");
+      return;
+    }
+
+    const account = accounts.active;
+    if (!account) {
+      error$.next("No active account");
+      return;
+    }
+
+    const currentUserPubkey = await account.signer.getPublicKey();
+    const isAdmin =
+      selectedGroupData.marmotData?.adminPubkeys?.includes(currentUserPubkey) ||
+      false;
+
+    if (!isAdmin) {
+      error$.next("You must be an admin to invite members to this group");
+      return;
+    }
+
+    await inviteMember(selectedGroup, selectedKeyPackage);
+  };
+
   return (
     <div className="container mx-auto p-6 space-y-6">
       {/* Header */}
@@ -712,6 +791,7 @@ export default withSignIn(function AddMember() {
           onKeyPackageSelect={handleKeyPackageSelect}
           onPropose={handlePropose}
           onCommit={handleCommit}
+          onInvite={handleInvite}
         />
       )}
 

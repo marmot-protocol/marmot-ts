@@ -32,6 +32,7 @@ import {
 import { isPrivateMessage } from "../../core/message.js";
 import { MarmotGroupData } from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
+import { proposeInviteUser } from "./proposals/invite-user.js";
 import { GroupStore } from "../../store/group-store.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
 import {
@@ -72,6 +73,14 @@ export type MarmotGroupOptions = {
   ciphersuite: CiphersuiteImpl;
   /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
+};
+
+/** Information about a welcome recipient */
+export type WelcomeRecipient = {
+  /** The recipient's Nostr public key */
+  pubkey: string;
+  /** The ID of the KeyPackage event (kind 443) used for the add operation */
+  keyPackageEventId: string;
 };
 
 export class MarmotGroup {
@@ -304,6 +313,7 @@ export class MarmotGroup {
    * @param options - Options for creating the commit
    * @param options.extraProposals - New proposals to include in the commit (inline)
    * @param options.proposalRefs - Proposal references (hex strings) to select from unappliedProposals
+   * @param options.welcomeRecipients - Explicit list of users to send Welcome messages to (for Add operations)
    */
   async commit(options?: {
     extraProposals?: (
@@ -312,6 +322,7 @@ export class MarmotGroup {
       | (Proposal | ProposalAction<Proposal>)[]
     )[];
     proposalRefs?: string[];
+    welcomeRecipients?: WelcomeRecipient[];
   }): Promise<Record<string, PublishResponse>> {
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
@@ -359,6 +370,7 @@ export class MarmotGroup {
     const commitOptions: CreateCommitOptions = {
       // All messages should be private
       wireAsPublicMessage: false,
+      ratchetTreeExtension: true,
     };
 
     // Only use extraProposals if we have proposals to include
@@ -391,29 +403,68 @@ export class MarmotGroup {
     await this.save();
 
     // If new users were added, send the welcome events
-    if (welcome) {
-      // How do we know what nostr users added?
-      const users: string[] = [];
+    if (
+      welcome &&
+      options?.welcomeRecipients &&
+      options.welcomeRecipients.length > 0
+    ) {
+      console.log(
+        `[MarmotGroup.commit] Sending Welcome messages to ${options.welcomeRecipients.length} recipient(s)`,
+      );
 
       // Send all welcome events in parallel
       await Promise.allSettled(
-        users.map(async (user) => {
+        options.welcomeRecipients.map(async (recipient) => {
           const welcomeRumor = createWelcomeRumor({
             welcome,
             author: actorPubkey,
             groupRelays: groupData.relays,
+            keyPackageEventId: recipient.keyPackageEventId,
           });
 
           // Gift wrap the welcome event to the newly added user
           const giftWrapEvent = await createGiftWrap({
             rumor: welcomeRumor,
-            recipient: user,
+            recipient: recipient.pubkey,
             signer: this.signer,
           });
 
           // Get the newly added user's inbox relays using the GroupNostrInterface
-          const inboxRelays = await this.network.getUserInboxRelays(user);
-          await this.network.publish(inboxRelays, giftWrapEvent);
+          // Fallback to group relays if inbox relays are not available
+          let inboxRelays: string[];
+          try {
+            inboxRelays = await this.network.getUserInboxRelays(
+              recipient.pubkey,
+            );
+            console.log(
+              `[MarmotGroup.commit] Retrieved inbox relays for recipient:`,
+              inboxRelays,
+            );
+          } catch (error) {
+            console.warn(
+              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${recipient.pubkey.slice(0, 16)}...:`,
+              error,
+            );
+            // Fallback to group relays
+            inboxRelays = groupData.relays || [];
+          }
+
+          if (inboxRelays.length === 0) {
+            console.warn(
+              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(0, 16)}...`,
+            );
+            return;
+          }
+
+          const publishResult = await this.network.publish(
+            inboxRelays,
+            giftWrapEvent,
+          );
+
+          console.log(
+            `[MarmotGroup.commit] Gift wrap publish result:`,
+            publishResult,
+          );
 
           // TODO: need to detect publish failure to attempt to send later
         }),
@@ -421,6 +472,45 @@ export class MarmotGroup {
     }
 
     return response;
+  }
+
+  /**
+   * Invites a user to the group using their KeyPackage event (kind 443).
+   *
+   * This method:
+   * 1. Validates the KeyPackage event (kind 443)
+   * 2. Validates that the credential identity matches the event pubkey
+   * 3. Builds an Add proposal using the KeyPackage
+   * 4. Commits the proposal
+   * 5. After commit ack, sends a Welcome message to the invitee via NIP-59 gift wrap
+   *
+   * @param keyPackageEvent - The KeyPackage event (kind 443) for the user to invite
+   * @returns Promise resolving to the publish response from the relays
+   * @throws Error if the event is not kind 443 or if credential identity doesn't match
+   */
+  async inviteByKeyPackageEvent(
+    keyPackageEvent: NostrEvent,
+  ): Promise<Record<string, PublishResponse>> {
+    // Validate the event is a KeyPackage event (kind 443)
+    if (keyPackageEvent.kind !== 443) {
+      throw new Error(
+        `Expected KeyPackage event kind 443, got ${keyPackageEvent.kind}`,
+      );
+    }
+
+    // Build the Add proposal using the existing proposeInviteUser function
+    const proposalAction = proposeInviteUser(keyPackageEvent);
+
+    // Commit with the proposal and explicit welcome recipient
+    return await this.commit({
+      extraProposals: [proposalAction],
+      welcomeRecipients: [
+        {
+          pubkey: keyPackageEvent.pubkey,
+          keyPackageEventId: keyPackageEvent.id,
+        },
+      ],
+    });
   }
 
   /**

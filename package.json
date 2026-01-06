@@ -59,7 +59,7 @@
     "applesauce-core": "^4.4.2",
     "applesauce-factory": "^4.0.0",
     "nostr-tools": "^2.19.4",
-    "ts-mls": "^1.5.0"
+    "ts-mls": "file:./ts-mls"
   },
   "devDependencies": {
     "@types/node": "^24.10.4",

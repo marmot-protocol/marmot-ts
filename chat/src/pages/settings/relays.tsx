@@ -7,7 +7,11 @@ import {
   RemoveInboxRelay,
   RemoveOutboxRelay,
 } from "applesauce-actions/actions/mailboxes";
-import { ensureHttpURL, relaySet } from "applesauce-core/helpers";
+import {
+  ensureHttpURL,
+  ensureWebSocketURL,
+  relaySet,
+} from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
 import { Loader2Icon, WifiIcon, WifiOffIcon } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -73,9 +77,11 @@ export function NewRelayForm({
     }
   };
 
-  const handleAdd = async () => {
+  const handleAdd = async (e?: React.FormEvent<HTMLFormElement>) => {
+    e?.preventDefault();
     setAdding(true);
-    await onAdd(newRelay.trim());
+    await onAdd(ensureWebSocketURL(newRelay.trim()));
+    setNewRelay("");
     setAdding(false);
   };
 

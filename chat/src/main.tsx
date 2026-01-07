@@ -7,6 +7,7 @@ import "./index.css";
 import { ThemeProvider } from "./components/theme-providers";
 import { SidebarProvider } from "./components/ui/sidebar";
 
+import ContactsIndexPage from "./pages/contacts/index.tsx";
 import ContactsPage from "./pages/contacts.tsx";
 import ContactDetailPage from "./pages/contacts/[npub].tsx";
 import GroupsPage from "./pages/groups.tsx";
@@ -42,6 +43,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/signin" element={<SignInPage />} />
             <Route path="/contacts" element={<ContactsPage />}>
               <Route path=":npub" element={<ContactDetailPage />} />
+              <Route index element={<ContactsIndexPage />} />
             </Route>
             <Route path="/settings" element={<SettingsPage />}>
               <Route

@@ -22,7 +22,6 @@ const DEFAULT_EXTRA_RELAYS = relaySet([
   "wss://relay.damus.io",
   "wss://nos.lol",
   "wss://relay.primal.net",
-  "wss://relay.nostr.band",
   "wss://nostr.wine",
   "wss://relay.snort.social",
 ]);

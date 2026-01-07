@@ -7,6 +7,7 @@ import {
 import { use$ } from "applesauce-react/hooks";
 import { useParams } from "react-router";
 import { eventStore } from "@/lib/nostr";
+import { PageHeader } from "../../components/page-header";
 
 export default function ContactDetailPage() {
   const { npub } = useParams<{ npub: string }>();
@@ -44,19 +45,28 @@ export default function ContactDetailPage() {
   );
 
   return (
-    <div className="flex items-center justify-center min-h-[400px] flex-col gap-4">
-      <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full">
-        <img
-          src={picture}
-          alt={displayName}
-          className="h-full w-full object-cover"
-        />
+    <>
+      <PageHeader
+        items={[
+          { label: "Home", to: "/" },
+          { label: "Contacts", to: "/contacts" },
+          { label: displayName },
+        ]}
+      />
+      <div className="flex items-center justify-center min-h-[400px] flex-col gap-4">
+        <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full">
+          <img
+            src={picture}
+            alt={displayName}
+            className="h-full w-full object-cover"
+          />
+        </div>
+        <div className="text-center">
+          <h2 className="text-2xl font-semibold">
+            <UserName pubkey={pubkey} />
+          </h2>
+        </div>
       </div>
-      <div className="text-center">
-        <h2 className="text-2xl font-semibold">
-          <UserName pubkey={pubkey} />
-        </h2>
-      </div>
-    </div>
+    </>
   );
 }

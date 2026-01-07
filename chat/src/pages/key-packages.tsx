@@ -1,14 +1,3 @@
-import { AppSidebar } from "@/components/app-sidebar";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
-import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { type NostrEvent, relaySet } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
 import { Plus } from "lucide-react";
@@ -19,69 +8,20 @@ import {
 } from "marmot-ts";
 import { useMemo } from "react";
 import { Link, Outlet, useLocation } from "react-router";
-import { combineLatest, EMPTY, map, of, switchMap } from "rxjs";
-import CipherSuiteBadge from "../components/cipher-suite-badge";
-import { Badge } from "../components/ui/badge";
-import { Button } from "../components/ui/button";
-import { withSignIn } from "../components/with-signIn";
-import accountManager, { keyPackageRelays$, user$ } from "../lib/accounts";
-import { eventStore, pool } from "../lib/nostr";
-import { extraRelays$ } from "../lib/settings";
+import { combineLatest, map } from "rxjs";
 
-/** Observable of all available relays */
-const relays$ = combineLatest([
-  user$.outboxes$,
-  keyPackageRelays$,
-  extraRelays$,
-]).pipe(
-  map(([outboxes, keyPackageRelays, extraRelays]) =>
-    relaySet(outboxes, keyPackageRelays, extraRelays),
-  ),
-);
-
-/** Observable of current user's key packages from all available relays */
-const keyPackageSubscription$ = combineLatest([
-  accountManager.active$,
-  relays$,
-]).pipe(
-  switchMap(([account, relays]) => {
-    if (!account) return EMPTY;
-
-    return pool.subscription(
-      relays,
-      {
-        kinds: [KEY_PACKAGE_KIND],
-        authors: [account.pubkey],
-      },
-      { eventStore },
-    );
-  }),
-);
-
-/** An observable of the key packages events from the event store, use this so deletes are handled automatically in the UI */
-const keyPackageTimeline$ = accountManager.active$.pipe(
-  switchMap((account) =>
-    account
-      ? eventStore.timeline({
-          kinds: [KEY_PACKAGE_KIND],
-          authors: [account.pubkey],
-        })
-      : of([]),
-  ),
-);
-
-/** Format timestamp to relative time (e.g., "2 hours ago") */
-function formatTimeAgo(timestamp: number): string {
-  const now = Date.now() / 1000;
-  const diff = now - timestamp;
-
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)} minutes ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)} days ago`;
-  if (diff < 2592000) return `${Math.floor(diff / 604800)} weeks ago`;
-  return new Date(timestamp * 1000).toLocaleDateString();
-}
+import { AppSidebar } from "@/components/app-sidebar";
+import CipherSuiteBadge from "@/components/cipher-suite-badge";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
+import { SidebarInset } from "@/components/ui/sidebar";
+import { withSignIn } from "@/components/with-signIn";
+import { default as accounts, keyPackageRelays$, user$ } from "@/lib/accounts";
+import { eventStore, pool } from "@/lib/nostr";
+import { extraRelays$ } from "@/lib/settings";
+import { formatTimeAgo } from "@/lib/time";
+import { RelayConnectionStatusButton } from "@/components/relay-connection-status-button";
 
 function KeyPackageItem({ event }: { event: NostrEvent }) {
   const location = useLocation();
@@ -120,12 +60,35 @@ function KeyPackageItem({ event }: { event: NostrEvent }) {
   );
 }
 
-function KeyPackageManager() {
-  // Observables
-  const keyPackages = use$(keyPackageTimeline$);
+// Create an observable of relays to read key packages from
+const readRelays$ = combineLatest([
+  user$.outboxes$,
+  keyPackageRelays$,
+  extraRelays$,
+]).pipe(map((all) => relaySet(...all)));
+
+function KeyPackagesPage() {
+  const account = use$(accounts.active$)!;
 
   // Fetch key packages from relays
-  use$(keyPackageSubscription$);
+  use$(
+    () =>
+      pool.subscription(readRelays$, {
+        kinds: [KEY_PACKAGE_KIND],
+        authors: [account.pubkey],
+      }),
+    [account.pubkey],
+  );
+
+  // Get timeline of key package events by the user
+  const keyPackages = use$(
+    () =>
+      eventStore.timeline({
+        kinds: [KEY_PACKAGE_KIND],
+        authors: [account.pubkey],
+      }),
+    [account],
+  );
 
   // Filter packages (for now, just show all)
   const filteredPackages = useMemo(() => {
@@ -137,12 +100,15 @@ function KeyPackageManager() {
       <AppSidebar
         title="Key Packages"
         actions={
-          <Button asChild size="sm" variant="default">
-            <Link to="/key-packages/create">
-              <Plus className="h-4 w-4 mr-1" />
-              New
-            </Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            <RelayConnectionStatusButton relays={readRelays$} />
+            <Button asChild size="sm" variant="default">
+              <Link to="/key-packages/create">
+                <Plus className="h-4 w-4 mr-1" />
+                New
+              </Link>
+            </Button>
+          </div>
         }
       >
         <div className="flex flex-col">
@@ -158,26 +124,9 @@ function KeyPackageManager() {
         </div>
       </AppSidebar>
       <SidebarInset>
-        <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator
-            orientation="vertical"
-            className="mr-2 data-[orientation=vertical]:h-4"
-          />
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:block">
-                <BreadcrumbLink asChild>
-                  <Link to="/">Home</Link>
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:block" />
-              <BreadcrumbItem>
-                <BreadcrumbPage>Key Packages</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-        </header>
+        <PageHeader
+          items={[{ label: "Home", to: "/" }, { label: "Key Packages" }]}
+        />
 
         {/* Detail sub-pages */}
         <Outlet />
@@ -186,4 +135,4 @@ function KeyPackageManager() {
   );
 }
 
-export default withSignIn(KeyPackageManager);
+export default withSignIn(KeyPackagesPage);

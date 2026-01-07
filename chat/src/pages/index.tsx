@@ -1,17 +1,7 @@
 import { AppSidebar } from "@/components/app-sidebar";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-} from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
-import {
-  SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
-} from "@/components/ui/sidebar";
-import { ComponentExample } from "../components/component-example";
+import { PageHeader } from "@/components/page-header";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { ComponentExample } from "@/components/component-example";
 
 export default function HomePage() {
   return (
@@ -24,20 +14,7 @@ export default function HomePage() {
     >
       <AppSidebar title="MarmoTS Chat" />
       <SidebarInset>
-        <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator
-            orientation="vertical"
-            className="mr-2 data-[orientation=vertical]:h-4"
-          />
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem>
-                <BreadcrumbPage>Home</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-        </header>
+        <PageHeader items={[{ label: "Home" }]} />
 
         {/* Page */}
         <ComponentExample />

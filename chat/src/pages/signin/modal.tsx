@@ -1,15 +1,15 @@
-import { useState, useEffect } from "react";
-import SignerBunker from "./bunker";
-import SignerConnectQR from "./connect-qr";
-import ExtensionSignIn from "./extension";
-import NewUser from "./new-user";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-} from "../ui/dialog";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "../ui/tabs";
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useEffect, useState } from "react";
+import SignerBunker from "./bunker";
+import SignerConnectQR from "./connect-qr";
+import ExtensionSignIn from "./extension";
+import NewUser from "./new-user";
 
 export default function SignInModal() {
   const [open, setOpen] = useState(false);
@@ -32,7 +32,9 @@ export default function SignInModal() {
 
     // Also support the old id-based approach
     const checkForModalOpen = () => {
-      const dialog = document.getElementById("signin_modal") as HTMLDialogElement;
+      const dialog = document.getElementById(
+        "signin_modal",
+      ) as HTMLDialogElement;
       if (dialog && dialog.open) {
         setOpen(true);
         dialog.close();
@@ -53,7 +55,10 @@ export default function SignInModal() {
           <DialogTitle>Sign In</DialogTitle>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v as typeof activeTab)}
+        >
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="newuser">New User</TabsTrigger>
             <TabsTrigger value="extension">Extension</TabsTrigger>

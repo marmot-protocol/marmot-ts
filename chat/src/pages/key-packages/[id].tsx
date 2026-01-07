@@ -1,27 +1,20 @@
 import { use$ } from "applesauce-react/hooks";
+import {
+  getKeyPackage,
+  getKeyPackageCipherSuiteId,
+  getKeyPackageClient,
+  KEY_PACKAGE_KIND,
+} from "marmot-ts";
 import { useParams } from "react-router";
-import { eventStore } from "@/lib/nostr";
-import { getKeyPackage, getKeyPackageCipherSuiteId, getKeyPackageClient } from "marmot-ts";
-import { KEY_PACKAGE_KIND } from "marmot-ts";
+import { of, switchMap } from "rxjs";
+
 import CipherSuiteBadge from "@/components/cipher-suite-badge";
+import KeyPackageDataView from "@/components/data-view/key-package";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import KeyPackageDataView from "@/components/data-view/key-package";
-import { of, switchMap } from "rxjs";
-
-/** Format timestamp to relative time (e.g., "2 hours ago") */
-function formatTimeAgo(timestamp: number): string {
-  const now = Date.now() / 1000;
-  const diff = now - timestamp;
-
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)} minutes ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)} days ago`;
-  if (diff < 2592000) return `${Math.floor(diff / 604800)} weeks ago`;
-  return new Date(timestamp * 1000).toLocaleDateString();
-}
+import { eventStore } from "@/lib/nostr";
+import { formatTimeAgo } from "@/lib/time";
 
 export default function KeyPackageDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -74,7 +67,10 @@ export default function KeyPackageDetailPage() {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="text-center text-muted-foreground">
-          <p>Error parsing key package: {error instanceof Error ? error.message : String(error)}</p>
+          <p>
+            Error parsing key package:{" "}
+            {error instanceof Error ? error.message : String(error)}
+          </p>
         </div>
       </div>
     );
@@ -84,7 +80,9 @@ export default function KeyPackageDetailPage() {
     <div className="container mx-auto p-4 space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Key Package Details</h1>
-        <p className="text-muted-foreground">View details for key package {id.slice(0, 16)}...</p>
+        <p className="text-muted-foreground">
+          View details for key package {id.slice(0, 16)}...
+        </p>
       </div>
 
       <Card>
@@ -93,24 +91,34 @@ export default function KeyPackageDetailPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <Label className="text-muted-foreground/60 mb-1 text-xs">Event ID</Label>
-            <div className="font-mono text-xs text-muted-foreground break-all">{event.id}</div>
+            <Label className="text-muted-foreground/60 mb-1 text-xs">
+              Event ID
+            </Label>
+            <div className="font-mono text-xs text-muted-foreground break-all">
+              {event.id}
+            </div>
           </div>
 
           <div>
-            <Label className="text-muted-foreground/60 mb-1 text-xs">Created</Label>
+            <Label className="text-muted-foreground/60 mb-1 text-xs">
+              Created
+            </Label>
             <div className="text-sm">{timeAgo}</div>
           </div>
 
           <div>
-            <Label className="text-muted-foreground/60 mb-1 text-xs">Client</Label>
+            <Label className="text-muted-foreground/60 mb-1 text-xs">
+              Client
+            </Label>
             <div>
               <Badge variant="outline">{client?.name || "Unknown"}</Badge>
             </div>
           </div>
 
           <div>
-            <Label className="text-muted-foreground/60 mb-1 text-xs">Cipher Suite</Label>
+            <Label className="text-muted-foreground/60 mb-1 text-xs">
+              Cipher Suite
+            </Label>
             <div>
               {cipherSuiteId !== undefined ? (
                 <CipherSuiteBadge cipherSuite={cipherSuiteId} />

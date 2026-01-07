@@ -7,7 +7,10 @@ import {
   colors,
   uniqueNamesGenerator,
 } from "unique-names-generator";
-
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Avatar, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { IconRefresh } from "@tabler/icons-react";
 import { buildEvent } from "applesauce-core";
 import { relaySet } from "applesauce-core/helpers";
@@ -16,10 +19,6 @@ import { createKeyPackageRelayListEvent } from "marmot-ts";
 import accountManager from "../../lib/accounts";
 import { eventStore, pool } from "../../lib/nostr";
 import { extraRelays$, lookupRelays$ } from "../../lib/settings";
-import { Alert, AlertDescription } from "../ui/alert";
-import { Avatar, AvatarImage } from "../ui/avatar";
-import { Button } from "../ui/button";
-import { Card, CardContent } from "../ui/card";
 
 interface NewUserProps {
   onSuccess?: () => void;

@@ -25,7 +25,7 @@ export const keyPackageStore$ = accountManager.active$.pipe(
       },
     );
   }),
-  // Remit the store when the store changes
+  // re-emit the store when the store changes
   combineLatestWith(storeChanges$),
   map(([store, _]) => store),
   shareReplay(1),

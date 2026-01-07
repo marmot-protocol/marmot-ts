@@ -1,25 +1,25 @@
+import { IconArrowLeft } from "@tabler/icons-react";
+import { use$ } from "applesauce-react/hooks";
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { use$ } from "applesauce-react/hooks";
-import { IconArrowLeft } from "@tabler/icons-react";
-import SignerBunker from "../components/signin/bunker";
-import SignerConnectQR from "../components/signin/connect-qr";
-import ExtensionSignIn from "../components/signin/extension";
-import NewUser from "../components/signin/new-user";
-import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-  TabsContent,
-} from "../components/ui/tabs";
+import { Button } from "../components/ui/button";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
-import { Button } from "../components/ui/button";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "../components/ui/tabs";
 import accountManager from "../lib/accounts";
+import SignerBunker from "./signin/bunker";
+import SignerConnectQR from "./signin/connect-qr";
+import ExtensionSignIn from "./signin/extension";
+import NewUser from "./signin/new-user";
 
 export default function SignInPage() {
   const navigate = useNavigate();
@@ -38,7 +38,7 @@ export default function SignInPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    <div className="flex items-center justify-center p-4 w-full">
       <Card className="w-full max-w-lg">
         <CardHeader className="relative">
           {activeAccount && (

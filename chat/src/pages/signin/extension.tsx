@@ -1,9 +1,9 @@
-import { useState } from "react";
-import { ExtensionSigner } from "applesauce-signers";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { ExtensionAccount } from "applesauce-accounts/accounts";
+import { ExtensionSigner } from "applesauce-signers";
+import { useState } from "react";
 import accountManager from "../../lib/accounts";
-import { Button } from "../ui/button";
-import { Alert, AlertDescription } from "../ui/alert";
 
 interface ExtensionSignInProps {
   onSuccess?: () => void;

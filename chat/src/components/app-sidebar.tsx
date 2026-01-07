@@ -142,9 +142,12 @@ export function AppSidebar({
 
       {/* This is the second sidebar */}
       {/* We disable collapsible and let it fill remaining space */}
-      <Sidebar collapsible="none" className="hidden flex-1 md:flex">
+      <Sidebar
+        collapsible="none"
+        className="hidden flex-1 md:flex overflow-hidden"
+      >
         <SidebarHeader className="gap-3.5 border-b p-4">
-          <div className="flex w-full items-center justify-between">
+          <div className="flex w-full items-center justify-between gap-2">
             <div className="text-foreground text-base font-medium">{title}</div>
             {actions}
           </div>

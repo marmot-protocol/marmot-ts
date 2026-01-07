@@ -1,10 +1,10 @@
-import { useState } from "react";
-import { NostrConnectSigner } from "applesauce-signers";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { NostrConnectAccount } from "applesauce-accounts/accounts";
+import { NostrConnectSigner } from "applesauce-signers";
+import { useState } from "react";
 import accountManager from "../../lib/accounts";
-import { Button } from "../ui/button";
-import { Input } from "../ui/input";
-import { Alert, AlertDescription } from "../ui/alert";
 
 interface SignerBunkerProps {
   onSuccess?: () => void;

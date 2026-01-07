@@ -1,19 +1,6 @@
 import { AppSidebar } from "@/components/app-sidebar";
 import { UserAvatar, UserName } from "@/components/nostr-user";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
-import {
-  SidebarInput,
-  SidebarInset,
-  SidebarTrigger,
-} from "@/components/ui/sidebar";
+import { SidebarInput, SidebarInset } from "@/components/ui/sidebar";
 import { contacts$ } from "@/lib/accounts";
 import { npubEncode } from "applesauce-core/helpers/pointers";
 import { use$ } from "applesauce-react/hooks";
@@ -87,28 +74,6 @@ export default function ContactsPage() {
         </div>
       </AppSidebar>
       <SidebarInset>
-        <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator
-            orientation="vertical"
-            className="mr-2 data-[orientation=vertical]:h-4"
-          />
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:block">
-                <BreadcrumbLink asChild>
-                  <Link to="/">Home</Link>
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:block" />
-              <BreadcrumbItem>
-                <BreadcrumbPage>Contacts</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-        </header>
-
-        {/* Contact detail sub-pages */}
         <Outlet />
       </SidebarInset>
     </>

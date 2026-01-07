@@ -1,19 +1,10 @@
 import { AppSidebar } from "@/components/app-sidebar";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
+import { PageHeader } from "@/components/page-header";
 import {
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { KeyIcon, Network, User, Users } from "lucide-react";
 import { Link, Outlet, useLocation } from "react-router";
@@ -73,34 +64,13 @@ export default function SettingsPage() {
         </SidebarMenu>
       </AppSidebar>
       <SidebarInset>
-        <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator
-            orientation="vertical"
-            className="mr-2 data-[orientation=vertical]:h-4"
-          />
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:block">
-                <BreadcrumbLink asChild>
-                  <Link to="/">Home</Link>
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:block" />
-              <BreadcrumbItem>
-                <BreadcrumbPage>Settings</BreadcrumbPage>
-              </BreadcrumbItem>
-              {activeSubNavItem && (
-                <>
-                  <BreadcrumbSeparator className="hidden md:block" />
-                  <BreadcrumbItem>
-                    <BreadcrumbPage>{activeSubNavItem}</BreadcrumbPage>
-                  </BreadcrumbItem>
-                </>
-              )}
-            </BreadcrumbList>
-          </Breadcrumb>
-        </header>
+        <PageHeader
+          items={[
+            { label: "Home", to: "/" },
+            { label: "Settings", to: "/settings" },
+            ...(activeSubNavItem ? [{ label: activeSubNavItem }] : []),
+          ]}
+        />
 
         {/* Settings sub-pages */}
         <Outlet />

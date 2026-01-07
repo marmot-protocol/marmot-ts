@@ -1,16 +1,9 @@
 import { getDisplayName, getProfilePicture } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
-import {
-  ChevronsUpDown,
-  LogOutIcon,
-  PlusIcon,
-  SettingsIcon,
-} from "lucide-react";
-import { useState } from "react";
+import { ChevronsUpDown, LogOutIcon, PlusIcon } from "lucide-react";
 import { useNavigate } from "react-router";
 import accountManager from "../lib/accounts";
 import { eventStore } from "../lib/nostr";
-import RelayConfig from "./relay-config";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import {
   DropdownMenu,
@@ -68,7 +61,6 @@ export default function NavUser() {
   const { isMobile } = useSidebar();
   const active = use$(accountManager.active$);
   const accounts = use$(accountManager.accounts$);
-  const [showRelayConfig, setShowRelayConfig] = useState(false);
 
   // Get profile data for active account
   // Always call the hook to avoid "fewer hooks were rendered" error
@@ -217,21 +209,11 @@ export default function NavUser() {
                     Sign Out
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem onClick={() => setShowRelayConfig(true)}>
-                  <SettingsIcon className="size-4" />
-                  Configure Relays
-                </DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
         </SidebarMenuItem>
       </SidebarMenu>
-
-      {/* Relay Configuration Modal */}
-      <RelayConfig
-        isOpen={showRelayConfig}
-        onClose={() => setShowRelayConfig(false)}
-      />
     </>
   );
 }

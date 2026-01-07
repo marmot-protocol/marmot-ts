@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
-import { NostrConnectSigner } from "applesauce-signers";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Card, CardContent } from "@/components/ui/card";
 import { NostrConnectAccount } from "applesauce-accounts/accounts";
+import { NostrConnectSigner } from "applesauce-signers";
+import { useEffect, useState } from "react";
 import accountManager from "../../lib/accounts";
-import { Alert, AlertDescription } from "../ui/alert";
-import { Card, CardContent } from "../ui/card";
 
 // Simple QR code component using an API
 const QRCode = ({ data }: { data: string }) => (

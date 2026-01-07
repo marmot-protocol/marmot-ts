@@ -13,9 +13,7 @@
     "prepublishOnly": "npm run build",
     "lint": "prettier --check .",
     "format": "prettier --write .",
-    "test": "vitest",
-    "example:full": "tsx examples/full-workflow.ts",
-    "example:chat": "tsx examples/simple-chat.ts"
+    "test": "vitest"
   },
   "repository": {
     "type": "git",

@@ -59,7 +59,7 @@ const recentFollows$ = user$.pipe(
             combineLatest([user$.inboxes$, extraRelays$]).pipe(
               map((all) => relaySet(...all)),
             ),
-            { kinds: [kinds.Contacts], "#p": [user.pubkey], limit: 10 },
+            { kinds: [kinds.Contacts], "#p": [user.pubkey], limit: 5 },
           )
           .pipe(
             onlyEvents(),

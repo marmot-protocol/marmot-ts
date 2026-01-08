@@ -21,6 +21,8 @@ import SettingsAccountsPage from "./pages/settings/accounts.tsx";
 import MarmotSettingsPage from "./pages/settings/marmot";
 import SettingsRelaysPage from "./pages/settings/relays.tsx";
 import SignInPage from "./pages/signin.tsx";
+import ToolsPage from "./pages/tools";
+import KeyPackageDecoderPage from "./pages/tools/key-package-decoder";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -44,6 +46,12 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/contacts" element={<ContactsPage />}>
               <Route path=":npub" element={<ContactDetailPage />} />
               <Route index element={<ContactsIndexPage />} />
+            </Route>
+            <Route path="/tools" element={<ToolsPage />}>
+              <Route
+                path="key-package-decoder"
+                element={<KeyPackageDecoderPage />}
+              />
             </Route>
             <Route path="/settings" element={<SettingsPage />}>
               <Route

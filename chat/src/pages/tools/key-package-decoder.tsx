@@ -16,6 +16,8 @@ import KeyPackageDataView from "@/components/data-view/key-package";
 import { LeafNodeCapabilitiesSection } from "@/components/key-package/leaf-node-capabilities";
 import { UserAvatar, UserName } from "@/components/nostr-user";
 import { DetailsField } from "@/components/details-field";
+import { PageHeader } from "@/components/page-header";
+import { PageBody } from "@/components/page-body";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -133,7 +135,7 @@ function KeyPackageTopLevelInfo({ keyPackage }: { keyPackage: KeyPackage }) {
 // Main Decoder Component
 // ============================================================================
 
-export default function KeyPackageDecoder() {
+export default function KeyPackageDecoderPage() {
   const [input, setInput] = useState("");
   const [keyPackage, setKeyPackage] = useState<KeyPackage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -185,150 +187,153 @@ export default function KeyPackageDecoder() {
   }, [input]);
 
   return (
-    <div className="w-full max-w-7xl space-y-6 p-4">
-      {/* Header */}
-      <div className="space-y-2">
-        <h1 className="text-3xl font-bold">Key Package Decoder</h1>
-        <p className="text-muted-foreground">
-          Decode and inspect MLS key packages from raw hex-encoded binary data
-        </p>
-      </div>
-
-      {/* Input Section */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Hex-Encoded Key Package</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Enter a hex-encoded MLS key package (with or without spaces)
-          </p>
-          <div>
-            <Textarea
-              className="font-mono text-sm h-32"
-              placeholder="Example: 0001000200030004... or 00 01 00 02 00 03 00 04..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-            />
-            <div className="flex justify-between items-center text-xs text-muted-foreground mt-2 mb-4">
-              <span>
-                {bytes
-                  ? `${bytes.length} bytes`
-                  : input.trim()
-                    ? "Invalid hex input"
-                    : "No input"}
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleClear}
-                  disabled={!input && !keyPackage}
-                >
-                  Clear
-                </Button>
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={handleDecode}
-                  disabled={!bytes}
-                >
-                  Decode
-                </Button>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Error Display */}
-      {error && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Decoding Error</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {/* Results */}
-      {keyPackage && (
-        <Tabs defaultValue="overview" className="w-full">
-          <TabsList>
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="credential">Credential</TabsTrigger>
-            <TabsTrigger value="capabilities">Capabilities</TabsTrigger>
-            <TabsTrigger value="raw">Raw Data</TabsTrigger>
-          </TabsList>
-          <TabsContent value="overview" className="p-6">
-            <ErrorBoundary>
-              <KeyPackageTopLevelInfo keyPackage={keyPackage} />
-            </ErrorBoundary>
-          </TabsContent>
-          <TabsContent value="credential" className="p-6">
-            <ErrorBoundary>
-              {keyPackage.leafNode.credential.credentialType === "basic" ? (
-                <CredentialSection
-                  credential={keyPackage.leafNode.credential}
-                />
-              ) : (
-                <Alert>
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertTitle>Unsupported Credential Type</AlertTitle>
-                  <AlertDescription>
-                    Unsupported credential type:{" "}
-                    {keyPackage.leafNode.credential.credentialType}
-                  </AlertDescription>
-                </Alert>
-              )}
-            </ErrorBoundary>
-          </TabsContent>
-          <TabsContent value="capabilities" className="p-6">
-            <ErrorBoundary>
-              <LeafNodeCapabilitiesSection leafNode={keyPackage.leafNode} />
-            </ErrorBoundary>
-          </TabsContent>
-          <TabsContent value="raw" className="p-6">
-            <div className="space-y-4">
-              <div>
-                <h3 className="text-lg font-semibold mb-1">
-                  Full Key Package Data
-                </h3>
-                <p className="text-sm text-muted-foreground">
-                  Complete decoded structure with all fields
-                </p>
-              </div>
-              <ErrorBoundary>
-                <KeyPackageDataView keyPackage={keyPackage} />
-              </ErrorBoundary>
-            </div>
-          </TabsContent>
-        </Tabs>
-      )}
-
-      {/* Empty State */}
-      {!keyPackage && !error && (
+    <>
+      <PageHeader
+        items={[
+          { label: "Home", to: "/" },
+          { label: "Tools", to: "/tools" },
+          { label: "Key Package Decoder" },
+        ]}
+      />
+      <PageBody>
+        {/* Input Section */}
         <Card>
-          <CardContent className="items-center text-center py-8">
-            <h3 className="text-xl font-semibold mb-2">
-              Enter a hex-encoded key package above to get started
-            </h3>
-            <p className="text-muted-foreground mb-4">
-              Paste the hex-encoded binary data from an MLS key package
+          <CardHeader>
+            <CardTitle>Hex-Encoded Key Package</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Enter a hex-encoded MLS key package (with or without spaces)
             </p>
-            <div className="text-sm text-muted-foreground text-left max-w-md">
-              <p className="font-semibold mb-2">Where to get key packages:</p>
-              <ul className="list-disc list-inside space-y-1">
-                <li>
-                  From Nostr events (kind 443) - use the "Key Package Explorer"
-                  example
-                </li>
-                <li>Create your own using the "Create Key Package" example</li>
-                <li>From the content field of a kind 443 Nostr event</li>
-              </ul>
+            <div>
+              <Textarea
+                className="font-mono text-sm h-32"
+                placeholder="Example: 0001000200030004... or 00 01 00 02 00 03 00 04..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+              />
+              <div className="flex justify-between items-center text-xs text-muted-foreground mt-2 mb-4">
+                <span>
+                  {bytes
+                    ? `${bytes.length} bytes`
+                    : input.trim()
+                      ? "Invalid hex input"
+                      : "No input"}
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleClear}
+                    disabled={!input && !keyPackage}
+                  >
+                    Clear
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleDecode}
+                    disabled={!bytes}
+                  >
+                    Decode
+                  </Button>
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
-      )}
-    </div>
+
+        {/* Error Display */}
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Decoding Error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {/* Results */}
+        {keyPackage && (
+          <Tabs defaultValue="overview" className="w-full">
+            <TabsList>
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="credential">Credential</TabsTrigger>
+              <TabsTrigger value="capabilities">Capabilities</TabsTrigger>
+              <TabsTrigger value="raw">Raw Data</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="p-6">
+              <ErrorBoundary>
+                <KeyPackageTopLevelInfo keyPackage={keyPackage} />
+              </ErrorBoundary>
+            </TabsContent>
+            <TabsContent value="credential" className="p-6">
+              <ErrorBoundary>
+                {keyPackage.leafNode.credential.credentialType === "basic" ? (
+                  <CredentialSection
+                    credential={keyPackage.leafNode.credential}
+                  />
+                ) : (
+                  <Alert>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Unsupported Credential Type</AlertTitle>
+                    <AlertDescription>
+                      Unsupported credential type:{" "}
+                      {keyPackage.leafNode.credential.credentialType}
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </ErrorBoundary>
+            </TabsContent>
+            <TabsContent value="capabilities" className="p-6">
+              <ErrorBoundary>
+                <LeafNodeCapabilitiesSection leafNode={keyPackage.leafNode} />
+              </ErrorBoundary>
+            </TabsContent>
+            <TabsContent value="raw" className="p-6">
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-lg font-semibold mb-1">
+                    Full Key Package Data
+                  </h3>
+                  <p className="text-sm text-muted-foreground">
+                    Complete decoded structure with all fields
+                  </p>
+                </div>
+                <ErrorBoundary>
+                  <KeyPackageDataView keyPackage={keyPackage} />
+                </ErrorBoundary>
+              </div>
+            </TabsContent>
+          </Tabs>
+        )}
+
+        {/* Empty State */}
+        {!keyPackage && !error && (
+          <Card>
+            <CardContent className="items-center text-center py-8">
+              <h3 className="text-xl font-semibold mb-2">
+                Enter a hex-encoded key package above to get started
+              </h3>
+              <p className="text-muted-foreground mb-4">
+                Paste the hex-encoded binary data from an MLS key package
+              </p>
+              <div className="text-sm text-muted-foreground text-left max-w-md">
+                <p className="font-semibold mb-2">Where to get key packages:</p>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>
+                    From Nostr events (kind 443) - use the "Key Package
+                    Explorer" example
+                  </li>
+                  <li>
+                    Create your own using the "Create Key Package" example
+                  </li>
+                  <li>From the content field of a kind 443 Nostr event</li>
+                </ul>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </PageBody>
+    </>
   );
 }

@@ -1,21 +1,11 @@
 import { AppSidebar } from "@/components/app-sidebar";
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
-import {
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { Code, Key, Package } from "lucide-react";
+import { Package, UsersIcon } from "lucide-react";
 import { Link, Outlet, useLocation } from "react-router";
 
 const toolsNavItems = [
@@ -25,14 +15,9 @@ const toolsNavItems = [
     icon: Package,
   },
   {
-    title: "TLS Encoding Explorer",
-    url: "/tools/tls-encoding",
-    icon: Code,
-  },
-  {
-    title: "Group Metadata Encoder/Decoder",
-    url: "/tools/group-metadata-encoder-decoder",
-    icon: Key,
+    title: "Group Metadata Encode/Decode",
+    url: "/tools/group-metadata-decoder",
+    icon: UsersIcon,
   },
 ];
 
@@ -68,35 +53,6 @@ export default function ToolsPage() {
         </SidebarMenu>
       </AppSidebar>
       <SidebarInset>
-        <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator
-            orientation="vertical"
-            className="mr-2 data-[orientation=vertical]:h-4"
-          />
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:block">
-                <BreadcrumbLink asChild>
-                  <Link to="/">Home</Link>
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:block" />
-              <BreadcrumbItem>
-                <BreadcrumbPage>Tools</BreadcrumbPage>
-              </BreadcrumbItem>
-              {activeSubNavItem && (
-                <>
-                  <BreadcrumbSeparator className="hidden md:block" />
-                  <BreadcrumbItem>
-                    <BreadcrumbPage>{activeSubNavItem}</BreadcrumbPage>
-                  </BreadcrumbItem>
-                </>
-              )}
-            </BreadcrumbList>
-          </Breadcrumb>
-        </header>
-
         {/* Tools sub-pages */}
         <Outlet />
       </SidebarInset>

@@ -73,10 +73,10 @@ export default function SignInModal() {
             <ExtensionSignIn onSuccess={handleSuccess} />
           </TabsContent>
           <TabsContent value="bunker">
-            <SignerBunker />
+            <SignerBunker onSuccess={handleSuccess} />
           </TabsContent>
           <TabsContent value="qr">
-            <SignerConnectQR />
+            <SignerConnectQR onSuccess={handleSuccess} />
           </TabsContent>
         </Tabs>
       </DialogContent>

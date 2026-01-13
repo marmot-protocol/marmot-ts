@@ -1,4 +1,5 @@
 import { AlertCircle } from "lucide-react";
+import { type ReactNode } from "react";
 import { ErrorBoundary as ReactErrorBoundary } from "react-error-boundary";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 
@@ -20,11 +21,7 @@ function ErrorFallback({ error }: { error: Error }) {
  * Default error boundary component for examples.
  * Wraps children and displays a simple alert on error.
  */
-export default function ErrorBoundary({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function ErrorBoundary({ children }: { children: ReactNode }) {
   return (
     <ReactErrorBoundary FallbackComponent={ErrorFallback}>
       {children}

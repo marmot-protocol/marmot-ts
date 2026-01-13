@@ -21,6 +21,7 @@ import {
   UsersIcon,
 } from "lucide-react";
 import * as React from "react";
+import { type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 
 const topLevelNav = [
@@ -47,9 +48,9 @@ const topLevelNav = [
 ];
 
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
-  children?: React.ReactNode;
+  children?: ReactNode;
   title?: string;
-  actions?: React.ReactNode;
+  actions?: ReactNode;
 }
 
 export function AppSidebar({

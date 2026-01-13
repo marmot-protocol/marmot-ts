@@ -147,7 +147,7 @@ function KeyPackageRelaysSection() {
         ) : (
           keyPackageRelaysList.map((relay, index) => (
             <RelayItem
-              key={index}
+              key={relay}
               relay={relay}
               onRemove={() => handleRemoveKeyPackageRelay(relay)}
             />

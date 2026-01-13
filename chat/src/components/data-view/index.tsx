@@ -1,4 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { type ReactNode } from "react";
 
 // ============================================================================
 // Generic Data Renderer (handles BigInt, Uint8Array, Map, etc.)
@@ -37,7 +38,7 @@ function renderValue(
   key?: string,
   currentPath = "",
   options: DataViewOptions = {},
-): React.ReactNode {
+): ReactNode {
   const {
     ignorePaths = [],
     maxHexLength = 64,

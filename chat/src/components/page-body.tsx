@@ -1,10 +1,11 @@
 import { cn } from "../lib/utils";
+import { type ReactNode } from "react";
 
 export function PageBody({
   children,
   center,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   center?: boolean;
 }) {
   return (

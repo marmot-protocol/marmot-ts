@@ -9,34 +9,7 @@ import { useParams } from "react-router";
 import { eventStore } from "@/lib/nostr";
 import { PageHeader } from "../../components/page-header";
 
-export default function ContactDetailPage() {
-  const { npub } = useParams<{ npub: string }>();
-
-  if (!npub) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center text-muted-foreground">
-          <p>Invalid contact identifier</p>
-        </div>
-      </div>
-    );
-  }
-
-  let pubkey: string;
-  try {
-    const hex = normalizeToPubkey(npub);
-    if (!hex) throw new Error("Invalid npub");
-    pubkey = hex;
-  } catch (error) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center text-muted-foreground">
-          <p>Invalid contact identifier</p>
-        </div>
-      </div>
-    );
-  }
-
+function ContactDetailContent({ pubkey }: { pubkey: string }) {
   const profile = use$(() => eventStore.profile(pubkey), [pubkey]);
   const displayName = getDisplayName(profile, pubkey.slice(0, 16));
   const picture = getProfilePicture(
@@ -69,4 +42,35 @@ export default function ContactDetailPage() {
       </div>
     </>
   );
+}
+
+export default function ContactDetailPage() {
+  const { npub } = useParams<{ npub: string }>();
+
+  if (!npub) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center text-muted-foreground">
+          <p>Invalid contact identifier</p>
+        </div>
+      </div>
+    );
+  }
+
+  let pubkey: string;
+  try {
+    const hex = normalizeToPubkey(npub);
+    if (!hex) throw new Error("Invalid npub");
+    pubkey = hex;
+  } catch (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center text-muted-foreground">
+          <p>Invalid contact identifier</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <ContactDetailContent pubkey={pubkey} />;
 }

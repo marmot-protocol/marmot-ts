@@ -6,8 +6,22 @@ interface QRButtonProps {
   data: string;
   label?: string;
   className?: string;
-  variant?: "default" | "outline" | "ghost" | "secondary" | "destructive" | "link";
-  size?: "default" | "xs" | "sm" | "lg" | "icon" | "icon-xs" | "icon-sm" | "icon-lg";
+  variant?:
+    | "default"
+    | "outline"
+    | "ghost"
+    | "secondary"
+    | "destructive"
+    | "link";
+  size?:
+    | "default"
+    | "xs"
+    | "sm"
+    | "lg"
+    | "icon"
+    | "icon-xs"
+    | "icon-sm"
+    | "icon-lg";
   modalSize?: number;
 }
 

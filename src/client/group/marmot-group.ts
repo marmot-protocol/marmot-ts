@@ -612,9 +612,14 @@ export class MarmotGroup {
     const retryCount = options?.retryCount ?? 0;
     const maxRetries = options?.maxRetries ?? 5;
 
-    // Check if we've exceeded the maximum retry attempts
+    // Check if we've exceeded the maximum retry attempts.
+    //
+    // IMPORTANT: ingest() processes untrusted network input. If we throw here,
+    // a single permanently-unreadable message (e.g. encrypted under an epoch we
+    // can never decrypt, malformed ciphertext, spam) can DoS consumers.
+    // Instead, stop retrying and drop the remaining unreadable events.
     if (retryCount > maxRetries) {
-      throw new MaxRetriesExceededError(maxRetries);
+      return;
     }
     // Early return if no events to process
     if (events.length === 0) return;
@@ -728,7 +733,9 @@ export class MarmotGroup {
       const currentEpoch = this.state.groupContext.epoch;
 
       // Skip commits from past epochs - we've already processed these
-      if (commitEpoch < currentEpoch) continue;
+      if (commitEpoch < currentEpoch) {
+        continue;
+      }
 
       // Skip commits that are too far in the future
       // We can only process commits for the current epoch or the next epoch

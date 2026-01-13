@@ -6,11 +6,12 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "dev": "cd chat && pnpm i && pnpm dev",
-    "build": "npm run clean && npm run compile",
+    "dev": "pnpm --filter chat dev",
+    "examples": "pnpm --filter examples dev",
+    "build": "pnpm run clean && pnpm run compile",
     "clean": "rimraf ./dist",
     "compile": "tsc -b tsconfig.build.json",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "pnpm run build",
     "lint": "prettier --check .",
     "format": "prettier --write .",
     "test": "vitest"

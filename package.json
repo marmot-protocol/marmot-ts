@@ -59,10 +59,10 @@
     "applesauce-core": "^4.4.2",
     "applesauce-factory": "^4.0.0",
     "nostr-tools": "^2.19.4",
-    "ts-mls": "file:./ts-mls"
+    "ts-mls": "^1.6.0"
   },
   "devDependencies": {
-    "@types/node": "^24.10.4",
+    "@types/node": "^24.10.8",
     "husky": "^9.1.7",
     "prettier": "^3.7.4",
     "rimraf": "~6.0.1",

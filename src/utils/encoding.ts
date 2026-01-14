@@ -1,5 +1,5 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { Rumor } from "applesauce-core/helpers";
+import { Rumor } from "applesauce-common/helpers";
 import { NostrEvent } from "applesauce-core/helpers/event";
 
 /**

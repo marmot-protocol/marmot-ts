@@ -6,6 +6,7 @@ import {
   ClientState,
   createApplicationMessage,
   createCommit,
+  CreateCommitOptions,
   createProposal,
   CryptoProvider,
   emptyPskIndex,
@@ -43,7 +44,6 @@ import { getKeyPackage } from "../../core/key-package.js";
 import { GroupStore } from "../../store/group-store.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
 import {
-  MaxRetriesExceededError,
   NoGroupRelaysError,
   NoMarmotGroupDataError,
   NoRelayReceivedEventError,

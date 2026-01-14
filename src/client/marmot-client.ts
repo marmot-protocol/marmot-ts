@@ -23,11 +23,10 @@ import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
 import { GroupStore } from "../store/group-store.js";
 import { KeyPackageStore } from "../store/key-package-store.js";
-import { MarmotGroup } from "./group/marmot-group.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
 import { MarmotGroup } from "./group/marmot-group.js";
 import { getWelcome } from "../core/welcome.js";
-import { Rumor } from "applesauce-core/helpers";
+import { Rumor } from "applesauce-common/helpers";
 
 export type MarmotClientOptions = {
   /** The signer used for the clients identity */

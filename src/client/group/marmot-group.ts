@@ -437,6 +437,9 @@ export class MarmotGroup {
     });
 
     // Publish to the group's relays
+    // MIP-02 REQUIRES: Commit MUST be published and acknowledged by relays BEFORE sending Welcome messages.
+    // This ordering is critical for protocol correctness - new members must be able to fetch the commit
+    // that added them before processing their Welcome.
     const response = await this.publish(commitEvent);
     if (!hasAck(response)) throw new NoRelayReceivedEventError(commitEvent.id);
 
@@ -447,6 +450,7 @@ export class MarmotGroup {
     await this.save();
 
     // If new users were added, send welcome events
+    // The commit has been published and acked, so it's safe to send Welcomes now (MIP-02 compliance)
     if (
       welcome &&
       options?.welcomeRecipients &&

@@ -56,15 +56,15 @@
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "applesauce-common": "^5.0.0",
-    "applesauce-core": "^5.0.0",
+    "applesauce-core": "^5.0.1",
     "nostr-tools": "^2.19.4",
-    "ts-mls": "^1.6.0"
+    "ts-mls": "^1.6.1"
   },
   "devDependencies": {
     "@types/node": "^24.10.8",
     "applesauce-accounts": "^5.0.0",
     "husky": "^9.1.7",
-    "prettier": "^3.7.4",
+    "prettier": "^3.8.0",
     "rimraf": "~6.0.1",
     "typescript": "~5.9.3",
     "vitest": "^3.2.4"

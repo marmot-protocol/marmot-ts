@@ -62,27 +62,24 @@ export function encodeMarmotGroupData(data: MarmotGroupData): Uint8Array {
   const relaysBytes = textEncoder.encode(relaysStr);
   const relaysWithLength = encodeVariableLengthField(relaysBytes);
 
-  // Image fields (variable-length)
-  // Encode image_hash (0 or 32 bytes with 2-byte length prefix)
-  const imageHashBytes = data.imageHash || new Uint8Array(0);
-  if (imageHashBytes.length !== 0 && imageHashBytes.length !== 32) {
-    throw new Error("image_hash must be 0 or 32 bytes");
+  // Image fields (fixed-size per MIP-01 spec)
+  // Encode image_hash (always 32 bytes, zero-padded if null)
+  const imageHashBytes = data.imageHash || new Uint8Array(32);
+  if (imageHashBytes.length !== 32) {
+    throw new Error("image_hash must be exactly 32 bytes");
   }
-  const imageHashWithLength = encodeVariableLengthField(imageHashBytes);
 
-  // Encode image_key (0 or 32 bytes with 2-byte length prefix)
-  const imageKeyBytes = data.imageKey || new Uint8Array(0);
-  if (imageKeyBytes.length !== 0 && imageKeyBytes.length !== 32) {
-    throw new Error("image_key must be 0 or 32 bytes");
+  // Encode image_key (always 32 bytes, zero-padded if null)
+  const imageKeyBytes = data.imageKey || new Uint8Array(32);
+  if (imageKeyBytes.length !== 32) {
+    throw new Error("image_key must be exactly 32 bytes");
   }
-  const imageKeyWithLength = encodeVariableLengthField(imageKeyBytes);
 
-  // Encode image_nonce (0 or 12 bytes with 2-byte length prefix)
-  const imageNonceBytes = data.imageNonce || new Uint8Array(0);
-  if (imageNonceBytes.length !== 0 && imageNonceBytes.length !== 12) {
-    throw new Error("image_nonce must be 0 or 12 bytes");
+  // Encode image_nonce (always 12 bytes, zero-padded if null)
+  const imageNonceBytes = data.imageNonce || new Uint8Array(12);
+  if (imageNonceBytes.length !== 12) {
+    throw new Error("image_nonce must be exactly 12 bytes");
   }
-  const imageNonceWithLength = encodeVariableLengthField(imageNonceBytes);
 
   // Calculate total length
   const totalLength =
@@ -92,9 +89,9 @@ export function encodeMarmotGroupData(data: MarmotGroupData): Uint8Array {
     descWithLength.length +
     adminWithLength.length +
     relaysWithLength.length +
-    imageHashWithLength.length +
-    imageKeyWithLength.length +
-    imageNonceWithLength.length;
+    imageHashBytes.length +
+    imageKeyBytes.length +
+    imageNonceBytes.length;
 
   // Concatenate all parts
   const result = new Uint8Array(totalLength);
@@ -118,13 +115,13 @@ export function encodeMarmotGroupData(data: MarmotGroupData): Uint8Array {
   result.set(relaysWithLength, offset);
   offset += relaysWithLength.length;
 
-  result.set(imageHashWithLength, offset);
-  offset += imageHashWithLength.length;
+  result.set(imageHashBytes, offset);
+  offset += imageHashBytes.length;
 
-  result.set(imageKeyWithLength, offset);
-  offset += imageKeyWithLength.length;
+  result.set(imageKeyBytes, offset);
+  offset += imageKeyBytes.length;
 
-  result.set(imageNonceWithLength, offset);
+  result.set(imageNonceBytes, offset);
 
   return result;
 }
@@ -139,7 +136,9 @@ export function encodeMarmotGroupData(data: MarmotGroupData): Uint8Array {
 export function decodeMarmotGroupData(
   extensionData: Uint8Array,
 ): MarmotGroupData {
-  const MIN_SIZE = 2 + 32 + 2 + 2 + 2 + 2 + 2 + 2 + 2; // 48 bytes minimum
+  // Minimum size with fixed-size image fields:
+  // version(2) + nostr_group_id(32) + name_len(2) + desc_len(2) + admin_len(2) + relays_len(2) + image_hash(32) + image_key(32) + image_nonce(12)
+  const MIN_SIZE = 2 + 32 + 2 + 2 + 2 + 2 + 32 + 32 + 12; // 118 bytes minimum
 
   if (extensionData.length < MIN_SIZE) {
     throw new Error(
@@ -197,23 +196,22 @@ export function decodeMarmotGroupData(
   const relays = relaysStr.length > 0 ? relaysStr.split(",") : [];
   offset = relaysOffset;
 
-  // Read image_hash (variable-length with 2-byte length prefix)
-  const { data: imageHashBytes, nextOffset: imageHashOffset } =
-    decodeVariableLengthField(extensionData, offset);
-  const imageHash = imageHashBytes.length > 0 ? imageHashBytes : null;
-  offset = imageHashOffset;
+  // Read image_hash (fixed 32 bytes)
+  const imageHashBytes = extensionData.slice(offset, offset + 32);
+  const imageHash = imageHashBytes.some((b) => b !== 0) ? imageHashBytes : null;
+  offset += 32;
 
-  // Read image_key (variable-length with 2-byte length prefix)
-  const { data: imageKeyBytes, nextOffset: imageKeyOffset } =
-    decodeVariableLengthField(extensionData, offset);
-  const imageKey = imageKeyBytes.length > 0 ? imageKeyBytes : null;
-  offset = imageKeyOffset;
+  // Read image_key (fixed 32 bytes)
+  const imageKeyBytes = extensionData.slice(offset, offset + 32);
+  const imageKey = imageKeyBytes.some((b) => b !== 0) ? imageKeyBytes : null;
+  offset += 32;
 
-  // Read image_nonce (variable-length with 2-byte length prefix)
-  const { data: imageNonceBytes, nextOffset: imageNonceOffset } =
-    decodeVariableLengthField(extensionData, offset);
-  const imageNonce = imageNonceBytes.length > 0 ? imageNonceBytes : null;
-  offset = imageNonceOffset;
+  // Read image_nonce (fixed 12 bytes)
+  const imageNonceBytes = extensionData.slice(offset, offset + 12);
+  const imageNonce = imageNonceBytes.some((b) => b !== 0)
+    ? imageNonceBytes
+    : null;
+  offset += 12;
 
   // Validate no extra data
   if (offset !== extensionData.length) {

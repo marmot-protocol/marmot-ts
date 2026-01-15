@@ -100,9 +100,10 @@ function GroupSelector({
 
 interface MessageItemProps {
   rumor: Rumor;
+  isOwnMessage: boolean;
 }
 
-function MessageItem({ rumor }: MessageItemProps) {
+function MessageItem({ rumor, isOwnMessage }: MessageItemProps) {
   const formatTimestamp = (timestamp: number) => {
     const date = new Date(timestamp * 1000);
     return date.toLocaleTimeString();
@@ -113,7 +114,11 @@ function MessageItem({ rumor }: MessageItemProps) {
   };
 
   return (
-    <div className="flex flex-col gap-1">
+    <div
+      className={`flex flex-col gap-1 ${
+        isOwnMessage ? "items-end" : "items-start"
+      }`}
+    >
       <div className="flex items-center gap-2">
         <span className="text-xs font-mono text-base-content/70">
           {truncatePubkey(rumor.pubkey)}
@@ -122,7 +127,13 @@ function MessageItem({ rumor }: MessageItemProps) {
           {formatTimestamp(rumor.created_at)}
         </span>
       </div>
-      <div className="p-3">
+      <div
+        className={`p-3 max-w-[80%] rounded-lg ${
+          isOwnMessage
+            ? "bg-primary text-primary-content"
+            : "bg-base-200 text-base-content"
+        }`}
+      >
         <p className="text-sm whitespace-pre-wrap">{rumor.content}</p>
       </div>
     </div>
@@ -135,9 +146,10 @@ function MessageItem({ rumor }: MessageItemProps) {
 
 interface MessageListProps {
   messages: Rumor[];
+  currentUserPubkey: string | null;
 }
 
-function MessageList({ messages }: MessageListProps) {
+function MessageList({ messages, currentUserPubkey }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -155,7 +167,11 @@ function MessageList({ messages }: MessageListProps) {
   return (
     <div className="space-y-4">
       {messages.map((rumor, index) => (
-        <MessageItem key={`${rumor.id}-${index}`} rumor={rumor} />
+        <MessageItem
+          key={`${rumor.id}-${index}`}
+          rumor={rumor}
+          isOwnMessage={rumor.pubkey === currentUserPubkey}
+        />
       ))}
       <div ref={messagesEndRef} />
     </div>
@@ -285,6 +301,7 @@ interface ChatInterfaceProps {
   messages: Rumor[];
   messageText: string;
   isSending: boolean;
+  currentUserPubkey: string | null;
   onMessageChange: (text: string) => void;
   onSend: () => void;
 }
@@ -294,6 +311,7 @@ function ChatInterface({
   messages,
   messageText,
   isSending,
+  currentUserPubkey,
   onMessageChange,
   onSend,
 }: ChatInterfaceProps) {
@@ -311,7 +329,10 @@ function ChatInterface({
 
       {/* Messages Display */}
       <div className="p-4 h-96 overflow-y-auto">
-        <MessageList messages={messages} />
+        <MessageList
+          messages={messages}
+          currentUserPubkey={currentUserPubkey}
+        />
       </div>
 
       {/* Message Input */}
@@ -480,8 +501,8 @@ function useMessageSender(group: MarmotGroup | null) {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sendMessage = async (messageText: string) => {
-    if (!group || !account || !messageText.trim()) return;
+  const sendMessage = async (messageText: string): Promise<Rumor | null> => {
+    if (!group || !account || !messageText.trim()) return null;
 
     try {
       setIsSending(true);
@@ -503,6 +524,8 @@ function useMessageSender(group: MarmotGroup | null) {
 
       // Send via group
       await group.sendApplicationRumor(rumor);
+
+      return rumor;
     } catch (err) {
       console.error("Failed to send message:", err);
       setError(err instanceof Error ? err.message : String(err));
@@ -533,6 +556,24 @@ function Chat() {
   // Get selected group ID and group from observables
   const selectedGroupId = useObservable(selectedGroupId$);
   const selectedGroup = useObservable(selectedGroup$) ?? null;
+
+  // Get current user pubkey
+  const account = accounts.active;
+  const [currentUserPubkey, setCurrentUserPubkey] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const getPubkey = async () => {
+      if (account) {
+        const pubkey = await account.signer.getPublicKey();
+        setCurrentUserPubkey(pubkey);
+      } else {
+        setCurrentUserPubkey(null);
+      }
+    };
+    getPubkey();
+  }, [account]);
 
   // Handle messages from subscription
   const handleMessagesReceived = (newMessages: Rumor[]) => {
@@ -576,8 +617,13 @@ function Chat() {
     if (!messageText.trim()) return;
 
     try {
-      await sendMessage(messageText);
+      const sentRumor = await sendMessage(messageText);
       setMessageText("");
+
+      // Optimistically append the sent message to the UI for immediate feedback
+      if (sentRumor) {
+        handleMessagesReceived([sentRumor]);
+      }
     } catch (err) {
       // Error is already set by useMessageSender
     }
@@ -617,6 +663,7 @@ function Chat() {
           messages={messages}
           messageText={messageText}
           isSending={isSending}
+          currentUserPubkey={currentUserPubkey}
           onMessageChange={setMessageText}
           onSend={handleSendMessage}
         />

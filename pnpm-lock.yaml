@@ -23,14 +23,14 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0(typescript@5.9.3)
       applesauce-core:
-        specifier: ^5.0.0
-        version: 5.0.0(typescript@5.9.3)
+        specifier: ^5.0.1
+        version: 5.0.1(typescript@5.9.3)
       nostr-tools:
         specifier: ^2.19.4
         version: 2.19.4(typescript@5.9.3)
       ts-mls:
-        specifier: ^1.6.0
-        version: 1.6.0(@noble/ciphers@2.1.1)(@noble/curves@2.0.1)
+        specifier: ^1.6.1
+        version: 1.6.1(@noble/ciphers@2.1.1)(@noble/curves@2.0.1)
     devDependencies:
       "@types/node":
         specifier: ^24.10.8
@@ -42,8 +42,8 @@ importers:
         specifier: ^9.1.7
         version: 9.1.7
       prettier:
-        specifier: ^3.7.4
-        version: 3.7.4
+        specifier: ^3.8.0
+        version: 3.8.0
       rimraf:
         specifier: ~6.0.1
         version: 6.0.1
@@ -3135,6 +3135,12 @@ packages:
         integrity: sha512-l41CGztEakxAl8nk3KhaHrf7LLIe7+6tfDF1gC5mLnfSpV9raEsUUlmhE+t0AzQPmoEmyUPiWzc32KeP/u85YA==,
       }
 
+  applesauce-core@5.0.1:
+    resolution:
+      {
+        integrity: sha512-2//mSm58ssaAYE6A3HBMimd/Y5OcLcmt/NLOe7rj2mr4EliganPCqqww9hwbMh5pxK5t25yLGYAKBupLjPw1KQ==,
+      }
+
   applesauce-extra@4.1.0:
     resolution:
       {
@@ -5430,6 +5436,14 @@ packages:
     engines: { node: ">=14" }
     hasBin: true
 
+  prettier@3.8.0:
+    resolution:
+      {
+        integrity: sha512-yEPsovQfpxYfgWNhCfECjG5AQaO+K3dp6XERmOepyPDVqcJm+bjyCVO3pmU+nAPe0N5dDvekfGezt/EIiRe1TA==,
+      }
+    engines: { node: ">=14" }
+    hasBin: true
+
   pretty-ms@9.3.0:
     resolution:
       {
@@ -6187,13 +6201,14 @@ packages:
         integrity: sha512-tmMpK00BjZiUyVyvrBK7knerNgmgvcV/KLVyuma/SC+TQN167GrMRciANTz09+k3zW8L8t60jWO1GpfkZdjTaw==,
       }
 
-  ts-mls@1.6.0:
+  ts-mls@1.6.1:
     resolution:
       {
-        integrity: sha512-XAFmlLNpZHdY2MhnZM62EswPubaf/Pktksha6OvboVTzs8eQakfNCJHIBbLBch0f7VouEW95DOuPjMWS9Ts5fA==,
+        integrity: sha512-rMVMos3XER442W/rk1tYS0wdeivM4wqpnRJkCMhhUGtEGbmv9LSHONVkmKUUzWM1W3qxJZA71l0HWQ+Wk9xOhA==,
       }
     peerDependencies:
       "@hpke/chacha20poly1305": 1.7.1
+      "@hpke/dhkem-x448": 1.6.4
       "@hpke/hybridkem-x-wing": 0.6.1
       "@hpke/ml-kem": 0.2.1
       "@noble/ciphers": 2.1.1
@@ -6201,6 +6216,8 @@ packages:
       "@noble/post-quantum": 0.5.2
     peerDependenciesMeta:
       "@hpke/chacha20poly1305":
+        optional: true
+      "@hpke/dhkem-x448":
         optional: true
       "@hpke/hybridkem-x-wing":
         optional: true
@@ -8480,7 +8497,7 @@ snapshots:
 
   applesauce-accounts@5.0.0(typescript@5.9.3):
     dependencies:
-      applesauce-core: 5.0.0(typescript@5.9.3)
+      applesauce-core: 5.0.1(typescript@5.9.3)
       applesauce-signers: 5.0.0(typescript@5.9.3)
       nanoid: 5.1.6
       rxjs: 7.8.2
@@ -8500,7 +8517,7 @@ snapshots:
   applesauce-common@5.0.0(typescript@5.9.3):
     dependencies:
       "@scure/base": 1.2.6
-      applesauce-core: 5.0.0(typescript@5.9.3)
+      applesauce-core: 5.0.1(typescript@5.9.3)
       hash-sum: 2.0.0
       light-bolt11-decoder: 3.2.0
       rxjs: 7.8.2
@@ -8541,6 +8558,18 @@ snapshots:
       - typescript
 
   applesauce-core@5.0.0(typescript@5.9.3):
+    dependencies:
+      debug: 4.4.3
+      fast-deep-equal: 3.1.3
+      hash-sum: 2.0.0
+      nanoid: 5.1.6
+      nostr-tools: 2.19.4(typescript@5.9.3)
+      rxjs: 7.8.2
+    transitivePeerDependencies:
+      - supports-color
+      - typescript
+
+  applesauce-core@5.0.1(typescript@5.9.3):
     dependencies:
       debug: 4.4.3
       fast-deep-equal: 3.1.3
@@ -9951,6 +9980,8 @@ snapshots:
 
   prettier@3.7.4: {}
 
+  prettier@3.8.0: {}
+
   pretty-ms@9.3.0:
     dependencies:
       parse-ms: 4.0.0
@@ -10524,7 +10555,7 @@ snapshots:
 
   trough@2.2.0: {}
 
-  ts-mls@1.6.0(@noble/ciphers@2.1.1)(@noble/curves@2.0.1):
+  ts-mls@1.6.1(@noble/ciphers@2.1.1)(@noble/curves@2.0.1):
     dependencies:
       "@hpke/core": 1.7.5
       "@noble/ciphers": 2.1.1

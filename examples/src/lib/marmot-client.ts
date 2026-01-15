@@ -68,14 +68,32 @@ export const marmotClient$ = combineLatest([
         network: networkInterface,
       }),
   ),
-  tap((client) => {
+  tap(async (client) => {
     // Start the subscription manager when client is created
-    if (client && !subscriptionManager) {
-      console.log("Starting subscription manager...");
-      subscriptionManager = new GroupSubscriptionManager(client);
-      subscriptionManager.start().catch((err) => {
-        console.error("Failed to start subscription manager:", err);
-      });
+    if (!client) {
+      return;
+    }
+
+    if (subscriptionManager) {
+      console.log("Stopping existing subscription manager...");
+      try {
+        subscriptionManager.stop();
+      } catch (err) {
+        console.error("Failed to stop subscription manager:", err);
+      } finally {
+        // Ensure cleanup to avoid double-running managers
+        subscriptionManager = null;
+      }
+    }
+
+    console.log("Starting subscription manager...");
+    subscriptionManager = new GroupSubscriptionManager(client);
+    try {
+      await subscriptionManager.start();
+    } catch (err) {
+      console.error("Failed to start subscription manager:", err);
+      // Clean up on start failure
+      subscriptionManager = null;
     }
   }),
   startWith(undefined),

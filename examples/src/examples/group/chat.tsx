@@ -1,30 +1,22 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
-import { NostrEvent } from "applesauce-core/helpers";
 import { getEventHash } from "nostr-tools";
 import { useEffect, useRef, useState } from "react";
-import { Subscription } from "rxjs";
 import { ClientState } from "ts-mls/clientState.js";
 import {
-  deserializeApplicationRumor,
   extractMarmotGroupData,
-  getEpoch,
   getGroupIdHex,
-  getMemberCount,
   getNostrGroupIdHex,
-  GROUP_EVENT_KIND,
 } from "../../../../src";
 import { MarmotGroup } from "../../../../src/client/group/marmot-group";
 import { unixNow } from "../../../../src/utils/nostr";
 import { withSignIn } from "../../components/with-signIn";
 import { useObservable, useObservableMemo } from "../../hooks/use-observable";
 import accounts from "../../lib/accounts";
+import { groupStore$, selectedGroupId$ } from "../../lib/group-store";
 import {
-  groupCount$,
-  groupStore$,
-  selectedGroupId$,
-  storeChanges$,
-} from "../../lib/group-store";
-import { selectedGroup$ } from "../../lib/marmot-client";
+  getSubscriptionManager,
+  selectedGroup$,
+} from "../../lib/marmot-client";
 import { pool } from "../../lib/nostr";
 
 // ============================================================================
@@ -81,11 +73,9 @@ function GroupSelector({
             const groupIdHex = getGroupIdHex(group);
             const marmotData = extractMarmotGroupData(group);
             const name = marmotData?.name || "Unnamed Group";
-            const epoch = getEpoch(group);
-            const memberCount = getMemberCount(group);
             return (
               <option key={groupIdHex} value={groupIdHex}>
-                {name} (Epoch: {epoch}, Members: {memberCount})
+                {name}
               </option>
             );
           })}
@@ -353,8 +343,6 @@ function ChatInterface({
 
 function useGroupLoader() {
   const groupStore = useObservable(groupStore$);
-  const groupCount = useObservable(groupCount$);
-  const storeChanges = useObservable(storeChanges$);
   const [groups, setGroups] = useState<ClientState[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -380,118 +368,9 @@ function useGroupLoader() {
     };
 
     loadGroups();
-  }, [groupStore, groupCount, storeChanges]);
+  }, [groupStore]);
 
   return { groups, isLoading, error };
-}
-
-// ============================================================================
-// Hook: useGroupSubscription
-// ============================================================================
-
-function useGroupSubscription(
-  group: MarmotGroup | null,
-  onMessagesReceived: (messages: Rumor[]) => void,
-) {
-  const account = accounts.active;
-  const subscriptionRef = useRef<Subscription | null>(null);
-  const processEventsRef = useRef<(events: NostrEvent[]) => Promise<void>>(
-    async (_events: NostrEvent[]) => {},
-  );
-  const seenEventIdsRef = useRef<Set<string>>(new Set());
-
-  // Set up message processing function
-  useEffect(() => {
-    if (!group) return;
-
-    processEventsRef.current = async (events: NostrEvent[]) => {
-      if (events.length === 0) return;
-
-      // Deduplicate events before processing
-      const newEvents = events.filter(
-        (e) => !seenEventIdsRef.current.has(e.id),
-      );
-      if (newEvents.length === 0) return;
-
-      // Add new event IDs to seen set
-      newEvents.forEach((e) => seenEventIdsRef.current.add(e.id));
-
-      try {
-        const newMessages: Rumor[] = [];
-        for await (const result of group.ingest(newEvents)) {
-          if (result.kind === "applicationMessage") {
-            try {
-              // Deserialize the application data to get the rumor
-              const applicationData = result.message;
-              const rumor = deserializeApplicationRumor(applicationData);
-              newMessages.push(rumor);
-            } catch (parseErr) {
-              console.error("Failed to parse application message:", parseErr);
-              // Continue processing other messages
-            }
-          }
-        }
-
-        if (newMessages.length > 0) {
-          onMessagesReceived(newMessages);
-        }
-      } catch (err) {
-        console.error("Failed to process events:", err);
-      }
-    };
-  }, [group, onMessagesReceived]);
-
-  // Set up subscription
-  useEffect(() => {
-    if (!group || !account) {
-      // Clean up existing subscription
-      if (subscriptionRef.current) {
-        subscriptionRef.current.unsubscribe();
-        subscriptionRef.current = null;
-      }
-      // Clear seen events when group changes
-      seenEventIdsRef.current.clear();
-      return;
-    }
-
-    const relays = group.relays;
-    if (!relays || relays.length === 0) {
-      return;
-    }
-
-    const nostrGroupIdHex = getNostrGroupIdHex(group.state);
-
-    // Create subscription filter
-    const filters = {
-      kinds: [GROUP_EVENT_KIND],
-      "#h": [nostrGroupIdHex],
-    };
-
-    // Set up subscription using the pool directly
-    const observable = pool.subscription(relays, filters);
-    const subscription = observable.subscribe({
-      next: (value: any) => {
-        // Handle both single events and arrays
-        const events: NostrEvent[] = Array.isArray(value) ? value : [value];
-        // Process events immediately as they arrive (real-time only)
-        processEventsRef.current?.(events);
-      },
-      error: (err) => {
-        console.error("Subscription error:", err);
-      },
-      complete: () => {
-        // No-op for real-time subscription
-        console.debug("Subscription completed");
-      },
-    });
-
-    subscriptionRef.current = subscription;
-
-    return () => {
-      subscription.unsubscribe();
-      seenEventIdsRef.current.clear();
-    };
-  }, [group, account]);
 }
 
 // ============================================================================
@@ -599,8 +478,22 @@ function Chat() {
     });
   };
 
-  // Set up subscription
-  useGroupSubscription(selectedGroup, handleMessagesReceived);
+  // Register callback with subscription manager to receive application messages
+  useEffect(() => {
+    if (!selectedGroup) return;
+
+    const groupIdHex = getNostrGroupIdHex(selectedGroup.state);
+    const subscriptionManager = getSubscriptionManager();
+
+    if (subscriptionManager) {
+      const unsubscribe = subscriptionManager.onApplicationMessage(
+        groupIdHex,
+        handleMessagesReceived,
+      );
+
+      return unsubscribe;
+    }
+  }, [selectedGroup, handleMessagesReceived]);
 
   // Message sender
   const {

@@ -5,6 +5,8 @@ import { MarmotGroup } from "../../../src/client/group/marmot-group";
 import { GROUP_EVENT_KIND } from "../../../src";
 import { getNostrGroupIdHex } from "../../../src";
 import { pool } from "./nostr";
+import { deserializeApplicationRumor } from "../../../src";
+import { Rumor } from "applesauce-common/helpers/gift-wrap";
 
 /**
  * Manages persistent subscriptions for all groups in the store.
@@ -22,9 +24,28 @@ export class GroupSubscriptionManager {
 
   private client: MarmotClient;
   private isActive = false;
+  private applicationMessageCallbacks = new Map<
+    string,
+    (messages: Rumor[]) => void
+  >();
 
   constructor(client: MarmotClient) {
     this.client = client;
+  }
+
+  /**
+   * Register a callback to receive application messages for a specific group.
+   * This allows UI components to receive chat messages without creating duplicate subscriptions.
+   */
+  onApplicationMessage(
+    groupIdHex: string,
+    callback: (messages: Rumor[]) => void,
+  ): () => void {
+    this.applicationMessageCallbacks.set(groupIdHex, callback);
+    // Return unsubscribe function
+    return () => {
+      this.applicationMessageCallbacks.delete(groupIdHex);
+    };
   }
 
   /**
@@ -133,7 +154,7 @@ export class GroupSubscriptionManager {
       });
 
       console.log(
-        `Started subscription for group ${groupIdHex} on relays:`,
+        `[GroupSubscriptionManager] Started subscription for group ${groupIdHex} on relays:`,
         relays,
       );
 
@@ -152,7 +173,9 @@ export class GroupSubscriptionManager {
     if (sub) {
       sub.subscription.unsubscribe();
       this.groupSubscriptions.delete(groupIdHex);
-      console.log(`Stopped subscription for group ${groupIdHex}`);
+      console.log(
+        `[GroupSubscriptionManager] Stopped subscription for group ${groupIdHex}`,
+      );
     }
   }
 
@@ -177,6 +200,7 @@ export class GroupSubscriptionManager {
     try {
       // Process events through the group's ingest function
       // This handles commits, proposals, and application messages
+      const newMessages: Rumor[] = [];
       for await (const result of group.ingest(newEvents)) {
         // We don't need to do anything special here - the ingest function
         // already updates the group state and persists it via group.save()
@@ -186,6 +210,25 @@ export class GroupSubscriptionManager {
           console.log(
             `Processed commit for group ${groupIdHex}, new epoch: ${group.state.groupContext.epoch}`,
           );
+        }
+
+        // Collect application messages for UI
+        if (result.kind === "applicationMessage") {
+          try {
+            const applicationData = result.message;
+            const rumor = deserializeApplicationRumor(applicationData);
+            newMessages.push(rumor);
+          } catch (parseErr) {
+            console.error("Failed to parse application message:", parseErr);
+          }
+        }
+      }
+
+      // Notify registered callbacks about new application messages
+      if (newMessages.length > 0) {
+        const callback = this.applicationMessageCallbacks.get(groupIdHex);
+        if (callback) {
+          callback(newMessages);
         }
       }
     } catch (err) {
@@ -217,7 +260,7 @@ export class GroupSubscriptionManager {
 
       if (events.length > 0) {
         console.log(
-          `Fetched ${events.length} historical events for group ${groupIdHex}`,
+          `[GroupSubscriptionManager] Fetched ${events.length} historical events for group ${groupIdHex}`,
         );
         await this.processEvents(groupIdHex, group, events, seenEventIds);
       }

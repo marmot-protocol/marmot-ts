@@ -22,6 +22,7 @@ import {
   groupCount$,
   groupStore$,
   selectedGroupId$,
+  storeChanges$,
 } from "../../lib/group-store";
 import { selectedGroup$ } from "../../lib/marmot-client";
 import { pool } from "../../lib/nostr";
@@ -353,6 +354,7 @@ function ChatInterface({
 function useGroupLoader() {
   const groupStore = useObservable(groupStore$);
   const groupCount = useObservable(groupCount$);
+  const storeChanges = useObservable(storeChanges$);
   const [groups, setGroups] = useState<ClientState[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -378,7 +380,7 @@ function useGroupLoader() {
     };
 
     loadGroups();
-  }, [groupStore, groupCount]);
+  }, [groupStore, groupCount, storeChanges]);
 
   return { groups, isLoading, error };
 }

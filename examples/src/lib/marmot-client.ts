@@ -10,6 +10,7 @@ import {
   shareReplay,
   startWith,
   switchMap,
+  tap,
 } from "rxjs";
 import { MarmotClient } from "../../../src";
 import { MarmotGroup } from "../../../src/client/group/marmot-group";
@@ -18,9 +19,10 @@ import {
   PublishResponse,
 } from "../../../src/client/nostr-interface";
 import accounts from "./accounts";
-import { groupStore$, selectedGroupId$ } from "./group-store";
+import { groupStore$, selectedGroupId$, storeChanges$ } from "./group-store";
 import { keyPackageStore$ } from "./key-package-store";
 import { eventStore, pool } from "./nostr";
+import { GroupSubscriptionManager } from "./group-subscription-manager";
 
 // Convert RelayPool to NostrPool, then to GroupNostrInterface
 const networkInterface: NostrNetworkInterface = {
@@ -48,7 +50,10 @@ const networkInterface: NostrNetworkInterface = {
     ),
 };
 
-// Create an obserbable that creates a MarmotClient instance based on the current active account and stores.
+// Global subscription manager instance
+let subscriptionManager: GroupSubscriptionManager | null = null;
+
+// Create an observable that creates a MarmotClient instance based on the current active account and stores.
 export const marmotClient$ = combineLatest([
   accounts.active$.pipe(defined()),
   groupStore$,
@@ -63,15 +68,43 @@ export const marmotClient$ = combineLatest([
         network: networkInterface,
       }),
   ),
+  tap((client) => {
+    // Start the subscription manager when client is created
+    if (client && !subscriptionManager) {
+      console.log("Starting subscription manager...");
+      subscriptionManager = new GroupSubscriptionManager(client);
+      subscriptionManager.start().catch((err) => {
+        console.error("Failed to start subscription manager:", err);
+      });
+    }
+  }),
   startWith(undefined),
   shareReplay(1),
 );
+
+// Stop subscription manager when account changes to null
+accounts.active$.subscribe((account) => {
+  if (!account && subscriptionManager) {
+    subscriptionManager.stop();
+    subscriptionManager = null;
+  }
+});
+
+// Reconcile subscriptions when group store changes
+groupStore$.subscribe((store) => {
+  if (subscriptionManager && store) {
+    subscriptionManager.reconcileSubscriptions().catch((err) => {
+      console.error("Failed to reconcile subscriptions:", err);
+    });
+  }
+});
 
 // Observable for the currently selected group
 // Derives the MarmotGroup from the selectedGroupId$ and marmotClient$
 export const selectedGroup$ = combineLatest([
   selectedGroupId$,
   marmotClient$.pipe(defined()),
+  storeChanges$,
 ]).pipe(
   switchMap(([groupId, client]) => {
     if (!groupId) {

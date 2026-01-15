@@ -430,9 +430,11 @@ export class MarmotGroup {
     );
 
     // Wrap the commit in a group event
+    // Use this.state (not newState) to get the exporter_secret for the current epoch
+    // This ensures all members at the current epoch can decrypt the commit
     const commitEvent = await createGroupEvent({
       message: commit,
-      state: newState,
+      state: this.state,
       ciphersuite: this.ciphersuite,
     });
 

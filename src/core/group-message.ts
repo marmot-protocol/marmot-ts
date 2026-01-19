@@ -1,4 +1,4 @@
-import { isRumor, Rumor } from "applesauce-core/helpers";
+import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
 import {
   finalizeEvent,
   generateSecretKey,

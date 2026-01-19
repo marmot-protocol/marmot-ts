@@ -1,5 +1,5 @@
 {
-  "name": "marmot-ts-examples",
+  "name": "examples",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,28 +10,30 @@
   },
   "dependencies": {
     "@noble/hashes": "^2.0.1",
-    "@tailwindcss/vite": "^4.1.17",
-    "applesauce-accounts": "^4.1.0",
-    "applesauce-core": "^4.4.2",
-    "applesauce-extra": "^4.1.0",
-    "applesauce-loaders": "^4.2.0",
-    "applesauce-relay": "^4.4.2",
-    "applesauce-signers": "^4.2.0",
-    "daisyui": "^5.5.5",
+    "@tailwindcss/vite": "^4.1.18",
+    "applesauce-accounts": "^5.0.0",
+    "applesauce-common": "^5.0.0",
+    "applesauce-core": "^5.0.0",
+    "applesauce-extra": "^5.0.0",
+    "applesauce-loaders": "^5.0.0",
+    "applesauce-relay": "^5.0.0",
+    "applesauce-signers": "^5.0.0",
+    "daisyui": "^5.5.14",
+    "marmot-ts": "workspace:*",
     "localforage": "^1.10.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "react-error-boundary": "^6.0.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-error-boundary": "^6.0.2",
     "rxjs": "^7.8.2",
-    "tailwindcss": "^4.1.17",
+    "tailwindcss": "^4.1.18",
     "unique-names-generator": "^4.7.1"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
-    "@types/react": "^19.2.6",
+    "@types/node": "^24.10.4",
+    "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.7.0",
     "typescript": "~5.9.3",
-    "vite": "^7.2.4"
+    "vite": "^7.3.0"
   }
 }

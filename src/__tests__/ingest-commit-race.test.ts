@@ -23,8 +23,8 @@ import { GroupStore } from "../store/group-store.js";
 import type { KeyValueStoreBackend } from "../utils/key-value.js";
 import { MarmotGroup } from "../client/group/marmot-group.js";
 import type { NostrNetworkInterface } from "../client/nostr-interface.js";
-import { EventSigner } from "applesauce-factory";
-import { Rumor } from "applesauce-core/helpers";
+import { EventSigner } from "applesauce-core";
+import { Rumor } from "applesauce-common/helpers";
 
 class MemoryBackend<T> implements KeyValueStoreBackend<T> {
   private map = new Map<string, T>();

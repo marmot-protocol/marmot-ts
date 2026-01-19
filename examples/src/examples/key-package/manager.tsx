@@ -1,6 +1,14 @@
 import { getSeenRelays, NostrEvent, relaySet } from "applesauce-core/helpers";
 import { useEffect, useMemo, useState } from "react";
-import { combineLatest, EMPTY, map, of, startWith, switchMap } from "rxjs";
+import {
+  combineLatest,
+  EMPTY,
+  filter,
+  map,
+  of,
+  startWith,
+  switchMap,
+} from "rxjs";
 import { KeyPackage } from "ts-mls";
 import {
   CiphersuiteId,
@@ -180,7 +188,8 @@ function KeyPackageCard({
   // Subscribe to event updates so that seen relays are updated
   const seenRelays = useObservableMemo(
     () =>
-      eventStore.updated(event.id).pipe(
+      eventStore.update$.pipe(
+        filter((e) => e.id === event.id),
         startWith(event),
         map((event) => getSeenRelays(event)),
       ),

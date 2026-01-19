@@ -1,9 +1,9 @@
+import { Rumor } from "applesauce-common/helpers/gift-wrap";
+import { NostrEvent } from "applesauce-core/helpers";
+import { getEventHash } from "nostr-tools";
 import { useEffect, useRef, useState } from "react";
 import { Subscription } from "rxjs";
 import { ClientState } from "ts-mls/clientState.js";
-import { getEventHash } from "nostr-tools";
-import { Rumor, NostrEvent } from "applesauce-core/helpers";
-import { MarmotGroup } from "../../../../src/client/group/marmot-group";
 import {
   deserializeApplicationRumor,
   extractMarmotGroupData,
@@ -13,6 +13,7 @@ import {
   getNostrGroupIdHex,
   GROUP_EVENT_KIND,
 } from "../../../../src";
+import { MarmotGroup } from "../../../../src/client/group/marmot-group";
 import { unixNow } from "../../../../src/utils/nostr";
 import { withSignIn } from "../../components/with-signIn";
 import { useObservable, useObservableMemo } from "../../hooks/use-observable";
@@ -22,8 +23,8 @@ import {
   groupStore$,
   selectedGroupId$,
 } from "../../lib/group-store";
-import { pool } from "../../lib/nostr";
 import { selectedGroup$ } from "../../lib/marmot-client";
+import { pool } from "../../lib/nostr";
 
 // ============================================================================
 // Component: ErrorAlert

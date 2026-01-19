@@ -1,6 +1,7 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
-import { build } from "applesauce-factory";
-import { Profile } from "applesauce-factory/operations";
+import { buildEvent } from "applesauce-core";
+import { relaySet } from "applesauce-core/helpers";
+import { setProfile } from "applesauce-core/operations/profile";
 import { useCallback, useEffect, useState } from "react";
 import {
   adjectives,
@@ -8,13 +9,11 @@ import {
   colors,
   uniqueNamesGenerator,
 } from "unique-names-generator";
-
-import { relaySet } from "applesauce-core/helpers";
+import { createKeyPackageRelayListEvent } from "../../../../src";
 import { useObservable } from "../../hooks/use-observable";
 import accountManager from "../../lib/accounts";
 import { eventStore, pool } from "../../lib/nostr";
 import { extraRelays$, lookupRelays$ } from "../../lib/settings";
-import { createKeyPackageRelayListEvent } from "../../../../src";
 
 interface NewUserProps {
   onSuccess?: () => void;
@@ -72,10 +71,10 @@ export default function NewUser({ onSuccess }: NewUserProps) {
       // Optionally publish a profile event with the name and robohash picture
       try {
         const profile = await account.signEvent(
-          await build(
+          await buildEvent(
             { kind: 0 },
             {},
-            Profile.setProfile({
+            setProfile({
               name: name,
               picture: `https://robohash.org/${account.pubkey}.png`,
             }),

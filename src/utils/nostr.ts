@@ -1,8 +1,8 @@
-import { NostrEvent, Rumor } from "applesauce-core/helpers";
-import type { EventSigner } from "applesauce-factory";
-import { create } from "applesauce-factory";
-import { GiftWrapBlueprint } from "applesauce-factory/blueprints";
-import type { GiftWrapOptions } from "applesauce-factory/operations/gift-wrap";
+import { GiftWrapBlueprint } from "applesauce-common/blueprints";
+import { Rumor } from "applesauce-common/helpers/gift-wrap";
+import { GiftWrapOptions } from "applesauce-common/operations/gift-wrap";
+import { createEvent, EventSigner } from "applesauce-core/event-factory";
+import { NostrEvent } from "applesauce-core/helpers/event";
 import { PublishResponse } from "../client/nostr-interface.js";
 
 /** Returns the value of a name / value tag */
@@ -42,7 +42,13 @@ export async function createGiftWrap(
   const { rumor, recipient, signer, opts } = options;
 
   // Use the GiftWrapBlueprint to create the gift wrap
-  return await create({ signer }, GiftWrapBlueprint, recipient, rumor, opts);
+  return await createEvent(
+    { signer },
+    GiftWrapBlueprint,
+    recipient,
+    rumor,
+    opts,
+  );
 }
 
 /** Returns the current Unix timestamp in seconds */

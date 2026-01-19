@@ -6,16 +6,15 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "dev": "cd examples && pnpm i && pnpm dev",
-    "build": "npm run clean && npm run compile",
+    "dev": "pnpm --filter chat dev",
+    "examples": "pnpm --filter examples dev",
+    "build": "pnpm run clean && pnpm run compile",
     "clean": "rimraf ./dist",
     "compile": "tsc -b tsconfig.build.json",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "pnpm run build",
     "lint": "prettier --check .",
     "format": "prettier --write .",
-    "test": "vitest",
-    "example:full": "tsx examples/full-workflow.ts",
-    "example:chat": "tsx examples/simple-chat.ts"
+    "test": "vitest"
   },
   "repository": {
     "type": "git",
@@ -56,8 +55,8 @@
     "@noble/ciphers": "^2.1.1",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
-    "applesauce-core": "^4.4.2",
-    "applesauce-factory": "^4.0.0",
+    "applesauce-common": "^5.0.0",
+    "applesauce-core": "^5.0.0",
     "nostr-tools": "^2.19.4",
     "ts-mls": "^1.5.0"
   },

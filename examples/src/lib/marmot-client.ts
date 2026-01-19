@@ -10,6 +10,8 @@ import {
   shareReplay,
   startWith,
   switchMap,
+  withLatestFrom,
+  filter,
 } from "rxjs";
 import { MarmotClient } from "../../../src";
 import { MarmotGroup } from "../../../src/client/group/marmot-group";
@@ -21,6 +23,7 @@ import accounts from "./accounts";
 import { groupStore$, selectedGroupId$ } from "./group-store";
 import { keyPackageStore$ } from "./key-package-store";
 import { eventStore, pool } from "./nostr";
+import { GroupSubscriptionManager } from "./group-subscription-manager";
 
 // Convert RelayPool to NostrPool, then to GroupNostrInterface
 const networkInterface: NostrNetworkInterface = {
@@ -48,7 +51,19 @@ const networkInterface: NostrNetworkInterface = {
     ),
 };
 
-// Create an obserbable that creates a MarmotClient instance based on the current active account and stores.
+// Global subscription manager instance
+let subscriptionManager: GroupSubscriptionManager | null = null;
+
+// Track when subscription manager is fully initialized
+let isSubscriptionManagerReady = false;
+
+// Export the subscription manager for components to register callbacks
+export function getSubscriptionManager(): GroupSubscriptionManager | null {
+  return subscriptionManager;
+}
+
+// Create an observable that creates a MarmotClient instance based on the current active account and stores.
+// Note: We use distinctUntilChanged on the account to avoid recreating the client unnecessarily.
 export const marmotClient$ = combineLatest([
   accounts.active$.pipe(defined()),
   groupStore$,
@@ -67,8 +82,57 @@ export const marmotClient$ = combineLatest([
   shareReplay(1),
 );
 
+// Initialize subscription manager when client is ready
+marmotClient$.subscribe(async (client) => {
+  if (!client) {
+    // Stop subscription manager when client is null
+    if (subscriptionManager) {
+      subscriptionManager.stop();
+      subscriptionManager = null;
+    }
+    isSubscriptionManagerReady = false;
+    return;
+  }
+
+  // Only start if not already running
+  if (!subscriptionManager) {
+    console.log("Starting subscription manager...");
+    subscriptionManager = new GroupSubscriptionManager(client);
+    try {
+      await subscriptionManager.start();
+      isSubscriptionManagerReady = true;
+      console.log("Subscription manager started successfully");
+    } catch (err) {
+      console.error("Failed to start subscription manager:", err);
+      subscriptionManager = null;
+      isSubscriptionManagerReady = false;
+    }
+  }
+});
+
+// Reconcile subscriptions when group store changes, but only after manager is ready
+// Use withLatestFrom to get the latest marmotClient$ value and filter for ready state
+groupStore$
+  .pipe(
+    withLatestFrom(marmotClient$),
+    filter(([store, client]) => {
+      // Only proceed if store exists, client exists, and subscription manager is fully initialized
+      return Boolean(
+        store && client && isSubscriptionManagerReady && subscriptionManager,
+      );
+    }),
+  )
+  .subscribe(() => {
+    // At this point we know subscriptionManager is not null because of the filter
+    subscriptionManager!.reconcileSubscriptions().catch((err) => {
+      console.error("Failed to reconcile subscriptions:", err);
+    });
+  });
+
 // Observable for the currently selected group
 // Derives the MarmotGroup from the selectedGroupId$ and marmotClient$
+// Note: This only updates when groupId or client changes, not on every store update.
+// The group's internal state is reactive through the MarmotGroup instance.
 export const selectedGroup$ = combineLatest([
   selectedGroupId$,
   marmotClient$.pipe(defined()),

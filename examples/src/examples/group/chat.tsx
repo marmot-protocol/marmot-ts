@@ -1,29 +1,22 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
-import { NostrEvent } from "applesauce-core/helpers";
 import { getEventHash } from "nostr-tools";
 import { useEffect, useRef, useState } from "react";
-import { Subscription } from "rxjs";
 import { ClientState } from "ts-mls/clientState.js";
 import {
-  deserializeApplicationRumor,
   extractMarmotGroupData,
-  getEpoch,
   getGroupIdHex,
-  getMemberCount,
   getNostrGroupIdHex,
-  GROUP_EVENT_KIND,
 } from "../../../../src";
 import { MarmotGroup } from "../../../../src/client/group/marmot-group";
 import { unixNow } from "../../../../src/utils/nostr";
 import { withSignIn } from "../../components/with-signIn";
 import { useObservable, useObservableMemo } from "../../hooks/use-observable";
 import accounts from "../../lib/accounts";
+import { groupStore$, selectedGroupId$ } from "../../lib/group-store";
 import {
-  groupCount$,
-  groupStore$,
-  selectedGroupId$,
-} from "../../lib/group-store";
-import { selectedGroup$ } from "../../lib/marmot-client";
+  getSubscriptionManager,
+  selectedGroup$,
+} from "../../lib/marmot-client";
 import { pool } from "../../lib/nostr";
 
 // ============================================================================
@@ -80,11 +73,9 @@ function GroupSelector({
             const groupIdHex = getGroupIdHex(group);
             const marmotData = extractMarmotGroupData(group);
             const name = marmotData?.name || "Unnamed Group";
-            const epoch = getEpoch(group);
-            const memberCount = getMemberCount(group);
             return (
               <option key={groupIdHex} value={groupIdHex}>
-                {name} (Epoch: {epoch}, Members: {memberCount})
+                {name}
               </option>
             );
           })}
@@ -100,9 +91,10 @@ function GroupSelector({
 
 interface MessageItemProps {
   rumor: Rumor;
+  isOwnMessage: boolean;
 }
 
-function MessageItem({ rumor }: MessageItemProps) {
+function MessageItem({ rumor, isOwnMessage }: MessageItemProps) {
   const formatTimestamp = (timestamp: number) => {
     const date = new Date(timestamp * 1000);
     return date.toLocaleTimeString();
@@ -113,7 +105,11 @@ function MessageItem({ rumor }: MessageItemProps) {
   };
 
   return (
-    <div className="flex flex-col gap-1">
+    <div
+      className={`flex flex-col gap-1 ${
+        isOwnMessage ? "items-end" : "items-start"
+      }`}
+    >
       <div className="flex items-center gap-2">
         <span className="text-xs font-mono text-base-content/70">
           {truncatePubkey(rumor.pubkey)}
@@ -122,7 +118,13 @@ function MessageItem({ rumor }: MessageItemProps) {
           {formatTimestamp(rumor.created_at)}
         </span>
       </div>
-      <div className="p-3">
+      <div
+        className={`p-3 max-w-[80%] rounded-lg ${
+          isOwnMessage
+            ? "bg-primary text-primary-content"
+            : "bg-base-200 text-base-content"
+        }`}
+      >
         <p className="text-sm whitespace-pre-wrap">{rumor.content}</p>
       </div>
     </div>
@@ -135,9 +137,10 @@ function MessageItem({ rumor }: MessageItemProps) {
 
 interface MessageListProps {
   messages: Rumor[];
+  currentUserPubkey: string | null;
 }
 
-function MessageList({ messages }: MessageListProps) {
+function MessageList({ messages, currentUserPubkey }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -155,7 +158,11 @@ function MessageList({ messages }: MessageListProps) {
   return (
     <div className="space-y-4">
       {messages.map((rumor, index) => (
-        <MessageItem key={`${rumor.id}-${index}`} rumor={rumor} />
+        <MessageItem
+          key={`${rumor.id}-${index}`}
+          rumor={rumor}
+          isOwnMessage={rumor.pubkey === currentUserPubkey}
+        />
       ))}
       <div ref={messagesEndRef} />
     </div>
@@ -285,6 +292,7 @@ interface ChatInterfaceProps {
   messages: Rumor[];
   messageText: string;
   isSending: boolean;
+  currentUserPubkey: string | null;
   onMessageChange: (text: string) => void;
   onSend: () => void;
 }
@@ -294,6 +302,7 @@ function ChatInterface({
   messages,
   messageText,
   isSending,
+  currentUserPubkey,
   onMessageChange,
   onSend,
 }: ChatInterfaceProps) {
@@ -311,7 +320,10 @@ function ChatInterface({
 
       {/* Messages Display */}
       <div className="p-4 h-96 overflow-y-auto">
-        <MessageList messages={messages} />
+        <MessageList
+          messages={messages}
+          currentUserPubkey={currentUserPubkey}
+        />
       </div>
 
       {/* Message Input */}
@@ -331,7 +343,6 @@ function ChatInterface({
 
 function useGroupLoader() {
   const groupStore = useObservable(groupStore$);
-  const groupCount = useObservable(groupCount$);
   const [groups, setGroups] = useState<ClientState[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -357,133 +368,9 @@ function useGroupLoader() {
     };
 
     loadGroups();
-  }, [groupStore, groupCount]);
+  }, [groupStore]);
 
   return { groups, isLoading, error };
-}
-
-// ============================================================================
-// Hook: useGroupSubscription
-// ============================================================================
-
-function useGroupSubscription(
-  group: MarmotGroup | null,
-  onMessagesReceived: (messages: Rumor[]) => void,
-) {
-  const account = accounts.active;
-  const subscriptionRef = useRef<Subscription | null>(null);
-  const processEventsRef = useRef<(events: NostrEvent[]) => Promise<void>>(
-    async (_events: NostrEvent[]) => {},
-  );
-
-  // Set up message processing function
-  useEffect(() => {
-    if (!group) return;
-
-    processEventsRef.current = async (events: NostrEvent[]) => {
-      if (events.length === 0) return;
-
-      try {
-        const newMessages: Rumor[] = [];
-        for await (const result of group.ingest(events)) {
-          if (result.kind === "applicationMessage") {
-            try {
-              // Deserialize the application data to get the rumor
-              const applicationData = result.message;
-              const rumor = deserializeApplicationRumor(applicationData);
-              newMessages.push(rumor);
-            } catch (parseErr) {
-              console.error("Failed to parse application message:", parseErr);
-              // Continue processing other messages
-            }
-          }
-        }
-
-        if (newMessages.length > 0) {
-          onMessagesReceived(newMessages);
-        }
-      } catch (err) {
-        console.error("Failed to process events:", err);
-      }
-    };
-  }, [group, onMessagesReceived]);
-
-  // Set up subscription
-  useEffect(() => {
-    if (!group || !account) {
-      // Clean up existing subscription
-      if (subscriptionRef.current) {
-        subscriptionRef.current.unsubscribe();
-        subscriptionRef.current = null;
-      }
-      return;
-    }
-
-    const relays = group.relays;
-    if (!relays || relays.length === 0) {
-      return;
-    }
-
-    const nostrGroupIdHex = getNostrGroupIdHex(group.state);
-
-    // Create subscription filter
-    const filters = {
-      kinds: [GROUP_EVENT_KIND],
-      "#h": [nostrGroupIdHex],
-    };
-
-    // Local state for this subscription
-    let localEoseReceived = false;
-    const localBatchedEvents: NostrEvent[] = [];
-
-    // Set up subscription using the pool directly
-    const observable = pool.subscription(relays, filters);
-    const subscription = observable.subscribe({
-      next: (value: any) => {
-        // Handle both single events and arrays
-        const events: NostrEvent[] = Array.isArray(value) ? value : [value];
-
-        if (localEoseReceived) {
-          // After EOSE, process events immediately
-          processEventsRef.current?.(events);
-        } else {
-          // Before EOSE, batch events locally
-          localBatchedEvents.push(...events);
-        }
-      },
-      error: (err) => {
-        console.error("Subscription error:", err);
-      },
-      complete: () => {
-        // Observable completion can be treated as EOSE
-        if (!localEoseReceived) {
-          localEoseReceived = true;
-          // Process batched events
-          if (localBatchedEvents.length > 0) {
-            processEventsRef.current?.(localBatchedEvents);
-          }
-        }
-      },
-    });
-
-    subscriptionRef.current = subscription;
-
-    // Set a timeout to treat as EOSE after initial batch period
-    const eoseTimeout = setTimeout(() => {
-      if (!localEoseReceived) {
-        localEoseReceived = true;
-        // Process batched events
-        if (localBatchedEvents.length > 0) {
-          processEventsRef.current?.(localBatchedEvents);
-        }
-      }
-    }, 2000); // 2 second timeout for initial batch
-
-    return () => {
-      subscription.unsubscribe();
-      clearTimeout(eoseTimeout);
-    };
-  }, [group, account]);
 }
 
 // ============================================================================
@@ -495,8 +382,8 @@ function useMessageSender(group: MarmotGroup | null) {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sendMessage = async (messageText: string) => {
-    if (!group || !account || !messageText.trim()) return;
+  const sendMessage = async (messageText: string): Promise<Rumor | null> => {
+    if (!group || !account || !messageText.trim()) return null;
 
     try {
       setIsSending(true);
@@ -518,6 +405,8 @@ function useMessageSender(group: MarmotGroup | null) {
 
       // Send via group
       await group.sendApplicationRumor(rumor);
+
+      return rumor;
     } catch (err) {
       console.error("Failed to send message:", err);
       setError(err instanceof Error ? err.message : String(err));
@@ -549,6 +438,24 @@ function Chat() {
   const selectedGroupId = useObservable(selectedGroupId$);
   const selectedGroup = useObservable(selectedGroup$) ?? null;
 
+  // Get current user pubkey
+  const account = accounts.active;
+  const [currentUserPubkey, setCurrentUserPubkey] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const getPubkey = async () => {
+      if (account) {
+        const pubkey = await account.signer.getPublicKey();
+        setCurrentUserPubkey(pubkey);
+      } else {
+        setCurrentUserPubkey(null);
+      }
+    };
+    getPubkey();
+  }, [account]);
+
   // Handle messages from subscription
   const handleMessagesReceived = (newMessages: Rumor[]) => {
     setMessages((prev) => {
@@ -571,8 +478,22 @@ function Chat() {
     });
   };
 
-  // Set up subscription
-  useGroupSubscription(selectedGroup, handleMessagesReceived);
+  // Register callback with subscription manager to receive application messages
+  useEffect(() => {
+    if (!selectedGroup) return;
+
+    const groupIdHex = getNostrGroupIdHex(selectedGroup.state);
+    const subscriptionManager = getSubscriptionManager();
+
+    if (subscriptionManager) {
+      const unsubscribe = subscriptionManager.onApplicationMessage(
+        groupIdHex,
+        handleMessagesReceived,
+      );
+
+      return unsubscribe;
+    }
+  }, [selectedGroup, handleMessagesReceived]);
 
   // Message sender
   const {
@@ -591,8 +512,13 @@ function Chat() {
     if (!messageText.trim()) return;
 
     try {
-      await sendMessage(messageText);
+      const sentRumor = await sendMessage(messageText);
       setMessageText("");
+
+      // Optimistically append the sent message to the UI for immediate feedback
+      if (sentRumor) {
+        handleMessagesReceived([sentRumor]);
+      }
     } catch (err) {
       // Error is already set by useMessageSender
     }
@@ -607,7 +533,11 @@ function Chat() {
       <div className="space-y-2">
         <h1 className="text-3xl font-bold">Group Chat</h1>
         <p className="text-base-content/70">
-          Select a group and start chatting with members
+          This page assumes you already joined the group. Use the Create,
+          Add-member, and Join examples for lifecycle steps.
+        </p>
+        <p className="text-base-content/70">
+          Select a group and start chatting with members in real-time.
         </p>
       </div>
 
@@ -628,6 +558,7 @@ function Chat() {
           messages={messages}
           messageText={messageText}
           isSending={isSending}
+          currentUserPubkey={currentUserPubkey}
           onMessageChange={setMessageText}
           onSend={handleSendMessage}
         />

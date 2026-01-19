@@ -6,6 +6,7 @@ import {
   ClientState,
   createApplicationMessage,
   createCommit,
+  CreateCommitOptions,
   createProposal,
   CryptoProvider,
   emptyPskIndex,
@@ -15,13 +16,18 @@ import {
   Proposal,
   type ProcessMessageResult,
 } from "ts-mls";
-import { CreateCommitOptions } from "ts-mls/createCommit.js";
-import { acceptAll } from "ts-mls/incomingMessageAction.js";
+import {
+  acceptAll,
+  type IncomingMessageCallback,
+} from "ts-mls/incomingMessageAction.js";
 import {
   MLSMessage,
   type MlsPrivateMessage,
   type MlsPublicMessage,
 } from "ts-mls/message.js";
+import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
+import { toLeafIndex, type LeafIndex } from "ts-mls/treemath.js";
+import { getCredentialPubkey } from "../../core/credential.js";
 import { extractMarmotGroupData } from "../../core/client-state.js";
 import {
   createGroupEvent,
@@ -33,10 +39,11 @@ import {
 import { isPrivateMessage } from "../../core/message.js";
 import { MarmotGroupData } from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
+import { proposeInviteUser } from "./proposals/invite-user.js";
+import { getKeyPackage } from "../../core/key-package.js";
 import { GroupStore } from "../../store/group-store.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
 import {
-  MaxRetriesExceededError,
   NoGroupRelaysError,
   NoMarmotGroupDataError,
   NoRelayReceivedEventError,
@@ -61,7 +68,7 @@ export type ProposalBuilder<
 > = (...args: Args) => ProposalAction<T>;
 
 export type MarmotGroupOptions = {
-  /** The backend to store and load the group from */
+  /** The backend to store and load of group from */
   store: GroupStore;
   /** The signer used for the clients identity */
   signer: EventSigner;
@@ -71,8 +78,57 @@ export type MarmotGroupOptions = {
   network: NostrNetworkInterface;
 };
 
+/** Information about a welcome recipient */
+export type WelcomeRecipient = {
+  /** The recipient's Nostr public key */
+  pubkey: string;
+  /** The ID of KeyPackage event (kind 443) used for add operation */
+  keyPackageEventId: string;
+};
+
+/**
+ * Build an incoming-message callback that enforces MIP-03 "admin-only commits".
+ *
+ * Kept as a pure helper for test ergonomics and clearer policy control.
+ */
+export function createAdminCommitPolicyCallback(args: {
+  ratchetTree: ClientState["ratchetTree"];
+  adminPubkeys: string[];
+  onUnverifiableCommit?: "reject" | "retry";
+}): IncomingMessageCallback {
+  const { ratchetTree, adminPubkeys, onUnverifiableCommit = "retry" } = args;
+
+  return (incoming) => {
+    if (incoming.kind === "proposal") return "accept";
+
+    // Commit must be attributable to an admin.
+    const senderLeafIndexUnknown = incoming.senderLeafIndex;
+    if (senderLeafIndexUnknown === undefined) return "reject";
+
+    const senderLeafIndex: LeafIndex =
+      typeof senderLeafIndexUnknown === "number"
+        ? toLeafIndex(senderLeafIndexUnknown)
+        : senderLeafIndexUnknown;
+
+    try {
+      const senderCredential = getCredentialFromLeafIndex(
+        ratchetTree,
+        senderLeafIndex,
+      );
+      const senderPubkey = getCredentialPubkey(senderCredential);
+      return adminPubkeys.includes(senderPubkey) ? "accept" : "reject";
+    } catch {
+      // "retry" here means we don't want to permanently reject the commit;
+      // MarmotGroup.ingest() will treat processing errors as unreadable/retryable.
+      if (onUnverifiableCommit === "retry")
+        throw new Error("unverifiable commit sender");
+      return "reject";
+    }
+  };
+}
+
 export class MarmotGroup {
-  /** The backend to store and load the group from */
+  /** The backend to store and load of group from */
   readonly store: GroupStore;
 
   /** The signer used for the clients identity */
@@ -84,7 +140,7 @@ export class MarmotGroup {
   /** The nostr relay pool to use for the group */
   readonly network: NostrNetworkInterface;
 
-  /** Whether the group state has been modified */
+  /** Whether group state has been modified */
   dirty = false;
 
   /** Internal state */
@@ -240,17 +296,17 @@ export class MarmotGroup {
   /**
    * Creates and sends an application message to the group.
    *
-   * Application messages contain the actual content shared within the group (e.g., chat messages,
+   * Application messages contain actual content shared within the group (e.g., chat messages,
    * reactions, etc.). The inner Nostr event (rumor) must be unsigned and will be serialized
    * according to the Marmot spec.
    *
-   * @param rumor - The unsigned Nostr event (rumor) to send as the application message
+   * @param rumor - The unsigned Nostr event (rumor) to send as an application message
    * @returns Promise resolving to the publish response from the relays
    */
   async sendApplicationRumor(
     rumor: Rumor,
   ): Promise<Record<string, PublishResponse>> {
-    // Serialize the Nostr event (rumor) to application data according to Marmot spec
+    // Serialize the Nostr event (rumor) to application data according to the Marmot spec
     const applicationData = serializeApplicationRumor(rumor);
 
     // Create the application message using ts-mls
@@ -301,6 +357,7 @@ export class MarmotGroup {
    * @param options - Options for creating the commit
    * @param options.extraProposals - New proposals to include in the commit (inline)
    * @param options.proposalRefs - Proposal references (hex strings) to select from unappliedProposals
+   * @param options.welcomeRecipients - Explicit list of users to send Welcome messages to (for Add operations)
    */
   async commit(options?: {
     extraProposals?: (
@@ -309,6 +366,7 @@ export class MarmotGroup {
       | (Proposal | ProposalAction<Proposal>)[]
     )[];
     proposalRefs?: string[];
+    welcomeRecipients?: WelcomeRecipient[];
   }): Promise<Record<string, PublishResponse>> {
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
@@ -356,6 +414,7 @@ export class MarmotGroup {
     const commitOptions: CreateCommitOptions = {
       // All messages should be private
       wireAsPublicMessage: false,
+      ratchetTreeExtension: true,
     };
 
     // Only use extraProposals if we have proposals to include
@@ -371,13 +430,18 @@ export class MarmotGroup {
     );
 
     // Wrap the commit in a group event
+    // Use this.state (not newState) to get the exporter_secret for the current epoch
+    // This ensures all members at the current epoch can decrypt the commit
     const commitEvent = await createGroupEvent({
       message: commit,
-      state: newState,
+      state: this.state,
       ciphersuite: this.ciphersuite,
     });
 
     // Publish to the group's relays
+    // MIP-02 REQUIRES: Commit MUST be published and acknowledged by relays BEFORE sending Welcome messages.
+    // This ordering is critical for protocol correctness - new members must be able to fetch the commit
+    // that added them before processing their Welcome.
     const response = await this.publish(commitEvent);
     if (!hasAck(response)) throw new NoRelayReceivedEventError(commitEvent.id);
 
@@ -387,30 +451,70 @@ export class MarmotGroup {
     // Persist local-authoritative epoch transition immediately.
     await this.save();
 
-    // If new users were added, send the welcome events
-    if (welcome) {
-      // How do we know what nostr users added?
-      const users: string[] = [];
+    // If new users were added, send welcome events
+    // The commit has been published and acked, so it's safe to send Welcomes now (MIP-02 compliance)
+    if (
+      welcome &&
+      options?.welcomeRecipients &&
+      options.welcomeRecipients.length > 0
+    ) {
+      console.log(
+        `[MarmotGroup.commit] Sending Welcome messages to ${options.welcomeRecipients.length} recipient(s)`,
+      );
 
       // Send all welcome events in parallel
       await Promise.allSettled(
-        users.map(async (user) => {
+        options.welcomeRecipients.map(async (recipient) => {
           const welcomeRumor = createWelcomeRumor({
             welcome,
             author: actorPubkey,
             groupRelays: groupData.relays,
+            keyPackageEventId: recipient.keyPackageEventId,
           });
 
           // Gift wrap the welcome event to the newly added user
           const giftWrapEvent = await createGiftWrap({
             rumor: welcomeRumor,
-            recipient: user,
+            recipient: recipient.pubkey,
             signer: this.signer,
           });
 
           // Get the newly added user's inbox relays using the GroupNostrInterface
-          const inboxRelays = await this.network.getUserInboxRelays(user);
-          await this.network.publish(inboxRelays, giftWrapEvent);
+          // Fallback to group relays if inbox relays are not available
+          let inboxRelays: string[];
+          try {
+            inboxRelays = await this.network.getUserInboxRelays(
+              recipient.pubkey,
+            );
+            console.log(
+              `[MarmotGroup.commit] Retrieved inbox relays for recipient:`,
+              inboxRelays,
+            );
+          } catch (error) {
+            console.warn(
+              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${recipient.pubkey.slice(0, 16)}...:`,
+              error,
+            );
+            // Fallback to group relays
+            inboxRelays = groupData.relays || [];
+          }
+
+          if (inboxRelays.length === 0) {
+            console.warn(
+              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(0, 16)}...`,
+            );
+            return;
+          }
+
+          const publishResult = await this.network.publish(
+            inboxRelays,
+            giftWrapEvent,
+          );
+
+          console.log(
+            `[MarmotGroup.commit] Gift wrap publish result:`,
+            publishResult,
+          );
 
           // TODO: need to detect publish failure to attempt to send later
         }),
@@ -418,6 +522,80 @@ export class MarmotGroup {
     }
 
     return response;
+  }
+
+  /**
+   * Invites a user to the group using their KeyPackage event (kind 443).
+   *
+   * This method:
+   * 1. Validates the KeyPackage event (kind 443)
+   * 2. Validates that the credential identity matches the event pubkey
+   * 3. Builds an Add proposal using the KeyPackage
+   * 4. Commits the proposal
+   * 5. After commit ack, sends a Welcome message to the invitee via NIP-59 gift wrap
+   *
+   * @param keyPackageEvent - The KeyPackage event (kind 443) for the user to invite
+   * @returns Promise resolving to the publish response from the relays
+   * @throws Error if the event is not kind 443 or if the credential identity doesn't match
+   */
+  async inviteByKeyPackageEvent(
+    keyPackageEvent: NostrEvent,
+  ): Promise<Record<string, PublishResponse>> {
+    // Validate the event is a KeyPackage event (kind 443)
+    if (keyPackageEvent.kind !== 443) {
+      throw new Error(
+        `inviteByKeyPackageEvent: Expected KeyPackage event kind 443, got ${keyPackageEvent.kind}`,
+      );
+    }
+
+    // Validate that the credential identity matches the event pubkey
+    const keyPackage = getKeyPackage(keyPackageEvent);
+    const credentialIdentity = getCredentialPubkey(
+      keyPackage.leafNode.credential,
+    );
+    if (credentialIdentity !== keyPackageEvent.pubkey) {
+      throw new Error(
+        `inviteByKeyPackageEvent: Credential identity ${credentialIdentity} does not match event pubkey ${keyPackageEvent.pubkey}`,
+      );
+    }
+
+    // Build the Add proposal using the existing proposeInviteUser function
+    const proposalAction = proposeInviteUser(keyPackageEvent);
+
+    // Commit with the proposal and explicit welcome recipient
+    return await this.commit({
+      extraProposals: [proposalAction],
+      welcomeRecipients: [
+        {
+          pubkey: keyPackageEvent.pubkey,
+          keyPackageEventId: keyPackageEvent.id,
+        },
+      ],
+    });
+  }
+
+  /**
+   * Creates an incoming message callback that enforces admin-only commits.
+   *
+   * Per MIP-03, only admins can send commits. This callback:
+   * - Accepts all proposals (they don't require admin privileges)
+   * - For commits, verifies that the sender is in the group's admin list
+   * - Rejects commits from non-admin senders
+   *
+   * @returns An IncomingMessageCallback that enforces admin verification
+   */
+  private createAdminVerificationCallback(): IncomingMessageCallback {
+    const groupData = this.groupData;
+    if (!groupData) {
+      // If no group data, we can't verify - accept all (shouldn't happen in normal flow)
+      return acceptAll;
+    }
+
+    return createAdminCommitPolicyCallback({
+      ratchetTree: this.state.ratchetTree,
+      adminPubkeys: groupData.adminPubkeys,
+      onUnverifiableCommit: "retry",
+    });
   }
 
   /**
@@ -448,9 +626,14 @@ export class MarmotGroup {
     const retryCount = options?.retryCount ?? 0;
     const maxRetries = options?.maxRetries ?? 5;
 
-    // Check if we've exceeded the maximum retry attempts
+    // Check if we've exceeded the maximum retry attempts.
+    //
+    // IMPORTANT: ingest() processes untrusted network input. If we throw here,
+    // a single permanently-unreadable message (e.g. encrypted under an epoch we
+    // can never decrypt, malformed ciphertext, spam) can DoS consumers.
+    // Instead, stop retrying and drop the remaining unreadable events.
     if (retryCount > maxRetries) {
-      throw new MaxRetriesExceededError(maxRetries);
+      return;
     }
     // Early return if no events to process
     if (events.length === 0) return;
@@ -513,7 +696,7 @@ export class MarmotGroup {
 
         // processMessage handles:
         // - Proposals: Adds them to state.unappliedProposals (keyed by proposal reference)
-        // - Application messages: Decrypts the content and returns it
+        // - Application messages: Decrypts content and returns it
         // - Both update state as needed (for forward secrecy)
         const result = await processMessage(
           message as MlsPrivateMessage | MlsPublicMessage,
@@ -523,7 +706,7 @@ export class MarmotGroup {
           this.ciphersuite,
         );
 
-        // Update state if the message changed it
+        // Update state if message changed it
         if (result.kind === "newState") {
           this.state = result.newState;
           yield result;
@@ -551,14 +734,22 @@ export class MarmotGroup {
     // sorted order. Each commit changes the epoch and rotates keys, so later
     // commits depend on earlier ones.
 
+    // Create admin verification callback for commit processing
+    const adminCallback = this.createAdminVerificationCallback();
+
     for (const { event, message } of commits) {
       if (!isPrivateMessage(message)) continue;
 
-      const commitEpoch = message.privateMessage.epoch;
+      const commitEpoch =
+        typeof message.privateMessage.epoch === "bigint"
+          ? message.privateMessage.epoch
+          : BigInt(message.privateMessage.epoch);
       const currentEpoch = this.state.groupContext.epoch;
 
       // Skip commits from past epochs - we've already processed these
-      if (commitEpoch < currentEpoch) continue;
+      if (commitEpoch < currentEpoch) {
+        continue;
+      }
 
       // Skip commits that are too far in the future
       // We can only process commits for the current epoch or the next epoch
@@ -569,7 +760,7 @@ export class MarmotGroup {
 
       try {
         // processMessage handles:
-        // - Decrypts the private message using group secrets from current state
+        // - Decrypts the private message using group secrets from the current state
         // - Verifies message authenticity and sender
         // - Resolves proposal references from state.unappliedProposals (if needed)
         // - Applies the commit (updates ratchet tree, advances epoch, rotates keys)
@@ -577,11 +768,17 @@ export class MarmotGroup {
           message,
           this.state,
           emptyPskIndex,
-          acceptAll, // Accept all proposals included in commits
+          adminCallback, // Use admin verification callback for commits
           this.ciphersuite,
         );
 
         if (result.kind === "newState") {
+          // If the commit was rejected by the callback (admin verification),
+          // do not advance state, do not yield, and do not retry.
+          if (result.actionTaken === "reject") {
+            continue;
+          }
+
           // Successfully processed the commit - update our state
           // After each commit, the epoch advances and keys rotate
           this.state = result.newState;

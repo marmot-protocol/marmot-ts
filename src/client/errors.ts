@@ -18,12 +18,3 @@ export class NoRelayReceivedEventError extends Error {
     super(`No relay received event ${eventId}`);
   }
 }
-
-/** An error that is thrown when maximum retry attempts are exceeded during message processing. */
-export class MaxRetriesExceededError extends Error {
-  constructor(maxRetries: number) {
-    super(
-      `Maximum retry attempts (${maxRetries}) exceeded for processing unreadable messages`,
-    );
-  }
-}

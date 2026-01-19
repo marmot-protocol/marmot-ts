@@ -10,6 +10,7 @@ import {
 } from "ts-mls";
 import { createCommit } from "ts-mls/createCommit.js";
 import type { ClientState } from "ts-mls/clientState.js";
+import { encodeGroupState, decodeGroupState } from "ts-mls/clientState.js";
 
 import { createCredential } from "../core/credential.js";
 import { createSimpleGroup } from "../core/group.js";
@@ -26,7 +27,7 @@ import type { NostrNetworkInterface } from "../client/nostr-interface.js";
 import { EventSigner } from "applesauce-core";
 import { Rumor } from "applesauce-common/helpers";
 
-class MemoryBackend<T> implements KeyValueStoreBackend<T> {
+export class MemoryBackend<T> implements KeyValueStoreBackend<T> {
   private map = new Map<string, T>();
 
   async getItem(key: string): Promise<T | null> {
@@ -119,15 +120,33 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       impl,
     );
 
-    // Create two competing commits from the same baseline member state (epoch 1).
-    // Both are valid *from the baseline*, but only one should be applied by receivers.
+    // Create two competing commits from the same baseline ADMIN state (epoch 1).
+    // Per MIP-03, only admins are allowed to send commits, so both commits must be
+    // authored by the admin leaf.
+    //
+    // NOTE: In MLS, creating a commit updates the sender's leaf key pair, so we cannot
+    // create two commits from the same ClientState object. We must clone the state first.
     const commitA = await createCommit({
-      state: memberStateEpoch1,
+      state: adminStateEpoch1,
       cipherSuite: impl,
     });
 
+    // Clone the baseline admin state to create a second independent copy for commitB.
+    // ClientState = GroupState + clientConfig, so preserve clientConfig.
+    const decodedAdminGroupState = decodeGroupState(
+      encodeGroupState(adminStateEpoch1),
+      0,
+    )?.[0];
+    if (!decodedAdminGroupState) {
+      throw new Error("Failed to clone adminStateEpoch1");
+    }
+    const adminStateEpoch1Clone: ClientState = {
+      ...decodedAdminGroupState,
+      clientConfig: adminStateEpoch1.clientConfig,
+    };
+
     const commitB = await createCommit({
-      state: memberStateEpoch1,
+      state: adminStateEpoch1Clone,
       cipherSuite: impl,
     });
 
@@ -156,7 +175,11 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
 
     const backend = new MemoryBackend<SerializedClientState>();
     const store = new GroupStore(backend, defaultMarmotClientConfig);
-    await store.add(adminStateEpoch1);
+    // IMPORTANT: The receiver for this race test must NOT be the sender.
+    // These are two competing commits from the admin leaf for the same epoch.
+    // If the receiver is the admin itself, MLS update-path processing can fail because
+    // UpdatePath secrets are encrypted to *other* members.
+    await store.add(memberStateEpoch1);
 
     const network: NostrNetworkInterface = {
       request: async () => {
@@ -174,10 +197,10 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     };
 
     const signer = {
-      getPublicKey: async () => adminPubkey,
+      getPublicKey: async () => memberPubkey,
     } as EventSigner;
 
-    const group = new MarmotGroup(adminStateEpoch1, {
+    const group = new MarmotGroup(memberStateEpoch1, {
       store,
       signer,
       ciphersuite: impl,
@@ -192,11 +215,11 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     // Exactly one epoch transition should have occurred.
     expect(seen.length).toBe(1);
     expect(group.state.groupContext.epoch).toBe(
-      adminStateEpoch1.groupContext.epoch + 1n,
+      memberStateEpoch1.groupContext.epoch + 1n,
     );
 
     // Store should also reflect the post-commit epoch due to ingest() persistence.
-    const reloaded = await store.get(adminStateEpoch1.groupContext.groupId);
+    const reloaded = await store.get(memberStateEpoch1.groupContext.groupId);
     expect(reloaded).not.toBeNull();
     expect(reloaded!.groupContext.epoch).toBe(group.state.groupContext.epoch);
   });

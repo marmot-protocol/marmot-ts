@@ -1,4 +1,5 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { Rumor } from "applesauce-common/helpers";
 import { NostrEvent } from "applesauce-core/helpers/event";
 
 /**
@@ -111,7 +112,9 @@ export function detectEncoding(content: string): EncodingFormat {
  * @param event - The Nostr event to check
  * @returns The encoding format specified in the event, or undefined if not present
  */
-export function getEncodingTag(event: NostrEvent): EncodingFormat | undefined {
+export function getEncodingTag(
+  event: NostrEvent | Rumor,
+): EncodingFormat | undefined {
   const encodingTag = event.tags.find((tag) => tag[0] === "encoding");
   if (!encodingTag || encodingTag.length < 2) {
     return undefined;

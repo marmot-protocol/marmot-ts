@@ -64,7 +64,7 @@ export function createWelcomeRumor({
  * @returns The decoded Welcome message
  * @throws Error if the content cannot be decoded
  */
-export function getWelcome(event: NostrEvent): Welcome {
+export function getWelcome(event: NostrEvent | Rumor): Welcome {
   if (event.kind !== WELCOME_EVENT_KIND) {
     throw new Error(
       `Expected welcome event kind ${WELCOME_EVENT_KIND}, got ${event.kind}`,

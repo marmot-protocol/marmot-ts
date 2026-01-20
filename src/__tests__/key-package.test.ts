@@ -1,11 +1,15 @@
 import { NostrEvent, unixNow } from "applesauce-core/helpers";
 import {
+  encode,
   defaultCryptoProvider,
+  defaultCredentialTypes,
   getCiphersuiteFromName,
   getCiphersuiteImpl,
 } from "ts-mls";
 import { Capabilities } from "ts-mls/capabilities.js";
 import { Extension } from "ts-mls/extension.js";
+import { CredentialX509 } from "ts-mls/credential.js";
+import { keyPackageEncoder } from "ts-mls/keyPackage.js";
 import { describe, expect, it } from "vitest";
 import { createCredential } from "../core/credential.js";
 import {
@@ -306,9 +310,9 @@ describe("generateKeyPackage", () => {
   });
 
   it("should throw error for non-basic credential", async () => {
-    const invalidCredential = {
-      credentialType: "x509" as any,
-      identity: new Uint8Array(32),
+    const invalidCredential: CredentialX509 = {
+      credentialType: defaultCredentialTypes.x509,
+      certificates: [new Uint8Array(32)],
     };
 
     const ciphersuiteImpl = await getCiphersuiteImpl(
@@ -404,10 +408,9 @@ describe("createKeyPackageEvent encoding", () => {
     });
 
     // Create a legacy event (hex-encoded, no encoding tag)
-    const { encodeKeyPackage } = await import("ts-mls/keyPackage.js");
     const { bytesToHex } = await import("@noble/ciphers/utils.js");
 
-    const encodedBytes = encodeKeyPackage(keyPackage.publicPackage);
+    const encodedBytes = encode(keyPackageEncoder, keyPackage.publicPackage);
     const legacyEvent: NostrEvent = {
       kind: KEY_PACKAGE_KIND,
       pubkey: validPubkey,
@@ -442,10 +445,9 @@ describe("createKeyPackageEvent encoding", () => {
       ciphersuiteImpl,
     });
 
-    const { encodeKeyPackage } = await import("ts-mls/keyPackage.js");
     const { bytesToHex } = await import("@noble/ciphers/utils.js");
 
-    const encodedBytes = encodeKeyPackage(keyPackage.publicPackage);
+    const encodedBytes = encode(keyPackageEncoder, keyPackage.publicPackage);
     const hexEvent: NostrEvent = {
       kind: KEY_PACKAGE_KIND,
       pubkey: validPubkey,

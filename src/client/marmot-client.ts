@@ -4,17 +4,16 @@ import {
   Capabilities,
   ClientState,
   CryptoProvider,
-  getCiphersuiteFromName,
   getCiphersuiteImpl,
   joinGroup,
   KeyPackage,
-  makePskIndex,
   PrivateKeyPackage,
 } from "ts-mls";
 import { makeKeyPackageRef } from "ts-mls/keyPackage.js";
 import {
   CiphersuiteId,
   CiphersuiteName,
+  getCiphersuiteFromName,
   getCiphersuiteFromId,
 } from "ts-mls/crypto/ciphersuite.js";
 import { createCredential } from "../core/credential.js";
@@ -27,6 +26,7 @@ import { NostrNetworkInterface } from "./nostr-interface.js";
 import { MarmotGroup } from "./group/marmot-group.js";
 import { getWelcome } from "../core/welcome.js";
 import { Rumor } from "applesauce-common/helpers";
+import { marmotAuthService } from "../core/auth-service.js";
 
 export type MarmotClientOptions = {
   /** The signer used for the clients identity */
@@ -105,7 +105,7 @@ export class MarmotClient {
   async addGroup(state: ClientState): Promise<MarmotGroup> {
     // Get the group's ciphersuite implementation
     const cipherSuite = await getCiphersuiteImpl(
-      getCiphersuiteFromName(state.groupContext.cipherSuite),
+      getCiphersuiteFromId(state.groupContext.cipherSuite),
       this.cryptoProvider,
     );
 
@@ -255,9 +255,6 @@ export class MarmotClient {
       ...candidatePackages.filter((p) => !p.hasMatchingSecret),
     ];
 
-    // Create an empty PSK index (no pre-shared keys for now)
-    const pskIndex = makePskIndex(undefined, {});
-
     // Try each key package in priority order until one successfully decrypts the Welcome message
     let clientState: any = null;
     let lastError: Error | null = null;
@@ -266,13 +263,15 @@ export class MarmotClient {
       try {
         // Attempt to join the group with this key package
         // The joinGroup function internally uses KeyPackageRef to find the correct secret
-        clientState = await joinGroup(
+        clientState = await joinGroup({
+          context: {
+            cipherSuite: ciphersuiteImpl,
+            authService: marmotAuthService,
+          },
           welcome,
-          keyPackage.publicPackage,
-          keyPackage.privatePackage,
-          pskIndex,
-          ciphersuiteImpl,
-        );
+          keyPackage: keyPackage.publicPackage,
+          privateKeys: keyPackage.privatePackage,
+        });
         // If successful, break out of the loop
         break;
       } catch (error) {

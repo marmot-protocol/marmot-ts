@@ -1,7 +1,12 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { NostrEvent } from "applesauce-core/helpers/event";
 import { getEventHash } from "nostr-tools";
-import { decodeWelcome, encodeWelcome, type Welcome } from "ts-mls/welcome.js";
+import { decode, encode } from "ts-mls";
+import {
+  welcomeDecoder,
+  welcomeEncoder,
+  type Welcome,
+} from "ts-mls/welcome.js";
 import {
   decodeContent,
   encodeContent,
@@ -31,7 +36,7 @@ export function createWelcomeRumor({
   groupRelays: string[];
 }): Rumor {
   // Serialize the welcome message according to RFC 9420
-  const serializedWelcome = encodeWelcome(welcome);
+  const serializedWelcome = encode(welcomeEncoder, welcome);
   const content = encodeContent(serializedWelcome, "base64");
 
   const draft = {
@@ -73,8 +78,8 @@ export function getWelcome(event: NostrEvent | Rumor): Welcome {
   // Check for encoding tag, default to hex for backward compatibility
   const encodingFormat = getEncodingTag(event) ?? "hex";
   const content = decodeContent(event.content, encodingFormat);
-  const welcome = decodeWelcome(content, 0);
+  const welcome = decode(welcomeDecoder, content);
   if (!welcome) throw new Error("Failed to decode welcome message");
 
-  return welcome[0];
+  return welcome;
 }

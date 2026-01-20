@@ -1,6 +1,6 @@
 import { randomBytes } from "@noble/hashes/utils.js";
 import { relaySet } from "applesauce-core/helpers";
-import { Extension } from "ts-mls";
+import { makeCustomExtension, type CustomExtension } from "ts-mls";
 import { isHexKey } from "./credential.js";
 import {
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
@@ -385,9 +385,11 @@ function validateMarmotGroupData(data: MarmotGroupData): void {
  * @param data - The Marmot group data to convert
  * @returns Extension object with Marmot Group Data Extension type and encoded data
  */
-export function marmotGroupDataToExtension(data: MarmotGroupData): Extension {
-  return {
+export function marmotGroupDataToExtension(
+  data: MarmotGroupData,
+): CustomExtension {
+  return makeCustomExtension({
     extensionType: MARMOT_GROUP_DATA_EXTENSION_TYPE,
     extensionData: encodeMarmotGroupData(data),
-  };
+  });
 }

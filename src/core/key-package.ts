@@ -6,17 +6,17 @@ import {
   CiphersuiteImpl,
   ciphersuites,
 } from "ts-mls/crypto/ciphersuite.js";
-import { Extension, ExtensionType } from "ts-mls/extension.js";
+import { CustomExtension } from "ts-mls/extension.js";
 import { greaseValues } from "ts-mls/grease.js";
 import {
   KeyPackage,
   generateKeyPackage as MLSGenerateKeyPackage,
   PrivateKeyPackage,
-  decodeKeyPackage,
-  encodeKeyPackage,
+  keyPackageDecoder,
+  keyPackageEncoder,
 } from "ts-mls/keyPackage.js";
 import { Lifetime } from "ts-mls/lifetime.js";
-import { protocolVersions } from "ts-mls/protocolVersion.js";
+import { decode, encode, defaultCredentialTypes } from "ts-mls";
 import {
   decodeContent,
   encodeContent,
@@ -38,7 +38,6 @@ import {
   KEY_PACKAGE_RELAYS_TAG,
   KeyPackageClient,
   MLS_VERSIONS,
-  extendedExtensionTypes,
 } from "./protocol.js";
 
 /**
@@ -59,11 +58,10 @@ export function getKeyPackage(event: NostrEvent): KeyPackage {
   // Check for encoding tag, default to hex for backward compatibility
   const encodingFormat = getEncodingTag(event) ?? "hex";
   const content = decodeContent(event.content, encodingFormat);
-  const decoded = decodeKeyPackage(content, 0);
+  const decoded = decode(keyPackageDecoder, content);
   if (!decoded) throw new Error("Failed to decode key package");
 
-  const [keyPackage, _noIdeaWhatThisIs] = decoded;
-  return keyPackage;
+  return decoded;
 }
 
 /** Gets the MLS protocol version from a kind 443 event */
@@ -95,7 +93,7 @@ export function getKeyPackageCipherSuiteId(
 /** Gets the MLS extensions for a kind 443 event */
 export function getKeyPackageExtensions(
   event: NostrEvent,
-): ExtensionType[] | undefined {
+): number[] | undefined {
   const tag = event.tags.find((t) => t[0] === KEY_PACKAGE_EXTENSIONS_TAG);
   if (!tag) return undefined;
 
@@ -105,7 +103,7 @@ export function getKeyPackageExtensions(
     .map((t) => parseInt(t))
     .filter((id) => Number.isFinite(id));
 
-  return ids as ExtensionType[];
+  return ids;
 }
 
 /** Gets the relays for a kind 443 event */
@@ -129,7 +127,7 @@ export function getKeyPackageClient(
 }
 
 /** Create default extensions for a key package */
-export function keyPackageDefaultExtensions(): Extension[] {
+export function keyPackageDefaultExtensions(): CustomExtension[] {
   return ensureLastResortExtension([]);
 }
 
@@ -138,7 +136,7 @@ export type GenerateKeyPackageOptions = {
   credential: Credential;
   capabilities?: Capabilities;
   lifetime?: Lifetime;
-  extensions?: Extension[];
+  extensions?: CustomExtension[];
   ciphersuiteImpl: CiphersuiteImpl;
 };
 
@@ -150,23 +148,23 @@ export async function generateKeyPackage({
   extensions,
   ciphersuiteImpl,
 }: GenerateKeyPackageOptions): Promise<CompleteKeyPackage> {
-  if (credential.credentialType !== "basic")
+  if (credential.credentialType !== defaultCredentialTypes.basic)
     throw new Error("Marmot key packages must use a basic credential");
 
   // Ensure the credential has a valid pubkey
   getCredentialPubkey(credential);
 
-  return await MLSGenerateKeyPackage(
+  return await MLSGenerateKeyPackage({
     credential,
-    capabilities
+    capabilities: capabilities
       ? ensureMarmotCapabilities(capabilities)
       : defaultCapabilities(),
-    lifetime ?? createThreeMonthLifetime(),
-    extensions
+    lifetime: lifetime ?? createThreeMonthLifetime(),
+    extensions: extensions
       ? ensureLastResortExtension(extensions)
       : keyPackageDefaultExtensions(),
-    ciphersuiteImpl,
-  );
+    cipherSuite: ciphersuiteImpl,
+  });
 }
 
 export type CreateKeyPackageEventOptions = {
@@ -192,7 +190,10 @@ export function createKeyPackageEvent(
 ): UnsignedEvent {
   const { keyPackage, pubkey, relays, client } = options;
 
-  if (keyPackage.leafNode.credential.credentialType !== "basic")
+  if (
+    keyPackage.leafNode.credential.credentialType !==
+    defaultCredentialTypes.basic
+  )
     throw new Error(
       "Key package leaf node credential is not a basic credential",
     );
@@ -203,32 +204,17 @@ export function createKeyPackageEvent(
     );
 
   // Encode the public key package to bytes
-  const encodedBytes = encodeKeyPackage(keyPackage);
+  const encodedBytes = encode(keyPackageEncoder, keyPackage);
   const content = encodeContent(encodedBytes, "base64");
 
   // Get the cipher suite from the key package
-  const ciphersuiteId = ciphersuites[keyPackage.cipherSuite];
-  const ciphersuiteHex = `0x${ciphersuiteId.toString(16).padStart(4, "0")}`;
+  const ciphersuiteHex = `0x${keyPackage.cipherSuite
+    .toString(16)
+    .padStart(4, "0")}`;
 
   // Extract extension types from the key package extensions
-  const extensionTypes = keyPackage.extensions.map((ext: Extension) => {
-    let extType: number;
-
-    if (typeof ext.extensionType === "number") {
-      // Custom extension types (like Marmot Group Data Extension 0xF2EE or GREASE values)
-      extType = ext.extensionType;
-    } else {
-      // Extended extension types (including Marmot-specific extensions)
-      // Use the extendedExtensionTypes for proper mapping
-      extType = extendedExtensionTypes[ext.extensionType];
-
-      // Validate that we have a valid extension type
-      if (extType === undefined) {
-        throw new Error(`Unknown extension type: ${ext.extensionType}`);
-      }
-    }
-
-    return `0x${extType.toString(16).padStart(4, "0")}`;
+  const extensionTypes = keyPackage.extensions.map((ext: CustomExtension) => {
+    return `0x${ext.extensionType.toString(16).padStart(4, "0")}`;
   });
 
   // Also include extensions from leaf node capabilities to signal support
@@ -251,7 +237,7 @@ export function createKeyPackageEvent(
     return !greaseValues.includes(extType);
   });
 
-  const version = protocolVersions[keyPackage.version].toFixed(1);
+  const version = keyPackage.version.toFixed(1);
 
   // Build tags
   const tags: string[][] = [

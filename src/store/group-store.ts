@@ -102,7 +102,7 @@ export class GroupStore {
 
     if (!entry) return null;
 
-    return deserializeClientState(entry, this.config);
+    return deserializeClientState(entry);
   }
 
   /**
@@ -133,9 +133,7 @@ export class GroupStore {
       (entry): entry is SerializedClientState => entry !== null,
     );
 
-    return serializedEntries.map((entry) =>
-      deserializeClientState(entry, this.config),
-    );
+    return serializedEntries.map((entry) => deserializeClientState(entry));
   }
 
   /** Gets the count of groups stored. */

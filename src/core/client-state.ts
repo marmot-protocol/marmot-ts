@@ -115,15 +115,12 @@ export function serializeClientState(
 /**
  * Deserializes a stored client state back into a ClientState object.
  * Uses the ts-mls library's binary decoding (TLS format).
- * Re-injects the ClientConfig.
  *
  * @param stored - The stored binary state
- * @param config - The ClientConfig to inject (contains AuthenticationService)
  * @returns The reconstructed ClientState
  */
 export function deserializeClientState(
   stored: SerializedClientState,
-  _config: ClientConfig,
 ): ClientState {
   try {
     const decoded = decode(clientStateDecoder, stored);

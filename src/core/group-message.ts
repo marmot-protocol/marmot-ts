@@ -42,7 +42,7 @@ async function getExporterSecretForNip44(
 }
 
 /**
- * Reads a {@link NostrEvent} and returns the {@link MLSMessage} it contains.
+ * Reads a {@link NostrEvent} and returns the {@link MlsMessage} it contains.
  * Decrypts the NIP-44 encrypted content using the exporter_secret from the group state.
  *
  * @param message - The Nostr event containing the encrypted MLS message

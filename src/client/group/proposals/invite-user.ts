@@ -1,5 +1,5 @@
 import { isEvent, NostrEvent } from "applesauce-core/helpers/event";
-import { type KeyPackage } from "ts-mls";
+import { defaultProposalTypes, type KeyPackage } from "ts-mls";
 import { type ProposalAdd } from "ts-mls/proposal.js";
 import { getKeyPackage } from "../../../core/key-package.js";
 import { ProposalAction } from "../marmot-group.js";
@@ -14,7 +14,7 @@ export function proposeInviteUser(
       : keyPackageEvent;
 
     return {
-      proposalType: "add",
+      proposalType: defaultProposalTypes.add,
       add: { keyPackage },
     };
   };

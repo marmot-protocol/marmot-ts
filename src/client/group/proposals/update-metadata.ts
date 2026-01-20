@@ -1,3 +1,4 @@
+import { defaultProposalTypes } from "ts-mls";
 import { type ProposalGroupContextExtensions } from "ts-mls/proposal.js";
 import { replaceExtension } from "../../../core/extensions.js";
 import { marmotGroupDataToExtension } from "../../../core/marmot-group-data.js";
@@ -19,7 +20,7 @@ export function proposeUpdateMetadata(
     const updatedExtension = marmotGroupDataToExtension(updatedGroupData);
 
     return {
-      proposalType: "group_context_extensions",
+      proposalType: defaultProposalTypes.group_context_extensions,
       groupContextExtensions: {
         // Replace the marmot group data extension with the updated one
         extensions: replaceExtension(

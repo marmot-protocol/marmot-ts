@@ -58,7 +58,7 @@
     "applesauce-common": "^5.0.0",
     "applesauce-core": "^5.0.1",
     "nostr-tools": "^2.19.4",
-    "ts-mls": "^1.6.1"
+    "ts-mls": "2.0.0-rc.4"
   },
   "devDependencies": {
     "@types/node": "^24.10.8",

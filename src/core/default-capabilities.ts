@@ -1,6 +1,8 @@
 import {
   Capabilities,
+  ciphersuites,
   defaultCapabilities as mlsDefaultCapabilities,
+  defaultCredentialTypes,
 } from "ts-mls";
 import { ensureMarmotCapabilities } from "./capabilities.js";
 
@@ -20,13 +22,13 @@ export function defaultCapabilities(): Capabilities {
   // and keep GREASE values (numeric IDs), but remove other MLS ciphersuites
   capabilities.ciphersuites = capabilities.ciphersuites.filter(
     (cipher) =>
-      cipher === "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" ||
-      !cipher.startsWith("MLS_"), // Keep GREASE values (they don't start with "MLS_")
+      cipher === ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 ||
+      !Object.values(ciphersuites).includes(cipher),
   );
 
   // Only include "basic" credential type (remove "x509" since we don't support it)
   capabilities.credentials = capabilities.credentials.filter(
-    (c) => c !== "x509",
+    (c) => c !== defaultCredentialTypes.x509,
   );
 
   return capabilities;

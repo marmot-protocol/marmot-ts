@@ -2,11 +2,11 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { ClientConfig, defaultClientConfig } from "ts-mls/clientConfig.js";
 import {
   ClientState,
-  encodeGroupState,
-  decodeGroupState,
+  clientStateDecoder,
+  clientStateEncoder,
 } from "ts-mls/clientState.js";
-import { Extension } from "ts-mls/extension.js";
-import { marmotAuthService } from "./auth-service.js";
+import { decode, encode, nodeTypes } from "ts-mls";
+import { GroupContextExtension } from "ts-mls/extension.js";
 import { decodeMarmotGroupData } from "./marmot-group-data.js";
 import {
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
@@ -16,7 +16,6 @@ import {
 /** Default ClientConfig for Marmot */
 export const defaultMarmotClientConfig = {
   ...defaultClientConfig,
-  auth_service: marmotAuthService,
 };
 
 /**
@@ -30,12 +29,16 @@ export function extractMarmotGroupData(
 ): MarmotGroupData | null {
   try {
     const marmotExtension = clientState.groupContext.extensions.find(
-      (ext: Extension) =>
+      (ext: GroupContextExtension) =>
         typeof ext.extensionType === "number" &&
         ext.extensionType === MARMOT_GROUP_DATA_EXTENSION_TYPE,
     );
 
     if (!marmotExtension) return null;
+
+    if (!(marmotExtension.extensionData instanceof Uint8Array)) {
+      throw new Error("MarmotGroupData extension data is not binary");
+    }
 
     return decodeMarmotGroupData(marmotExtension.extensionData);
   } catch (error) {
@@ -86,7 +89,7 @@ export function getEpoch(clientState: ClientState): number {
  */
 export function getMemberCount(clientState: ClientState): number {
   return clientState.ratchetTree.filter(
-    (node) => node && node.nodeType === "leaf",
+    (node) => node && node.nodeType === nodeTypes.leaf,
   ).length;
 }
 
@@ -106,31 +109,27 @@ export type SerializedClientState = Uint8Array;
 export function serializeClientState(
   state: ClientState,
 ): SerializedClientState {
-  return encodeGroupState(state);
+  return encode(clientStateEncoder, state);
 }
 
 /**
  * Deserializes a stored client state back into a ClientState object.
  * Uses the ts-mls library's binary decoding (TLS format).
- * Re-injects the ClientConfig.
  *
  * @param stored - The stored binary state
- * @param config - The ClientConfig to inject (contains AuthenticationService)
  * @returns The reconstructed ClientState
  */
 export function deserializeClientState(
   stored: SerializedClientState,
-  config: ClientConfig,
 ): ClientState {
   try {
-    const decoded = decodeGroupState(stored, 0);
+    const decoded = decode(clientStateDecoder, stored);
     if (!decoded) {
       throw new Error(
-        "Failed to deserialize ClientState: decodeGroupState returned null",
+        "Failed to deserialize ClientState: clientStateDecoder returned null",
       );
     }
-    // Inject the config back into the state
-    return { ...decoded[0], clientConfig: config };
+    return decoded;
   } catch (error) {
     if (error instanceof Error) {
       throw new Error(`Failed to deserialize ClientState: ${error.message}`);

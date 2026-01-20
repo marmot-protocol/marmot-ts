@@ -7,13 +7,13 @@ import {
   NostrEvent,
 } from "nostr-tools";
 import { bytesToHex, hexToBytes } from "nostr-tools/utils";
-import { ClientState } from "ts-mls/clientState.js";
+import { ClientState, decode, encode } from "ts-mls";
 import { CiphersuiteImpl } from "ts-mls/crypto/ciphersuite.js";
 import { mlsExporter } from "ts-mls/keySchedule.js";
 import {
-  decodeMlsMessage,
-  encodeMlsMessage,
-  type MLSMessage,
+  mlsMessageDecoder,
+  mlsMessageEncoder,
+  type MlsMessage,
 } from "ts-mls/message.js";
 import { unixNow } from "../utils/nostr.js";
 import { getNostrGroupIdHex } from "./client-state.js";
@@ -42,7 +42,7 @@ async function getExporterSecretForNip44(
 }
 
 /**
- * Reads a {@link NostrEvent} and returns the {@link MLSMessage} it contains.
+ * Reads a {@link NostrEvent} and returns the {@link MlsMessage} it contains.
  * Decrypts the NIP-44 encrypted content using the exporter_secret from the group state.
  *
  * @param message - The Nostr event containing the encrypted MLS message
@@ -54,7 +54,7 @@ export async function decryptGroupMessageEvent(
   message: NostrEvent,
   clientState: ClientState,
   ciphersuite: CiphersuiteImpl,
-): Promise<MLSMessage> {
+): Promise<MlsMessage> {
   // Step 1: Get exporter_secret for current epoch
   const exporterSecret = await getExporterSecretForNip44(
     clientState,
@@ -76,9 +76,9 @@ export async function decryptGroupMessageEvent(
 
   // Step 4: Decode the serialized MLSMessage
   const serializedMessage = hexToBytes(decryptedContent);
-  const decoded = decodeMlsMessage(serializedMessage, 0);
+  const decoded = decode(mlsMessageDecoder, serializedMessage);
   if (!decoded) throw new Error("Failed to decode MLS message");
-  return decoded[0];
+  return decoded;
 }
 
 /**
@@ -96,10 +96,10 @@ export async function createEncryptedGroupEventContent({
 }: {
   state: ClientState;
   ciphersuite: CiphersuiteImpl;
-  message: MLSMessage;
+  message: MlsMessage;
 }): Promise<string> {
   // Step 1: Serialize the MLSMessage
-  const serializedMessage = encodeMlsMessage(message);
+  const serializedMessage = encode(mlsMessageEncoder, message);
 
   // Step 2: Get exporter_secret for current epoch
   const exporterSecret = await getExporterSecretForNip44(state, ciphersuite);
@@ -140,7 +140,7 @@ export async function createGroupEvent({
   state,
   ciphersuite,
 }: {
-  message: MLSMessage;
+  message: MlsMessage;
   state: ClientState;
   ciphersuite: CiphersuiteImpl;
 }): Promise<NostrEvent> {
@@ -170,7 +170,7 @@ export async function createGroupEvent({
 }
 
 /** A type for a decrypted group message event */
-export type GroupMessagePair = { event: NostrEvent; message: MLSMessage };
+export type GroupMessagePair = { event: NostrEvent; message: MlsMessage };
 
 /**
  * Serializes a Nostr event (rumor) to application data for use in MLS application messages.

@@ -1,4 +1,8 @@
-import { AuthenticationService, Credential } from "ts-mls";
+import {
+  AuthenticationService,
+  Credential,
+  defaultCredentialTypes,
+} from "ts-mls";
 
 /**
  * Marmot Authentication Service
@@ -12,7 +16,8 @@ export const marmotAuthService: AuthenticationService = {
     _signaturePublicKey: Uint8Array,
   ): Promise<boolean> {
     // 1. Check if credential type is 'basic' (Marmot uses basic credentials)
-    if (credential.credentialType !== "basic") return false;
+    if (credential.credentialType !== defaultCredentialTypes.basic)
+      return false;
 
     // 2. Extract the Nostr pubkey from the credential identity
     // const nostrPubkey = credential.identity;

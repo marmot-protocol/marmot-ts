@@ -29,8 +29,8 @@ importers:
         specifier: ^2.19.4
         version: 2.19.4(typescript@5.9.3)
       ts-mls:
-        specifier: ^1.6.1
-        version: 1.6.1(@noble/ciphers@2.1.1)(@noble/curves@2.0.1)
+        specifier: ^2.0.0-rc.4
+        version: 2.0.0-rc.4(@noble/ciphers@2.1.1)(@noble/curves@2.0.1)
     devDependencies:
       "@types/node":
         specifier: ^24.10.8
@@ -6201,10 +6201,10 @@ packages:
         integrity: sha512-tmMpK00BjZiUyVyvrBK7knerNgmgvcV/KLVyuma/SC+TQN167GrMRciANTz09+k3zW8L8t60jWO1GpfkZdjTaw==,
       }
 
-  ts-mls@1.6.1:
+  ts-mls@2.0.0-rc.4:
     resolution:
       {
-        integrity: sha512-rMVMos3XER442W/rk1tYS0wdeivM4wqpnRJkCMhhUGtEGbmv9LSHONVkmKUUzWM1W3qxJZA71l0HWQ+Wk9xOhA==,
+        integrity: sha512-A939/TWFwvG100ArTYyVy90EJc8BFHrC14TyUKqcwpeSgDXdg3wQaqCa93xZkXQX378AaI9FYzy3AdBZs9Qfzg==,
       }
     peerDependencies:
       "@hpke/chacha20poly1305": 1.7.1
@@ -10555,7 +10555,7 @@ snapshots:
 
   trough@2.2.0: {}
 
-  ts-mls@1.6.1(@noble/ciphers@2.1.1)(@noble/curves@2.0.1):
+  ts-mls@2.0.0-rc.4(@noble/ciphers@2.1.1)(@noble/curves@2.0.1):
     dependencies:
       "@hpke/core": 1.7.5
       "@noble/ciphers": 2.1.1

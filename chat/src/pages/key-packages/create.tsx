@@ -1,19 +1,3 @@
-import { CipherSuitePicker } from "@/components/form/cipher-suite-picker";
-import { KeyPackageRelaysAlert } from "@/components/key-package-relays-alert";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { withSignIn } from "@/components/with-signIn";
-import accountManager, { keyPackageRelays$, user$ } from "@/lib/accounts";
-import { keyPackageStore$ } from "@/lib/key-package-store";
-import { eventStore, pool } from "@/lib/nostr";
 import { relaySet } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
 import { Loader2, XCircle } from "lucide-react";
@@ -30,6 +14,26 @@ import {
   getCiphersuiteImpl,
 } from "ts-mls";
 import { type CiphersuiteName } from "ts-mls/crypto/ciphersuite.js";
+
+import { CipherSuitePicker } from "@/components/form/cipher-suite-picker";
+import { KeyPackageRelaysAlert } from "@/components/key-package-relays-alert";
+import { PageBody } from "@/components/page-body";
+import { PageHeader } from "@/components/page-header";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { withSignIn } from "@/components/with-signIn";
+import { accounts, user$ } from "@/lib/accounts";
+import { keyPackageStore$ } from "@/lib/key-package-store";
+import { eventStore, pool } from "@/lib/nostr";
+import { keyPackageRelays$ } from "../../lib/lifecycle";
 
 function CreateKeyPackagePage() {
   // Subscribe to the user's key package relays and mailboxes
@@ -58,10 +62,8 @@ function CreateKeyPackagePage() {
       setIsCreating(true);
       setError(null);
 
-      const account = accountManager.active;
-      if (!account) {
-        throw new Error("No active account");
-      }
+      const account = accounts.active;
+      if (!account) throw new Error("No active account");
 
       const pubkey = account.pubkey;
 
@@ -141,58 +143,58 @@ function CreateKeyPackagePage() {
   }
 
   return (
-    <div className="container mx-auto p-6 max-w-4xl space-y-6">
+    <>
       {/* Header */}
-      <div className="space-y-2">
-        <h1 className="text-3xl font-bold">Create Key Package</h1>
-        <p className="text-muted-foreground">
-          Generate and publish a new MLS key package to enable encrypted group
-          messaging.
-        </p>
-      </div>
+      <PageHeader
+        items={[
+          { label: "Home", to: "/" },
+          { label: "Key Packages", to: "/key-packages" },
+          { label: "Create Key Package" },
+        ]}
+      />
+      <PageBody>
+        <Card>
+          <CardHeader>
+            <CardTitle>Configuration</CardTitle>
+            <CardDescription>
+              Configure the cipher suite for your key package. The key package
+              will be published to your key package relays and outboxes.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <CipherSuitePicker
+              value={cipherSuite}
+              onChange={setCipherSuite}
+              disabled={isCreating}
+            />
+          </CardContent>
+          <CardFooter>
+            <Button
+              onClick={handleCreate}
+              disabled={isCreating}
+              className="w-full"
+            >
+              {isCreating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                "Create Key Package"
+              )}
+            </Button>
+          </CardFooter>
+        </Card>
 
-      {/* Configuration Form */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Configuration</CardTitle>
-          <CardDescription>
-            Configure the cipher suite for your key package. The key package
-            will be published to your key package relays and outboxes.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <CipherSuitePicker
-            value={cipherSuite}
-            onChange={setCipherSuite}
-            disabled={isCreating}
-          />
-        </CardContent>
-        <CardFooter>
-          <Button
-            onClick={handleCreate}
-            disabled={isCreating}
-            className="w-full"
-          >
-            {isCreating ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Creating...
-              </>
-            ) : (
-              "Create Key Package"
-            )}
-          </Button>
-        </CardFooter>
-      </Card>
-
-      {/* Error Display */}
-      {error && (
-        <Alert variant="destructive">
-          <XCircle className="h-4 w-4" />
-          <AlertDescription>Error: {error}</AlertDescription>
-        </Alert>
-      )}
-    </div>
+        {/* Error Display */}
+        {error && (
+          <Alert variant="destructive">
+            <XCircle className="h-4 w-4" />
+            <AlertDescription>Error: {error}</AlertDescription>
+          </Alert>
+        )}
+      </PageBody>
+    </>
   );
 }
 

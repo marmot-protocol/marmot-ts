@@ -6,6 +6,7 @@ export * from "./extensions.js";
 export * from "./group-members.js";
 export * from "./group-message.js";
 export * from "./group.js";
+export * from "./key-package-event.js";
 export * from "./key-package-relay-list.js";
 export * from "./key-package.js";
 export * from "./marmot-group-data.js";

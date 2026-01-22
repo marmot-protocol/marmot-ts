@@ -27,8 +27,8 @@ import {
 } from "ts-mls/message.js";
 import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
 import { toLeafIndex, type LeafIndex } from "ts-mls/treemath.js";
-import { getCredentialPubkey } from "../../core/credential.js";
 import { extractMarmotGroupData } from "../../core/client-state.js";
+import { getCredentialPubkey } from "../../core/credential.js";
 import {
   createGroupEvent,
   GroupMessagePair,
@@ -36,11 +36,10 @@ import {
   serializeApplicationRumor,
   sortGroupCommits,
 } from "../../core/group-message.js";
+import { getKeyPackage } from "../../core/key-package-event.js";
 import { isPrivateMessage } from "../../core/message.js";
 import { MarmotGroupData } from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
-import { proposeInviteUser } from "./proposals/invite-user.js";
-import { getKeyPackage } from "../../core/key-package.js";
 import { GroupStore } from "../../store/group-store.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
 import {
@@ -49,6 +48,7 @@ import {
   NoRelayReceivedEventError,
 } from "../errors.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
+import { proposeInviteUser } from "./proposals/invite-user.js";
 
 export type ProposalContext = {
   state: ClientState;

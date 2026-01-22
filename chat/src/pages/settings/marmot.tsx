@@ -10,11 +10,8 @@ import { combineLatest, of, switchMap } from "rxjs";
 import { EventStatusButton } from "@/components/event-status-button";
 import { PageBody } from "@/components/page-body";
 import { PageHeader } from "@/components/page-header";
-import accountManager, {
-  keyPackageRelays$,
-  mailboxes$,
-  user$,
-} from "@/lib/accounts";
+import { user$, accounts } from "@/lib/accounts";
+import { keyPackageRelays$ } from "@/lib/lifecycle";
 import { pool } from "@/lib/nostr";
 import { extraRelays$, lookupRelays$ } from "@/lib/settings";
 import { NewRelayForm, RelayItem } from "./relays";
@@ -32,14 +29,14 @@ function KeyPackageRelaysSection() {
   const lookupRelays = use$(lookupRelays$);
   const extraRelays = use$(extraRelays$);
   const keyPackageRelays = use$(keyPackageRelays$);
-  const mailboxes = use$(mailboxes$);
+  const mailboxes = use$(user$.mailboxes$);
 
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishSuccess, setPublishSuccess] = useState(false);
 
   const handlePublishKeyPackageRelays = async (relays: string[]) => {
-    const account = accountManager.active;
+    const account = accounts.active;
     if (!account) return setPublishError("No active account");
 
     try {

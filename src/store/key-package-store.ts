@@ -1,24 +1,35 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { KeyPackage, PrivateKeyPackage } from "ts-mls";
-import { Hash } from "ts-mls/crypto/hash.js";
-import { makeHashImpl } from "ts-mls/crypto/implementation/noble/makeHashImpl.js";
-import { makeKeyPackageRef } from "ts-mls/keyPackage.js";
-import { CompleteKeyPackage } from "../core/key-package.js";
+import { CryptoProvider, defaultCryptoProvider } from "ts-mls";
+import { KeyPackage, PrivateKeyPackage } from "ts-mls/keyPackage.js";
+import { calculateKeyPackageRef } from "../core/key-package.js";
 import { KeyValueStoreBackend } from "../utils/key-value.js";
 
+export type StoredKeyPackage = {
+  /** The calculated key package reference (should be used to identify the key package) */
+  keyPackageRef: Uint8Array;
+  /** The public key package */
+  publicPackage: KeyPackage;
+  /** The private key package */
+  privatePackage: PrivateKeyPackage;
+};
+
+/** A type for listing the key package without the private package */
+export type ListedKeyPackage = Omit<StoredKeyPackage, "privatePackage">;
+
 /** A generic interface for a key-value store */
-export interface KeyPackageStoreBackend extends KeyValueStoreBackend<CompleteKeyPackage> {}
+export interface KeyPackageStoreBackend extends KeyValueStoreBackend<StoredKeyPackage> {}
 
 /** Options for creating a {@link KeyPackageStore} instance */
 export type KeyPackageStoreOptions = {
   prefix?: string;
-  hash?: Hash;
+  /** The crypto provider to use for cryptographic operations */
+  cryptoProvider?: CryptoProvider;
   /** Optional callback invoked when a key package is added/updated */
   onUpdate?: (key?: string) => void;
 };
 
 /**
- * Stores {@link CompleteKeyPackage}s in a {@link KeyPackageStoreBackend}.
+ * Stores key packages in a {@link KeyPackageStoreBackend}.
  *
  * This class provides a simple interface for managing complete key packages, including their private components.
  * It's designed to work with any backend that implements the {@link KeyPackageStoreBackend} interface.
@@ -28,7 +39,7 @@ export type KeyPackageStoreOptions = {
  * const store = new KeyPackageStore(backend);
  *
  * // Add a complete key package
- * await store.add(completeKeyPackage);
+ * await store.add({ publicPackage, privatePackage });
  * // List all key packages
  * const packages = await store.list();
  * // Get a specific key package by its publicKey
@@ -40,7 +51,7 @@ export type KeyPackageStoreOptions = {
  */
 export class KeyPackageStore {
   private backend: KeyPackageStoreBackend;
-  private readonly hash: Hash;
+  private readonly cryptoProvider: CryptoProvider;
   private readonly prefix?: string;
   private readonly onUpdate?: (key?: string) => void;
 
@@ -52,14 +63,10 @@ export class KeyPackageStore {
    */
   constructor(
     backend: KeyPackageStoreBackend,
-    {
-      prefix,
-      hash = makeHashImpl("SHA-256"),
-      onUpdate,
-    }: KeyPackageStoreOptions = {},
+    { prefix, onUpdate, cryptoProvider }: KeyPackageStoreOptions = {},
   ) {
     this.backend = backend;
-    this.hash = hash;
+    this.cryptoProvider = cryptoProvider ?? defaultCryptoProvider;
     this.prefix = prefix;
     this.onUpdate = onUpdate;
   }
@@ -79,11 +86,33 @@ export class KeyPackageStore {
       // Convert Uint8Array to hex and add prefix
       key = bytesToHex(hashOrPackage);
     } else {
-      // It's a KeyPackage
-      key = bytesToHex(await makeKeyPackageRef(hashOrPackage, this.hash));
+      // Calculate the key package reference from the public package
+      key = bytesToHex(
+        await calculateKeyPackageRef(hashOrPackage, this.cryptoProvider),
+      );
     }
 
     return (this.prefix ?? "") + key;
+  }
+
+  /** Ensures that a stored key package object has a key package reference */
+  private async ensureKeyPackageRef<T extends { publicPackage: KeyPackage }>(
+    keyPackage: T,
+  ): Promise<T & { keyPackageRef: Uint8Array }> {
+    // Skip calculation if the key package reference is already present
+    if (
+      "keyPackageRef" in keyPackage &&
+      keyPackage.keyPackageRef instanceof Uint8Array
+    )
+      return keyPackage as T & { keyPackageRef: Uint8Array };
+
+    return {
+      ...keyPackage,
+      keyPackageRef: await calculateKeyPackageRef(
+        keyPackage.publicPackage,
+        this.cryptoProvider,
+      ),
+    };
   }
 
   /**
@@ -99,11 +128,17 @@ export class KeyPackageStore {
    * console.log(`Stored key package with key: ${key}`);
    * ```
    */
-  async add(keyPackage: CompleteKeyPackage): Promise<string> {
+  async add(
+    keyPackage: Omit<StoredKeyPackage, "keyPackageRef">,
+  ): Promise<string> {
     const key = await this.resolveStorageKey(keyPackage.publicPackage);
 
     // Serialize the key package for storage
     const serialized = {
+      keyPackageRef: await calculateKeyPackageRef(
+        keyPackage.publicPackage,
+        this.cryptoProvider,
+      ),
       publicPackage: keyPackage.publicPackage,
       privatePackage: keyPackage.privatePackage,
     };
@@ -111,9 +146,7 @@ export class KeyPackageStore {
     await this.backend.setItem(key, serialized);
 
     // Notify about the change if callback provided
-    if (this.onUpdate) {
-      this.onUpdate(key);
-    }
+    this.onUpdate?.(key);
 
     return key;
   }
@@ -124,13 +157,13 @@ export class KeyPackageStore {
    * This method is useful when you only need the public component and want to avoid
    * loading the private key into memory.
    *
-   * @param keyOrPackage - Either the initKey (as Uint8Array or hex string) or the full KeyPackage
+   * @param ref - The key package reference (as Uint8Array or hex string) or the public key package
    * @returns A promise that resolves to the public key package, or null if not found
    */
   async getPublicKey(
-    keyOrPackage: Uint8Array | string | KeyPackage,
+    ref: Uint8Array | string | KeyPackage,
   ): Promise<KeyPackage | null> {
-    const key = await this.resolveStorageKey(keyOrPackage);
+    const key = await this.resolveStorageKey(ref);
     const stored = await this.backend.getItem(key);
     return stored ? stored.publicPackage : null;
   }
@@ -141,12 +174,12 @@ export class KeyPackageStore {
    * Use this method when you need access to the private keys for cryptographic operations.
    * Be cautious about keeping private keys in memory longer than necessary.
    *
-   * @param keyOrPackage - Either the initKey (as Uint8Array or hex string) or the full KeyPackage
+   * @param ref - The key package reference (as Uint8Array or hex string) or the public key package
    */
   async getPrivateKey(
-    keyOrPackage: Uint8Array | string | KeyPackage,
+    ref: Uint8Array | string | KeyPackage,
   ): Promise<PrivateKeyPackage | null> {
-    const key = await this.resolveStorageKey(keyOrPackage);
+    const key = await this.resolveStorageKey(ref);
     const stored = await this.backend.getItem(key);
     return stored ? stored.privatePackage : null;
   }
@@ -154,38 +187,34 @@ export class KeyPackageStore {
   /**
    * Retrieves the complete key package (both public and private) from the store.
    *
-   * This is more efficient than calling `getPublicKey()` and `getPrivateKey()` separately,
-   * as it only makes a single storage lookup.
-   *
-   * @param keyOrPackage - Either the initKey (as Uint8Array or hex string) or the full KeyPackage
+   * @param ref - The key package reference (as Uint8Array or hex string) or the public key package
    * @returns A promise that resolves to the complete key package, or null if not found
    */
-  async getCompletePackage(
-    keyOrPackage: Uint8Array | string | KeyPackage,
-  ): Promise<CompleteKeyPackage | null> {
-    const key = await this.resolveStorageKey(keyOrPackage);
-    return await this.backend.getItem(key);
+  async getKeyPackage(
+    ref: Uint8Array | string | KeyPackage,
+  ): Promise<StoredKeyPackage | null> {
+    const key = await this.resolveStorageKey(ref);
+    const stored = await this.backend.getItem(key);
+    return stored && (await this.ensureKeyPackageRef(stored));
   }
 
   /**
    * Removes a key package from the store.
-   * @param keyOrPackage - Either the initKey (as Uint8Array or hex string) or the full KeyPackage
+   * @param ref - The key package reference (as Uint8Array or hex string) or the public key package
    */
-  async remove(keyOrPackage: Uint8Array | string | KeyPackage): Promise<void> {
-    const key = await this.resolveStorageKey(keyOrPackage);
+  async remove(ref: Uint8Array | string | KeyPackage): Promise<void> {
+    const key = await this.resolveStorageKey(ref);
     await this.backend.removeItem(key);
 
     // Notify about the change if callback provided
-    if (this.onUpdate) {
-      this.onUpdate(key);
-    }
+    this.onUpdate?.(key);
   }
 
   /**
    * Lists all public key packages stored in the store.
    * @returns An array of public key packages
    */
-  async list(): Promise<KeyPackage[]> {
+  async list(): Promise<ListedKeyPackage[]> {
     const allKeys = await this.backend.keys();
 
     // Filter keys by prefix
@@ -194,24 +223,21 @@ export class KeyPackageStore {
       : allKeys;
 
     const packages = await Promise.all(
-      keys.map((key) => this.backend.getItem(key)),
+      keys.map((key) =>
+        this.backend
+          .getItem(key)
+          .then((pkg) => pkg && this.ensureKeyPackageRef(pkg)),
+      ),
     );
 
     // Filter out null values and validate that items are CompleteKeyPackages
-    return (
-      packages
-        .filter((pkg): pkg is CompleteKeyPackage => {
-          if (!pkg) return false;
-          // Basic validation: check if it has the expected structure
-          return (
-            typeof pkg === "object" &&
-            "publicPackage" in pkg &&
-            "privatePackage" in pkg
-          );
-        })
-        // Only return the public packages
-        .map((pkg) => pkg.publicPackage)
-    );
+    return packages
+      .filter((pkg) => pkg !== null)
+      .map((pkg) => ({
+        // NOTE: Explicicly omit the private key package here since in most cases clients will not need it for listing stored key packages
+        keyPackageRef: pkg.keyPackageRef,
+        publicPackage: pkg.publicPackage,
+      }));
   }
 
   /** Gets the count of key packages stored. */
@@ -244,10 +270,10 @@ export class KeyPackageStore {
 
   /**
    * Checks if a key package exists in the store.
-   * @param keyOrPackage - Either the initKey (as Uint8Array or hex string) or the full KeyPackage
+   * @param ref - The key package reference (as Uint8Array or hex string) or the public key package
    */
-  async has(keyOrPackage: Uint8Array | string | KeyPackage): Promise<boolean> {
-    const key = await this.resolveStorageKey(keyOrPackage);
+  async has(ref: Uint8Array | string | KeyPackage): Promise<boolean> {
+    const key = await this.resolveStorageKey(ref);
     const item = await this.backend.getItem(key);
     return item !== null;
   }

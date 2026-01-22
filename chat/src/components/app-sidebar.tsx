@@ -6,7 +6,6 @@ import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarHeader,
-  SidebarInput,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -176,10 +175,9 @@ export function AppSidebar({
             <div className="text-foreground text-base font-medium">{title}</div>
             {actions}
           </div>
-          {!children && <SidebarInput placeholder="Type to search..." />}
         </SidebarHeader>
         <SidebarContent>
-          <SidebarGroup className="px-0">
+          <SidebarGroup className="p-0">
             <SidebarGroupContent>{children}</SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>

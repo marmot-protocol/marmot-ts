@@ -1,5 +1,4 @@
 import { EventStore } from "applesauce-core";
-import type { CacheRequest } from "applesauce-loaders";
 import { createEventLoaderForStore } from "applesauce-loaders/loaders";
 import { RelayPool } from "applesauce-relay";
 import { extraRelays$, lookupRelays$ } from "./settings";
@@ -7,7 +6,11 @@ import { extraRelays$, lookupRelays$ } from "./settings";
 // Import window.nostrdb for global event cache
 import "window.nostrdb.js";
 
-import { persistEventsToCache } from "applesauce-core/helpers";
+import {
+  Filter,
+  NostrEvent,
+  persistEventsToCache,
+} from "applesauce-core/helpers";
 import { initNostrWasm } from "nostr-wasm";
 const nw = await initNostrWasm();
 
@@ -33,8 +36,11 @@ persistEventsToCache(eventStore, (events) =>
 export const pool = new RelayPool();
 
 // Create generic method to query window.nostrdb cache
-export const cacheRequest: CacheRequest = (filters) =>
-  window.nostrdb.filters(filters);
+export function cacheRequest(
+  filters: Filter | Filter[],
+): Promise<NostrEvent[]> {
+  return window.nostrdb.filters(Array.isArray(filters) ? filters : [filters]);
+}
 
 // Attach loaders to event store
 export const eventLoader = createEventLoaderForStore(eventStore, pool, {

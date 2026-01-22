@@ -1,13 +1,7 @@
 import localforage from "localforage";
-import {
-  BehaviorSubject,
-  combineLatestWith,
-  map,
-  shareReplay,
-  switchMap,
-} from "rxjs";
-import accountManager from "./accounts";
 import { KeyPackageStore } from "marmot-ts";
+import { BehaviorSubject, combineLatestWith, map, shareReplay } from "rxjs";
+import accountManager from "./accounts";
 
 // Observable that triggers whenever the store changes
 const storeChanges$ = new BehaviorSubject<number>(0);
@@ -35,10 +29,3 @@ export const keyPackageStore$ = accountManager.active$.pipe(
 function notifyStoreChange() {
   storeChanges$.next(storeChanges$.value + 1);
 }
-
-// Observable for the count of key packages in the store
-// This will automatically update when the store changes
-export const keyPackageCount$ = keyPackageStore$.pipe(
-  combineLatestWith(storeChanges$),
-  switchMap(([store, _]) => store.count()),
-);

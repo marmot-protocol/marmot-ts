@@ -6,7 +6,7 @@ import {
   createCredential,
   generateKeyPackage,
 } from "marmot-ts";
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import type { CiphersuiteName, KeyPackage } from "ts-mls";
 import {
@@ -28,6 +28,7 @@ import { withSignIn } from "@/components/with-signIn";
 import accountManager from "@/lib/accounts";
 import { keyPackageStore$ } from "@/lib/key-package-store";
 import { marmotClient$ } from "@/lib/marmot-client";
+import { switchMap } from "rxjs";
 
 // ============================================================================
 // Types
@@ -258,21 +259,19 @@ function ConfigurationForm({
 function CreateGroupPage() {
   const client = use$(marmotClient$);
   const keyPackageStore = use$(keyPackageStore$);
-  const [keyPackages, setKeyPackages] = useState<KeyPackage[]>([]);
+  const storedKeyPackages = use$(
+    () => keyPackageStore$.pipe(switchMap((store) => store.list())),
+    [],
+  );
+  const keyPackages = useMemo(
+    () => storedKeyPackages?.map((kp) => kp.publicPackage) ?? [],
+    [storedKeyPackages],
+  );
 
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const navigate = useNavigate();
-
-  // Load key packages
-  useEffect(() => {
-    if (keyPackageStore) {
-      keyPackageStore.list().then((packages: KeyPackage[]) => {
-        setKeyPackages(packages);
-      });
-    }
-  }, [keyPackageStore]);
 
   const handleFormSubmit = async (data: ConfigurationFormData) => {
     if (!data.selectedKeyPackage) {

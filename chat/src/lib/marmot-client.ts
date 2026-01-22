@@ -74,3 +74,11 @@ export const marmotClient$ = combineLatest([
   startWith(undefined),
   shareReplay(1),
 );
+
+// Attach marmot client to window for debugging
+if (import.meta.env.DEV) {
+  marmotClient$.subscribe((client) => {
+    // @ts-ignore
+    window.marmotClient = client;
+  });
+}

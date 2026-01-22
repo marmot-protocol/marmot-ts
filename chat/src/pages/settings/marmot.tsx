@@ -2,12 +2,12 @@ import { EventStatusButton } from "@/components/event-status-button";
 import { PageBody } from "@/components/page-body";
 import { PageHeader } from "@/components/page-header";
 import accountManager, {
-  actions,
   keyPackageRelays$,
   mailboxes$,
   user$,
 } from "@/lib/accounts";
 import { extraRelays$, lookupRelays$ } from "@/lib/settings";
+import { pool } from "@/lib/nostr";
 import { relaySet } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
 import {
@@ -71,7 +71,7 @@ function KeyPackageRelaysSection() {
         );
 
       // Publish to all publishing relays in parallel
-      await actions.publish(signedEvent, allPublishingRelays);
+      await pool.publish(allPublishingRelays, signedEvent);
 
       setPublishSuccess(true);
       // Clear success message after 3 seconds
@@ -85,15 +85,15 @@ function KeyPackageRelaysSection() {
   };
 
   const handleAddRelay = async (relay: string) => {
-    if (!keyPackageRelays) return;
-    await handlePublishKeyPackageRelays(relaySet(keyPackageRelays, relay));
+    // Treat undefined as empty array to bootstrap the relay list
+    const current = keyPackageRelays ?? [];
+    await handlePublishKeyPackageRelays(relaySet(current, relay));
   };
 
   const handleRemoveRelay = async (relay: string) => {
-    if (!keyPackageRelays) return;
-    await handlePublishKeyPackageRelays(
-      keyPackageRelays.filter((r) => r !== relay),
-    );
+    // Treat undefined as empty array (nothing to remove if no relays exist)
+    const current = keyPackageRelays ?? [];
+    await handlePublishKeyPackageRelays(current.filter((r) => r !== relay));
   };
 
   return (
@@ -107,13 +107,21 @@ function KeyPackageRelaysSection() {
       </div>
 
       <div className="space-y-2">
-        {keyPackageRelays?.map((relay, index) => (
-          <RelayItem
-            key={index}
-            relay={relay}
-            onRemove={() => handleRemoveRelay(relay)}
-          />
-        ))}
+        {keyPackageRelays && keyPackageRelays.length > 0 ? (
+          keyPackageRelays.map((relay, index) => (
+            <RelayItem
+              key={index}
+              relay={relay}
+              onRemove={() => handleRemoveRelay(relay)}
+            />
+          ))
+        ) : (
+          <div className="text-sm text-muted-foreground p-3 bg-muted/50 rounded-md">
+            {keyPackageRelays === undefined
+              ? "No key package relay list published yet. Add your first relay below to publish it."
+              : "No relays configured. Add a relay to publish your key package relay list."}
+          </div>
+        )}
       </div>
 
       <NewRelayForm onAdd={handleAddRelay} />

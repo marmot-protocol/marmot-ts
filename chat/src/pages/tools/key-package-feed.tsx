@@ -7,10 +7,9 @@ import {
   getKeyPackageCipherSuiteId,
   getKeyPackageClient,
 } from "marmot-ts";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { of } from "rxjs";
 import { map } from "rxjs/operators";
-
 import CipherSuiteBadge from "@/components/cipher-suite-badge";
 import KeyPackageDetailsModal from "@/components/key-package/details-modal";
 import { UserAvatar, UserName } from "@/components/nostr-user";
@@ -106,6 +105,18 @@ export default function KeyPackageFeedPage() {
       );
   }, [selectedRelay]);
 
+  // Deduplicate events by ID, keeping the most recent one
+  const uniqueEvents = useMemo(() => {
+    if (!events) return [];
+    const seen = new Map<string, NostrEvent>();
+    for (const event of events) {
+      const existing = seen.get(event.id);
+      if (!existing || event.created_at > existing.created_at) {
+        seen.set(event.id, event);
+      }
+    }
+    return Array.from(seen.values());
+  }, [events]);
   return (
     <>
       <PageHeader
@@ -149,21 +160,20 @@ export default function KeyPackageFeedPage() {
               Key Packages {events ? `(${events.length})` : ""}
             </h2>
           </div>
-
           {/* Events List */}
           <div className="space-y-4">
             {events === undefined ? (
               <div className="text-center text-muted-foreground py-8">
                 Loading...
               </div>
-            ) : events.length === 0 ? (
+            ) : uniqueEvents.length === 0 ? (
               <div className="text-center text-muted-foreground py-8">
                 {selectedRelay
                   ? "No key packages found on this relay"
                   : "Please enter a relay URL to fetch key packages"}
               </div>
             ) : (
-              events.map((event) => (
+              uniqueEvents.map((event) => (
                 <KeyPackageItem key={event.id} event={event as NostrEvent} />
               ))
             )}

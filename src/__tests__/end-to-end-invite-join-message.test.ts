@@ -10,7 +10,10 @@ import {
 } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
 import { MarmotClient } from "../client/marmot-client";
-import { defaultMarmotClientConfig, extractMarmotGroupData } from "../core/client-state";
+import {
+  defaultMarmotClientConfig,
+  extractMarmotGroupData,
+} from "../core/client-state";
 import { createCredential } from "../core/credential";
 import { deserializeApplicationRumor } from "../core/group-message";
 import { createKeyPackageEvent, generateKeyPackage } from "../core/key-package";

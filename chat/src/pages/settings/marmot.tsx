@@ -1,44 +1,45 @@
-import { Button } from "@/components/ui/button";
-import { RelayListCreator } from "@/components/form/relay-list-creator";
-import accountManager, { keyPackageRelays$, mailboxes$ } from "@/lib/accounts";
+import { EventStatusButton } from "@/components/event-status-button";
+import { PageBody } from "@/components/page-body";
+import { PageHeader } from "@/components/page-header";
+import accountManager, {
+  actions,
+  keyPackageRelays$,
+  mailboxes$,
+  user$,
+} from "@/lib/accounts";
 import { extraRelays$, lookupRelays$ } from "@/lib/settings";
 import { relaySet } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
-import { createKeyPackageRelayListEvent } from "marmot-ts";
-import { useEffect, useState } from "react";
-import { pool } from "../../lib/nostr";
+import {
+  KEY_PACKAGE_RELAY_LIST_KIND,
+  createKeyPackageRelayListEvent,
+} from "marmot-ts";
+import { useState } from "react";
+import { combineLatest, of, switchMap } from "rxjs";
+import { NewRelayForm, RelayItem } from "./relays";
+
+// Observable of current user's key package relay list event
+const keyPackageRelayListEvent$ = combineLatest([user$, user$.outboxes$]).pipe(
+  switchMap(([user, outboxes]) =>
+    user
+      ? user.replaceable(KEY_PACKAGE_RELAY_LIST_KIND, undefined, outboxes)
+      : of(undefined),
+  ),
+);
 
 function KeyPackageRelaysSection() {
   const lookupRelays = use$(lookupRelays$);
   const extraRelays = use$(extraRelays$);
   const keyPackageRelays = use$(keyPackageRelays$);
   const mailboxes = use$(mailboxes$);
-  const [keyPackageRelaysList, setKeyPackageRelaysList] = useState<string[]>(
-    [],
-  );
+
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishSuccess, setPublishSuccess] = useState(false);
 
-  // Sync local state with observable
-  useEffect(() => {
-    if (keyPackageRelays && keyPackageRelays.length > 0) {
-      setKeyPackageRelaysList(keyPackageRelays);
-    }
-  }, [keyPackageRelays]);
-
-
-  const handlePublishKeyPackageRelays = async () => {
-    if (keyPackageRelaysList.length === 0) {
-      setPublishError("At least one relay is required");
-      return;
-    }
-
+  const handlePublishKeyPackageRelays = async (relays: string[]) => {
     const account = accountManager.active;
-    if (!account) {
-      setPublishError("No active account");
-      return;
-    }
+    if (!account) return setPublishError("No active account");
 
     try {
       setIsPublishing(true);
@@ -48,7 +49,7 @@ function KeyPackageRelaysSection() {
       // Create unsigned event
       const unsignedEvent = createKeyPackageRelayListEvent({
         pubkey: account.pubkey,
-        relays: keyPackageRelaysList,
+        relays: relays,
         client: "marmot-chat",
       });
 
@@ -59,26 +60,18 @@ function KeyPackageRelaysSection() {
       const outboxRelays = mailboxes?.outboxes || [];
       const allPublishingRelays = relaySet(
         outboxRelays,
-        keyPackageRelaysList,
+        relays,
         extraRelays,
         lookupRelays,
       );
 
-      if (allPublishingRelays.length === 0) {
+      if (allPublishingRelays.length === 0)
         throw new Error(
           "No relays available for publishing. Configure your account or add relays.",
         );
-      }
 
-      // Publish to all publishing relays
-      for (const relay of allPublishingRelays) {
-        try {
-          await pool.publish([relay], signedEvent);
-        } catch (err) {
-          console.error("Failed to publish to", relay, err);
-          // Continue publishing to other relays even if one fails
-        }
-      }
+      // Publish to all publishing relays in parallel
+      await actions.publish(signedEvent, allPublishingRelays);
 
       setPublishSuccess(true);
       // Clear success message after 3 seconds
@@ -91,6 +84,17 @@ function KeyPackageRelaysSection() {
     }
   };
 
+  const handleAddRelay = async (relay: string) => {
+    if (!keyPackageRelays) return;
+    await handlePublishKeyPackageRelays(relaySet(keyPackageRelays, relay));
+  };
+
+  const handleRemoveRelay = async (relay: string) => {
+    if (!keyPackageRelays) return;
+    await handlePublishKeyPackageRelays(
+      keyPackageRelays.filter((r) => r !== relay),
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -101,6 +105,18 @@ function KeyPackageRelaysSection() {
           messaging
         </p>
       </div>
+
+      <div className="space-y-2">
+        {keyPackageRelays?.map((relay, index) => (
+          <RelayItem
+            key={index}
+            relay={relay}
+            onRemove={() => handleRemoveRelay(relay)}
+          />
+        ))}
+      </div>
+
+      <NewRelayForm onAdd={handleAddRelay} />
 
       {/* Error Message */}
       {publishError && (
@@ -116,39 +132,37 @@ function KeyPackageRelaysSection() {
         </div>
       )}
 
-      <RelayListCreator
-        relays={keyPackageRelaysList}
-        label="Key Package Relays"
-        placeholder="wss://relay.example.com"
-        disabled={isPublishing}
-        emptyMessage="No key package relays configured. Add relays below to publish your relay list."
-        onRelaysChange={setKeyPackageRelaysList}
-      />
-
-      <div className="flex justify-end">
-        <Button
-          onClick={handlePublishKeyPackageRelays}
-          disabled={isPublishing || keyPackageRelaysList.length === 0}
-          className="min-w-[120px]"
-        >
-          {isPublishing ? (
-            <>
-              <span className="mr-2">Publishing...</span>
-              <span className="loading loading-spinner loading-sm"></span>
-            </>
-          ) : (
-            "Save"
-          )}
-        </Button>
-      </div>
+      {/* Publishing indicator */}
+      {isPublishing && (
+        <div className="text-sm text-muted-foreground flex items-center gap-2">
+          <span className="loading loading-spinner loading-sm"></span>
+          <span>Publishing changes...</span>
+        </div>
+      )}
     </div>
   );
 }
 
 export default function MarmotSettingsPage() {
+  const keyPackageRelayListEvent = use$(keyPackageRelayListEvent$);
+
   return (
-    <div className="w-full max-w-2xl space-y-8 p-4">
-      <KeyPackageRelaysSection />
-    </div>
+    <>
+      <PageHeader
+        items={[
+          { label: "Home", to: "/" },
+          { label: "Settings", to: "/settings" },
+          { label: "Marmot" },
+        ]}
+        actions={
+          keyPackageRelayListEvent && (
+            <EventStatusButton event={keyPackageRelayListEvent} />
+          )
+        }
+      />
+      <PageBody>
+        <KeyPackageRelaysSection />
+      </PageBody>
+    </>
   );
 }

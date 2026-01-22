@@ -1,5 +1,4 @@
 import { AppSidebar } from "@/components/app-sidebar";
-import { PageHeader } from "@/components/page-header";
 import { SidebarInset } from "@/components/ui/sidebar";
 import { groupStore$ } from "@/lib/group-store";
 import { use$ } from "applesauce-react/hooks";

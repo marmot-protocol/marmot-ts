@@ -12,6 +12,7 @@ import ContactsPage from "./pages/contacts.tsx";
 import ContactDetailPage from "./pages/contacts/[npub].tsx";
 import GroupsPage from "./pages/groups.tsx";
 import CreateGroupPage from "./pages/groups/create.tsx";
+import GroupDetailPage from "./pages/groups/[id].tsx";
 import HomePage from "./pages/index.tsx";
 import KeyPackagePage from "./pages/key-packages.tsx";
 import KeyPackageDetailPage from "./pages/key-packages/[id].tsx";
@@ -47,7 +48,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/" element={<HomePage />} />
             <Route path="/groups" element={<GroupsPage />}>
               <Route path="create" element={<CreateGroupPage />} />
-              <Route path=":id" element={<div>Group Detail (TODO)</div>} />
+              <Route path=":id" element={<GroupDetailPage />} />
             </Route>
             <Route path="/key-packages" element={<KeyPackagePage />}>
               <Route path="create" element={<CreateKeyPackagePage />} />

@@ -4,12 +4,12 @@ import { ActionRunner } from "applesauce-actions";
 import { castUser } from "applesauce-common/casts/user";
 import { chainable } from "applesauce-common/observable/chainable";
 import { EventFactory } from "applesauce-core";
-import { relaySet, safeParse } from "applesauce-core/helpers";
+import { kinds, relaySet, safeParse } from "applesauce-core/helpers";
 import { NostrConnectSigner } from "applesauce-signers";
 import { getKeyPackageRelayList, KEY_PACKAGE_RELAY_LIST_KIND } from "marmot-ts";
 import { combineLatest, map, of, switchMap } from "rxjs";
 import { eventStore, pool } from "./nostr";
-import { extraRelays$ } from "./settings";
+import { extraRelays$, lookupRelays$ } from "./settings";
 
 // create an account manager instance
 const accounts = new AccountManager();
@@ -55,8 +55,34 @@ export const user$ = chainable(
 
 // Create an event factory for the current active account
 export const factory = new EventFactory({ signer: accounts.signer });
-export const actions = new ActionRunner(eventStore, factory, (event, relays) =>
-  pool.publish(relaySet(relays, extraRelays$.value), event),
+export const actions = new ActionRunner(
+  eventStore,
+  factory,
+  async (event, relays) => {
+    const outboxes = await castUser(event.pubkey, eventStore).outboxes$.$first(
+      1_000,
+      undefined,
+    );
+
+    // add outboxes to relays
+    relays = relaySet(relays, outboxes, extraRelays$.value);
+
+    // Add lookup relays if profile or relay list
+    if (
+      [
+        kinds.Metadata,
+        kinds.RelayList,
+        kinds.Contacts,
+        kinds.BlossomServerList,
+        KEY_PACKAGE_RELAY_LIST_KIND,
+      ].includes(event.kind)
+    ) {
+      relays = relaySet(relays, lookupRelays$.value);
+    }
+
+    await pool.publish(relays, event);
+    await window.nostrdb.add(event);
+  },
 );
 
 /** An observable of the current account's mailboxes */

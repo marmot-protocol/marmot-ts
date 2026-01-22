@@ -10,6 +10,7 @@ import {
 import {
   ensureHttpURL,
   ensureWebSocketURL,
+  kinds,
   relaySet,
 } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
@@ -19,6 +20,7 @@ import { PageBody } from "../../components/page-body";
 import { PageHeader } from "../../components/page-header";
 import { actions, user$ } from "../../lib/accounts";
 import { pool } from "../../lib/nostr";
+import { EventStatusButton } from "../../components/event-status-button";
 
 export function RelayItem({
   relay,
@@ -268,6 +270,9 @@ function ExtraRelaysSection() {
 }
 
 export default function SettingsRelaysPage() {
+  const user = use$(user$);
+  const relayList = use$(() => user?.replaceable(kinds.RelayList), []);
+
   return (
     <>
       <PageHeader
@@ -276,6 +281,7 @@ export default function SettingsRelaysPage() {
           { label: "Settings", to: "/settings" },
           { label: "Relays" },
         ]}
+        actions={relayList && <EventStatusButton event={relayList} />}
       />
       <PageBody>
         <LookupRelaysSection />

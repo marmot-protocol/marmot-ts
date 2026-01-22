@@ -69,6 +69,10 @@ export function EventStatusButton({ event }: { event: NostrEvent }) {
                 <span className="text-muted-foreground">Kind: </span>
                 <span>{event.kind}</span>
               </div>
+              <div>
+                <span className="text-muted-foreground">Tags: </span>
+                <span>{event.tags.length}</span>
+              </div>
             </div>
           </div>
           <div>

@@ -11,17 +11,18 @@ import { IconLock } from "@tabler/icons-react";
 import { castUser, User } from "applesauce-common/casts/user";
 import { use$ } from "applesauce-react/hooks";
 import { KEY_PACKAGE_RELAY_LIST_KIND } from "marmot-ts";
-import { createContext, useContext, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router";
+import { BehaviorSubject } from "rxjs";
 import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
 import { useDebounce } from "../hooks/use-debounce";
 import { eventLoader, eventStore } from "../lib/nostr";
 import { profileSearch } from "../lib/search";
+import { persist } from "../lib/settings";
 
-const FilterContext = createContext<{ hasKeyPackageRelays: boolean }>({
-  hasKeyPackageRelays: false,
-});
+const hasKeyPackageRelays$ = new BehaviorSubject<boolean>(false);
+persist("contacts:has-key-package-relays", hasKeyPackageRelays$);
 
 function ContactItem({ user }: { user: User }) {
   const location = useLocation();
@@ -31,8 +32,8 @@ function ContactItem({ user }: { user: User }) {
     () => user.replaceable(KEY_PACKAGE_RELAY_LIST_KIND, undefined, outboxes),
     [user.pubkey, outboxes?.join(",")],
   );
-  const { hasKeyPackageRelays } = useContext(FilterContext);
 
+  const hasKeyPackageRelays = use$(hasKeyPackageRelays$);
   if (hasKeyPackageRelays && !keyPackageRelayList) return null;
 
   return (
@@ -68,7 +69,6 @@ function ContactItem({ user }: { user: User }) {
 export default function ContactsPage() {
   const contacts = use$(user$.contacts$);
   const [query, setQuery] = useState("");
-  const [hasKeyPackageRelays, setHasKeyPackageRelays] = useState(true);
 
   // always load the latest contacts
   const user = use$(user$);
@@ -97,10 +97,7 @@ export default function ContactsPage() {
       .map((r) => castUser(r.item.pubkey, eventStore));
   }, [contacts, debouncedQuery]);
 
-  const filters = useMemo(
-    () => ({ hasKeyPackageRelays }),
-    [hasKeyPackageRelays],
-  );
+  const hasKeyPackageRelays = use$(hasKeyPackageRelays$);
 
   return (
     <>
@@ -112,33 +109,31 @@ export default function ContactsPage() {
             <Switch
               className="shadow-none"
               checked={hasKeyPackageRelays}
-              onCheckedChange={setHasKeyPackageRelays}
+              onCheckedChange={(checked) => hasKeyPackageRelays$.next(checked)}
             />
           </Label>
         }
       >
-        <FilterContext.Provider value={filters}>
-          <div className="flex flex-col">
-            <div className="p-2 border-b">
-              <SidebarInput
-                placeholder="Search contacts..."
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-            {filteredContacts && filteredContacts.length > 0 ? (
-              filteredContacts.map((contact) => (
-                <ContactItem key={contact.pubkey} user={contact} />
-              ))
-            ) : (
-              <div className="p-4 text-sm text-muted-foreground text-center">
-                {query.trim()
-                  ? "No contacts found matching your search"
-                  : "No contacts yet"}
-              </div>
-            )}
+        <div className="flex flex-col">
+          <div className="p-2 border-b">
+            <SidebarInput
+              placeholder="Search contacts..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
           </div>
-        </FilterContext.Provider>
+          {filteredContacts && filteredContacts.length > 0 ? (
+            filteredContacts.map((contact) => (
+              <ContactItem key={contact.pubkey} user={contact} />
+            ))
+          ) : (
+            <div className="p-4 text-sm text-muted-foreground text-center">
+              {query.trim()
+                ? "No contacts found matching your search"
+                : "No contacts yet"}
+            </div>
+          )}
+        </div>
       </AppSidebar>
       <SidebarInset>
         <Outlet />

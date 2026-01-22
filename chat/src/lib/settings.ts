@@ -2,7 +2,7 @@ import { relaySet } from "applesauce-core/helpers";
 import { BehaviorSubject, combineLatest, map } from "rxjs";
 
 // save and load settings from localStorage
-function persist<T>(key: string, subject: BehaviorSubject<T>) {
+export function persist<T>(key: string, subject: BehaviorSubject<T>) {
   try {
     if (localStorage.getItem(key))
       subject.next(JSON.parse(localStorage.getItem(key)!));
@@ -51,3 +51,7 @@ export const relayConfig$ = combineLatest([
     commonRelays: extraRelays,
   })),
 );
+
+/** Whether to automatically create a key package if none exists for the user */
+export const autoCreateKeyPackage$ = new BehaviorSubject<boolean>(false);
+persist("auto-create-key-package", autoCreateKeyPackage$);

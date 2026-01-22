@@ -1,11 +1,11 @@
-import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { X } from "lucide-react";
+import { pool } from "@/lib/nostr";
 import { ensureWebSocketURL } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
-import { pool } from "@/lib/nostr";
+import { X } from "lucide-react";
+import { useMemo, useState } from "react";
 
 function RelayItem({
   relay,
@@ -64,9 +64,9 @@ export function RelayListCreator({
       return ensureWebSocketURL(trimmed);
     } catch {
       // If it fails, try to prepend wss://
-      if (!trimmed.startsWith("wss://") && !trimmed.startsWith("ws://")) {
+      if (!trimmed.startsWith("wss://") && !trimmed.startsWith("ws://"))
         return `wss://${trimmed}`;
-      }
+
       return trimmed;
     }
   };

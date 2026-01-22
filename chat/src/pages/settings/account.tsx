@@ -41,7 +41,6 @@ export default function SettingsAccountPage() {
   // Initialize form state from profile
   useEffect(() => {
     if (profile) {
-      console.log("Profile:", profile);
       setName(profile.name ?? "");
       setAbout(profile.about ?? "");
       setPicture(profile.picture ?? "");

@@ -13,13 +13,13 @@ import {
 import { map } from "rxjs/operators";
 import { ClientState } from "ts-mls/clientState.js";
 import { getCiphersuiteNameFromId } from "ts-mls/crypto/ciphersuite.js";
+import { getKeyPackageCipherSuiteId } from "../../../../src";
 import { MarmotGroup } from "../../../../src/client/group/marmot-group";
 import { proposeInviteUser } from "../../../../src/client/group/proposals/invite-user.js";
 import {
   extractMarmotGroupData,
   getMemberCount,
 } from "../../../../src/core/client-state";
-import { getKeyPackageCipherSuiteId } from "../../../../src/core/key-package.js";
 import {
   KEY_PACKAGE_KIND,
   MarmotGroupData,

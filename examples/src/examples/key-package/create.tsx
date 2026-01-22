@@ -9,20 +9,21 @@ import {
 import { CiphersuiteName } from "ts-mls/crypto/ciphersuite.js";
 import { KeyPackage } from "ts-mls/keyPackage.js";
 
-import { CompleteKeyPackage, getKeyPackageRelayList } from "../../../../src";
-import { createCredential } from "../../../../src/core/credential";
 import {
+  CompleteKeyPackage,
   createKeyPackageEvent,
-  generateKeyPackage,
-} from "../../../../src/core/key-package";
+  getKeyPackageRelayList,
+} from "../../../../src";
+import { createCredential } from "../../../../src/core/credential";
+import { generateKeyPackage } from "../../../../src/core/key-package";
 import {
   KEY_PACKAGE_RELAY_LIST_KIND,
   KEY_PACKAGE_RELAYS_TAG,
 } from "../../../../src/core/protocol";
+import KeyPackageDataView from "../../components/data-view/key-package";
 import { CipherSuitePicker } from "../../components/form/cipher-suite-picker";
 import { RelayListCreator } from "../../components/form/relay-list-creator";
 import JsonBlock from "../../components/json-block";
-import KeyPackageDataView from "../../components/data-view/key-package";
 import { withSignIn } from "../../components/with-signIn";
 import { useObservable } from "../../hooks/use-observable";
 import accounts, { mailboxes$ } from "../../lib/accounts";

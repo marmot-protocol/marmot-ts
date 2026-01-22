@@ -215,8 +215,8 @@ export default function KeyPackageStoreModal() {
 
               {packages.map((pkg, index) => (
                 <StoredPackageDetails
-                  key={bytesToHex(pkg.initKey)}
-                  publicPackage={pkg}
+                  key={bytesToHex(pkg.keyPackageRef)}
+                  publicPackage={pkg.publicPackage}
                   index={index}
                 />
               ))}

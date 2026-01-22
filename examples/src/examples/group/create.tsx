@@ -1,6 +1,6 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useState } from "react";
-import { switchMap } from "rxjs";
+import { map, switchMap } from "rxjs";
 import type { CiphersuiteName, KeyPackage } from "ts-mls";
 import {
   defaultCryptoProvider,
@@ -271,7 +271,11 @@ export default withSignIn(function GroupCreation() {
   const keyPackageStore = useObservable(keyPackageStore$);
   const keyPackages =
     useObservableMemo(
-      () => keyPackageStore$.pipe(switchMap((store) => store.list())),
+      () =>
+        keyPackageStore$.pipe(
+          switchMap((store) => store.list()),
+          map((packages) => packages.map((kp) => kp.publicPackage)),
+        ),
       [],
     ) ?? [];
 

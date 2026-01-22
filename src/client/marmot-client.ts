@@ -1,4 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { EventSigner } from "applesauce-core";
 import {
   Capabilities,
@@ -11,22 +12,21 @@ import {
   makePskIndex,
   PrivateKeyPackage,
 } from "ts-mls";
-import { makeKeyPackageRef } from "ts-mls/keyPackage.js";
 import {
   CiphersuiteId,
   CiphersuiteName,
   getCiphersuiteFromId,
 } from "ts-mls/crypto/ciphersuite.js";
+import { makeKeyPackageRef } from "ts-mls/keyPackage.js";
 import { createCredential } from "../core/credential.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
+import { getWelcome } from "../core/welcome.js";
 import { GroupStore } from "../store/group-store.js";
 import { KeyPackageStore } from "../store/key-package-store.js";
-import { NostrNetworkInterface } from "./nostr-interface.js";
 import { MarmotGroup } from "./group/marmot-group.js";
-import { getWelcome } from "../core/welcome.js";
-import { Rumor } from "applesauce-common/helpers";
+import { NostrNetworkInterface } from "./nostr-interface.js";
 
 export type MarmotClientOptions = {
   /** The signer used for the clients identity */

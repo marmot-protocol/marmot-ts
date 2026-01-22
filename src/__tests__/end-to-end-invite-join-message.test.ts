@@ -1,31 +1,29 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { bytesToHex } from "@noble/hashes/utils.js";
+import { PrivateKeyAccount } from "applesauce-accounts/accounts";
+import { Rumor, unlockGiftWrap } from "applesauce-common/helpers/gift-wrap";
+import { getEventHash, type NostrEvent } from "nostr-tools";
 import {
   CiphersuiteImpl,
   defaultCryptoProvider,
   getCiphersuiteFromName,
   getCiphersuiteImpl,
 } from "ts-mls";
-import { PrivateKeyAccount } from "applesauce-accounts/accounts";
-import { bytesToHex } from "@noble/hashes/utils.js";
-import { getEventHash, type NostrEvent } from "nostr-tools";
-import { Rumor, unlockGiftWrap } from "applesauce-common/helpers/gift-wrap";
-
+import { beforeEach, describe, expect, it } from "vitest";
 import { MarmotClient } from "../client/marmot-client";
-import { GroupStore } from "../store/group-store";
-import { KeyPackageStore } from "../store/key-package-store";
-import { MemoryBackend } from "./ingest-commit-race.test";
-import { defaultMarmotClientConfig } from "../core/client-state";
+import { defaultMarmotClientConfig, extractMarmotGroupData } from "../core/client-state";
+import { createCredential } from "../core/credential";
+import { deserializeApplicationRumor } from "../core/group-message";
 import { createKeyPackageEvent, generateKeyPackage } from "../core/key-package";
 import {
+  GROUP_EVENT_KIND,
   KEY_PACKAGE_KIND,
   WELCOME_EVENT_KIND,
-  GROUP_EVENT_KIND,
 } from "../core/protocol";
-import { deserializeApplicationRumor } from "../core/group-message";
+import { GroupStore } from "../store/group-store";
+import { KeyPackageStore } from "../store/key-package-store";
 import { unixNow } from "../utils/nostr";
-import { createCredential } from "../core/credential";
-import { extractMarmotGroupData } from "../core/client-state";
 import { MockNetwork } from "./helpers/mock-network";
+import { MemoryBackend } from "./ingest-commit-race.test";
 
 // NOTE: we use the shared test helper MockNetwork, not an inline version.
 

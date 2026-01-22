@@ -12,10 +12,13 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { user$ } from "@/lib/accounts";
+import { use$ } from "applesauce-react/hooks";
 import {
   Command,
   KeyIcon,
   MessageSquareIcon,
+  QrCodeIcon,
   Settings,
   ToolCaseIcon,
   UsersIcon,
@@ -23,6 +26,7 @@ import {
 import * as React from "react";
 import { type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
+import QRModal from "./qr-modal";
 
 const topLevelNav = [
   {
@@ -63,6 +67,8 @@ export function AppSidebar({
   const navigate = useNavigate();
 
   const { setOpen } = useSidebar();
+  const user = use$(user$);
+  const [qrOpen, setQrOpen] = React.useState(false);
 
   return (
     <Sidebar
@@ -123,6 +129,21 @@ export function AppSidebar({
         </SidebarContent>
         <SidebarFooter>
           <SidebarMenu>
+            {user && (
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip={{
+                    children: "Invite QR Code",
+                    hidden: false,
+                  }}
+                  onClick={() => setQrOpen(true)}
+                  className="px-2.5 md:px-2"
+                >
+                  <QrCodeIcon />
+                  <span>Invite QR Code</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            )}
             <SidebarMenuItem>
               <SidebarMenuButton
                 tooltip={{
@@ -138,6 +159,9 @@ export function AppSidebar({
             </SidebarMenuItem>
           </SidebarMenu>
           <NavUser />
+          {user && (
+            <QRModal data={user.npub} open={qrOpen} onOpenChange={setQrOpen} />
+          )}
         </SidebarFooter>
       </Sidebar>
 
@@ -163,20 +187,3 @@ export function AppSidebar({
     </Sidebar>
   );
 }
-
-// const coolGroupNavItem = (
-//   <a
-//     href="#"
-//     key={title}
-//     className="hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0"
-//   >
-//     <div className="flex w-full items-center gap-2">
-//       <span>{mail.name}</span>{" "}
-//       <span className="ml-auto text-xs">{mail.date}</span>
-//     </div>
-//     <span className="font-medium">{mail.subject}</span>
-//     <span className="line-clamp-2 w-[260px] text-xs whitespace-break-spaces">
-//       {mail.teaser}
-//     </span>
-//   </a>
-// );

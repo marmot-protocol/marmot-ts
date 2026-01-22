@@ -1,9 +1,40 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { X } from "lucide-react";
 import { ensureWebSocketURL } from "applesauce-core/helpers";
+import { use$ } from "applesauce-react/hooks";
+import { pool } from "@/lib/nostr";
+
+function RelayItem({
+  relay,
+  onRemove,
+  disabled,
+}: {
+  relay: string;
+  onRemove: () => void;
+  disabled: boolean;
+}) {
+  const relayInstance = useMemo(() => pool.relay(relay), [relay]);
+  const icon = use$(relayInstance.icon$);
+
+  return (
+    <div className="flex items-center gap-2 p-2 bg-muted rounded">
+      <img src={icon} className="w-4 h-4" alt="" />
+      <code className="flex-1 text-xs font-mono select-all">{relay}</code>
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onRemove}
+        disabled={disabled}
+        className="h-6 w-6"
+      >
+        <X className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
 
 interface RelayListCreatorProps {
   relays: string[];
@@ -73,23 +104,12 @@ export function RelayListCreator({
       ) : (
         <div className="space-y-2">
           {relays.map((relay, index) => (
-            <div
+            <RelayItem
               key={index}
-              className="flex items-center gap-2 p-2 bg-muted rounded"
-            >
-              <code className="flex-1 text-xs font-mono select-all">
-                {relay}
-              </code>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => handleRemoveRelay(relay)}
-                disabled={disabled}
-                className="h-6 w-6"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+              relay={relay}
+              onRemove={() => handleRemoveRelay(relay)}
+              disabled={disabled}
+            />
           ))}
         </div>
       )}

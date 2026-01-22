@@ -48,6 +48,11 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./mls": {
+      "types": "./src/mls.d.ts",
+      "import": "./src/mls.js",
+      "default": "./src/mls.js"
+    },
     "./package.json": "./package.json"
   },
   "dependencies": {
@@ -56,15 +61,15 @@
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "applesauce-common": "^5.0.0",
-    "applesauce-core": "^5.0.1",
+    "applesauce-core": "^5.0.3",
     "nostr-tools": "^2.19.4",
     "ts-mls": "^1.6.1"
   },
   "devDependencies": {
-    "@types/node": "^24.10.8",
+    "@types/node": "^24.10.9",
     "applesauce-accounts": "^5.0.0",
     "husky": "^9.1.7",
-    "prettier": "^3.8.0",
+    "prettier": "^3.8.1",
     "rimraf": "~6.0.1",
     "typescript": "~5.9.3",
     "vitest": "^3.2.4"

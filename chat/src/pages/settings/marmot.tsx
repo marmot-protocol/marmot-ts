@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { RelayListCreator } from "@/components/form/relay-list-creator";
 import accountManager, { keyPackageRelays$, mailboxes$ } from "@/lib/accounts";
 import { extraRelays$, lookupRelays$ } from "@/lib/settings";
 import { relaySet } from "applesauce-core/helpers";
@@ -7,7 +7,6 @@ import { use$ } from "applesauce-react/hooks";
 import { createKeyPackageRelayListEvent } from "marmot-ts";
 import { useEffect, useState } from "react";
 import { pool } from "../../lib/nostr";
-import { RelayItem } from "./relays";
 
 function KeyPackageRelaysSection() {
   const lookupRelays = use$(lookupRelays$);
@@ -17,7 +16,6 @@ function KeyPackageRelaysSection() {
   const [keyPackageRelaysList, setKeyPackageRelaysList] = useState<string[]>(
     [],
   );
-  const [newKeyPackageRelay, setNewKeyPackageRelay] = useState("");
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishSuccess, setPublishSuccess] = useState(false);
@@ -29,20 +27,6 @@ function KeyPackageRelaysSection() {
     }
   }, [keyPackageRelays]);
 
-  const handleAddKeyPackageRelay = () => {
-    if (newKeyPackageRelay.trim()) {
-      const newRelays = [
-        ...new Set([...keyPackageRelaysList, newKeyPackageRelay.trim()]),
-      ];
-      setKeyPackageRelaysList(newRelays);
-      setNewKeyPackageRelay("");
-    }
-  };
-
-  const handleRemoveKeyPackageRelay = (relay: string) => {
-    const newRelays = keyPackageRelaysList.filter((r) => r !== relay);
-    setKeyPackageRelaysList(newRelays);
-  };
 
   const handlePublishKeyPackageRelays = async () => {
     if (keyPackageRelaysList.length === 0) {
@@ -107,12 +91,6 @@ function KeyPackageRelaysSection() {
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleAddKeyPackageRelay();
-    }
-  };
 
   return (
     <div className="space-y-4">
@@ -138,40 +116,14 @@ function KeyPackageRelaysSection() {
         </div>
       )}
 
-      <div className="space-y-2">
-        {keyPackageRelaysList.length === 0 ? (
-          <div className="text-muted-foreground text-sm text-center py-4">
-            No key package relays configured. Add relays below to publish your
-            relay list.
-          </div>
-        ) : (
-          keyPackageRelaysList.map((relay) => (
-            <RelayItem
-              key={relay}
-              relay={relay}
-              onRemove={() => handleRemoveKeyPackageRelay(relay)}
-            />
-          ))
-        )}
-      </div>
-
-      <div className="flex gap-2 w-full">
-        <Input
-          type="text"
-          placeholder="wss://relay.example.com"
-          value={newKeyPackageRelay}
-          onChange={(e) => setNewKeyPackageRelay(e.target.value)}
-          onKeyDown={handleKeyPress}
-          className="flex-1"
-          disabled={isPublishing}
-        />
-        <Button
-          onClick={handleAddKeyPackageRelay}
-          disabled={!newKeyPackageRelay.trim() || isPublishing}
-        >
-          Add
-        </Button>
-      </div>
+      <RelayListCreator
+        relays={keyPackageRelaysList}
+        label="Key Package Relays"
+        placeholder="wss://relay.example.com"
+        disabled={isPublishing}
+        emptyMessage="No key package relays configured. Add relays below to publish your relay list."
+        onRelaysChange={setKeyPackageRelaysList}
+      />
 
       <div className="flex justify-end">
         <Button

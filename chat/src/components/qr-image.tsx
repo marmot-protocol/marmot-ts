@@ -1,3 +1,6 @@
+import { qrcode } from "@libs/qrcode";
+import { useMemo } from "react";
+
 interface QRImageProps {
   data: string;
   size?: number;
@@ -9,11 +12,11 @@ export default function QRImage({
   size = 150,
   className = "",
 }: QRImageProps) {
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(data)}`;
+  const svg = useMemo(() => qrcode(data, { output: "svg" }), [data]);
 
   return (
     <img
-      src={qrUrl}
+      src={`data:image/svg+xml;base64,${btoa(svg)}`}
       alt="QR Code"
       className={`rounded-lg p-2 bg-white ${className}`}
       style={{ width: `${size}px`, height: `${size}px` }}

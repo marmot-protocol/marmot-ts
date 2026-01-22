@@ -7,12 +7,14 @@ import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
  * Simple error boundary component that displays errors in an alert.
  * This is a default fallback for all examples to use.
  */
-function ErrorFallback({ error }: { error: Error }) {
+function ErrorFallback({ error }: { error: Error | unknown }) {
   return (
     <Alert variant="destructive">
       <AlertCircle className="h-4 w-4" />
       <AlertTitle>Error</AlertTitle>
-      <AlertDescription>{error.message}</AlertDescription>
+      <AlertDescription>
+        {error instanceof Error ? error.message : String(error)}
+      </AlertDescription>
     </Alert>
   );
 }

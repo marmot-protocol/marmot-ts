@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { Rumor } from "applesauce-common/helpers/gift-wrap";
+import { EventSigner } from "applesauce-core";
 import {
   CiphersuiteImpl,
   createApplicationMessage,
@@ -8,24 +9,22 @@ import {
   getCiphersuiteImpl,
   joinGroup,
 } from "ts-mls";
-import { createCommit } from "ts-mls/createCommit.js";
 import type { ClientState } from "ts-mls/clientState.js";
-import { encodeGroupState, decodeGroupState } from "ts-mls/clientState.js";
-
-import { createCredential } from "../core/credential.js";
-import { createSimpleGroup } from "../core/group.js";
-import { generateKeyPackage } from "../core/key-package.js";
+import { decodeGroupState, encodeGroupState } from "ts-mls/clientState.js";
+import { createCommit } from "ts-mls/createCommit.js";
+import { describe, expect, it } from "vitest";
+import { MarmotGroup } from "../client/group/marmot-group.js";
+import type { NostrNetworkInterface } from "../client/nostr-interface.js";
 import {
   defaultMarmotClientConfig,
   SerializedClientState,
 } from "../core/client-state.js";
+import { createCredential } from "../core/credential.js";
 import { createGroupEvent } from "../core/group-message.js";
+import { createSimpleGroup } from "../core/group.js";
+import { generateKeyPackage } from "../core/key-package.js";
 import { GroupStore } from "../store/group-store.js";
 import type { KeyValueStoreBackend } from "../utils/key-value.js";
-import { MarmotGroup } from "../client/group/marmot-group.js";
-import type { NostrNetworkInterface } from "../client/nostr-interface.js";
-import { EventSigner } from "applesauce-core";
-import { Rumor } from "applesauce-common/helpers";
 
 export class MemoryBackend<T> implements KeyValueStoreBackend<T> {
   private map = new Map<string, T>();

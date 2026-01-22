@@ -40,7 +40,7 @@ function getUserInboxRelays(pubkey: string): Promise<string[]> {
   return firstValueFrom(
     eventStore.mailboxes(pubkey).pipe(
       defined(),
-      map((mailboxes) => mailboxes.outboxes),
+      map((mailboxes) => mailboxes.inboxes),
       simpleTimeout(30_000, "Failed to fetch users inbox relays"),
     ),
   );

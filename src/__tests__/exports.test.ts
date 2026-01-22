@@ -23,6 +23,7 @@ describe("exports", () => {
         "MarmotGroup",
         "Proposals",
         "WELCOME_EVENT_KIND",
+        "calculateKeyPackageRef",
         "createAdminCommitPolicyCallback",
         "createCredential",
         "createDeleteKeyPackageEvent",

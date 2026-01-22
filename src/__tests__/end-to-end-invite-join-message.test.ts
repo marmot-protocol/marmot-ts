@@ -16,7 +16,8 @@ import {
 } from "../core/client-state";
 import { createCredential } from "../core/credential";
 import { deserializeApplicationRumor } from "../core/group-message";
-import { createKeyPackageEvent, generateKeyPackage } from "../core/key-package";
+import { generateKeyPackage } from "../core/key-package";
+import { createKeyPackageEvent } from "../core/key-package-event";
 import {
   GROUP_EVENT_KIND,
   KEY_PACKAGE_KIND,

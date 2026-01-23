@@ -86,9 +86,9 @@ export async function publish(event: NostrEvent, relays?: string[]) {
 
   await Promise.allSettled([
     // Save event to the local cache
-    await window.nostrdb.add(event),
+    window.nostrdb.add(event),
     // Publish event to all relays
-    await pool.publish(relays, event),
+    pool.publish(relays, event),
   ]);
 }
 

@@ -80,13 +80,20 @@ export const publishedKeyPackages$ = combineLatest([
     // Observable watch event store and parse all key packages
     const published = eventStore.filters(filter).pipe(
       mergeMap(async (event) => {
-        const keyPackage = getKeyPackage(event);
-        const keyPackageRef = await calculateKeyPackageRef(
-          keyPackage,
-          client?.cryptoProvider,
-        );
-        return { event, keyPackage, keyPackageRef };
+        try {
+          const keyPackage = getKeyPackage(event);
+          const keyPackageRef = await calculateKeyPackageRef(
+            keyPackage,
+            client?.cryptoProvider,
+          );
+          return { event, keyPackage, keyPackageRef };
+        } catch {
+          // Skip malformed events that fail decoding or ref calculation
+          return null;
+        }
       }),
+      // Filter out null values (failed events)
+      mergeMap((result) => (result ? [result] : [])),
       scan((acc, curr) => [...acc, curr], [] as PublishedKeyPackage[]),
     );
 

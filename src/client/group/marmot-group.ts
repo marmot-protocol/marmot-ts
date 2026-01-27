@@ -20,11 +20,7 @@ import {
   acceptAll,
   type IncomingMessageCallback,
 } from "ts-mls/incomingMessageAction.js";
-import {
-  MLSMessage,
-  type MlsPrivateMessage,
-  type MlsPublicMessage,
-} from "ts-mls/message.js";
+import { MLSMessage } from "ts-mls/message.js";
 import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
 import { type LeafIndex, toLeafIndex } from "ts-mls/treemath.js";
 import { extractMarmotGroupData } from "../../core/client-state.js";
@@ -50,6 +46,12 @@ import {
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 
+/** The minimum interface for a group to store its message history */
+export interface GroupHistoryStore {
+  /** Saves a new application message to the group history */
+  saveMessage(groupId: Uint8Array, message: Uint8Array): Promise<void>;
+}
+
 export type ProposalContext = {
   state: ClientState;
   ciphersuite: CiphersuiteImpl;
@@ -67,7 +69,9 @@ export type ProposalBuilder<
   T extends Proposal | Proposal[],
 > = (...args: Args) => ProposalAction<T>;
 
-export type MarmotGroupOptions = {
+export type MarmotGroupOptions<
+  HistoryStore extends GroupHistoryStore | undefined,
+> = {
   /** The backend to store and load of group from */
   store: GroupStore;
   /** The signer used for the clients identity */
@@ -76,6 +80,10 @@ export type MarmotGroupOptions = {
   ciphersuite: CiphersuiteImpl;
   /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
+  /** The storage interface for the groups application message history */
+  history:
+    | HistoryStore
+    | ((groupId: Uint8Array) => HistoryStore);
 };
 
 /** Information about a welcome recipient */
@@ -128,7 +136,9 @@ export function createAdminCommitPolicyCallback(args: {
   };
 }
 
-export class MarmotGroup {
+export class MarmotGroup<
+  THistoryStore extends GroupHistoryStore | undefined,
+> {
   /** The backend to store and load of group from */
   readonly store: GroupStore;
 
@@ -140,6 +150,9 @@ export class MarmotGroup {
 
   /** The nostr relay pool to use for the group */
   readonly network: NostrNetworkInterface;
+
+  /** The storage interface for the groups application message history */
+  readonly history: THistoryStore;
 
   /** Whether group state has been modified */
   dirty = false;
@@ -183,21 +196,26 @@ export class MarmotGroup {
     return this.groupData?.relays;
   }
 
-  constructor(state: ClientState, options: MarmotGroupOptions) {
+  constructor(state: ClientState, options: MarmotGroupOptions<THistoryStore>) {
     this._state = state;
     this.store = options.store;
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
     this.network = options.network;
+
+    // Create the history store
+    if (typeof options.history === "function") {
+      this.history = options.history(this.id);
+    } else this.history = options.history;
   }
 
   /** Loads a group from the store */
-  static async load(
+  static async load<THistoryStore extends GroupHistoryStore | undefined>(
     groupId: Uint8Array | string,
-    options: Omit<MarmotGroupOptions, "ciphersuite"> & {
+    options: Omit<MarmotGroupOptions<THistoryStore>, "ciphersuite"> & {
       cryptoProvider?: CryptoProvider;
     },
-  ): Promise<MarmotGroup> {
+  ): Promise<MarmotGroup<THistoryStore>> {
     const state = await options.store.get(groupId);
     if (!state) throw new Error(`Group ${groupId} not found`);
 
@@ -711,7 +729,7 @@ export class MarmotGroup {
         // - Application messages: Decrypts content and returns it
         // - Both update state as needed (for forward secrecy)
         const result = await processMessage(
-          message as MlsPrivateMessage | MlsPublicMessage,
+          message,
           this.state,
           emptyPskIndex,
           acceptAll, // Accept all proposals (adds them to unappliedProposals)
@@ -725,6 +743,12 @@ export class MarmotGroup {
         } else if (result.kind === "applicationMessage") {
           // Application messages also update state (for forward secrecy)
           this.state = result.newState;
+
+          // Save application message to history
+          if (this.history) {
+            await this.history.saveMessage(this.id, result.message);
+          }
+
           yield result;
         }
       } catch (error) {

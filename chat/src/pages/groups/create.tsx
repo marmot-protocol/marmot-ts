@@ -29,7 +29,7 @@ import accountManager from "@/lib/accounts";
 import { keyPackageStore$ } from "@/lib/key-package-store";
 import { marmotClient$ } from "@/lib/marmot-client";
 import { extraRelays$ } from "@/lib/settings";
-import { switchMap } from "rxjs";
+import { of, switchMap } from "rxjs";
 
 // ============================================================================
 // Types
@@ -287,7 +287,7 @@ function CreateGroupPage() {
   const keyPackageStore = use$(keyPackageStore$);
   const extraRelays = use$(extraRelays$);
   const storedKeyPackages = use$(
-    () => keyPackageStore$.pipe(switchMap((store) => store.list())),
+    () => keyPackageStore$.pipe(switchMap((store) => store?.list() ?? of([]))),
     [],
   );
   const keyPackages = useMemo(

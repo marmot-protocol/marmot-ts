@@ -1,7 +1,3 @@
-import { defined } from "applesauce-core";
-import { firstValueFrom } from "rxjs";
-
-import accounts from "@/lib/accounts";
 import { GroupSubscriptionManager } from "@/lib/group-subscription-manager";
 import { InvitationInboxManager } from "@/lib/invitation-inbox-manager";
 import { marmotClient$ } from "@/lib/marmot-client";
@@ -29,20 +25,22 @@ export function getInvitesUnreadCount$() {
  *
  * Import this module once (e.g. in `main.tsx`) to activate.
  */
-accounts.active$.subscribe(async (acct) => {
-  if (!acct) {
-    groupMgr?.stop();
-    inviteMgr?.stop();
-    groupMgr = null;
-    inviteMgr = null;
-    return;
-  }
+marmotClient$.subscribe(
+  async (client) => {
+    if (!client) {
+      // Client is not created, stop the managers
+      groupMgr?.stop();
+      inviteMgr?.stop();
 
-  const client = await firstValueFrom(marmotClient$.pipe(defined()));
+      groupMgr = null;
+      inviteMgr = null;
+    } else {
+      // Client is created, start the managers
+      groupMgr ??= new GroupSubscriptionManager(client);
+      inviteMgr ??= new InvitationInboxManager({ signer: client.signer });
 
-  groupMgr ??= new GroupSubscriptionManager(client);
-  inviteMgr ??= new InvitationInboxManager({ signer: acct.signer });
-
-  await groupMgr.start();
-  await inviteMgr.start();
-});
+      await groupMgr.start();
+      await inviteMgr.start();
+    }
+  },
+);

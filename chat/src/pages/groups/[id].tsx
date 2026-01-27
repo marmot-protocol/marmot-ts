@@ -1,21 +1,21 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
-import { use$ } from "applesauce-react/hooks";
-import { Loader2, XCircle } from "lucide-react";
 import { mapEventsToTimeline } from "applesauce-core";
 import type { NostrEvent } from "applesauce-core/helpers";
+import { use$ } from "applesauce-react/hooks";
+import { Loader2, XCircle } from "lucide-react";
 import {
   extractMarmotGroupData,
-  getNostrGroupIdHex,
   getGroupMembers,
+  getNostrGroupIdHex,
   MarmotGroup,
+  MarmotGroupHistoryStore,
   unixNow,
 } from "marmot-ts";
 import { getEventHash } from "nostr-tools";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { from, of, switchMap } from "rxjs";
-import { map } from "rxjs/operators";
-import { catchError } from "rxjs/operators";
+import { catchError, map } from "rxjs/operators";
 
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -29,14 +29,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -46,12 +38,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { withSignIn } from "@/components/with-signIn";
-import accountManager from "@/lib/accounts";
+import { useGroupMessages } from "@/hooks/use-group-messages";
+import accountManager, { accounts, user$ } from "@/lib/accounts";
+import { marmotClient$ } from "@/lib/marmot-client";
 import { pool } from "@/lib/nostr";
 import { getGroupSubscriptionManager } from "@/lib/runtime";
-import { marmotClient$ } from "@/lib/marmot-client";
-import { user$ } from "@/lib/accounts";
 import { extraRelays$ } from "@/lib/settings";
 
 function jsonStringifySafe(value: unknown): string {
@@ -115,6 +115,9 @@ function MessageItem({ rumor, isOwnMessage }: MessageItemProps) {
 interface MessageListProps {
   messages: Rumor[];
   currentUserPubkey: string | null;
+  loadMoreMessages?: () => Promise<void>;
+  loadingMore?: boolean;
+  loadingDone?: boolean;
 }
 
 function MessageList({ messages, currentUserPubkey }: MessageListProps) {
@@ -197,7 +200,7 @@ function MessageInput({
 // Hook: useMessageSender
 // ============================================================================
 
-function useMessageSender(group: MarmotGroup | null) {
+function useMessageSender(group: MarmotGroup<MarmotGroupHistoryStore> | null) {
   const account = accountManager.active;
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -246,7 +249,6 @@ function useMessageSender(group: MarmotGroup | null) {
 function GroupDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [messages, setMessages] = useState<Array<Rumor>>([]);
   const [messageText, setMessageText] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -255,25 +257,35 @@ function GroupDetailPage() {
     useState("");
   const [isInviting, setIsInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
-  const [currentUserPubkey, setCurrentUserPubkey] = useState<string | null>(
-    null,
-  );
+  const account = use$(accounts.active$);
 
   // Get the selected group from marmotClient$
   const group = use$(
     () =>
       marmotClient$.pipe(
         switchMap((client) => {
-          if (!client || !id) {
-            return of<MarmotGroup | null>(null);
-          }
-          return from(client.getGroup(id)).pipe(
-            catchError(() => of<MarmotGroup | null>(null)),
-          );
+          if (!client || !id) return of(null);
+          return from(client.getGroup(id)).pipe(catchError(() => of(null)));
         }),
       ),
     [id],
   );
+
+  const { messages, loadMoreMessages, loadingMore, loadingDone } =
+    useGroupMessages(group ?? null);
+
+  const groupIdHex = useMemo(() => {
+    if (!group) return null;
+    return getNostrGroupIdHex(group.state);
+  }, [group]);
+
+  // Mark group as seen when viewing it and when new messages arrive
+  useEffect(() => {
+    if (!groupIdHex) return;
+    const subscriptionManager = getGroupSubscriptionManager();
+    if (!subscriptionManager) return;
+    subscriptionManager.markGroupSeen(groupIdHex, unixNow());
+  }, [groupIdHex, messages.length]);
 
   // If the group doesn't exist locally, go back to the groups list.
   // Only do this after we have a resolved value (null means "not found").
@@ -283,66 +295,6 @@ function GroupDetailPage() {
       navigate("/groups");
     }
   }, [id, group, navigate]);
-
-  // Get current user pubkey
-  const account = accountManager.active;
-  useEffect(() => {
-    const getPubkey = async () => {
-      if (account) {
-        const pubkey = await account.signer.getPublicKey();
-        setCurrentUserPubkey(pubkey);
-      } else {
-        setCurrentUserPubkey(null);
-      }
-    };
-    getPubkey();
-  }, [account]);
-
-  // Handle messages from subscription
-  const handleMessagesReceived = (newMessages: Rumor[]) => {
-    setMessages((prev) => {
-      // Create a map to avoid duplicates by rumor ID
-      const messageMap = new Map<string, Rumor>();
-
-      // Add existing messages
-      prev.forEach((msg) => {
-        if (msg.id) messageMap.set(msg.id, msg);
-      });
-
-      // Add new messages
-      newMessages.forEach((msg) => {
-        if (msg.id) messageMap.set(msg.id, msg);
-      });
-
-      // Convert back to array and sort by created_at timestamp
-      const combined = Array.from(messageMap.values());
-      return combined.sort((a, b) => a.created_at - b.created_at);
-    });
-  };
-
-  const groupIdHex = useMemo(() => {
-    if (!group) return null;
-    return getNostrGroupIdHex(group.state);
-  }, [group]);
-
-  useEffect(() => {
-    if (!groupIdHex) return;
-
-    // Clear messages when switching groups
-    setMessages([]);
-
-    const subscriptionManager = getGroupSubscriptionManager();
-    if (!subscriptionManager) return;
-
-    // If the user is currently viewing the group, mark it as seen.
-    subscriptionManager.markGroupSeen(groupIdHex, unixNow());
-
-    return subscriptionManager.onApplicationMessage(groupIdHex, (msgs) => {
-      // Messages arriving while on the group page should not count as unread.
-      subscriptionManager.markGroupSeen(groupIdHex, unixNow());
-      handleMessagesReceived(msgs);
-    });
-  }, [groupIdHex]);
 
   // Message sender
   const {
@@ -359,10 +311,8 @@ function GroupDetailPage() {
       const sentRumor = await sendMessage(messageText);
       setMessageText("");
 
-      // Optimistically append the sent message to the UI for immediate feedback
-      if (sentRumor) {
-        handleMessagesReceived([sentRumor]);
-      }
+      // Optimistically save new messages to the groups history for immediate feedback
+      if (sentRumor) await group?.history.saveRumor(sentRumor);
     } catch (err) {
       // Error is already set by useMessageSender
     }
@@ -388,10 +338,10 @@ function GroupDetailPage() {
   }, [group]);
 
   const isAdmin = useMemo(() => {
-    if (!group || !currentUserPubkey) return false;
+    if (!group || !account?.pubkey) return false;
     const data = extractMarmotGroupData(group.state);
-    return data?.adminPubkeys?.includes(currentUserPubkey) ?? false;
-  }, [group, currentUserPubkey]);
+    return data?.adminPubkeys?.includes(account?.pubkey) ?? false;
+  }, [group, account?.pubkey]);
 
   const contacts = use$(user$.contacts$);
   const contactOptions = useMemo(() => {
@@ -570,7 +520,7 @@ function GroupDetailPage() {
                         <div className="text-xs text-muted-foreground mb-2">
                           ClientState (JSON)
                         </div>
-                        <pre className="text-xs whitespace-pre-wrap break-words border rounded p-3 bg-muted/30">
+                        <pre className="text-xs whitespace-pre-wrap wrap-break-words border rounded p-3 bg-muted/30">
                           {jsonStringifySafe(groupDetails.state)}
                         </pre>
                       </div>
@@ -692,12 +642,24 @@ function GroupDetailPage() {
         {/* Messages - flex-col-reverse for scroll-to-bottom behavior */}
         <div className="flex-1 overflow-y-auto p-4">
           <div className="flex flex-col-reverse h-full">
-            <div className="flex flex-col">
-              <MessageList
-                messages={messages}
-                currentUserPubkey={currentUserPubkey}
-              />
-            </div>
+            <MessageList
+              messages={messages}
+              currentUserPubkey={account?.pubkey ?? null}
+            />
+            {loadMoreMessages && !loadingDone && (
+              <div className="flex justify-center py-2">
+                <Button onClick={loadMoreMessages} disabled={loadingMore}>
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Loading...
+                    </>
+                  ) : (
+                    "Load older messages"
+                  )}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
 

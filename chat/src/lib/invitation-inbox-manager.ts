@@ -1,8 +1,8 @@
 import localforage from "localforage";
-import { BehaviorSubject, Subscription, firstValueFrom, of } from "rxjs";
+import { BehaviorSubject, firstValueFrom, of, Subscription } from "rxjs";
 import { catchError, map, timeout } from "rxjs/operators";
 
-import { mapEventsToTimeline } from "applesauce-core";
+import { EventSigner, mapEventsToTimeline } from "applesauce-core";
 import type { NostrEvent } from "applesauce-core/helpers";
 import { relaySet } from "applesauce-core/helpers";
 import { castUser } from "applesauce-common/casts/user";
@@ -25,7 +25,7 @@ export type PendingInvite = {
 };
 
 type InvitationInboxManagerOptions = {
-  signer: { getPublicKey(): Promise<string> };
+  signer: EventSigner;
 };
 
 function getInviteRelaysFromWelcome(rumor: Rumor): string[] {
@@ -119,8 +119,9 @@ export class InvitationInboxManager {
     if (!this.isActive) return;
     if (!this.pubkey) return;
 
-    const relays =
-      this.relays.length > 0 ? this.relays : relaySet([], extraRelays$.value);
+    const relays = this.relays.length > 0
+      ? this.relays
+      : relaySet([], extraRelays$.value);
 
     const events = await firstValueFrom(
       pool
@@ -154,8 +155,7 @@ export class InvitationInboxManager {
     // NOTE: `extraRelays$` isn't an Observable chain here, so we just poll it via startPolling().
     this.relaySubscription = user.inboxes$.subscribe((inboxes) => {
       const next = relaySet(inboxes, extraRelays$.value);
-      const same =
-        next.length === this.relays.length &&
+      const same = next.length === this.relays.length &&
         next.every((r, i) => r === this.relays[i]);
       if (same) return;
 
@@ -211,7 +211,7 @@ export class InvitationInboxManager {
     if (!this.pubkey) return;
 
     const updated = this.invites$.value.map((inv) =>
-      inv.id === id ? { ...inv, status } : inv,
+      inv.id === id ? { ...inv, status } : inv
     );
     this.invites$.next(updated);
     this.unreadCount$.next(

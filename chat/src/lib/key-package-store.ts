@@ -8,17 +8,16 @@ const storeChanges$ = new BehaviorSubject<number>(0);
 
 // Create and export a shared KeyPackageStore instance
 export const keyPackageStore$ = accountManager.active$.pipe(
-  map((account) => {
-    return new KeyPackageStore(
+  map((account) =>
+    account && new KeyPackageStore(
       localforage.createInstance({
-        name: "marmot-key-package-store",
+        name: `${account.pubkey}-key-packages`,
       }),
       {
-        prefix: account?.pubkey ?? "anon",
         onUpdate: () => notifyStoreChange(), // Wire up notification
       },
-    );
-  }),
+    )
+  ),
   // re-emit the store when the store changes
   combineLatestWith(storeChanges$),
   map(([store, _]) => store),

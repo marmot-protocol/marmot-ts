@@ -1,15 +1,14 @@
-import { Subscription } from "rxjs";
-import { BehaviorSubject } from "rxjs";
-
-import type { NostrEvent } from "applesauce-core/helpers";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-
+import type { NostrEvent } from "applesauce-core/helpers";
 import {
   deserializeApplicationRumor,
   getNostrGroupIdHex,
   GROUP_EVENT_KIND,
   MarmotClient,
+  MarmotGroup,
+  MarmotGroupHistoryStore,
 } from "marmot-ts";
+import { BehaviorSubject, Subscription } from "rxjs";
 
 import { pool } from "@/lib/nostr";
 
@@ -28,7 +27,7 @@ export class GroupSubscriptionManager {
     }
   >();
 
-  private readonly client: MarmotClient;
+  private readonly client: MarmotClient<MarmotGroupHistoryStore>;
   private isActive = false;
   private reconcileInterval: ReturnType<typeof setInterval> | null = null;
   private applicationMessageCallbacks = new Map<
@@ -48,7 +47,7 @@ export class GroupSubscriptionManager {
   /** Last seen timestamp per group (seconds), persisted in localStorage. */
   private lastSeenAtByGroup = new Map<string, number>();
 
-  constructor(client: MarmotClient) {
+  constructor(client: MarmotClient<MarmotGroupHistoryStore>) {
     this.client = client;
   }
 
@@ -225,7 +224,7 @@ export class GroupSubscriptionManager {
 
   private async processEvents(
     groupIdHex: string,
-    group: Awaited<ReturnType<MarmotClient["getGroup"]>>,
+    group: MarmotGroup<MarmotGroupHistoryStore>,
     events: NostrEvent[],
     seenEventIds: Set<string>,
   ): Promise<void> {
@@ -289,7 +288,7 @@ export class GroupSubscriptionManager {
   private async fetchHistoricalEvents(
     groupIdHex: string,
     relays: string[],
-    group: Awaited<ReturnType<MarmotClient["getGroup"]>>,
+    group: MarmotGroup<MarmotGroupHistoryStore>,
     seenEventIds: Set<string>,
   ): Promise<void> {
     try {

@@ -15,7 +15,7 @@ import {
   startWith,
 } from "rxjs";
 import accounts from "./accounts";
-import { groupStore$ } from "./group-store";
+import { groupHistoryStore$, groupStore$ } from "./group-store";
 import { keyPackageStore$ } from "./key-package-store";
 import { eventStore, pool } from "./nostr";
 
@@ -31,7 +31,7 @@ export function publish(
         return acc;
       },
       {} as Record<string, PublishResponse>,
-    ),
+    )
   );
 }
 
@@ -58,17 +58,22 @@ const networkInterface: NostrNetworkInterface = {
 
 // Create an observable that creates a MarmotClient instance based on the current active account and stores.
 export const marmotClient$ = combineLatest([
-  accounts.active$.pipe(defined()),
+  accounts.active$,
   groupStore$,
   keyPackageStore$,
+  groupHistoryStore$,
 ]).pipe(
   map(
-    ([account, groupStore, keyPackageStore]) =>
+    ([account, groupStore, keyPackageStore, groupHistoryStore]) =>
+      // Ensure all stores are created and setup
+      account && groupStore && keyPackageStore && groupHistoryStore &&
+      // Create a new marmot client for the active account
       new MarmotClient({
         signer: account.signer,
         groupStore,
         keyPackageStore,
         network: networkInterface,
+        groupHistory: groupHistoryStore,
       }),
   ),
   startWith(undefined),

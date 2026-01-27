@@ -70,6 +70,7 @@ describe("End-to-end: invite, join, first message", () => {
       keyPackageStore,
       signer: adminAccount.signer,
       network: mockNetwork,
+      groupHistory: undefined,
     });
 
     inviteeClient = new MarmotClient({
@@ -80,6 +81,7 @@ describe("End-to-end: invite, join, first message", () => {
       keyPackageStore: new KeyPackageStore(new MemoryBackend()),
       signer: inviteeAccount.signer,
       network: mockNetwork,
+      groupHistory: undefined,
     });
   });
 
@@ -110,11 +112,10 @@ describe("End-to-end: invite, join, first message", () => {
     await mockNetwork.publish(["wss://mock-relay.test"], signedKeyPackageEvent);
 
     // Step 2: Admin creates group
-    const groupId = await adminClient.createGroup("Test Group", {
+    const adminGroup = await adminClient.createGroup("Test Group", {
       adminPubkeys: [adminPubkey],
       relays: ["wss://mock-relay.test"],
     });
-    const adminGroup = await adminClient.getGroup(groupId);
 
     // Step 3: Admin invites invitee
     // First, fetch the invitee's KeyPackage event

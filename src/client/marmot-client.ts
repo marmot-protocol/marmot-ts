@@ -33,7 +33,7 @@ import {
 import { NostrNetworkInterface } from "./nostr-interface.js";
 
 export type MarmotClientOptions<
-  HistoryStore extends GroupHistoryStore | undefined,
+  THistoryStore extends GroupHistoryStore | undefined = undefined,
 > = {
   /** The signer used for the clients identity */
   signer: EventSigner;
@@ -48,15 +48,15 @@ export type MarmotClientOptions<
   /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
   /** The group history interface to be passed to group instaces */
-  groupHistory: MarmotGroupOptions<HistoryStore>["history"];
+  groupHistory: MarmotGroupOptions<THistoryStore>["history"];
 };
 
 /** Given a MarmotClient type, returns the MarmotGroup class type with the same THistoryStore. */
-export type InferGroupType<TClient extends MarmotClient<any>> =
-  TClient extends MarmotClient<infer THistoryStore> ? MarmotGroup<THistoryStore> : never;
+export type InferGroupType<TClient extends MarmotClient<any>> = TClient extends
+  MarmotClient<infer THistoryStore> ? MarmotGroup<THistoryStore> : never;
 
 export class MarmotClient<
-  THistoryStore extends GroupHistoryStore | undefined,
+  THistoryStore extends GroupHistoryStore | undefined = undefined,
 > {
   /** The signer used for the clients identity */
   readonly signer: EventSigner;

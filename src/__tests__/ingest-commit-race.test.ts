@@ -13,6 +13,7 @@ import type { ClientState } from "ts-mls/clientState.js";
 import { decodeGroupState, encodeGroupState } from "ts-mls/clientState.js";
 import { createCommit } from "ts-mls/createCommit.js";
 import { describe, expect, it } from "vitest";
+
 import { MarmotGroup } from "../client/group/marmot-group.js";
 import type { NostrNetworkInterface } from "../client/nostr-interface.js";
 import {

@@ -9,6 +9,7 @@ import {
   getCiphersuiteImpl,
 } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
+
 import { MarmotClient } from "../client/marmot-client";
 import {
   defaultMarmotClientConfig,
@@ -103,8 +104,8 @@ describe("End-to-end: invite, join, first message", () => {
     });
 
     // Sign the event
-    const signedKeyPackageEvent: NostrEvent =
-      await inviteeAccount.signer.signEvent(unsignedKeyPackageEvent);
+    const signedKeyPackageEvent: NostrEvent = await inviteeAccount.signer
+      .signEvent(unsignedKeyPackageEvent);
 
     await mockNetwork.publish(["wss://mock-relay.test"], signedKeyPackageEvent);
 

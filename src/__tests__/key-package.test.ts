@@ -7,6 +7,7 @@ import {
 import { Capabilities } from "ts-mls/capabilities.js";
 import { Extension } from "ts-mls/extension.js";
 import { describe, expect, it } from "vitest";
+
 import { createCredential } from "../core/credential.js";
 import { generateKeyPackage } from "../core/key-package.js";
 import {
@@ -50,8 +51,8 @@ describe("generateKeyPackage", () => {
       ciphersuiteImpl,
     });
 
-    const capabilities =
-      keyPackage.publicPackage.leafNode.capabilities?.extensions;
+    const capabilities = keyPackage.publicPackage.leafNode.capabilities
+      ?.extensions;
     expect(capabilities).toBeDefined();
     expect(capabilities).toContain(MARMOT_GROUP_DATA_EXTENSION_TYPE);
   });
@@ -98,8 +99,8 @@ describe("generateKeyPackage", () => {
       ciphersuiteImpl,
     });
 
-    const capabilities =
-      keyPackage.publicPackage.leafNode.capabilities?.extensions;
+    const capabilities = keyPackage.publicPackage.leafNode.capabilities
+      ?.extensions;
     expect(capabilities).toBeDefined();
     // Should include both custom extensions and Marmot extension
     expect(capabilities).toContain(1);

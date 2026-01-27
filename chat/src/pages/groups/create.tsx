@@ -329,14 +329,14 @@ function CreateGroupPage() {
       ];
       const allRelays = [...data.relays];
 
-      const groupId = await client.createGroup(data.groupName, {
+      const group = await client.createGroup(data.groupName, {
         description: data.groupDescription,
         adminPubkeys: adminPubkeysList,
         relays: allRelays,
       });
 
       // Navigate directly to the group detail page
-      navigate(`/groups/${bytesToHex(groupId)}`);
+      navigate(`/groups/${bytesToHex(group.id)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setIsCreating(false);

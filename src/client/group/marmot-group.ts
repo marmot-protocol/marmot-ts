@@ -1,6 +1,6 @@
-import { Rumor } from "applesauce-common/helpers/gift-wrap";
-import { EventSigner } from "applesauce-core/event-factory";
-import { NostrEvent } from "applesauce-core/helpers/event";
+import type { Rumor } from "applesauce-common/helpers/gift-wrap";
+import type { EventSigner } from "applesauce-core/event-factory";
+import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
   CiphersuiteImpl,
   ClientState,
@@ -13,8 +13,8 @@ import {
   getCiphersuiteFromName,
   getCiphersuiteImpl,
   processMessage,
-  Proposal,
   type ProcessMessageResult,
+  Proposal,
 } from "ts-mls";
 import {
   acceptAll,
@@ -26,7 +26,7 @@ import {
   type MlsPublicMessage,
 } from "ts-mls/message.js";
 import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
-import { toLeafIndex, type LeafIndex } from "ts-mls/treemath.js";
+import { type LeafIndex, toLeafIndex } from "ts-mls/treemath.js";
 import { extractMarmotGroupData } from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
 import {
@@ -120,8 +120,9 @@ export function createAdminCommitPolicyCallback(args: {
     } catch {
       // "retry" here means we don't want to permanently reject the commit;
       // MarmotGroup.ingest() will treat processing errors as unreadable/retryable.
-      if (onUnverifiableCommit === "retry")
+      if (onUnverifiableCommit === "retry") {
         throw new Error("unverifiable commit sender");
+      }
       return "reject";
     }
   };
@@ -146,6 +147,10 @@ export class MarmotGroup {
   /** Internal state */
   private _state: ClientState;
   private _groupData: MarmotGroupData | null = null;
+
+  get id() {
+    return this.state.groupContext.groupId;
+  }
 
   /** Read the current group state */
   get state() {
@@ -250,8 +255,9 @@ export class MarmotGroup {
       proposals = await (args[0] as ProposalBuilder<Args, T>)(...args)(context);
     }
 
-    if (!proposals)
+    if (!proposals) {
       throw new Error("Proposal is undefined. This should not happen.");
+    }
 
     // Handle both single proposals and arrays of proposals
     const proposalArray = Array.isArray(proposals) ? proposals : [proposals];
@@ -333,8 +339,9 @@ export class MarmotGroup {
 
     // Publish to the group's relays
     const response = await this.publish(applicationEvent);
-    if (!hasAck(response))
+    if (!hasAck(response)) {
       throw new NoRelayReceivedEventError(applicationEvent.id);
+    }
 
     // Update the group state after successful publish
     // Application messages update state for forward secrecy (key schedule rotation)
@@ -372,8 +379,9 @@ export class MarmotGroup {
     if (!groupData) throw new NoMarmotGroupDataError();
 
     const actorPubkey = await this.signer.getPublicKey();
-    if (!groupData.adminPubkeys.includes(actorPubkey))
+    if (!groupData.adminPubkeys.includes(actorPubkey)) {
       throw new Error("Not a group admin. Cannot commit proposals.");
+    }
 
     const context: ProposalContext = {
       state: this.state,
@@ -492,7 +500,9 @@ export class MarmotGroup {
             );
           } catch (error) {
             console.warn(
-              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${recipient.pubkey.slice(0, 16)}...:`,
+              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${
+                recipient.pubkey.slice(0, 16)
+              }...:`,
               error,
             );
             // Fallback to group relays
@@ -501,7 +511,9 @@ export class MarmotGroup {
 
           if (inboxRelays.length === 0) {
             console.warn(
-              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(0, 16)}...`,
+              `No relays available to send Welcome to recipient ${
+                recipient.pubkey.slice(0, 16)
+              }...`,
             );
             return;
           }
@@ -740,10 +752,9 @@ export class MarmotGroup {
     for (const { event, message } of commits) {
       if (!isPrivateMessage(message)) continue;
 
-      const commitEpoch =
-        typeof message.privateMessage.epoch === "bigint"
-          ? message.privateMessage.epoch
-          : BigInt(message.privateMessage.epoch);
+      const commitEpoch = typeof message.privateMessage.epoch === "bigint"
+        ? message.privateMessage.epoch
+        : BigInt(message.privateMessage.epoch);
       const currentEpoch = this.state.groupContext.epoch;
 
       // Skip commits from past epochs - we've already processed these

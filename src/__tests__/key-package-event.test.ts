@@ -5,6 +5,7 @@ import {
   getCiphersuiteImpl,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
+
 import { createCredential } from "../core/credential.js";
 import { generateKeyPackage } from "../core/key-package";
 import {
@@ -175,8 +176,7 @@ describe("createKeyPackageEvent encoding", () => {
 
     // Content should be base64 (contains characters like +, /, =)
     // or at least not be pure hex (which would only have 0-9a-f)
-    const hasBase64Chars =
-      /[+/=]/.test(event.content) ||
+    const hasBase64Chars = /[+/=]/.test(event.content) ||
       event.content.length % 2 !== 0 ||
       /[g-zG-Z]/.test(event.content);
     expect(hasBase64Chars).toBe(true);

@@ -72,10 +72,9 @@ export class MarmotClient {
 
   /** Get a ciphersuite implementation from a name or id */
   private async getCiphersuiteImpl(name: CiphersuiteName | CiphersuiteId = 1) {
-    const suite =
-      typeof name === "string"
-        ? getCiphersuiteFromName(name)
-        : getCiphersuiteFromId(name);
+    const suite = typeof name === "string"
+      ? getCiphersuiteFromName(name)
+      : getCiphersuiteFromId(name);
 
     // Get a new ciphersuite implementation
     return await getCiphersuiteImpl(suite, this.cryptoProvider);
@@ -83,8 +82,9 @@ export class MarmotClient {
 
   /** Gets a group from cache or loads it from store */
   async getGroup(groupId: Uint8Array | string) {
-    const groupIdHex =
-      typeof groupId === "string" ? groupId : bytesToHex(groupId);
+    const groupIdHex = typeof groupId === "string"
+      ? groupId
+      : bytesToHex(groupId);
     let group = this.groups.get(groupIdHex);
     if (!group) {
       group = await MarmotGroup.load(groupId, {
@@ -131,7 +131,7 @@ export class MarmotClient {
     options?: SimpleGroupOptions & {
       ciphersuite?: CiphersuiteName | CiphersuiteId;
     },
-  ): Promise<Uint8Array> {
+  ): Promise<MarmotGroup> {
     const ciphersuiteImpl = await this.getCiphersuiteImpl(options?.ciphersuite);
 
     // generate a new key package
@@ -153,8 +153,18 @@ export class MarmotClient {
     // Save the group to the store
     await this.groupStore.add(clientState);
 
-    // Return the group id
-    return clientState.groupContext.groupId;
+    // Create and cache the MarmotGroup instance
+    const group = new MarmotGroup(clientState, {
+      ciphersuite: ciphersuiteImpl,
+      store: this.groupStore,
+      signer: this.signer,
+      network: this.network,
+    });
+
+    // Save the group to the cache
+    this.groups.set(bytesToHex(clientState.groupContext.groupId), group);
+
+    return group;
   }
 
   /**
@@ -185,8 +195,7 @@ export class MarmotClient {
 
     // Extract keyPackageEventId from welcome rumor tags if not explicitly provided
     // The keyPackageEventId is stored as an "e" tag in the welcome message per MIP-00
-    const keyPackageEventId =
-      explicitKeyPackageEventId ??
+    const keyPackageEventId = explicitKeyPackageEventId ??
       welcomeRumor.tags.find((tag) => tag[0] === "e")?.[1];
 
     // Get the ciphersuite implementation for the Welcome
@@ -204,8 +213,9 @@ export class MarmotClient {
     // Collect all key packages with matching cipher suite and compute their KeyPackageRef
     // KeyPackageRef is used to identify which encrypted secret in the welcome is ours (RFC 9420)
     for (const keyPackage of allKeyPackages) {
-      if (keyPackage.publicPackage.cipherSuite !== welcome.cipherSuite)
+      if (keyPackage.publicPackage.cipherSuite !== welcome.cipherSuite) {
         continue;
+      }
 
       const privatekeyPackage = await this.keyPackageStore.getPrivateKey(
         keyPackage.keyPackageRef,

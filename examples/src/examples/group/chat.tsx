@@ -288,7 +288,7 @@ function RelayStatusItem({ relay }: RelayStatusItemProps) {
 // ============================================================================
 
 interface ChatInterfaceProps {
-  group: MarmotGroup;
+  group: MarmotGroup<undefined>;
   messages: Rumor[];
   messageText: string;
   isSending: boolean;
@@ -377,7 +377,7 @@ function useGroupLoader() {
 // Hook: useMessageSender
 // ============================================================================
 
-function useMessageSender(group: MarmotGroup | null) {
+function useMessageSender(group: MarmotGroup<undefined> | null) {
   const account = accounts.active;
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);

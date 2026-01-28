@@ -92,7 +92,7 @@ function ExampleView(props: { example?: Example; isSettings?: boolean }) {
         {props.isSettings ? (
           <ErrorBoundary
             fallbackRender={({ error }) => (
-              <div className="text-red-500">{error.message}</div>
+              <div className="text-red-500">{(error as Error).message}</div>
             )}
           >
             <Settings />
@@ -100,7 +100,7 @@ function ExampleView(props: { example?: Example; isSettings?: boolean }) {
         ) : Component ? (
           <ErrorBoundary
             fallbackRender={({ error }) => (
-              <div className="text-red-500">{error.message}</div>
+              <div className="text-red-500">{(error as Error).message}</div>
             )}
           >
             <Suspense

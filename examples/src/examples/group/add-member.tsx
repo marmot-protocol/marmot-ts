@@ -56,11 +56,11 @@ const group$ = combineLatest([
 ]).pipe(
   switchMap(([groupId, client]) => {
     if (!groupId) {
-      return of<MarmotGroup | null>(null);
+      return of<MarmotGroup<undefined> | null>(null);
     }
     return from(client.getGroup(groupId));
   }),
-  startWith<MarmotGroup | null>(null),
+  startWith<MarmotGroup<undefined> | null>(null),
   shareReplay(1),
 );
 
@@ -499,7 +499,7 @@ function ResultsDisplay({ result, actionType, onReset }: ResultsDisplayProps) {
 // ============================================================================
 
 async function proposeMember(
-  group: MarmotGroup,
+  group: MarmotGroup<undefined>,
   selectedKeyPackageEvent: NostrEvent,
 ) {
   try {
@@ -521,7 +521,7 @@ async function proposeMember(
 }
 
 async function commitMember(
-  group: MarmotGroup,
+  group: MarmotGroup<undefined>,
   selectedKeyPackageEvent: NostrEvent,
 ) {
   try {
@@ -543,7 +543,7 @@ async function commitMember(
 }
 
 async function inviteMember(
-  group: MarmotGroup,
+  group: MarmotGroup<undefined>,
   selectedKeyPackageEvent: NostrEvent,
 ) {
   try {
@@ -603,7 +603,7 @@ export default withSignIn(function AddMember() {
   });
 
   const selectedGroupKey = useObservable(selectedGroupKey$) as string;
-  const selectedGroup = useObservable(group$) as MarmotGroup | null;
+  const selectedGroup = useObservable(group$) as MarmotGroup<undefined> | null;
   const selectedUserPubkey = useObservable(selectedUserPubkey$) as
     | string
     | null;

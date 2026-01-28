@@ -5,6 +5,7 @@ import {
   PrivateKeyPackage,
   decodeKeyPackage,
 } from "ts-mls/keyPackage.js";
+import type { KeyPackage as KeyPackageType } from "ts-mls/keyPackage.js";
 import { calculateKeyPackageRef } from "../core/key-package.js";
 import { KeyValueStoreBackend } from "../utils/key-value.js";
 
@@ -18,7 +19,10 @@ export type StoredKeyPackage = {
 };
 
 /** A type for listing the key package without the private package */
-export type ListedKeyPackage = Omit<StoredKeyPackage, "privatePackage">;
+export type ListedKeyPackage = Omit<StoredKeyPackage, "privatePackage"> & {
+  /** The public key package decoded from TLS bytes */
+  publicPackage: KeyPackageType;
+};
 
 /** A generic interface for a key-value store */
 export interface KeyPackageStoreBackend extends KeyValueStoreBackend<StoredKeyPackage> {}
@@ -248,11 +252,18 @@ export class KeyPackageStore {
     // Filter out null values and validate that items are CompleteKeyPackages
     return packages
       .filter((pkg) => pkg !== null)
-      .map((pkg) => ({
-        // NOTE: Explicicly omit the private key package here since in most cases clients will not need it for listing stored key packages
-        keyPackageRef: pkg.keyPackageRef,
-        keyPackageTls: pkg.keyPackageTls,
-      }));
+      .map((pkg) => {
+        const decoded = decodeKeyPackage(pkg.keyPackageTls, 0);
+        if (!decoded) return null;
+        const [publicPackage] = decoded;
+        return {
+          // NOTE: Explicicly omit the private key package here since in most cases clients will not need it for listing stored key packages
+          keyPackageRef: pkg.keyPackageRef,
+          keyPackageTls: pkg.keyPackageTls,
+          publicPackage,
+        };
+      })
+      .filter((pkg): pkg is ListedKeyPackage => pkg !== null);
   }
 
   /** Gets the count of key packages stored. */

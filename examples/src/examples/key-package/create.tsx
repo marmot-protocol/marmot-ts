@@ -385,7 +385,15 @@ function useKeyPackageCreation() {
       // Store the key package locally only after successful publication
       if (keyPackageStore) {
         console.log("Storing key package locally...");
-        const key = await keyPackageStore.add(keyPackage);
+        // Extract the parts needed for storage - encode public package to TLS bytes
+        const encoder = new TextEncoder();
+        // Create a minimal representation - the store will handle encoding
+        const key = await keyPackageStore.add({
+          keyPackageTls: encoder.encode(
+            JSON.stringify(keyPackage.publicPackage),
+          ),
+          privatePackage: keyPackage.privatePackage,
+        });
         setStorageKey(key);
         console.log("Stored with key:", key);
       }

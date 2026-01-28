@@ -274,7 +274,9 @@ export default withSignIn(function GroupCreation() {
       () =>
         keyPackageStore$.pipe(
           switchMap((store) => store.list()),
-          map((packages) => packages.map((kp) => kp.publicPackage)),
+          map((packages) =>
+            packages.map((kp) => kp.publicPackage as KeyPackage),
+          ),
         ),
       [],
     ) ?? [];
@@ -312,14 +314,14 @@ export default withSignIn(function GroupCreation() {
       const adminPubkeysList = [...data.adminPubkeys];
       const allRelays = [...data.relays];
 
-      const groupId = await client.createGroup(data.groupName, {
+      const group = await client.createGroup(data.groupName, {
         description: data.groupDescription,
         adminPubkeys: adminPubkeysList,
         relays: allRelays,
       });
 
-      // Retrieve the group to get the client state for display
-      const group = await client.getGroup(groupId);
+      // The group ID is available from the group object
+      const groupId = group.id;
       setResult({ groupId, clientState: group.state });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

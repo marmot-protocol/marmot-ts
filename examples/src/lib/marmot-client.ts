@@ -76,6 +76,7 @@ export const marmotClient$ = combineLatest([
         groupStore,
         keyPackageStore,
         network: networkInterface,
+        groupHistory: undefined,
       }),
   ),
   startWith(undefined),
@@ -139,10 +140,10 @@ export const selectedGroup$ = combineLatest([
 ]).pipe(
   switchMap(([groupId, client]) => {
     if (!groupId) {
-      return of<MarmotGroup | null>(null);
+      return of<MarmotGroup<undefined> | null>(null);
     }
     return from(client.getGroup(groupId));
   }),
-  startWith<MarmotGroup | null>(null),
+  startWith<MarmotGroup<undefined> | null>(null),
   shareReplay(1),
 );

@@ -184,7 +184,7 @@ export class GroupSubscriptionManager {
    */
   private async processEvents(
     groupIdHex: string,
-    group: MarmotGroup,
+    group: MarmotGroup<undefined>,
     events: NostrEvent[],
     seenEventIds: Set<string>,
   ): Promise<void> {
@@ -240,7 +240,7 @@ export class GroupSubscriptionManager {
    * Fetch historical events for a group to catch up on missed commits.
    */
   private async fetchHistoricalEvents(
-    group: MarmotGroup,
+    group: MarmotGroup<undefined>,
     seenEventIds: Set<string>,
   ): Promise<void> {
     try {

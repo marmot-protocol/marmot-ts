@@ -4,7 +4,7 @@ import { ErrorBoundary as ReactErrorBoundary } from "react-error-boundary";
  * Simple error boundary component that displays errors in an alert.
  * This is a default fallback for all examples to use.
  */
-function ErrorFallback({ error }: { error: Error }) {
+function ErrorFallback({ error }: { error: unknown }) {
   return (
     <div className="alert alert-error">
       <svg
@@ -22,7 +22,7 @@ function ErrorFallback({ error }: { error: Error }) {
       </svg>
       <div>
         <div className="font-bold">Error</div>
-        <div className="text-sm">{error.message}</div>
+        <div className="text-sm">{(error as Error).message}</div>
       </div>
     </div>
   );

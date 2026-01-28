@@ -1,14 +1,18 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { CryptoProvider, defaultCryptoProvider } from "ts-mls";
-import { KeyPackage, PrivateKeyPackage } from "ts-mls/keyPackage.js";
+import {
+  KeyPackage,
+  PrivateKeyPackage,
+  decodeKeyPackage,
+} from "ts-mls/keyPackage.js";
 import { calculateKeyPackageRef } from "../core/key-package.js";
 import { KeyValueStoreBackend } from "../utils/key-value.js";
 
 export type StoredKeyPackage = {
   /** The calculated key package reference (should be used to identify the key package) */
   keyPackageRef: Uint8Array;
-  /** The public key package */
-  publicPackage: KeyPackage;
+  /** TLS bytes of the public KeyPackage (portable across backends) */
+  keyPackageTls: Uint8Array;
   /** The private key package */
   privatePackage: PrivateKeyPackage;
 };
@@ -96,7 +100,7 @@ export class KeyPackageStore {
   }
 
   /** Ensures that a stored key package object has a key package reference */
-  private async ensureKeyPackageRef<T extends { publicPackage: KeyPackage }>(
+  private async ensureKeyPackageRef<T extends { keyPackageTls: Uint8Array }>(
     keyPackage: T,
   ): Promise<T & { keyPackageRef: Uint8Array }> {
     // Skip calculation if the key package reference is already present
@@ -106,10 +110,14 @@ export class KeyPackageStore {
     )
       return keyPackage as T & { keyPackageRef: Uint8Array };
 
+    const decoded = decodeKeyPackage(keyPackage.keyPackageTls, 0);
+    if (!decoded) throw new Error("Failed to decode stored key package");
+    const [publicPackage] = decoded;
+
     return {
       ...keyPackage,
       keyPackageRef: await calculateKeyPackageRef(
-        keyPackage.publicPackage,
+        publicPackage,
         this.cryptoProvider,
       ),
     };
@@ -131,15 +139,19 @@ export class KeyPackageStore {
   async add(
     keyPackage: Omit<StoredKeyPackage, "keyPackageRef">,
   ): Promise<string> {
-    const key = await this.resolveStorageKey(keyPackage.publicPackage);
+    const decoded = decodeKeyPackage(keyPackage.keyPackageTls, 0);
+    if (!decoded) throw new Error("Failed to decode key package");
+    const [publicPackage] = decoded;
+
+    const key = await this.resolveStorageKey(publicPackage);
 
     // Serialize the key package for storage
     const serialized = {
       keyPackageRef: await calculateKeyPackageRef(
-        keyPackage.publicPackage,
+        publicPackage,
         this.cryptoProvider,
       ),
-      publicPackage: keyPackage.publicPackage,
+      keyPackageTls: keyPackage.keyPackageTls,
       privatePackage: keyPackage.privatePackage,
     };
 
@@ -165,7 +177,10 @@ export class KeyPackageStore {
   ): Promise<KeyPackage | null> {
     const key = await this.resolveStorageKey(ref);
     const stored = await this.backend.getItem(key);
-    return stored ? stored.publicPackage : null;
+    if (!stored) return null;
+    const decoded = decodeKeyPackage(stored.keyPackageTls, 0);
+    if (!decoded) throw new Error("Failed to decode stored key package");
+    return decoded[0];
   }
 
   /**
@@ -236,7 +251,7 @@ export class KeyPackageStore {
       .map((pkg) => ({
         // NOTE: Explicicly omit the private key package here since in most cases clients will not need it for listing stored key packages
         keyPackageRef: pkg.keyPackageRef,
-        publicPackage: pkg.publicPackage,
+        keyPackageTls: pkg.keyPackageTls,
       }));
   }
 

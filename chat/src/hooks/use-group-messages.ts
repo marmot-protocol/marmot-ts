@@ -1,6 +1,6 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { type MarmotGroup, type MarmotGroupHistoryStore } from "marmot-ts";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * Hook that loads and subscribes to group messages: paginated history from the
@@ -24,15 +24,19 @@ export function useGroupMessages(
   loadMoreMessages: () => Promise<void>;
   loadingMore: boolean;
   loadingDone: boolean;
+  addNewMessages: (newMessages: Rumor[]) => void;
 } {
   const [messages, setMessages] = useState<Rumor[]>([]);
   const [loadingDone, setLoadingDone] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const paginatedLoader = useMemo(() => {
-    if (!group?.history) return null;
-    return group.history.createPaginatedLoader(50);
-  }, [group]);
+  // Cursor used for paging older messages.
+  // NOTE: the library history contract paginates by *outer cursor*, but the
+  // current UI only has rumor metadata. Using `(rumor.created_at, rumor.id)` is a
+  // best-effort proxy until outer metadata is exposed to UI paging.
+  const [untilCursor, setUntilCursor] = useState<
+    { created_at: number; id: string } | undefined
+  >(undefined);
 
   const addNewMessages = useCallback((newMessages: Rumor[]) => {
     setMessages((prev) => {
@@ -49,42 +53,73 @@ export function useGroupMessages(
   }, []);
 
   const loadMoreMessages = useCallback(async () => {
-    if (!paginatedLoader) return;
+    if (!group?.history) return;
     setLoadingMore(true);
-    const page = await paginatedLoader.next();
-    addNewMessages(page.value);
-    if (page.done) setLoadingDone(page.done);
+
+    const page = await group.history.queryRumors({
+      until: untilCursor,
+      limit: 50,
+    });
+
+    addNewMessages(page);
+
+    if (page.length === 0) {
+      setLoadingDone(true);
+    } else {
+      const last = page[page.length - 1];
+      // Advance the cursor to the oldest rumor returned (exclusive).
+      setUntilCursor({ created_at: last.created_at, id: last.id });
+    }
+
     setLoadingMore(false);
-  }, [paginatedLoader, addNewMessages]);
+  }, [group, untilCursor, addNewMessages]);
 
   // Clear messages and reset loading state when group changes
   useEffect(() => {
     setMessages([]);
     setLoadingDone(false);
     setLoadingMore(false);
+    setUntilCursor(undefined);
   }, [group]);
 
-  // Load initial messages
+  // Load initial messages once per group selection.
+  // NOTE: do NOT depend on `loadMoreMessages` here — it changes identity when the
+  // paging cursor updates, which would cause an infinite auto-pagination loop.
   useEffect(() => {
-    loadMoreMessages();
-  }, [loadMoreMessages]);
+    if (!group?.history) return;
+    loadMoreMessages().catch(() => {
+      // ignore (best-effort)
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group]);
 
   // Subscribe to new rumors
   useEffect(() => {
     if (!group?.history) return;
-    const listener = (rumor: Rumor) => {
-      setMessages((prev) => [...prev, rumor]);
-    };
-    group.history.addListener("rumor", listener);
-    return () => {
-      group.history.removeListener("rumor", listener);
-    };
-  }, [group]);
+
+    const sub = group.history.subscribe?.((rumor: Rumor) => {
+      addNewMessages([rumor]);
+    });
+
+    // Back-compat: if the store is still an EventEmitter, fall back.
+    if (!sub) {
+      const listener = (rumor: Rumor) => addNewMessages([rumor]);
+      const emitter = group.history as unknown as {
+        addListener?: (event: "rumor", cb: (rumor: Rumor) => void) => void;
+        removeListener?: (event: "rumor", cb: (rumor: Rumor) => void) => void;
+      };
+      emitter.addListener?.("rumor", listener);
+      return () => emitter.removeListener?.("rumor", listener);
+    }
+
+    return () => sub.unsubscribe();
+  }, [group, addNewMessages]);
 
   return {
     messages,
     loadMoreMessages,
     loadingMore,
     loadingDone,
+    addNewMessages,
   };
 }

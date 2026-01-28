@@ -26,6 +26,7 @@ import {
 } from "../core/protocol";
 import { GroupStore } from "../store/group-store";
 import { KeyPackageStore } from "../store/key-package-store";
+import { encodeKeyPackage } from "ts-mls/keyPackage.js";
 import { unixNow } from "../utils/nostr";
 import { MockNetwork } from "./helpers/mock-network";
 import { MemoryBackend } from "./ingest-commit-race.test";
@@ -97,7 +98,10 @@ describe("End-to-end: invite, join, first message", () => {
     });
 
     // Store the KeyPackage in invitee's local store (required for joinGroupFromWelcome)
-    await inviteeClient.keyPackageStore.add(inviteeKeyPackage);
+    await inviteeClient.keyPackageStore.add({
+      keyPackageTls: encodeKeyPackage(inviteeKeyPackage.publicPackage),
+      privatePackage: inviteeKeyPackage.privatePackage,
+    });
 
     const unsignedKeyPackageEvent = createKeyPackageEvent({
       keyPackage: inviteeKeyPackage.publicPackage,
@@ -106,8 +110,8 @@ describe("End-to-end: invite, join, first message", () => {
     });
 
     // Sign the event
-    const signedKeyPackageEvent: NostrEvent = await inviteeAccount.signer
-      .signEvent(unsignedKeyPackageEvent);
+    const signedKeyPackageEvent: NostrEvent =
+      await inviteeAccount.signer.signEvent(unsignedKeyPackageEvent);
 
     await mockNetwork.publish(["wss://mock-relay.test"], signedKeyPackageEvent);
 

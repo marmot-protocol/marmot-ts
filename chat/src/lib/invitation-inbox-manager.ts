@@ -119,9 +119,8 @@ export class InvitationInboxManager {
     if (!this.isActive) return;
     if (!this.pubkey) return;
 
-    const relays = this.relays.length > 0
-      ? this.relays
-      : relaySet([], extraRelays$.value);
+    const relays =
+      this.relays.length > 0 ? this.relays : relaySet([], extraRelays$.value);
 
     const events = await firstValueFrom(
       pool
@@ -155,7 +154,8 @@ export class InvitationInboxManager {
     // NOTE: `extraRelays$` isn't an Observable chain here, so we just poll it via startPolling().
     this.relaySubscription = user.inboxes$.subscribe((inboxes) => {
       const next = relaySet(inboxes, extraRelays$.value);
-      const same = next.length === this.relays.length &&
+      const same =
+        next.length === this.relays.length &&
         next.every((r, i) => r === this.relays[i]);
       if (same) return;
 
@@ -211,7 +211,7 @@ export class InvitationInboxManager {
     if (!this.pubkey) return;
 
     const updated = this.invites$.value.map((inv) =>
-      inv.id === id ? { ...inv, status } : inv
+      inv.id === id ? { ...inv, status } : inv,
     );
     this.invites$.next(updated);
     this.unreadCount$.next(

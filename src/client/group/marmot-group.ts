@@ -28,6 +28,7 @@ import { getCredentialPubkey } from "../../core/credential.js";
 import {
   createGroupEvent,
   GroupMessagePair,
+  deserializeApplicationRumor,
   readGroupMessages,
   serializeApplicationRumor,
   sortGroupCommits,
@@ -45,11 +46,23 @@ import {
 } from "../errors.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
+import type { OuterCursor } from "../../utils/cursor.js";
 
 /** The minimum interface for a group to store its message history */
 export interface GroupHistoryStore {
-  /** Saves a new application message to the group history */
-  saveMessage(groupId: Uint8Array, message: Uint8Array): Promise<void>;
+  markOuterEventProcessed(outer: OuterCursor): Promise<void>;
+  getResumeCursor(): Promise<OuterCursor | null>;
+  addRumor(entry: { rumor: Rumor; outer: OuterCursor }): Promise<void>;
+  queryRumors(filter: {
+    until?: OuterCursor;
+    limit?: number;
+  }): Promise<Rumor[]>;
+  subscribe?(handler: (rumor: Rumor) => void): { unsubscribe(): void };
+
+  /** Convenience: parse MLS application bytes as a rumor and store it.
+   * @deprecated Prefer {@link addRumor} once outer metadata is available (Phase 2).
+   */
+  saveMessage?(message: Uint8Array): Promise<void>;
 }
 
 export type ProposalContext = {
@@ -81,9 +94,7 @@ export type MarmotGroupOptions<
   /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
   /** The storage interface for the groups application message history */
-  history:
-    | HistoryStore
-    | ((groupId: Uint8Array) => HistoryStore);
+  history: HistoryStore | ((groupId: Uint8Array) => HistoryStore);
 };
 
 /** Information about a welcome recipient */
@@ -136,9 +147,7 @@ export function createAdminCommitPolicyCallback(args: {
   };
 }
 
-export class MarmotGroup<
-  THistoryStore extends GroupHistoryStore | undefined,
-> {
+export class MarmotGroup<THistoryStore extends GroupHistoryStore | undefined> {
   /** The backend to store and load of group from */
   readonly store: GroupStore;
 
@@ -518,9 +527,10 @@ export class MarmotGroup<
             );
           } catch (error) {
             console.warn(
-              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${
-                recipient.pubkey.slice(0, 16)
-              }...:`,
+              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${recipient.pubkey.slice(
+                0,
+                16,
+              )}...:`,
               error,
             );
             // Fallback to group relays
@@ -529,9 +539,10 @@ export class MarmotGroup<
 
           if (inboxRelays.length === 0) {
             console.warn(
-              `No relays available to send Welcome to recipient ${
-                recipient.pubkey.slice(0, 16)
-              }...`,
+              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(
+                0,
+                16,
+              )}...`,
             );
             return;
           }
@@ -739,14 +750,45 @@ export class MarmotGroup<
         // Update state if message changed it
         if (result.kind === "newState") {
           this.state = result.newState;
+          // Persist MLS state as the authoritative source, then best-effort history.
+          await this.save();
+
+          if (this.history) {
+            const outer: OuterCursor = {
+              created_at: event.created_at,
+              id: event.id,
+            };
+            try {
+              await this.history.markOuterEventProcessed(outer);
+            } catch {
+              // history is best-effort and must not block MLS state
+            }
+          }
           yield result;
         } else if (result.kind === "applicationMessage") {
           // Application messages also update state (for forward secrecy)
           this.state = result.newState;
 
-          // Save application message to history
+          // Persist MLS state first, then best-effort history.
+          await this.save();
+
           if (this.history) {
-            await this.history.saveMessage(this.id, result.message);
+            const outer: OuterCursor = {
+              created_at: event.created_at,
+              id: event.id,
+            };
+            try {
+              await this.history.markOuterEventProcessed(outer);
+            } catch {
+              // best-effort
+            }
+
+            try {
+              const rumor = deserializeApplicationRumor(result.message);
+              await this.history.addRumor({ rumor, outer });
+            } catch {
+              // best-effort
+            }
           }
 
           yield result;
@@ -776,9 +818,10 @@ export class MarmotGroup<
     for (const { event, message } of commits) {
       if (!isPrivateMessage(message)) continue;
 
-      const commitEpoch = typeof message.privateMessage.epoch === "bigint"
-        ? message.privateMessage.epoch
-        : BigInt(message.privateMessage.epoch);
+      const commitEpoch =
+        typeof message.privateMessage.epoch === "bigint"
+          ? message.privateMessage.epoch
+          : BigInt(message.privateMessage.epoch);
       const currentEpoch = this.state.groupContext.epoch;
 
       // Skip commits from past epochs - we've already processed these
@@ -817,6 +860,21 @@ export class MarmotGroup<
           // Successfully processed the commit - update our state
           // After each commit, the epoch advances and keys rotate
           this.state = result.newState;
+
+          // Persist MLS state first, then best-effort history.
+          await this.save();
+          if (this.history) {
+            const outer: OuterCursor = {
+              created_at: event.created_at,
+              id: event.id,
+            };
+            try {
+              await this.history.markOuterEventProcessed(outer);
+            } catch {
+              // best-effort
+            }
+          }
+
           yield result;
         }
       } catch (error) {
@@ -826,7 +884,7 @@ export class MarmotGroup<
       }
     }
 
-    // Save the group state after processing all messages
+    // State is already persisted after each successful message. Keep final save for safety.
     await this.save();
 
     // ============================================================================

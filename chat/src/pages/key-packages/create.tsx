@@ -14,6 +14,7 @@ import {
   getCiphersuiteImpl,
 } from "ts-mls";
 import { type CiphersuiteName } from "ts-mls/crypto/ciphersuite.js";
+import { encodeKeyPackage } from "ts-mls/keyPackage.js";
 
 import { CipherSuitePicker } from "@/components/form/cipher-suite-picker";
 import { KeyPackageRelaysAlert } from "@/components/key-package-relays-alert";
@@ -110,7 +111,10 @@ function CreateKeyPackagePage() {
       // Store the key package locally only after successful publication
       if (keyPackageStore) {
         console.log("Storing key package locally...");
-        await keyPackageStore.add(keyPackage);
+        await keyPackageStore.add({
+          keyPackageTls: encodeKeyPackage(keyPackage.publicPackage),
+          privatePackage: keyPackage.privatePackage,
+        });
         console.log("Stored key package");
       }
 

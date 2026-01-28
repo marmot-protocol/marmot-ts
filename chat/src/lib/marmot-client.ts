@@ -8,6 +8,7 @@ import {
 } from "marmot-ts";
 import {
   combineLatest,
+  distinctUntilChanged,
   firstValueFrom,
   lastValueFrom,
   map,
@@ -31,7 +32,7 @@ export function publish(
         return acc;
       },
       {} as Record<string, PublishResponse>,
-    )
+    ),
   );
 }
 
@@ -59,14 +60,17 @@ const networkInterface: NostrNetworkInterface = {
 // Create an observable that creates a MarmotClient instance based on the current active account and stores.
 export const marmotClient$ = combineLatest([
   accounts.active$,
-  groupStore$,
-  keyPackageStore$,
-  groupHistoryStore$,
+  groupStore$.pipe(distinctUntilChanged()),
+  keyPackageStore$.pipe(distinctUntilChanged()),
+  groupHistoryStore$.pipe(distinctUntilChanged()),
 ]).pipe(
   map(
     ([account, groupStore, keyPackageStore, groupHistoryStore]) =>
       // Ensure all stores are created and setup
-      account && groupStore && keyPackageStore && groupHistoryStore &&
+      account &&
+      groupStore &&
+      keyPackageStore &&
+      groupHistoryStore &&
       // Create a new marmot client for the active account
       new MarmotClient({
         signer: account.signer,

@@ -14,6 +14,7 @@ import {
   getCiphersuiteFromName,
   getCiphersuiteImpl,
 } from "ts-mls";
+import { decodeKeyPackage } from "ts-mls/keyPackage.js";
 
 import { PubkeyListCreator } from "@/components/form/pubkey-list-creator";
 import { RelayListCreator } from "@/components/form/relay-list-creator";
@@ -291,7 +292,15 @@ function CreateGroupPage() {
     [],
   );
   const keyPackages = useMemo(
-    () => storedKeyPackages?.map((kp) => kp.publicPackage) ?? [],
+    () =>
+      (storedKeyPackages ?? [])
+        .map((kp) => {
+          const decoded = decodeKeyPackage(kp.keyPackageTls, 0);
+          if (!decoded) return null;
+          const [publicPackage] = decoded;
+          return publicPackage;
+        })
+        .filter(Boolean) as KeyPackage[],
     [storedKeyPackages],
   );
 

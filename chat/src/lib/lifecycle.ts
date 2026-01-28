@@ -34,11 +34,11 @@ export const keyPackageRelays$ = combineLatest([user$, user$.outboxes$]).pipe(
   switchMap(([user, outboxes]) =>
     user
       ? user
-        .replaceable(KEY_PACKAGE_RELAY_LIST_KIND, undefined, outboxes)
-        .pipe(
-          map((event) => (event ? getKeyPackageRelayList(event) : undefined)),
-        )
-      : of(undefined)
+          .replaceable(KEY_PACKAGE_RELAY_LIST_KIND, undefined, outboxes)
+          .pipe(
+            map((event) => (event ? getKeyPackageRelayList(event) : undefined)),
+          )
+      : of(undefined),
   ),
 );
 
@@ -97,7 +97,7 @@ export const publishedKeyPackages$ = combineLatest([
       from(eventStore.getByFilters(filter)).pipe(
         mergeMap((event) => from(parseEvent(event))),
         defined(),
-      )
+      ),
     );
     const updates$ = eventStore.filters(filter).pipe(
       mergeMap((event) => from(parseEvent(event))),

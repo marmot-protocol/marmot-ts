@@ -1,28 +1,50 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { bytesToHex } from "applesauce-core/helpers";
 import { type DBSchema, type IDBPDatabase, openDB } from "idb";
-import type {
-	GroupHistoryStoreFilter,
-	MarmotGroupHistoryStoreBackend,
-} from "marmot-ts/store";
+import type { MarmotGroupHistoryStoreBackend } from "marmot-ts/store";
 
-const DB_VERSION = 1;
-const STORE_NAME = "rumors";
-const INDEX_NAME = "by_group_created_at";
+import type { OuterCursor } from "marmot-ts";
+import { compareCursor } from "marmot-ts";
+
+const DB_VERSION = 2;
+const RUMOR_STORE = "rumors";
+const RUMOR_BY_OUTER_INDEX = "by_group_outer_cursor";
+
+const OUTER_STORE = "processed_outer_events";
+const OUTER_BY_CURSOR_INDEX = "by_group_outer_cursor";
 
 interface StoredRumor {
-	groupId: string;
-	created_at: number;
-	id: string;
-	rumor: Rumor;
+  groupId: string;
+  rumor_created_at: number;
+  rumor_id: string;
+  rumor: Rumor;
+
+  outer_created_at: number;
+  outer_event_id: string;
+}
+
+interface StoredOuterEvent {
+  groupId: string;
+  outer_created_at: number;
+  outer_event_id: string;
 }
 
 interface GroupHistoryDB extends DBSchema {
-	[STORE_NAME]: {
-		value: StoredRumor;
-		key: [string, string];
-		indexes: { [INDEX_NAME]: [string, number] };
-	};
+  [RUMOR_STORE]: {
+    value: StoredRumor;
+    key: [string, string];
+    indexes: {
+      [RUMOR_BY_OUTER_INDEX]: [string, number, string];
+    };
+  };
+
+  [OUTER_STORE]: {
+    value: StoredOuterEvent;
+    key: [string, string];
+    indexes: {
+      [OUTER_BY_CURSOR_INDEX]: [string, number, string];
+    };
+  };
 }
 
 /**
@@ -30,72 +52,136 @@ interface GroupHistoryDB extends DBSchema {
  * Stores and retrieves group history (MIP-03 rumors) using the `idb` package.
  */
 export class IdbGroupHistoryStore implements MarmotGroupHistoryStoreBackend {
-	private name: string;
+  private name: string;
 
-	private dbPromise: Promise<IDBPDatabase<GroupHistoryDB>> | null = null;
-	private async getDB(): Promise<IDBPDatabase<GroupHistoryDB>> {
-		if (!this.dbPromise) {
-			this.dbPromise = openDB<GroupHistoryDB>(this.name, DB_VERSION, {
-				upgrade(db) {
-					const store = db.createObjectStore(STORE_NAME, {
-						keyPath: ["groupId", "id"],
-					});
-					store.createIndex(INDEX_NAME, ["groupId", "created_at"]);
-				},
-			});
-		}
-		return this.dbPromise;
-	}
+  private dbPromise: Promise<IDBPDatabase<GroupHistoryDB>> | null = null;
+  private async getDB(): Promise<IDBPDatabase<GroupHistoryDB>> {
+    if (!this.dbPromise) {
+      this.dbPromise = openDB<GroupHistoryDB>(this.name, DB_VERSION, {
+        upgrade(db) {
+          const rumorStore = db.createObjectStore(RUMOR_STORE, {
+            keyPath: ["groupId", "rumor_id"],
+          });
+          rumorStore.createIndex(RUMOR_BY_OUTER_INDEX, [
+            "groupId",
+            "outer_created_at",
+            "outer_event_id",
+          ]);
 
-	constructor(name: string) {
-		this.name = name;
-	}
+          const outerStore = db.createObjectStore(OUTER_STORE, {
+            keyPath: ["groupId", "outer_event_id"],
+          });
+          outerStore.createIndex(OUTER_BY_CURSOR_INDEX, [
+            "groupId",
+            "outer_created_at",
+            "outer_event_id",
+          ]);
+        },
+      });
+    }
+    return this.dbPromise;
+  }
 
-	async getRumors(
-		groupId: Uint8Array,
-		filter: GroupHistoryStoreFilter,
-	): Promise<Rumor[]> {
-		const db = await this.getDB();
-		const groupKey = bytesToHex(groupId);
-		const { since, until, limit } = filter;
+  constructor(name: string) {
+    this.name = name;
+  }
 
-		let range: IDBKeyRange;
-		if (since !== undefined && until !== undefined) {
-			range = IDBKeyRange.bound(
-				[groupKey, since],
-				[groupKey, until],
-				false,
-				false,
-			);
-		} else if (since !== undefined) {
-			range = IDBKeyRange.lowerBound([groupKey, since], false);
-		} else if (until !== undefined) {
-			range = IDBKeyRange.upperBound([groupKey, until], false);
-		} else {
-			range = IDBKeyRange.lowerBound([groupKey, 0]);
-		}
+  async markOuterEventProcessed(
+    groupId: Uint8Array,
+    outer: OuterCursor,
+  ): Promise<void> {
+    const db = await this.getDB();
+    const groupKey = bytesToHex(groupId);
+    const entry: StoredOuterEvent = {
+      groupId: groupKey,
+      outer_created_at: outer.created_at,
+      outer_event_id: outer.id,
+    };
+    await db.put(OUTER_STORE, entry);
+  }
 
-		const tx = db.transaction(STORE_NAME, "readonly");
-		const index = tx.objectStore(STORE_NAME).index(INDEX_NAME);
-		const cursor = await index.openCursor(range, "prev");
-		const stored: StoredRumor[] = [];
-		let cur = cursor;
-		while (cur && (limit === undefined || stored.length < limit)) {
-			stored.push(cur.value as StoredRumor);
-			cur = await cur.continue();
-		}
-		return stored.map((s) => s.rumor);
-	}
+  async getResumeCursor(groupId: Uint8Array): Promise<OuterCursor | null> {
+    const db = await this.getDB();
+    const groupKey = bytesToHex(groupId);
 
-	async addRumor(groupId: Uint8Array, message: Rumor): Promise<void> {
-		const db = await this.getDB();
-		const groupKey = bytesToHex(groupId);
-		const entry: StoredRumor = {
-			groupId: groupKey,
-			created_at: message.created_at,
-			id: message.id,
-			rumor: message,
-		};
-		await db.put(STORE_NAME, entry);
-	}
+    const range = IDBKeyRange.bound(
+      [groupKey, 0, ""],
+      [groupKey, Number.MAX_SAFE_INTEGER, "~"],
+    );
+    const tx = db.transaction(OUTER_STORE, "readonly");
+    const index = tx.objectStore(OUTER_STORE).index(OUTER_BY_CURSOR_INDEX);
+    const cursor = await index.openCursor(range, "prev");
+    if (!cursor) return null;
+
+    const value = cursor.value as StoredOuterEvent;
+    return {
+      created_at: value.outer_created_at,
+      id: value.outer_event_id,
+    };
+  }
+
+  async addRumor(
+    groupId: Uint8Array,
+    entry: { rumor: Rumor; outer: OuterCursor },
+  ): Promise<void> {
+    const db = await this.getDB();
+    const groupKey = bytesToHex(groupId);
+
+    const row: StoredRumor = {
+      groupId: groupKey,
+      rumor_created_at: entry.rumor.created_at,
+      rumor_id: entry.rumor.id,
+      rumor: entry.rumor,
+      outer_created_at: entry.outer.created_at,
+      outer_event_id: entry.outer.id,
+    };
+
+    // Idempotent on rumor id.
+    await db.put(RUMOR_STORE, row);
+
+    // Also record the outer event as processed (idempotent on outer id).
+    await this.markOuterEventProcessed(groupId, entry.outer);
+  }
+
+  async queryRumors(
+    groupId: Uint8Array,
+    filter: { until?: OuterCursor; limit?: number },
+  ): Promise<Rumor[]> {
+    const db = await this.getDB();
+    const groupKey = bytesToHex(groupId);
+    const { until, limit } = filter;
+
+    // Query newest-first by outer cursor.
+    // If `until` is provided, return items strictly older than `until`.
+    const range = until
+      ? IDBKeyRange.upperBound([groupKey, until.created_at, until.id], true)
+      : IDBKeyRange.bound(
+          [groupKey, 0, ""],
+          [groupKey, Number.MAX_SAFE_INTEGER, "~"],
+        );
+
+    const tx = db.transaction(RUMOR_STORE, "readonly");
+    const index = tx.objectStore(RUMOR_STORE).index(RUMOR_BY_OUTER_INDEX);
+    const cursor = await index.openCursor(range, "prev");
+
+    const rumors: Rumor[] = [];
+    let cur = cursor;
+    while (cur && (limit === undefined || rumors.length < limit)) {
+      const value = cur.value as StoredRumor;
+      rumors.push(value.rumor);
+      cur = await cur.continue();
+    }
+
+    // Defensive: ensure stable ordering (by rumor created_at/id) for rendering.
+    // IndexedDB index already orders by outer cursor, but sorting here guarantees
+    // deterministic output if backends change.
+    rumors.sort((a, b) => {
+      // emulate MIP-03 tie-breaker on the rumor cursor
+      const ca: OuterCursor = { created_at: a.created_at, id: a.id };
+      const cb: OuterCursor = { created_at: b.created_at, id: b.id };
+      return compareCursor(ca, cb);
+    });
+
+    return rumors;
+  }
 }

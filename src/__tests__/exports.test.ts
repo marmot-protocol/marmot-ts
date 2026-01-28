@@ -25,6 +25,7 @@ describe("exports", () => {
         "Proposals",
         "WELCOME_EVENT_KIND",
         "calculateKeyPackageRef",
+        "compareCursor",
         "createAdminCommitPolicyCallback",
         "createCredential",
         "createDeleteKeyPackageEvent",

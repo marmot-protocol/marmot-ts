@@ -10,17 +10,7 @@ import {
 describe("encoding utilities", () => {
   // Test data
   const testBytes = new Uint8Array([
-    0x48,
-    0x65,
-    0x6c,
-    0x6c,
-    0x6f,
-    0x20,
-    0x57,
-    0x6f,
-    0x72,
-    0x6c,
-    0x64,
+    0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64,
   ]); // "Hello World"
   const testHex = "48656c6c6f20576f726c64";
   const testBase64 = "SGVsbG8gV29ybGQ=";
@@ -258,8 +248,8 @@ describe("encoding utilities", () => {
       expect(base64Encoded.length).toBeLessThan(hexEncoded.length);
 
       // Verify the size reduction is approximately 33%
-      const reduction = (hexEncoded.length - base64Encoded.length) /
-        hexEncoded.length;
+      const reduction =
+        (hexEncoded.length - base64Encoded.length) / hexEncoded.length;
       expect(reduction).toBeGreaterThan(0.3); // At least 30% reduction
       expect(reduction).toBeLessThan(0.4); // At most 40% reduction
     });

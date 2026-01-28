@@ -31,6 +31,7 @@ import { marmotClient$ } from "@/lib/marmot-client";
 import { eventStore, pool } from "@/lib/nostr";
 import { formatTimeAgo } from "@/lib/time";
 import { KeyPackage } from "ts-mls";
+import { decodeKeyPackage } from "ts-mls/keyPackage.js";
 import accounts, { publish, user$ } from "../../lib/accounts";
 
 function KeyPackageRelayStatus({ event }: { event: NostrEvent | undefined }) {
@@ -186,7 +187,6 @@ function DeleteKeyPackageButton({
   keyPackageRef: Uint8Array;
 }) {
   const client = use$(marmotClient$);
-  const keyPackageRelays = use$(keyPackageRelays$);
   const navigate = useNavigate();
 
   const [deleting, setDeleting] = useState(false);
@@ -293,7 +293,10 @@ function KeyPackageDetailBody({
   const event = publishedKeyPackages?.find(
     (pkg) => bytesToHex(pkg.keyPackageRef) === refString,
   )?.event;
-  const cipherSuiteId = keyPackage.publicPackage.cipherSuite;
+
+  const decoded = decodeKeyPackage(keyPackage.keyPackageTls, 0);
+  const [publicPackage] = decoded ?? [];
+  const cipherSuiteId = publicPackage?.cipherSuite;
   const clientInfo = event ? getKeyPackageClient(event) : undefined;
   const timeAgo = event ? formatTimeAgo(event.created_at) : "Unpublished";
   const isLocal = !!keyPackage.privatePackage;
@@ -381,11 +384,11 @@ function KeyPackageDetailBody({
               <>
                 <PublishKeyPackageButton
                   event={event}
-                  keyPackage={keyPackage.publicPackage}
+                  keyPackage={publicPackage as KeyPackage}
                 />
                 <BroadcastKeyPackageButton
                   event={event}
-                  keyPackage={keyPackage.publicPackage}
+                  keyPackage={publicPackage as KeyPackage}
                 />
                 <DeleteKeyPackageButton
                   event={event}
@@ -407,7 +410,9 @@ function KeyPackageDetailBody({
           </CardHeader>
           <CardContent>
             <div className="bg-muted p-4 rounded-lg overflow-auto">
-              <KeyPackageDataView keyPackage={keyPackage.publicPackage} />
+              {publicPackage ? (
+                <KeyPackageDataView keyPackage={publicPackage} />
+              ) : null}
             </div>
           </CardContent>
         </Card>
@@ -468,12 +473,18 @@ export default function KeyPackageDetailPage() {
     );
   }
 
-  // If not stored locally but published, create a minimal StoredKeyPackage
-  const displayKeyPackage = keyPackage || {
-    keyPackageRef: publishedKeyPackage!.keyPackageRef,
-    publicPackage: publishedKeyPackage!.keyPackage,
-    privatePackage: null, // No private package available
-  };
+  if (!keyPackage) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center text-muted-foreground">
+          <p>
+            Key package is published but not stored locally. Import is not
+            implemented yet.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
-  return <KeyPackageDetailBody keyPackage={displayKeyPackage} />;
+  return <KeyPackageDetailBody keyPackage={keyPackage} />;
 }

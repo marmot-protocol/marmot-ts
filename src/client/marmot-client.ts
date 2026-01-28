@@ -52,8 +52,10 @@ export type MarmotClientOptions<
 };
 
 /** Given a MarmotClient type, returns the MarmotGroup class type with the same THistoryStore. */
-export type InferGroupType<TClient extends MarmotClient<any>> = TClient extends
-  MarmotClient<infer THistoryStore> ? MarmotGroup<THistoryStore> : never;
+export type InferGroupType<TClient extends MarmotClient<any>> =
+  TClient extends MarmotClient<infer THistoryStore>
+    ? MarmotGroup<THistoryStore>
+    : never;
 
 export class MarmotClient<
   THistoryStore extends GroupHistoryStore | undefined = undefined,
@@ -90,9 +92,10 @@ export class MarmotClient<
 
   /** Get a ciphersuite implementation from a name or id */
   private async getCiphersuiteImpl(name: CiphersuiteName | CiphersuiteId = 1) {
-    const suite = typeof name === "string"
-      ? getCiphersuiteFromName(name)
-      : getCiphersuiteFromId(name);
+    const suite =
+      typeof name === "string"
+        ? getCiphersuiteFromName(name)
+        : getCiphersuiteFromId(name);
 
     // Get a new ciphersuite implementation
     return await getCiphersuiteImpl(suite, this.cryptoProvider);
@@ -100,9 +103,8 @@ export class MarmotClient<
 
   /** Gets a group from cache or loads it from store */
   async getGroup(groupId: Uint8Array | string) {
-    const groupIdHex = typeof groupId === "string"
-      ? groupId
-      : bytesToHex(groupId);
+    const groupIdHex =
+      typeof groupId === "string" ? groupId : bytesToHex(groupId);
     let group = this.groups.get(groupIdHex);
     if (!group) {
       group = await MarmotGroup.load<THistoryStore>(groupId, {
@@ -216,7 +218,8 @@ export class MarmotClient<
 
     // Extract keyPackageEventId from welcome rumor tags if not explicitly provided
     // The keyPackageEventId is stored as an "e" tag in the welcome message per MIP-00
-    const keyPackageEventId = explicitKeyPackageEventId ??
+    const keyPackageEventId =
+      explicitKeyPackageEventId ??
       welcomeRumor.tags.find((tag) => tag[0] === "e")?.[1];
 
     // Get the ciphersuite implementation for the Welcome
@@ -234,7 +237,12 @@ export class MarmotClient<
     // Collect all key packages with matching cipher suite and compute their KeyPackageRef
     // KeyPackageRef is used to identify which encrypted secret in the welcome is ours (RFC 9420)
     for (const keyPackage of allKeyPackages) {
-      if (keyPackage.publicPackage.cipherSuite !== welcome.cipherSuite) {
+      const publicPackage = await this.keyPackageStore.getPublicKey(
+        keyPackage.keyPackageRef,
+      );
+      if (!publicPackage) continue;
+
+      if (publicPackage.cipherSuite !== welcome.cipherSuite) {
         continue;
       }
 
@@ -254,7 +262,7 @@ export class MarmotClient<
       );
 
       candidatePackages.push({
-        publicPackage: keyPackage.publicPackage,
+        publicPackage,
         privatePackage: privatekeyPackage,
         keyPackageRef: keyPackage.keyPackageRef,
         hasMatchingSecret,

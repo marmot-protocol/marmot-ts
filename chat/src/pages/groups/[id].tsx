@@ -271,8 +271,13 @@ function GroupDetailPage() {
     [id],
   );
 
-  const { messages, loadMoreMessages, loadingMore, loadingDone } =
-    useGroupMessages(group ?? null);
+  const {
+    messages,
+    loadMoreMessages,
+    loadingMore,
+    loadingDone,
+    addNewMessages,
+  } = useGroupMessages(group ?? null);
 
   const groupIdHex = useMemo(() => {
     if (!group) return null;
@@ -311,8 +316,9 @@ function GroupDetailPage() {
       const sentRumor = await sendMessage(messageText);
       setMessageText("");
 
-      // Optimistically save new messages to the groups history for immediate feedback
-      if (sentRumor) await group?.history.saveRumor(sentRumor);
+      // Optimistic UI: insert immediately, but rely on history for the canonical
+      // timeline (dedupe by id in the hook).
+      if (sentRumor) addNewMessages([sentRumor]);
     } catch (err) {
       // Error is already set by useMessageSender
     }

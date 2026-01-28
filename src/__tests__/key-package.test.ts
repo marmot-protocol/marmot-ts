@@ -51,8 +51,8 @@ describe("generateKeyPackage", () => {
       ciphersuiteImpl,
     });
 
-    const capabilities = keyPackage.publicPackage.leafNode.capabilities
-      ?.extensions;
+    const capabilities =
+      keyPackage.publicPackage.leafNode.capabilities?.extensions;
     expect(capabilities).toBeDefined();
     expect(capabilities).toContain(MARMOT_GROUP_DATA_EXTENSION_TYPE);
   });
@@ -99,8 +99,8 @@ describe("generateKeyPackage", () => {
       ciphersuiteImpl,
     });
 
-    const capabilities = keyPackage.publicPackage.leafNode.capabilities
-      ?.extensions;
+    const capabilities =
+      keyPackage.publicPackage.leafNode.capabilities?.extensions;
     expect(capabilities).toBeDefined();
     // Should include both custom extensions and Marmot extension
     expect(capabilities).toContain(1);

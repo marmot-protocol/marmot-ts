@@ -2,6 +2,7 @@ import { bytesToHex, relaySet, type NostrEvent } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
 import { Plus } from "lucide-react";
 import { getKeyPackageClient, ListedKeyPackage } from "marmot-ts";
+import { decodeKeyPackage } from "ts-mls/keyPackage.js";
 import { useMemo } from "react";
 import { Link, Outlet, useLocation } from "react-router";
 import { combineLatest, from, map, shareReplay } from "rxjs";
@@ -68,7 +69,13 @@ function KeyPackageItem({
         </span>
       </div>
       <div className="flex items-center gap-2">
-        <CipherSuiteBadge cipherSuite={keyPackage.publicPackage.cipherSuite} />
+        {(() => {
+          const decoded = decodeKeyPackage(keyPackage.keyPackageTls, 0);
+          const [publicPackage] = decoded ?? [];
+          return publicPackage ? (
+            <CipherSuiteBadge cipherSuite={publicPackage.cipherSuite} />
+          ) : null;
+        })()}
       </div>
       {/* <span className="line-clamp-1 w-full text-xs text-muted-foreground font-mono">
         {matchedEvent?.id ||
@@ -115,13 +122,14 @@ function KeyPackagesPage() {
           bytesToHex(publishedPkg.keyPackageRef),
       );
 
+      // Use the published event as the UI source; when local exists we only use
+      // it to mark "isLocal".
       return {
         keyPackageRef: publishedPkg.keyPackageRef,
-        publicPackage:
-          localKeyPackage?.publicPackage || publishedPkg.keyPackage,
+        keyPackageTls: localKeyPackage?.keyPackageTls ?? new Uint8Array(),
         event: publishedPkg.event,
         isLocal: !!localKeyPackage,
-      };
+      } satisfies ListedKeyPackage & { event: NostrEvent; isLocal: boolean };
     });
 
     return { items, uniqueCount: seen.size };

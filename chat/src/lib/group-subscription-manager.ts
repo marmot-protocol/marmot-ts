@@ -1,7 +1,7 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { NostrEvent } from "applesauce-core/helpers";
+import type { Filter } from "nostr-tools";
 import {
-  deserializeApplicationRumor,
   getNostrGroupIdHex,
   GROUP_EVENT_KIND,
   MarmotClient,
@@ -24,16 +24,13 @@ export class GroupSubscriptionManager {
     {
       subscription: Subscription;
       seenEventIds: Set<string>;
+      historySubscription?: { unsubscribe(): void };
     }
   >();
 
   private readonly client: MarmotClient<MarmotGroupHistoryStore>;
   private isActive = false;
   private reconcileInterval: ReturnType<typeof setInterval> | null = null;
-  private applicationMessageCallbacks = new Map<
-    string,
-    (messages: Rumor[]) => void
-  >();
 
   /** GroupIds that currently have messages newer than the last "seen" timestamp. */
   readonly unreadGroupIds$ = new BehaviorSubject<string[]>([]);
@@ -41,38 +38,11 @@ export class GroupSubscriptionManager {
   /** Last known message timestamp per group (seconds). */
   private lastMessageAtByGroup = new Map<string, number>();
 
-  /** In-memory buffer of recent application messages per group (sorted). */
-  private messageBufferByGroup = new Map<string, Rumor[]>();
-
   /** Last seen timestamp per group (seconds), persisted in localStorage. */
   private lastSeenAtByGroup = new Map<string, number>();
 
   constructor(client: MarmotClient<MarmotGroupHistoryStore>) {
     this.client = client;
-  }
-
-  /**
-   * Register a callback to receive application messages for a specific group.
-   *
-   * This lets pages receive chat messages without creating duplicate relay
-   * subscriptions.
-   */
-  onApplicationMessage(
-    groupIdHex: string,
-    callback: (messages: Rumor[]) => void,
-  ): () => void {
-    this.applicationMessageCallbacks.set(groupIdHex, callback);
-
-    // Immediately replay whatever we already ingested so the UI isn't empty
-    // when opening a group that has existing history.
-    const buffered = this.messageBufferByGroup.get(groupIdHex);
-    if (buffered && buffered.length > 0) {
-      callback(buffered);
-    }
-
-    return () => {
-      this.applicationMessageCallbacks.delete(groupIdHex);
-    };
   }
 
   /** Start managing subscriptions for all groups in the store. */
@@ -106,13 +76,13 @@ export class GroupSubscriptionManager {
 
     for (const [groupId, sub] of this.groupSubscriptions) {
       sub.subscription.unsubscribe();
+      sub.historySubscription?.unsubscribe();
       this.groupSubscriptions.delete(groupId);
     }
 
     this.unreadGroupIds$.next([]);
     this.lastMessageAtByGroup.clear();
     this.lastSeenAtByGroup.clear();
-    this.messageBufferByGroup.clear();
   }
 
   /** Mark a group as seen up to a given timestamp (seconds). */
@@ -192,9 +162,20 @@ export class GroupSubscriptionManager {
         },
       });
 
+      // Track new rumors durably persisted to history.
+      // This is the single source of truth for UI-facing timeline updates.
+      const historySubscription = group.history?.subscribe?.((rumor: Rumor) => {
+        const prevNewest = this.lastMessageAtByGroup.get(groupIdHex) ?? 0;
+        if (rumor.created_at > prevNewest) {
+          this.lastMessageAtByGroup.set(groupIdHex, rumor.created_at);
+          this.recomputeUnreadGroupIds();
+        }
+      });
+
       this.groupSubscriptions.set(groupIdHex, {
         subscription,
         seenEventIds,
+        historySubscription,
       });
 
       console.debug(
@@ -216,6 +197,7 @@ export class GroupSubscriptionManager {
     if (!sub) return;
 
     sub.subscription.unsubscribe();
+    sub.historySubscription?.unsubscribe();
     this.groupSubscriptions.delete(groupIdHex);
     console.debug(
       `[GroupSubscriptionManager] Stopped subscription for group ${groupIdHex}`,
@@ -235,47 +217,10 @@ export class GroupSubscriptionManager {
     newEvents.forEach((e) => seenEventIds.add(e.id));
 
     try {
-      const newMessages: Rumor[] = [];
-
-      for await (const result of group.ingest(newEvents)) {
-        if (result.kind === "applicationMessage") {
-          try {
-            const rumor = deserializeApplicationRumor(result.message);
-            newMessages.push(rumor);
-          } catch (parseErr) {
-            console.error(
-              "[GroupSubscriptionManager] Failed to parse application message:",
-              parseErr,
-            );
-          }
-        }
-      }
-
-      if (newMessages.length > 0) {
-        // Update in-memory message buffer
-        const prev = this.messageBufferByGroup.get(groupIdHex) ?? [];
-        const mapById = new Map<string, Rumor>();
-        for (const m of prev) mapById.set(m.id, m);
-        for (const m of newMessages) mapById.set(m.id, m);
-        const merged = Array.from(mapById.values()).sort(
-          (a, b) => a.created_at - b.created_at,
-        );
-        // Keep it small and predictable
-        const capped = merged.slice(-200);
-        this.messageBufferByGroup.set(groupIdHex, capped);
-
-        const newest = newMessages.reduce(
-          (acc, m) => Math.max(acc, m.created_at),
-          0,
-        );
-        const prevNewest = this.lastMessageAtByGroup.get(groupIdHex) ?? 0;
-        if (newest > prevNewest) {
-          this.lastMessageAtByGroup.set(groupIdHex, newest);
-          this.recomputeUnreadGroupIds();
-        }
-
-        const callback = this.applicationMessageCallbacks.get(groupIdHex);
-        callback?.(newMessages);
+      // Ingest handles MLS processing and persists rumors to history.
+      // UI updates should observe the history store (single source of truth).
+      for await (const _result of group.ingest(newEvents)) {
+        // ignore
       }
     } catch (err) {
       console.error(
@@ -292,12 +237,27 @@ export class GroupSubscriptionManager {
     seenEventIds: Set<string>,
   ): Promise<void> {
     try {
-      const filters = {
+      const resume = await group.history.getResumeCursor();
+
+      const filters: Filter = {
         kinds: [GROUP_EVENT_KIND],
         "#h": [groupIdHex],
       };
 
-      const events = await this.client.network.request(relays, filters);
+      // Best-effort incremental backfill: relays support `since` by timestamp only.
+      // We still apply composite `(created_at, id)` inclusivity locally.
+      if (resume) {
+        filters.since = resume.created_at;
+      }
+
+      const eventsAll = await this.client.network.request(relays, filters);
+      const events = resume
+        ? eventsAll.filter(
+            (e) =>
+              e.created_at > resume.created_at ||
+              (e.created_at === resume.created_at && e.id > resume.id),
+          )
+        : eventsAll;
       if (events.length === 0) return;
 
       console.debug(

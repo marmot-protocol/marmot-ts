@@ -201,7 +201,7 @@ export function serializeApplicationRumor(rumor: Rumor): Uint8Array {
   return new TextEncoder().encode(jsonString);
 }
 
-/** Deserializes a serialized application rumor back into a Rumor object */
+/** Deserializes an application message into a MIP-03 rumor */
 export function deserializeApplicationRumor(data: Uint8Array): Rumor {
   const jsonString = new TextDecoder().decode(data);
   const rumor = JSON.parse(jsonString);
@@ -237,8 +237,9 @@ export function sortGroupCommits(
     }
 
     // Same epoch - second priority: Use timestamp (earliest wins)
-    if (a.event.created_at !== b.event.created_at)
+    if (a.event.created_at !== b.event.created_at) {
       return a.event.created_at - b.event.created_at;
+    }
 
     // Same timestamp - third priority: Use event id (lexicographically smallest wins)
     return a.event.id.localeCompare(b.event.id);

@@ -1,15 +1,13 @@
-import { Subscription } from "rxjs";
-import { BehaviorSubject } from "rxjs";
-
-import type { NostrEvent } from "applesauce-core/helpers";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-
+import type { NostrEvent } from "applesauce-core/helpers";
 import {
   deserializeApplicationRumor,
   getNostrGroupIdHex,
   GROUP_EVENT_KIND,
   MarmotClient,
+  MarmotGroup,
 } from "marmot-ts";
+import { BehaviorSubject, Subscription } from "rxjs";
 
 import { pool } from "@/lib/nostr";
 
@@ -50,30 +48,6 @@ export class GroupSubscriptionManager {
 
   constructor(client: MarmotClient) {
     this.client = client;
-  }
-
-  /**
-   * Register a callback to receive application messages for a specific group.
-   *
-   * This lets pages receive chat messages without creating duplicate relay
-   * subscriptions.
-   */
-  onApplicationMessage(
-    groupIdHex: string,
-    callback: (messages: Rumor[]) => void,
-  ): () => void {
-    this.applicationMessageCallbacks.set(groupIdHex, callback);
-
-    // Immediately replay whatever we already ingested so the UI isn't empty
-    // when opening a group that has existing history.
-    const buffered = this.messageBufferByGroup.get(groupIdHex);
-    if (buffered && buffered.length > 0) {
-      callback(buffered);
-    }
-
-    return () => {
-      this.applicationMessageCallbacks.delete(groupIdHex);
-    };
   }
 
   /** Start managing subscriptions for all groups in the store. */
@@ -225,7 +199,7 @@ export class GroupSubscriptionManager {
 
   private async processEvents(
     groupIdHex: string,
-    group: Awaited<ReturnType<MarmotClient["getGroup"]>>,
+    group: MarmotGroup,
     events: NostrEvent[],
     seenEventIds: Set<string>,
   ): Promise<void> {
@@ -289,7 +263,7 @@ export class GroupSubscriptionManager {
   private async fetchHistoricalEvents(
     groupIdHex: string,
     relays: string[],
-    group: Awaited<ReturnType<MarmotClient["getGroup"]>>,
+    group: MarmotGroup,
     seenEventIds: Set<string>,
   ): Promise<void> {
     try {

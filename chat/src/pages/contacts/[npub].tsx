@@ -7,6 +7,7 @@ import {
 } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
 import {
+  extractMarmotGroupData,
   getCredentialPubkey,
   getKeyPackage,
   getKeyPackageCipherSuiteId,
@@ -15,13 +16,12 @@ import {
   getKeyPackageMLSVersion,
   getKeyPackageRelayList,
   getKeyPackageRelays,
-  extractMarmotGroupData,
   KEY_PACKAGE_KIND,
   KEY_PACKAGE_RELAY_LIST_KIND,
 } from "marmot-ts";
 import { useMemo, useState } from "react";
 import { useParams } from "react-router";
-import { from, switchMap } from "rxjs";
+import { of, switchMap } from "rxjs";
 import { map } from "rxjs/operators";
 import { KeyPackage } from "ts-mls";
 
@@ -29,6 +29,7 @@ import FollowButton from "@/components/follow-button";
 import { UserAvatar, UserName } from "@/components/nostr-user";
 import { PageHeader } from "@/components/page-header";
 import QRButton from "@/components/qr-button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -48,10 +49,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { groupStore$ } from "@/lib/group-store";
-import { eventStore, pool } from "@/lib/nostr";
 import { marmotClient$ } from "@/lib/marmot-client";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { eventStore, pool } from "@/lib/nostr";
 
 function KeyPackageCard({ event }: { event: NostrEvent }) {
   const [expanded, setExpanded] = useState(false);
@@ -397,10 +396,8 @@ function ContactDetailContent({ user }: { user: User }) {
 
   const groups = use$(
     () =>
-      groupStore$.pipe(
-        switchMap((store) =>
-          store ? from(store.list()) : from(Promise.resolve([])),
-        ),
+      marmotClient$.pipe(
+        switchMap((client) => client?.groupStore.list() ?? of([])),
       ),
     [],
   );

@@ -1,4 +1,4 @@
-import { mapEventsToStore } from "applesauce-core";
+import { defined, mapEventsToStore } from "applesauce-core";
 import { NostrEvent, relaySet } from "applesauce-core/helpers";
 import { onlyEvents } from "applesauce-relay";
 import {
@@ -11,6 +11,7 @@ import {
 import {
   combineLatest,
   defer,
+  from,
   ignoreElements,
   map,
   merge,
@@ -77,24 +78,36 @@ export const publishedKeyPackages$ = combineLatest([
     // Observable to load events from cache
     const cache = defer(() => cacheRequest(filter)).pipe(mergeAll());
 
-    // Observable watch event store and parse all key packages
-    const published = eventStore.filters(filter).pipe(
-      mergeMap(async (event) => {
-        try {
-          const keyPackage = getKeyPackage(event);
-          const keyPackageRef = await calculateKeyPackageRef(
-            keyPackage,
-            client?.cryptoProvider,
-          );
-          return { event, keyPackage, keyPackageRef };
-        } catch {
-          // Skip malformed events that fail decoding or ref calculation
-          return null;
-        }
-      }),
-      // Filter out null values (failed events)
-      mergeMap((result) => (result ? [result] : [])),
-      scan((acc, curr) => [...acc, curr], [] as PublishedKeyPackage[]),
+    // Observable: all current matching events first, then live updates from the store.
+    // eventStore.filters(filter) is shared with ReplaySubject(1), so late subscribers
+    // only see the last event; seeding with getByFilters ensures we get the full set.
+    const parseEvent = async (event: NostrEvent) => {
+      try {
+        const keyPackage = getKeyPackage(event);
+        const keyPackageRef = await calculateKeyPackageRef(
+          keyPackage,
+          client?.cryptoProvider,
+        );
+        return { event, keyPackage, keyPackageRef } as PublishedKeyPackage;
+      } catch {
+        return null;
+      }
+    };
+    const existing$ = defer(() =>
+      from(eventStore.getByFilters(filter)).pipe(
+        mergeMap((event) => from(parseEvent(event))),
+        defined(),
+      ),
+    );
+    const updates$ = eventStore.filters(filter).pipe(
+      mergeMap((event) => from(parseEvent(event))),
+      defined(),
+    );
+    const published = merge(existing$, updates$).pipe(
+      scan((acc, curr) => {
+        const seen = acc.some((p) => p.event.id === curr.event.id);
+        return seen ? acc : [...acc, curr];
+      }, [] as PublishedKeyPackage[]),
     );
 
     return merge(

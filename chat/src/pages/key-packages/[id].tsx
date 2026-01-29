@@ -33,6 +33,11 @@ import { formatTimeAgo } from "@/lib/time";
 import { KeyPackage } from "ts-mls";
 import accounts, { publish, user$ } from "../../lib/accounts";
 
+/** A key package that is not stored locally but read from an event */
+type RemoteKeyPackage = Omit<StoredKeyPackage, "privatePackage"> & {
+  privatePackage: null;
+};
+
 function KeyPackageRelayStatus({ event }: { event: NostrEvent | undefined }) {
   const keyPackageRelays = use$(keyPackageRelays$);
   const seenRelays = use$(
@@ -186,7 +191,6 @@ function DeleteKeyPackageButton({
   keyPackageRef: Uint8Array;
 }) {
   const client = use$(marmotClient$);
-  const keyPackageRelays = use$(keyPackageRelays$);
   const navigate = useNavigate();
 
   const [deleting, setDeleting] = useState(false);
@@ -280,7 +284,7 @@ function BroadcastKeyPackageButton({
 function KeyPackageDetailBody({
   keyPackage,
 }: {
-  keyPackage: StoredKeyPackage;
+  keyPackage: StoredKeyPackage | RemoteKeyPackage;
 }) {
   const refString = useMemo(
     () => bytesToHex(keyPackage.keyPackageRef),
@@ -296,7 +300,7 @@ function KeyPackageDetailBody({
   const cipherSuiteId = keyPackage.publicPackage.cipherSuite;
   const clientInfo = event ? getKeyPackageClient(event) : undefined;
   const timeAgo = event ? formatTimeAgo(event.created_at) : "Unpublished";
-  const isLocal = !!keyPackage.privatePackage;
+  const isLocal = "privatePackage" in keyPackage;
 
   return (
     <>

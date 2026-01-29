@@ -26,10 +26,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { withSignIn } from "@/components/with-signIn";
 import accountManager from "@/lib/accounts";
-import { keyPackageStore$ } from "@/lib/key-package-store";
 import { marmotClient$ } from "@/lib/marmot-client";
 import { extraRelays$ } from "@/lib/settings";
-import { switchMap } from "rxjs";
+import { from, merge } from "rxjs";
 
 // ============================================================================
 // Types
@@ -284,11 +283,10 @@ function ConfigurationForm({
 
 function CreateGroupPage() {
   const client = use$(marmotClient$);
-  const keyPackageStore = use$(keyPackageStore$);
   const extraRelays = use$(extraRelays$);
   const storedKeyPackages = use$(
-    () => keyPackageStore$.pipe(switchMap((store) => store.list())),
-    [],
+    () => client && merge(from(client.keyPackageStore.list())),
+    [client],
   );
   const keyPackages = useMemo(
     () => storedKeyPackages?.map((kp) => kp.publicPackage) ?? [],
@@ -329,14 +327,14 @@ function CreateGroupPage() {
       ];
       const allRelays = [...data.relays];
 
-      const groupId = await client.createGroup(data.groupName, {
+      const group = await client.createGroup(data.groupName, {
         description: data.groupDescription,
         adminPubkeys: adminPubkeysList,
         relays: allRelays,
       });
 
       // Navigate directly to the group detail page
-      navigate(`/groups/${bytesToHex(groupId)}`);
+      navigate(`/groups/${bytesToHex(group.id)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setIsCreating(false);
@@ -356,7 +354,7 @@ function CreateGroupPage() {
         {/* Configuration Form */}
         <ConfigurationForm
           keyPackages={keyPackages}
-          keyPackageStore={keyPackageStore}
+          keyPackageStore={client?.keyPackageStore}
           isCreating={isCreating}
           defaultRelays={extraRelays ?? []}
           onSubmit={(data) => {

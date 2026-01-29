@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest";
 import {
   CiphersuiteName,
   ciphersuites,
@@ -6,6 +5,9 @@ import {
   getCiphersuiteFromName,
   getCiphersuiteImpl,
 } from "ts-mls";
+import { describe, expect, it } from "vitest";
+
+import { generateKeyPackage } from "../core/key-package.js";
 import {
   createMarmotGroupData,
   decodeMarmotGroupData,
@@ -14,7 +16,6 @@ import {
   marmotGroupDataToExtension,
 } from "../core/marmot-group-data.js";
 import { MarmotGroupData } from "../core/protocol.js";
-import { generateKeyPackage } from "../core/key-package.js";
 
 describe("encodeMarmotGroupData and decodeMarmotGroupData", () => {
   it("should encode and decode group data correctly", () => {

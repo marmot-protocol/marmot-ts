@@ -1,32 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { EventSigner } from "applesauce-core/event-factory";
 import {
   CiphersuiteImpl,
   createCommit,
   defaultCryptoProvider,
+  emptyPskIndex,
   getCiphersuiteFromName,
   getCiphersuiteImpl,
   joinGroup,
   processMessage,
-  emptyPskIndex,
 } from "ts-mls";
-import type { ClientState } from "ts-mls/clientState.js";
 import type { MlsPrivateMessage, MlsPublicMessage } from "ts-mls/message.js";
+import { describe, expect, it } from "vitest";
 
-import { createCredential } from "../core/credential.js";
-import { createSimpleGroup } from "../core/group.js";
-import { generateKeyPackage } from "../core/key-package.js";
+import {
+  createAdminCommitPolicyCallback,
+  MarmotGroup,
+} from "../client/group/marmot-group.js";
+import type { NostrNetworkInterface } from "../client/nostr-interface.js";
 import {
   defaultMarmotClientConfig,
   SerializedClientState,
 } from "../core/client-state.js";
+import { createCredential } from "../core/credential.js";
+import { createSimpleGroup } from "../core/group.js";
+import { generateKeyPackage } from "../core/key-package.js";
 import { GroupStore } from "../store/group-store.js";
 import type { KeyValueStoreBackend } from "../utils/key-value.js";
-import {
-  MarmotGroup,
-  createAdminCommitPolicyCallback,
-} from "../client/group/marmot-group.js";
-import type { NostrNetworkInterface } from "../client/nostr-interface.js";
-import { EventSigner } from "applesauce-factory";
 
 class MemoryBackend<T> implements KeyValueStoreBackend<T> {
   private map = new Map<string, T>();

@@ -6,6 +6,7 @@ describe("exports", () => {
     expect(Object.keys(exports).sort()).toMatchInlineSnapshot(`
       [
         "GROUP_EVENT_KIND",
+        "GroupRumorHistory",
         "GroupStore",
         "KEY_PACKAGE_CIPHER_SUITE_TAG",
         "KEY_PACKAGE_CLIENT_TAG",

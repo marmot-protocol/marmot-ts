@@ -4,7 +4,7 @@ import { Plus } from "lucide-react";
 import { getKeyPackageClient, ListedKeyPackage } from "marmot-ts";
 import { useMemo } from "react";
 import { Link, Outlet, useLocation } from "react-router";
-import { combineLatest, from, map, shareReplay } from "rxjs";
+import { combineLatest, map, shareReplay } from "rxjs";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import CipherSuiteBadge from "@/components/cipher-suite-badge";
@@ -15,7 +15,7 @@ import { SidebarInset } from "@/components/ui/sidebar";
 import { withSignIn } from "@/components/with-signIn";
 import { user$ } from "@/lib/accounts";
 import { keyPackageRelays$, publishedKeyPackages$ } from "@/lib/lifecycle";
-import { marmotClient$ } from "@/lib/marmot-client";
+import { liveKeyPackages$ } from "@/lib/marmot-client";
 import { extraRelays$ } from "@/lib/settings";
 import { formatTimeAgo } from "@/lib/time";
 
@@ -82,11 +82,7 @@ function KeyPackageItem({
 }
 
 function KeyPackagesPage() {
-  const client = use$(marmotClient$);
-  const keyPackages = use$(
-    () => (client ? from(client.keyPackageStore.list()) : undefined),
-    [client],
-  );
+  const keyPackages = use$(liveKeyPackages$);
   const published = use$(publishedKeyPackages$);
 
   // Combine published and local key packages to show all published packages

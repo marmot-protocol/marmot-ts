@@ -53,6 +53,16 @@
       "import": "./src/mls.js",
       "default": "./src/mls.js"
     },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js",
+      "default": "./dist/client/index.js"
+    },
+    "./store": {
+      "types": "./dist/store/index.d.ts",
+      "import": "./dist/store/index.js",
+      "default": "./dist/store/index.js"
+    },
     "./package.json": "./package.json"
   },
   "dependencies": {
@@ -62,7 +72,8 @@
     "@noble/hashes": "^2.0.1",
     "applesauce-common": "^5.0.0",
     "applesauce-core": "^5.0.3",
-    "nostr-tools": "^2.19.4",
+    "eventemitter3": "^5.0.4",
+    "nostr-tools": "^2.20.0",
     "ts-mls": "^1.6.1"
   },
   "devDependencies": {

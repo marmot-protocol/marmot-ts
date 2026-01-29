@@ -1,6 +1,7 @@
-import { Rumor } from "applesauce-common/helpers/gift-wrap";
-import { EventSigner } from "applesauce-core/event-factory";
-import { NostrEvent } from "applesauce-core/helpers/event";
+import type { Rumor } from "applesauce-common/helpers/gift-wrap";
+import type { EventSigner } from "applesauce-core/event-factory";
+import { bytesToHex, type NostrEvent } from "applesauce-core/helpers/event";
+import { EventEmitter } from "eventemitter3";
 import {
   CiphersuiteImpl,
   ClientState,
@@ -13,20 +14,16 @@ import {
   getCiphersuiteFromName,
   getCiphersuiteImpl,
   processMessage,
-  Proposal,
   type ProcessMessageResult,
+  Proposal,
 } from "ts-mls";
 import {
   acceptAll,
   type IncomingMessageCallback,
 } from "ts-mls/incomingMessageAction.js";
-import {
-  MLSMessage,
-  type MlsPrivateMessage,
-  type MlsPublicMessage,
-} from "ts-mls/message.js";
+import { MLSMessage } from "ts-mls/message.js";
 import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
-import { toLeafIndex, type LeafIndex } from "ts-mls/treemath.js";
+import { type LeafIndex, toLeafIndex } from "ts-mls/treemath.js";
 import { extractMarmotGroupData } from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
 import {
@@ -50,6 +47,21 @@ import {
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 
+/**
+ * The minimum interface for a group to store them MLS messages
+ * Implementations should extend this with methods for querying and loading stored messages
+ */
+export interface BaseGroupHistory {
+  /** Saves a new application message to the group history */
+  saveMessage(message: Uint8Array): Promise<void>;
+  /** Purge the group history, called when group is destroyed */
+  prugeMessages(): Promise<void>;
+}
+
+/** A factory function that creates a {@link BaseGroupHistory} instance for a group id */
+export type GroupHistoryFactory<THistory extends BaseGroupHistory | undefined> =
+  (groupId: Uint8Array) => THistory;
+
 export type ProposalContext = {
   state: ClientState;
   ciphersuite: CiphersuiteImpl;
@@ -67,16 +79,19 @@ export type ProposalBuilder<
   T extends Proposal | Proposal[],
 > = (...args: Args) => ProposalAction<T>;
 
-export type MarmotGroupOptions = {
-  /** The backend to store and load of group from */
-  store: GroupStore;
-  /** The signer used for the clients identity */
-  signer: EventSigner;
-  /** The ciphersuite implementation to use for the group */
-  ciphersuite: CiphersuiteImpl;
-  /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
-  network: NostrNetworkInterface;
-};
+export type MarmotGroupOptions<THistory extends BaseGroupHistory | undefined> =
+  {
+    /** The backend to store and load of group from */
+    store: GroupStore;
+    /** The signer used for the clients identity */
+    signer: EventSigner;
+    /** The ciphersuite implementation to use for the group */
+    ciphersuite: CiphersuiteImpl;
+    /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
+    network: NostrNetworkInterface;
+    /** The storage interface for the groups application message history */
+    history: THistory | GroupHistoryFactory<THistory>;
+  };
 
 /** Information about a welcome recipient */
 export type WelcomeRecipient = {
@@ -120,14 +135,33 @@ export function createAdminCommitPolicyCallback(args: {
     } catch {
       // "retry" here means we don't want to permanently reject the commit;
       // MarmotGroup.ingest() will treat processing errors as unreadable/retryable.
-      if (onUnverifiableCommit === "retry")
+      if (onUnverifiableCommit === "retry") {
         throw new Error("unverifiable commit sender");
+      }
       return "reject";
     }
   };
 }
 
-export class MarmotGroup {
+/** Map of events that can be emitted by a MarmotGroup */
+type MarmotGroupEvents<THistory extends BaseGroupHistory | undefined = any> = {
+  /** Emitted when the group state is updated */
+  stateChanged: (state: ClientState) => any;
+  /** Emitted when a new application message is received */
+  applicationMessage: (message: Uint8Array) => any;
+  /** Emitted when the group state is saved */
+  stateSaved: (group: MarmotGroup<THistory>) => any;
+  /** Emitted when the group is destroyed */
+  destroyed: (group: MarmotGroup<THistory>) => any;
+};
+
+/**
+ * The main class for interacting with a MLS group
+ * @template THistory - The type of the history store to use for the group, must implement the {@link BaseGroupHistory} interface. (Default is no history store)
+ */
+export class MarmotGroup<
+  THistory extends BaseGroupHistory | undefined = any,
+> extends EventEmitter<MarmotGroupEvents<THistory>> {
   /** The backend to store and load of group from */
   readonly store: GroupStore;
 
@@ -140,21 +174,31 @@ export class MarmotGroup {
   /** The nostr relay pool to use for the group */
   readonly network: NostrNetworkInterface;
 
+  /** The storage interface for the groups application message history */
+  readonly history: THistory;
+
   /** Whether group state has been modified */
   dirty = false;
 
-  /** Internal state */
-  private _state: ClientState;
-  private _groupData: MarmotGroupData | null = null;
+  /** Internal ClientState */
+  #state: ClientState;
+  #groupData: MarmotGroupData | null = null;
+
+  get id() {
+    return this.state.groupContext.groupId;
+  }
+
+  /** The group id as a hex string */
+  idStr: string;
 
   /** Read the current group state */
   get state() {
-    return this._state;
+    return this.#state;
   }
   get groupData() {
     // If not cached, extract the group data from the state
-    if (!this._groupData) this._groupData = extractMarmotGroupData(this.state);
-    return this._groupData;
+    if (!this.#groupData) this.#groupData = extractMarmotGroupData(this.state);
+    return this.#groupData;
   }
   get unappliedProposals() {
     return this.state.unappliedProposals;
@@ -166,11 +210,12 @@ export class MarmotGroup {
    */
   set state(newState: ClientState) {
     // Read new group data from the state
-    this._groupData = extractMarmotGroupData(newState);
+    this.#groupData = extractMarmotGroupData(newState);
 
     // Set new state and mark as dirty
-    this._state = newState;
+    this.#state = newState;
     this.dirty = true;
+    this.emit("stateChanged", newState);
   }
 
   // Common accessors for marmot group data
@@ -178,24 +223,51 @@ export class MarmotGroup {
     return this.groupData?.relays;
   }
 
-  constructor(state: ClientState, options: MarmotGroupOptions) {
-    this._state = state;
+  constructor(state: ClientState, options: MarmotGroupOptions<THistory>) {
+    super();
+    this.#state = state;
     this.store = options.store;
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
     this.network = options.network;
+
+    // Create the history store
+    if (typeof options.history === "function") {
+      this.history = options.history(this.id);
+    } else this.history = options.history;
+
+    // Set useful fields
+    this.idStr = bytesToHex(this.id);
   }
 
-  /** Loads a group from the store */
-  static async load(
+  /** Loads a {@link MarmotGroup} instance from the group store based on the group id */
+  static async load<THistory extends BaseGroupHistory | undefined = any>(
     groupId: Uint8Array | string,
-    options: Omit<MarmotGroupOptions, "ciphersuite"> & {
+    options: Omit<MarmotGroupOptions<THistory>, "ciphersuite"> & {
       cryptoProvider?: CryptoProvider;
     },
-  ): Promise<MarmotGroup> {
+  ): Promise<MarmotGroup<THistory>> {
     const state = await options.store.get(groupId);
     if (!state) throw new Error(`Group ${groupId} not found`);
 
+    // Get the group's ciphersuite implementation
+    const cipherSuite = await getCiphersuiteImpl(
+      getCiphersuiteFromName(state.groupContext.cipherSuite),
+      options.cryptoProvider,
+    );
+
+    return new MarmotGroup(state, { ...options, ciphersuite: cipherSuite });
+  }
+
+  /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
+  static async fromClientState<
+    THistory extends BaseGroupHistory | undefined = any,
+  >(
+    state: ClientState,
+    options: Omit<MarmotGroupOptions<THistory>, "ciphersuite"> & {
+      cryptoProvider?: CryptoProvider;
+    },
+  ): Promise<MarmotGroup<THistory>> {
     // Get the group's ciphersuite implementation
     const cipherSuite = await getCiphersuiteImpl(
       getCiphersuiteFromName(state.groupContext.cipherSuite),
@@ -211,6 +283,7 @@ export class MarmotGroup {
 
     await this.store.update(this.state);
     this.dirty = false;
+    this.emit("stateSaved", this);
   }
 
   /** Publish an event to the group relays */
@@ -250,8 +323,9 @@ export class MarmotGroup {
       proposals = await (args[0] as ProposalBuilder<Args, T>)(...args)(context);
     }
 
-    if (!proposals)
+    if (!proposals) {
       throw new Error("Proposal is undefined. This should not happen.");
+    }
 
     // Handle both single proposals and arrays of proposals
     const proposalArray = Array.isArray(proposals) ? proposals : [proposals];
@@ -333,8 +407,9 @@ export class MarmotGroup {
 
     // Publish to the group's relays
     const response = await this.publish(applicationEvent);
-    if (!hasAck(response))
+    if (!hasAck(response)) {
       throw new NoRelayReceivedEventError(applicationEvent.id);
+    }
 
     // Update the group state after successful publish
     // Application messages update state for forward secrecy (key schedule rotation)
@@ -372,8 +447,9 @@ export class MarmotGroup {
     if (!groupData) throw new NoMarmotGroupDataError();
 
     const actorPubkey = await this.signer.getPublicKey();
-    if (!groupData.adminPubkeys.includes(actorPubkey))
+    if (!groupData.adminPubkeys.includes(actorPubkey)) {
       throw new Error("Not a group admin. Cannot commit proposals.");
+    }
 
     const context: ProposalContext = {
       state: this.state,
@@ -492,7 +568,10 @@ export class MarmotGroup {
             );
           } catch (error) {
             console.warn(
-              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${recipient.pubkey.slice(0, 16)}...:`,
+              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${recipient.pubkey.slice(
+                0,
+                16,
+              )}...:`,
               error,
             );
             // Fallback to group relays
@@ -501,7 +580,10 @@ export class MarmotGroup {
 
           if (inboxRelays.length === 0) {
             console.warn(
-              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(0, 16)}...`,
+              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(
+                0,
+                16,
+              )}...`,
             );
             return;
           }
@@ -699,7 +781,7 @@ export class MarmotGroup {
         // - Application messages: Decrypts content and returns it
         // - Both update state as needed (for forward secrecy)
         const result = await processMessage(
-          message as MlsPrivateMessage | MlsPublicMessage,
+          message,
           this.state,
           emptyPskIndex,
           acceptAll, // Accept all proposals (adds them to unappliedProposals)
@@ -713,7 +795,14 @@ export class MarmotGroup {
         } else if (result.kind === "applicationMessage") {
           // Application messages also update state (for forward secrecy)
           this.state = result.newState;
+
+          // Save application message to history
+          if (this.history) {
+            await this.history.saveMessage(result.message);
+          }
+
           yield result;
+          this.emit("applicationMessage", result.message);
         }
       } catch (error) {
         // Message processing failed - might be invalid or from wrong epoch
@@ -811,5 +900,16 @@ export class MarmotGroup {
         maxRetries: maxRetries,
       });
     }
+  }
+
+  /** Destroys the group and purges the group history */
+  async destroy() {
+    if (this.history) await this.history.prugeMessages();
+
+    // Remove the group from the store
+    await this.store.remove(this.id);
+
+    // Emit the destroyed event
+    this.emit("destroyed", this);
   }
 }

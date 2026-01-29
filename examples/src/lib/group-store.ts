@@ -3,11 +3,6 @@ import { BehaviorSubject, map, shareReplay, switchMap } from "rxjs";
 import { GroupStore, defaultMarmotClientConfig } from "../../../src";
 import accounts from "./accounts";
 
-// Observable that triggers whenever the store changes.
-// This is a manual signal for UI components that need to reload data.
-// Note: This is NOT used in reactive chains (groupStore$, selectedGroup$) to avoid cascading re-emissions.
-export const storeChanges$ = new BehaviorSubject<number>(0);
-
 // BehaviorSubject for the currently selected group ID
 export const selectedGroupId$ = new BehaviorSubject<string | null>(null);
 
@@ -23,17 +18,11 @@ export const groupStore$ = accounts.active$.pipe(
       defaultMarmotClientConfig,
       {
         prefix: account?.pubkey ?? "anon",
-        onUpdate: () => notifyStoreChange(), // Wire up notification
       },
     );
   }),
   shareReplay(1),
 );
-
-// Helper function to notify about store changes
-function notifyStoreChange() {
-  storeChanges$.next(storeChanges$.value + 1);
-}
 
 // Observable for the count of groups in the store
 // Note: This updates when the store instance changes (account change).

@@ -312,15 +312,13 @@ export default withSignIn(function GroupCreation() {
       const adminPubkeysList = [...data.adminPubkeys];
       const allRelays = [...data.relays];
 
-      const groupId = await client.createGroup(data.groupName, {
+      const group = await client.createGroup(data.groupName, {
         description: data.groupDescription,
         adminPubkeys: adminPubkeysList,
         relays: allRelays,
       });
 
-      // Retrieve the group to get the client state for display
-      const group = await client.getGroup(groupId);
-      setResult({ groupId, clientState: group.state });
+      setResult({ groupId: group.id, clientState: group.state });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

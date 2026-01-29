@@ -1,13 +1,9 @@
-import { useMemo, useState } from "react";
-import { Link, Outlet, useLocation } from "react-router";
-import { from, startWith, switchMap } from "rxjs";
+import { Link, Outlet, useLocation, useNavigate } from "react-router";
 
 import { use$ } from "applesauce-react/hooks";
-import { extractMarmotGroupData, getGroupIdHex } from "marmot-ts";
-import { ClientState } from "ts-mls/clientState.js";
+import { GroupRumorHistory, MarmotGroup } from "marmot-ts";
 
 import { AppSidebar } from "@/components/app-sidebar";
-import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,30 +15,29 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { SidebarInset } from "@/components/ui/sidebar";
 import { Switch } from "@/components/ui/switch";
-import { groupStore$, groupStoreChanges$ } from "@/lib/group-store";
 import { getGroupSubscriptionManager } from "@/lib/runtime";
+import { liveGroups$, marmotClient$ } from "../lib/marmot-client";
 
 function GroupItem({
-  groupId,
-  clientState,
+  group,
   onRemove,
 }: {
-  groupId: string;
-  clientState: ClientState;
+  group: MarmotGroup<GroupRumorHistory>;
   onRemove: () => void;
 }) {
   const location = useLocation();
-  const isActive = location.pathname === `/groups/${groupId}`;
-  const marmotData = extractMarmotGroupData(clientState);
+  const isActive = location.pathname === `/groups/${group.idStr}`;
+  const marmotData = group.groupData;
   const name = marmotData?.name || "Unnamed Group";
 
   const groupMgr = getGroupSubscriptionManager();
   const unreadGroups = use$(groupMgr?.unreadGroupIds$ ?? undefined);
   const hasUnread = Array.isArray(unreadGroups)
-    ? unreadGroups.includes(groupId)
+    ? unreadGroups.includes(group.idStr)
     : false;
 
   return (
@@ -51,7 +46,7 @@ function GroupItem({
         isActive ? "bg-sidebar-accent text-sidebar-accent-foreground" : ""
       }`}
     >
-      <Link to={`/groups/${groupId}`} className="flex-1 min-w-0 p-4">
+      <Link to={`/groups/${group.idStr}`} className="flex-1 min-w-0 p-4">
         <div className="font-medium truncate flex items-center gap-2">
           <span className="truncate">{name}</span>
           {hasUnread && (
@@ -63,7 +58,7 @@ function GroupItem({
           )}
         </div>
         <div className="text-xs text-muted-foreground truncate font-mono">
-          {groupId.slice(0, 16)}...
+          {group.idStr.slice(0, 16)}...
         </div>
       </Link>
 
@@ -82,8 +77,8 @@ function GroupItem({
           <AlertDialogHeader>
             <AlertDialogTitle>Remove group?</AlertDialogTitle>
             <AlertDialogDescription>
-              This only removes the group from your local list. No protocol
-              action will be published.
+              This only removes the group and its messages from your local list.
+              No protocol action will be published.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -104,42 +99,10 @@ function GroupItem({
 }
 
 export default function GroupsPage() {
-  const [optimisticallyRemovedIds, setOptimisticallyRemovedIds] = useState<
-    Set<string>
-  >(() => new Set());
-
-  // Get groups list from store
-  const groups = use$(
-    () =>
-      groupStore$.pipe(
-        // Ensure the list refreshes when the underlying store changes.
-        // Note: `groupStore$` may re-emit the same store instance, so we also
-        // listen to a dedicated change signal.
-        switchMap((store) =>
-          store
-            ? groupStoreChanges$.pipe(
-                startWith(0),
-                switchMap(() => from(store.list())),
-              )
-            : from(Promise.resolve([])),
-        ),
-      ),
-    [],
-  );
-
-  const store = use$(groupStore$);
-
-  // Avoid recomputing group IDs on every re-render.
-  // This prevents group list churn while typing in other parts of the UI.
-  const groupItems = useMemo(() => {
-    const removed = optimisticallyRemovedIds;
-    return (groups ?? [])
-      .map((clientState: ClientState) => {
-        const groupId = getGroupIdHex(clientState);
-        return { groupId, clientState };
-      })
-      .filter(({ groupId }) => !removed.has(groupId));
-  }, [groups, optimisticallyRemovedIds]);
+  const client = use$(marmotClient$);
+  const groups = use$(liveGroups$);
+  const navigate = useNavigate();
+  const location = useLocation();
 
   return (
     <>
@@ -156,41 +119,21 @@ export default function GroupsPage() {
           <Button asChild className="m-2">
             <Link to="/groups/create">Create Group</Link>
           </Button>
-          {groupItems.length > 0 ? (
-            groupItems.map(
-              ({
-                groupId,
-                clientState,
-              }: {
-                groupId: string;
-                clientState: ClientState;
-              }) => (
-                <GroupItem
-                  key={groupId}
-                  groupId={groupId}
-                  clientState={clientState}
-                  onRemove={async () => {
-                    if (!store) return;
-                    setOptimisticallyRemovedIds((prev) => {
-                      const next = new Set(prev);
-                      next.add(groupId);
-                      return next;
-                    });
+          {groups && groups.length > 0 ? (
+            groups.map((group) => (
+              <GroupItem
+                key={group.idStr}
+                group={group}
+                onRemove={async () => {
+                  if (!client) return;
+                  await client.destroyGroup(group.id);
 
-                    try {
-                      await store.remove(groupId);
-                    } catch {
-                      // Revert optimistic remove on failure.
-                      setOptimisticallyRemovedIds((prev) => {
-                        const next = new Set(prev);
-                        next.delete(groupId);
-                        return next;
-                      });
-                    }
-                  }}
-                />
-              ),
-            )
+                  // Navigate back to groups page if not already there
+                  if (location.pathname !== `/groups`)
+                    navigate("/groups", { replace: true });
+                }}
+              />
+            ))
           ) : (
             <div className="p-4 text-sm text-muted-foreground text-center">
               {groups === undefined ? "Loading..." : "No groups yet"}

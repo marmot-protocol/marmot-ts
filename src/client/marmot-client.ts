@@ -1,6 +1,8 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { EventSigner } from "applesauce-core";
+import { hexToBytes } from "applesauce-core/helpers";
+import { EventEmitter } from "eventemitter3";
 import {
   Capabilities,
   ClientState,
@@ -25,25 +27,58 @@ import { generateKeyPackage } from "../core/key-package.js";
 import { getWelcome } from "../core/welcome.js";
 import { GroupStore } from "../store/group-store.js";
 import { KeyPackageStore } from "../store/key-package-store.js";
-import { MarmotGroup } from "./group/marmot-group.js";
+import {
+  BaseGroupHistory,
+  GroupHistoryFactory,
+  MarmotGroup,
+} from "./group/marmot-group.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
 
-export type MarmotClientOptions = {
-  /** The signer used for the clients identity */
-  signer: EventSigner;
-  /** The capabilities to use for the client */
-  capabilities?: Capabilities;
-  /** The backend to store and load the groups from */
-  groupStore: GroupStore;
-  /** The backend to store and load the key packages from */
-  keyPackageStore: KeyPackageStore;
-  /** The crypto provider to use for cryptographic operations */
-  cryptoProvider?: CryptoProvider;
-  /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
-  network: NostrNetworkInterface;
+export type MarmotClientOptions<THistory extends BaseGroupHistory | undefined> =
+  {
+    /** The signer used for the clients identity */
+    signer: EventSigner;
+    /** The capabilities to use for the client */
+    capabilities?: Capabilities;
+    /** The backend to store and load the groups from */
+    groupStore: GroupStore;
+    /** The backend to store and load the key packages from */
+    keyPackageStore: KeyPackageStore;
+    /** The crypto provider to use for cryptographic operations */
+    cryptoProvider?: CryptoProvider;
+    /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
+    network: NostrNetworkInterface;
+  } & (THistory extends undefined
+    ? {}
+    : {
+        /** The group history interface to be passed to group instaces */
+        historyFactory: GroupHistoryFactory<THistory>;
+      });
+
+/** Given a MarmotClient type, returns the MarmotGroup class type with the same THistory. */
+export type InferGroupType<TClient extends MarmotClient<any>> =
+  TClient extends MarmotClient<infer THistory> ? MarmotGroup<THistory> : never;
+
+type MarmotClientEvents<THistory extends BaseGroupHistory | undefined = any> = {
+  /** Emitted when the groups array is updated */
+  groupsUpdated: (groups: MarmotGroup<THistory>[]) => any;
+  /** Emitted when a group is loaded from the store */
+  groupLoaded: (group: MarmotGroup<THistory>) => any;
+  /** Emitted when a new group is created */
+  groupCreated: (group: MarmotGroup<THistory>) => any;
+  /** Emitted when a group is imported from a ClientState object */
+  groupImported: (group: MarmotGroup<THistory>) => any;
+  /** Emitted when a group is joined */
+  groupJoined: (group: MarmotGroup<THistory>) => any;
+  /** Emitted when a group is unloaded */
+  groupUnloaded: (groupId: Uint8Array) => any;
+  /** Emitted when a group is destroyed */
+  groupDestroyed: (groupId: Uint8Array) => any;
 };
 
-export class MarmotClient {
+export class MarmotClient<
+  THistory extends BaseGroupHistory | undefined = any,
+> extends EventEmitter<MarmotClientEvents<THistory>> {
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
   /** The capabilities to use for the client */
@@ -58,16 +93,27 @@ export class MarmotClient {
   /** Crypto provider for cryptographic operations */
   public cryptoProvider: CryptoProvider;
 
-  /** Internal store for group classes */
-  private groups = new Map<string, MarmotGroup>();
+  /** An array of all loaded groups */
+  get groups() {
+    return Array.from(this.#groups.values());
+  }
 
-  constructor(options: MarmotClientOptions) {
+  /** Group history interface to be passed to group instaces */
+  private historyFactory: GroupHistoryFactory<THistory>;
+
+  constructor(options: MarmotClientOptions<THistory>) {
+    super();
     this.signer = options.signer;
     this.capabilities = options.capabilities ?? defaultCapabilities();
     this.groupStore = options.groupStore;
     this.keyPackageStore = options.keyPackageStore;
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
+
+    // Set the history factory if its set in the options
+    this.historyFactory = (
+      "historyFactory" in options ? options.historyFactory : undefined
+    ) as GroupHistoryFactory<THistory>;
   }
 
   /** Get a ciphersuite implementation from a name or id */
@@ -81,48 +127,115 @@ export class MarmotClient {
     return await getCiphersuiteImpl(suite, this.cryptoProvider);
   }
 
+  /** Internal store for loaded group classes */
+  #groups = new Map<string, MarmotGroup<THistory>>();
+
+  /** Sets a group instance in the cache */
+  private setGroupInstance(group: MarmotGroup<THistory>) {
+    this.#groups.set(bytesToHex(group.id), group);
+    this.emit("groupsUpdated", this.groups);
+  }
+  private clearGroupInstance(groupId: Uint8Array | string) {
+    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
+
+    if (this.#groups.has(id)) {
+      this.#groups.delete(id);
+      this.emit("groupsUpdated", this.groups);
+    }
+  }
+
+  /** Loads a new group from the store */
+  private async loadGroup(
+    groupId: Uint8Array | string,
+  ): Promise<MarmotGroup<THistory>> {
+    return await MarmotGroup.load<THistory>(groupId, {
+      store: this.groupStore,
+      signer: this.signer,
+      cryptoProvider: this.cryptoProvider,
+      network: this.network,
+      history: this.historyFactory,
+    });
+  }
+
   /** Gets a group from cache or loads it from store */
-  async getGroup(groupId: Uint8Array | string) {
-    const groupIdHex =
-      typeof groupId === "string" ? groupId : bytesToHex(groupId);
-    let group = this.groups.get(groupIdHex);
+  async getGroup(groupId: Uint8Array | string): Promise<MarmotGroup<THistory>> {
+    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
+    let group = this.#groups.get(id);
+
     if (!group) {
-      group = await MarmotGroup.load(groupId, {
-        store: this.groupStore,
-        signer: this.signer,
-        cryptoProvider: this.cryptoProvider,
-        network: this.network,
-      });
+      group = await this.loadGroup(groupId);
 
       // Save group to cache
-      this.groups.set(groupIdHex, group);
+      this.setGroupInstance(group);
+      this.emit("groupLoaded", group);
     }
 
     return group;
   }
 
-  /** Adds a group to client */
-  async addGroup(state: ClientState): Promise<MarmotGroup> {
-    // Get the group's ciphersuite implementation
-    const cipherSuite = await getCiphersuiteImpl(
-      getCiphersuiteFromName(state.groupContext.cipherSuite),
-      this.cryptoProvider,
-    );
+  /** Loads all groups from the store and returns them */
+  async loadAllGroups(): Promise<MarmotGroup<THistory>[]> {
+    const states = await this.groupStore.list();
 
-    const group = new MarmotGroup(state, {
-      ciphersuite: cipherSuite,
+    return await Promise.all(
+      states.map((state) => this.getGroup(state.groupContext.groupId)),
+    );
+  }
+
+  /** Imports a new group from a ClientState object */
+  async importGroupFromClientState(
+    state: ClientState,
+  ): Promise<MarmotGroup<THistory>> {
+    const id = bytesToHex(state.groupContext.groupId);
+    if (await this.groupStore.has(id)) {
+      throw new Error(`Group ${id} already exists`);
+    }
+
+    // Create a new MarmotGroup instance from the ClientState
+    const group = await MarmotGroup.fromClientState(state, {
       store: this.groupStore,
       signer: this.signer,
+      cryptoProvider: this.cryptoProvider,
       network: this.network,
+      history: this.historyFactory,
     });
 
     // Save group to store
     await this.groupStore.add(state);
 
     // Add group to cache
-    this.groups.set(bytesToHex(state.groupContext.groupId), group);
+    this.setGroupInstance(group);
+    this.emit("groupImported", group);
 
     return group;
+  }
+
+  /** Unloads a group from the client but does not remove it from the store */
+  async unloadGroup(groupId: Uint8Array | string): Promise<void> {
+    const hex = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
+    this.clearGroupInstance(hex);
+    this.emit("groupUnloaded", hex);
+  }
+
+  /** Destroys a group and purges the group history */
+  async destroyGroup(groupId: Uint8Array | string): Promise<void> {
+    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
+
+    // Get the existing instance or load a new one
+    const group = this.#groups.get(id) || (await this.loadGroup(groupId));
+
+    // Use the instance to destroy the group
+    await group.destroy();
+
+    // Remove the group from the cache without emitting an event
+    this.groupStore.remove(groupId);
+
+    // Remove the group from the cache
+    this.#groups.delete(id);
+
+    // Emit events
+    this.emit("groupDestroyed", group.id);
+    this.emit("groupsUpdated", this.groups);
   }
 
   /** Creates a new simple group */
@@ -131,7 +244,7 @@ export class MarmotClient {
     options?: SimpleGroupOptions & {
       ciphersuite?: CiphersuiteName | CiphersuiteId;
     },
-  ): Promise<Uint8Array> {
+  ): Promise<MarmotGroup<THistory>> {
     const ciphersuiteImpl = await this.getCiphersuiteImpl(options?.ciphersuite);
 
     // generate a new key package
@@ -153,8 +266,20 @@ export class MarmotClient {
     // Save the group to the store
     await this.groupStore.add(clientState);
 
-    // Return the group id
-    return clientState.groupContext.groupId;
+    // Create and cache the MarmotGroup instance
+    const group = new MarmotGroup(clientState, {
+      ciphersuite: ciphersuiteImpl,
+      store: this.groupStore,
+      signer: this.signer,
+      network: this.network,
+      history: this.historyFactory,
+    });
+
+    // Save the group to the cache
+    this.setGroupInstance(group);
+    this.emit("groupCreated", group);
+
+    return group;
   }
 
   /**
@@ -176,7 +301,7 @@ export class MarmotClient {
   async joinGroupFromWelcome(options: {
     welcomeRumor: Rumor;
     keyPackageEventId?: string;
-  }): Promise<MarmotGroup> {
+  }): Promise<MarmotGroup<THistory>> {
     const { welcomeRumor, keyPackageEventId: explicitKeyPackageEventId } =
       options;
 
@@ -204,8 +329,9 @@ export class MarmotClient {
     // Collect all key packages with matching cipher suite and compute their KeyPackageRef
     // KeyPackageRef is used to identify which encrypted secret in the welcome is ours (RFC 9420)
     for (const keyPackage of allKeyPackages) {
-      if (keyPackage.publicPackage.cipherSuite !== welcome.cipherSuite)
+      if (keyPackage.publicPackage.cipherSuite !== welcome.cipherSuite) {
         continue;
+      }
 
       const privatekeyPackage = await this.keyPackageStore.getPrivateKey(
         keyPackage.keyPackageRef,
@@ -294,10 +420,12 @@ export class MarmotClient {
       store: this.groupStore,
       signer: this.signer,
       network: this.network,
+      history: this.historyFactory,
     });
 
     // Add the group to the cache
-    this.groups.set(bytesToHex(clientState.groupContext.groupId), group);
+    this.setGroupInstance(group);
+    this.emit("groupJoined", group);
 
     return group;
   }

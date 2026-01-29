@@ -1,8 +1,8 @@
 import localforage from "localforage";
-import { BehaviorSubject, Subscription, firstValueFrom, of } from "rxjs";
+import { BehaviorSubject, firstValueFrom, of, Subscription } from "rxjs";
 import { catchError, map, timeout } from "rxjs/operators";
 
-import { mapEventsToTimeline } from "applesauce-core";
+import { EventSigner, mapEventsToTimeline } from "applesauce-core";
 import type { NostrEvent } from "applesauce-core/helpers";
 import { relaySet } from "applesauce-core/helpers";
 import { castUser } from "applesauce-common/casts/user";
@@ -25,7 +25,7 @@ export type PendingInvite = {
 };
 
 type InvitationInboxManagerOptions = {
-  signer: { getPublicKey(): Promise<string> };
+  signer: EventSigner;
 };
 
 function getInviteRelaysFromWelcome(rumor: Rumor): string[] {

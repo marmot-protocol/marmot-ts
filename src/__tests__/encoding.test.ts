@@ -1,12 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { NostrEvent } from "applesauce-core/helpers/event";
+import { describe, expect, it } from "vitest";
 import {
-  encodeContent,
   decodeContent,
   detectEncoding,
+  encodeContent,
   getEncodingTag,
-  type EncodingFormat,
 } from "../utils/encoding.js";
-import { NostrEvent } from "applesauce-core/helpers/event";
 
 describe("encoding utilities", () => {
   // Test data

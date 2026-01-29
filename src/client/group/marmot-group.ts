@@ -81,9 +81,7 @@ export type MarmotGroupOptions<
   /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
   /** The storage interface for the groups application message history */
-  history:
-    | HistoryStore
-    | ((groupId: Uint8Array) => HistoryStore);
+  history: HistoryStore | ((groupId: Uint8Array) => HistoryStore);
 };
 
 /** Information about a welcome recipient */
@@ -136,9 +134,7 @@ export function createAdminCommitPolicyCallback(args: {
   };
 }
 
-export class MarmotGroup<
-  THistoryStore extends GroupHistoryStore | undefined,
-> {
+export class MarmotGroup<THistoryStore extends GroupHistoryStore | undefined> {
   /** The backend to store and load of group from */
   readonly store: GroupStore;
 
@@ -518,9 +514,10 @@ export class MarmotGroup<
             );
           } catch (error) {
             console.warn(
-              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${
-                recipient.pubkey.slice(0, 16)
-              }...:`,
+              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${recipient.pubkey.slice(
+                0,
+                16,
+              )}...:`,
               error,
             );
             // Fallback to group relays
@@ -529,9 +526,10 @@ export class MarmotGroup<
 
           if (inboxRelays.length === 0) {
             console.warn(
-              `No relays available to send Welcome to recipient ${
-                recipient.pubkey.slice(0, 16)
-              }...`,
+              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(
+                0,
+                16,
+              )}...`,
             );
             return;
           }
@@ -776,9 +774,10 @@ export class MarmotGroup<
     for (const { event, message } of commits) {
       if (!isPrivateMessage(message)) continue;
 
-      const commitEpoch = typeof message.privateMessage.epoch === "bigint"
-        ? message.privateMessage.epoch
-        : BigInt(message.privateMessage.epoch);
+      const commitEpoch =
+        typeof message.privateMessage.epoch === "bigint"
+          ? message.privateMessage.epoch
+          : BigInt(message.privateMessage.epoch);
       const currentEpoch = this.state.groupContext.epoch;
 
       // Skip commits from past epochs - we've already processed these

@@ -23,16 +23,18 @@ export const groupStoreChanges$ = storeChanges$.asObservable();
 
 /** Create a group store based on the active account */
 export const groupStore$ = accountManager.active$.pipe(
-  map((account) =>
-    account && new GroupStore(
-      localforage.createInstance({
-        name: `${account.pubkey}-groups`,
-      }),
-      defaultMarmotClientConfig,
-      {
-        onUpdate: () => notifyStoreChange(), // Wire up notification
-      },
-    )
+  map(
+    (account) =>
+      account &&
+      new GroupStore(
+        localforage.createInstance({
+          name: `${account.pubkey}-groups`,
+        }),
+        defaultMarmotClientConfig,
+        {
+          onUpdate: () => notifyStoreChange(), // Wire up notification
+        },
+      ),
   ),
   // re-emit the store when the store changes
   combineLatestWith(storeChanges$),
@@ -42,10 +44,12 @@ export const groupStore$ = accountManager.active$.pipe(
 
 /** Group a group history store based on the active account */
 export const groupHistoryStore$ = accountManager.active$.pipe(
-  map((account) =>
-    account && MarmotGroupHistoryStore.makeGroupHistoryInterface(
-      new IdbGroupHistoryStore(`${account?.pubkey}-group-history`),
-    )
+  map(
+    (account) =>
+      account &&
+      MarmotGroupHistoryStore.makeGroupHistoryInterface(
+        new IdbGroupHistoryStore(`${account?.pubkey}-group-history`),
+      ),
   ),
   // Only create a single instance of the group history store
   shareReplay(1),
@@ -60,5 +64,5 @@ function notifyStoreChange() {
 // This will automatically update when the store changes
 export const groupCount$ = groupStore$.pipe(
   combineLatestWith(storeChanges$),
-  switchMap(([store, _]) => store ? store.count() : of(0)),
+  switchMap(([store, _]) => (store ? store.count() : of(0))),
 );

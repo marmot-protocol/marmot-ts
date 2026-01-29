@@ -330,9 +330,8 @@ describe("serialization with byteOffset handling", () => {
 
   it("should correctly decode extension data after encodeGroupState/decodeGroupState round-trip", async () => {
     // Import encodeGroupState and decodeGroupState
-    const { encodeGroupState, decodeGroupState } = await import(
-      "ts-mls/clientState.js"
-    );
+    const { encodeGroupState, decodeGroupState } =
+      await import("ts-mls/clientState.js");
 
     // Use the first available ciphersuite
     const cipherSuite = Object.keys(ciphersuites)[0] as CiphersuiteName;
@@ -357,8 +356,7 @@ describe("serialization with byteOffset handling", () => {
     const marmotGroupData: MarmotGroupData = {
       version: 1,
       nostrGroupId: new Uint8Array(32).fill(1),
-      name:
-        "Very Long Group Name That Tests Variable Length Field Encoding with Serialization",
+      name: "Very Long Group Name That Tests Variable Length Field Encoding with Serialization",
       description:
         "A very long description that ensures we properly handle variable-length fields when they span multiple bytes after binary serialization round-trip",
       adminPubkeys: [alicePubkey, "c".repeat(64), "d".repeat(64)],
@@ -395,8 +393,8 @@ describe("serialization with byteOffset handling", () => {
     const [deserializedState, _bytesRead] = deserializedResult;
 
     // Extract the Marmot extension from the deserialized group
-    const deserializedExtension = deserializedState.groupContext.extensions
-      .find(
+    const deserializedExtension =
+      deserializedState.groupContext.extensions.find(
         (ext) =>
           typeof ext.extensionType === "number" && ext.extensionType === 0xf2ee,
       );

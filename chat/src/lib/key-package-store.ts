@@ -8,15 +8,17 @@ const storeChanges$ = new BehaviorSubject<number>(0);
 
 // Create and export a shared KeyPackageStore instance
 export const keyPackageStore$ = accountManager.active$.pipe(
-  map((account) =>
-    account && new KeyPackageStore(
-      localforage.createInstance({
-        name: `${account.pubkey}-key-packages`,
-      }),
-      {
-        onUpdate: () => notifyStoreChange(), // Wire up notification
-      },
-    )
+  map(
+    (account) =>
+      account &&
+      new KeyPackageStore(
+        localforage.createInstance({
+          name: `${account.pubkey}-key-packages`,
+        }),
+        {
+          onUpdate: () => notifyStoreChange(), // Wire up notification
+        },
+      ),
   ),
   // re-emit the store when the store changes
   combineLatestWith(storeChanges$),

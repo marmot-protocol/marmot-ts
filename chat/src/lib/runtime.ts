@@ -25,22 +25,20 @@ export function getInvitesUnreadCount$() {
  *
  * Import this module once (e.g. in `main.tsx`) to activate.
  */
-marmotClient$.subscribe(
-  async (client) => {
-    if (!client) {
-      // Client is not created, stop the managers
-      groupMgr?.stop();
-      inviteMgr?.stop();
+marmotClient$.subscribe(async (client) => {
+  if (!client) {
+    // Client is not created, stop the managers
+    groupMgr?.stop();
+    inviteMgr?.stop();
 
-      groupMgr = null;
-      inviteMgr = null;
-    } else {
-      // Client is created, start the managers
-      groupMgr ??= new GroupSubscriptionManager(client);
-      inviteMgr ??= new InvitationInboxManager({ signer: client.signer });
+    groupMgr = null;
+    inviteMgr = null;
+  } else {
+    // Client is created, start the managers
+    groupMgr ??= new GroupSubscriptionManager(client);
+    inviteMgr ??= new InvitationInboxManager({ signer: client.signer });
 
-      await groupMgr.start();
-      await inviteMgr.start();
-    }
-  },
-);
+    await groupMgr.start();
+    await inviteMgr.start();
+  }
+});

@@ -31,7 +31,7 @@ export function publish(
         return acc;
       },
       {} as Record<string, PublishResponse>,
-    )
+    ),
   );
 }
 
@@ -66,7 +66,10 @@ export const marmotClient$ = combineLatest([
   map(
     ([account, groupStore, keyPackageStore, groupHistoryStore]) =>
       // Ensure all stores are created and setup
-      account && groupStore && keyPackageStore && groupHistoryStore &&
+      account &&
+      groupStore &&
+      keyPackageStore &&
+      groupHistoryStore &&
       // Create a new marmot client for the active account
       new MarmotClient({
         signer: account.signer,

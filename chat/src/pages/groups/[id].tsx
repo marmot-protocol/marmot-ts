@@ -11,7 +11,7 @@ import {
   unixNow,
 } from "marmot-ts";
 import { getEventHash } from "nostr-tools";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { from, of, switchMap } from "rxjs";
 import { catchError, map } from "rxjs/operators";
@@ -70,7 +70,10 @@ interface MessageItemProps {
   isOwnMessage: boolean;
 }
 
-function MessageItem({ rumor, isOwnMessage }: MessageItemProps) {
+const MessageItem = memo(function MessageItem({
+  rumor,
+  isOwnMessage,
+}: MessageItemProps) {
   const formatTimestamp = (timestamp: number) => {
     const date = new Date(timestamp * 1000);
     return date.toLocaleTimeString();
@@ -105,7 +108,7 @@ function MessageItem({ rumor, isOwnMessage }: MessageItemProps) {
       </div>
     </div>
   );
-}
+});
 
 // ============================================================================
 // Component: MessageList
@@ -119,7 +122,10 @@ interface MessageListProps {
   loadingDone?: boolean;
 }
 
-function MessageList({ messages, currentUserPubkey }: MessageListProps) {
+const MessageList = memo(function MessageList({
+  messages,
+  currentUserPubkey,
+}: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -146,42 +152,56 @@ function MessageList({ messages, currentUserPubkey }: MessageListProps) {
       <div ref={messagesEndRef} />
     </div>
   );
-}
+});
 
 // ============================================================================
-// Component: MessageInput
+// Component: MessageForm (owns draft state so typing does not re-render page)
 // ============================================================================
 
-interface MessageInputProps {
-  messageText: string;
+interface MessageFormProps {
   isSending: boolean;
-  onMessageChange: (text: string) => void;
-  onSend: () => void;
+  onSend: (text: string) => Promise<void>;
 }
 
-function MessageInput({
-  messageText,
-  isSending,
-  onMessageChange,
-  onSend,
-}: MessageInputProps) {
+function MessageForm({ isSending, onSend }: MessageFormProps) {
+  const input = useRef<HTMLInputElement>(null);
+  const [messageText, setMessageText] = useState("");
+
+  const handleSubmit = async () => {
+    const text = messageText.trim();
+    if (!text) return;
+    try {
+      await onSend(text);
+      setMessageText("");
+
+      // Focus the input after sending
+      input.current?.focus();
+    } catch {
+      // Error shown by parent; keep draft
+    }
+  };
+
   return (
     <div className="flex gap-2">
       <Input
+        ref={input}
         type="text"
         placeholder="Type your message..."
         value={messageText}
-        onChange={(e) => onMessageChange(e.target.value)}
+        onChange={(e) => setMessageText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
-            onSend();
+            handleSubmit();
           }
         }}
         disabled={isSending}
         className="flex-1"
       />
-      <Button onClick={onSend} disabled={isSending || !messageText.trim()}>
+      <Button
+        onClick={handleSubmit}
+        disabled={isSending || !messageText.trim()}
+      >
         {isSending ? (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -248,7 +268,6 @@ function useMessageSender(group: MarmotGroup<any> | null) {
 function GroupDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [messageText, setMessageText] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [inviteContactPubkey, setInviteContactPubkey] = useState<string>("");
@@ -302,13 +321,12 @@ function GroupDetailPage() {
     error: sendError,
   } = useMessageSender(group ?? null);
 
-  // Handle sending messages
-  const handleSendMessage = async () => {
-    if (!messageText.trim()) return;
+  // Handle sending messages (text passed from MessageForm so page doesn't re-render on typing)
+  const handleSendMessage = async (text: string) => {
+    if (!text.trim()) return;
 
     try {
-      const sentRumor = await sendMessage(messageText);
-      setMessageText("");
+      const sentRumor = await sendMessage(text);
 
       // Optimistically save new messages to the groups history for immediate feedback
       if (sentRumor) await group?.history.saveRumor(sentRumor);
@@ -662,14 +680,9 @@ function GroupDetailPage() {
           </div>
         </div>
 
-        {/* Message Input - sticky at bottom */}
+        {/* Message Input - sticky at bottom; state lives in MessageForm to avoid full-page re-renders on typing */}
         <div className="border-t p-4 bg-background">
-          <MessageInput
-            messageText={messageText}
-            isSending={isSending}
-            onMessageChange={setMessageText}
-            onSend={handleSendMessage}
-          />
+          <MessageForm isSending={isSending} onSend={handleSendMessage} />
         </div>
       </div>
     </>

@@ -1,12 +1,13 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { KeyValueStoreBackend } from "../utils/key-value.js";
-import { ClientState } from "ts-mls/clientState.js";
+import { EventEmitter } from "eventemitter3";
 import { ClientConfig } from "ts-mls/clientConfig.js";
+import { ClientState } from "ts-mls/clientState.js";
 import {
-  serializeClientState,
   deserializeClientState,
+  serializeClientState,
   SerializedClientState,
 } from "../core/client-state.js";
+import { KeyValueStoreBackend } from "../utils/key-value.js";
 
 /** A generic interface for a client state store backend */
 export interface GroupStoreBackend extends KeyValueStoreBackend<SerializedClientState> {}
@@ -14,8 +15,15 @@ export interface GroupStoreBackend extends KeyValueStoreBackend<SerializedClient
 /** Options for creating a {@link GroupStore} instance */
 export type GroupStoreOptions = {
   prefix?: string;
-  /** Optional callback invoked when a group is updated */
-  onUpdate?: (groupId?: string) => void;
+};
+
+type GroupStoreEvents = {
+  /** Emitted when a client state is added */
+  clientStateAdded: (clientState: ClientState) => any;
+  /** Emitted when a client state is updated */
+  clientStateUpdated: (clientState: ClientState) => any;
+  /** Emitted when a client state is removed */
+  clientStateRemoved: (groupId: Uint8Array) => any;
 };
 
 /**
@@ -25,11 +33,10 @@ export type GroupStoreOptions = {
  * ClientState internally but always returning deserialized ClientState objects.
  * The ClientConfig is stored in the instance and used for all deserialization.
  */
-export class GroupStore {
+export class GroupStore extends EventEmitter<GroupStoreEvents> {
   private backend: GroupStoreBackend;
   private readonly prefix?: string;
   private readonly config: ClientConfig;
-  private readonly onUpdate?: (groupId?: string) => void;
 
   /**
    * Creates a new GroupStore instance.
@@ -40,12 +47,12 @@ export class GroupStore {
   constructor(
     backend: GroupStoreBackend,
     config: ClientConfig,
-    { prefix, onUpdate }: GroupStoreOptions = {},
+    { prefix }: GroupStoreOptions = {},
   ) {
+    super();
     this.backend = backend;
     this.config = config;
     this.prefix = prefix;
-    this.onUpdate = onUpdate;
   }
 
   /**
@@ -68,11 +75,7 @@ export class GroupStore {
     const storedClientState = serializeClientState(clientState);
 
     await this.backend.setItem(key, storedClientState);
-
-    // Notify about the change if callback provided
-    if (this.onUpdate) {
-      this.onUpdate(bytesToHex(clientState.groupContext.groupId));
-    }
+    this.emit("clientStateAdded", clientState);
 
     return key;
   }
@@ -87,7 +90,13 @@ export class GroupStore {
    * @returns A promise that resolves to the storage key used
    */
   async update(clientState: ClientState): Promise<string> {
-    return await this.add(clientState);
+    const key = this.resolveStorageKey(clientState.groupContext.groupId);
+    const storedClientState = serializeClientState(clientState);
+
+    await this.backend.setItem(key, storedClientState);
+    this.emit("clientStateAdded", clientState);
+
+    return key;
   }
 
   /**
@@ -111,15 +120,11 @@ export class GroupStore {
    */
   async remove(groupId: Uint8Array | string): Promise<void> {
     const key = this.resolveStorageKey(groupId);
+    const clientState = await this.get(groupId);
     await this.backend.removeItem(key);
 
-    // Notify about the change if callback provided.
-    // Note: remove() previously did not emit updates, which caused UIs using
-    // onUpdate/storeChanges to not refresh when a group was deleted.
-    if (this.onUpdate) {
-      const groupIdHex =
-        typeof groupId === "string" ? groupId : bytesToHex(groupId);
-      this.onUpdate(groupIdHex);
+    if (clientState) {
+      this.emit("clientStateRemoved", clientState.groupContext.groupId);
     }
   }
 
@@ -155,6 +160,8 @@ export class GroupStore {
 
   /** Clears all groups from the store (only those matching the prefix if one is set). */
   async clear(): Promise<void> {
+    const groups = await this.list();
+
     if (this.prefix) {
       // Only clear keys with this prefix
       const allKeys = await this.backend.keys();
@@ -169,9 +176,8 @@ export class GroupStore {
       await this.backend.clear();
     }
 
-    // Notify about the change if callback provided
-    if (this.onUpdate) {
-      this.onUpdate();
+    for (const clientState of groups) {
+      this.emit("clientStateRemoved", clientState.groupContext.groupId);
     }
   }
 

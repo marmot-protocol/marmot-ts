@@ -2,7 +2,10 @@ import localforage from "localforage";
 import {
   BehaviorSubject,
   combineLatestWith,
+  fromEvent,
   map,
+  merge,
+  of,
   shareReplay,
   switchMap,
 } from "rxjs";
@@ -21,20 +24,19 @@ export const keyPackageStore$ = accounts.active$.pipe(
       }),
       {
         prefix: account?.pubkey ?? "anon",
-        onUpdate: () => notifyStoreChange(), // Wire up notification
       },
     );
   }),
-  // Remit the store when the store changes
-  combineLatestWith(storeChanges$),
-  map(([store, _]) => store),
+  switchMap((store) => {
+    return merge(
+      of(store),
+      // Listen for key package events
+      fromEvent(store, "keyPackageAdded"),
+      fromEvent(store, "keyPackageRemoved"),
+    ).pipe(map(() => store));
+  }),
   shareReplay(1),
 );
-
-// Helper function to notify about store changes
-function notifyStoreChange() {
-  storeChanges$.next(storeChanges$.value + 1);
-}
 
 // Observable for the count of key packages in the store
 // This will automatically update when the store changes

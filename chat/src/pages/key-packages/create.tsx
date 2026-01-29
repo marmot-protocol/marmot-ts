@@ -31,15 +31,15 @@ import {
 } from "@/components/ui/card";
 import { withSignIn } from "@/components/with-signIn";
 import { accounts, user$ } from "@/lib/accounts";
-import { keyPackageStore$ } from "@/lib/key-package-store";
+import { keyPackageRelays$ } from "@/lib/lifecycle";
+import { marmotClient$ } from "@/lib/marmot-client";
 import { eventStore, pool } from "@/lib/nostr";
-import { keyPackageRelays$ } from "../../lib/lifecycle";
 
 function CreateKeyPackagePage() {
   // Subscribe to the user's key package relays and mailboxes
   const keyPackageRelays = use$(keyPackageRelays$);
+  const client = use$(marmotClient$);
   const outboxes = use$(user$.outboxes$);
-  const keyPackageStore = use$(keyPackageStore$);
   const navigate = useNavigate();
 
   const [cipherSuite, setCipherSuite] = useState<CiphersuiteName>(
@@ -108,9 +108,9 @@ function CreateKeyPackagePage() {
       eventStore.add(signedEvent);
 
       // Store the key package locally only after successful publication
-      if (keyPackageStore) {
+      if (client?.keyPackageStore) {
         console.log("Storing key package locally...");
-        await keyPackageStore.add(keyPackage);
+        await client.keyPackageStore.add(keyPackage);
         console.log("Stored key package");
       }
 

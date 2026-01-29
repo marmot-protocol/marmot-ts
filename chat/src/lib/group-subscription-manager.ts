@@ -50,30 +50,6 @@ export class GroupSubscriptionManager {
     this.client = client;
   }
 
-  /**
-   * Register a callback to receive application messages for a specific group.
-   *
-   * This lets pages receive chat messages without creating duplicate relay
-   * subscriptions.
-   */
-  onApplicationMessage(
-    groupIdHex: string,
-    callback: (messages: Rumor[]) => void,
-  ): () => void {
-    this.applicationMessageCallbacks.set(groupIdHex, callback);
-
-    // Immediately replay whatever we already ingested so the UI isn't empty
-    // when opening a group that has existing history.
-    const buffered = this.messageBufferByGroup.get(groupIdHex);
-    if (buffered && buffered.length > 0) {
-      callback(buffered);
-    }
-
-    return () => {
-      this.applicationMessageCallbacks.delete(groupIdHex);
-    };
-  }
-
   /** Start managing subscriptions for all groups in the store. */
   async start(): Promise<void> {
     if (this.isActive) return;

@@ -10,6 +10,8 @@ export interface GroupRumorHistoryBackend {
   queryRumors(filter: Filter): Promise<Rumor[]>;
   /** Save a new group rumor event */
   addRumor(message: Rumor): Promise<void>;
+  /** Clear all rumor events from the backend */
+  clear(): Promise<void>;
 }
 
 /** A map of events that can be emitted by a {@link GroupRumorHistory} */
@@ -50,6 +52,11 @@ export class GroupRumorHistory
 
     // Notify listeners that a new rumor has been added
     this.emit("rumor", rumor);
+  }
+
+  /** Purge all rumor events from the backend */
+  async prugeMessages(): Promise<void> {
+    await this.backend.clear();
   }
 
   /** Request stored rumors by filters */

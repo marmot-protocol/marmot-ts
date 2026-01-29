@@ -1,6 +1,7 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { EventSigner } from "applesauce-core/event-factory";
-import type { NostrEvent } from "applesauce-core/helpers/event";
+import { bytesToHex, type NostrEvent } from "applesauce-core/helpers/event";
+import { EventEmitter } from "eventemitter3";
 import {
   CiphersuiteImpl,
   ClientState,
@@ -52,7 +53,9 @@ import { proposeInviteUser } from "./proposals/invite-user.js";
  */
 export interface BaseGroupHistory {
   /** Saves a new application message to the group history */
-  saveMessage(groupId: Uint8Array, message: Uint8Array): Promise<void>;
+  saveMessage(message: Uint8Array): Promise<void>;
+  /** Purge the group history, called when group is destroyed */
+  prugeMessages(): Promise<void>;
 }
 
 /** A factory function that creates a {@link BaseGroupHistory} instance for a group id */
@@ -140,11 +143,25 @@ export function createAdminCommitPolicyCallback(args: {
   };
 }
 
+/** Map of events that can be emitted by a MarmotGroup */
+type MarmotGroupEvents<THistory extends BaseGroupHistory | undefined = any> = {
+  /** Emitted when the group state is updated */
+  stateChanged: (state: ClientState) => any;
+  /** Emitted when a new application message is received */
+  applicationMessage: (message: Uint8Array) => any;
+  /** Emitted when the group state is saved */
+  stateSaved: (group: MarmotGroup<THistory>) => any;
+  /** Emitted when the group is destroyed */
+  destroyed: (group: MarmotGroup<THistory>) => any;
+};
+
 /**
  * The main class for interacting with a MLS group
  * @template THistory - The type of the history store to use for the group, must implement the {@link BaseGroupHistory} interface. (Default is no history store)
  */
-export class MarmotGroup<THistory extends BaseGroupHistory | undefined = any> {
+export class MarmotGroup<
+  THistory extends BaseGroupHistory | undefined = any,
+> extends EventEmitter<MarmotGroupEvents<THistory>> {
   /** The backend to store and load of group from */
   readonly store: GroupStore;
 
@@ -163,22 +180,25 @@ export class MarmotGroup<THistory extends BaseGroupHistory | undefined = any> {
   /** Whether group state has been modified */
   dirty = false;
 
-  /** Internal state */
-  private _state: ClientState;
-  private _groupData: MarmotGroupData | null = null;
+  /** Internal ClientState */
+  #state: ClientState;
+  #groupData: MarmotGroupData | null = null;
 
   get id() {
     return this.state.groupContext.groupId;
   }
 
+  /** The group id as a hex string */
+  idStr: string;
+
   /** Read the current group state */
   get state() {
-    return this._state;
+    return this.#state;
   }
   get groupData() {
     // If not cached, extract the group data from the state
-    if (!this._groupData) this._groupData = extractMarmotGroupData(this.state);
-    return this._groupData;
+    if (!this.#groupData) this.#groupData = extractMarmotGroupData(this.state);
+    return this.#groupData;
   }
   get unappliedProposals() {
     return this.state.unappliedProposals;
@@ -190,11 +210,12 @@ export class MarmotGroup<THistory extends BaseGroupHistory | undefined = any> {
    */
   set state(newState: ClientState) {
     // Read new group data from the state
-    this._groupData = extractMarmotGroupData(newState);
+    this.#groupData = extractMarmotGroupData(newState);
 
     // Set new state and mark as dirty
-    this._state = newState;
+    this.#state = newState;
     this.dirty = true;
+    this.emit("stateChanged", newState);
   }
 
   // Common accessors for marmot group data
@@ -203,7 +224,8 @@ export class MarmotGroup<THistory extends BaseGroupHistory | undefined = any> {
   }
 
   constructor(state: ClientState, options: MarmotGroupOptions<THistory>) {
-    this._state = state;
+    super();
+    this.#state = state;
     this.store = options.store;
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
@@ -213,9 +235,12 @@ export class MarmotGroup<THistory extends BaseGroupHistory | undefined = any> {
     if (typeof options.history === "function") {
       this.history = options.history(this.id);
     } else this.history = options.history;
+
+    // Set useful fields
+    this.idStr = bytesToHex(this.id);
   }
 
-  /** Loads a group from the store */
+  /** Loads a {@link MarmotGroup} instance from the group store based on the group id */
   static async load<THistory extends BaseGroupHistory | undefined = any>(
     groupId: Uint8Array | string,
     options: Omit<MarmotGroupOptions<THistory>, "ciphersuite"> & {
@@ -234,12 +259,31 @@ export class MarmotGroup<THistory extends BaseGroupHistory | undefined = any> {
     return new MarmotGroup(state, { ...options, ciphersuite: cipherSuite });
   }
 
+  /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
+  static async fromClientState<
+    THistory extends BaseGroupHistory | undefined = any,
+  >(
+    state: ClientState,
+    options: Omit<MarmotGroupOptions<THistory>, "ciphersuite"> & {
+      cryptoProvider?: CryptoProvider;
+    },
+  ): Promise<MarmotGroup<THistory>> {
+    // Get the group's ciphersuite implementation
+    const cipherSuite = await getCiphersuiteImpl(
+      getCiphersuiteFromName(state.groupContext.cipherSuite),
+      options.cryptoProvider,
+    );
+
+    return new MarmotGroup(state, { ...options, ciphersuite: cipherSuite });
+  }
+
   /** Persists any pending changes to the group state in the store */
   async save() {
     if (!this.dirty) return;
 
     await this.store.update(this.state);
     this.dirty = false;
+    this.emit("stateSaved", this);
   }
 
   /** Publish an event to the group relays */
@@ -754,10 +798,11 @@ export class MarmotGroup<THistory extends BaseGroupHistory | undefined = any> {
 
           // Save application message to history
           if (this.history) {
-            await this.history.saveMessage(this.id, result.message);
+            await this.history.saveMessage(result.message);
           }
 
           yield result;
+          this.emit("applicationMessage", result.message);
         }
       } catch (error) {
         // Message processing failed - might be invalid or from wrong epoch
@@ -855,5 +900,16 @@ export class MarmotGroup<THistory extends BaseGroupHistory | undefined = any> {
         maxRetries: maxRetries,
       });
     }
+  }
+
+  /** Destroys the group and purges the group history */
+  async destroy() {
+    if (this.history) await this.history.prugeMessages();
+
+    // Remove the group from the store
+    await this.store.remove(this.id);
+
+    // Emit the destroyed event
+    this.emit("destroyed", this);
   }
 }

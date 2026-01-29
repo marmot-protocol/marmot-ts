@@ -72,14 +72,12 @@ export function useGroupMessages(
   // Subscribe to new rumors
   useEffect(() => {
     if (!group?.history) return;
-    const listener = (rumor: Rumor) => {
-      setMessages((prev) => [...prev, rumor]);
-    };
+    const listener = (rumor: Rumor) => addNewMessages([rumor]);
     group.history.addListener("rumor", listener);
     return () => {
       group.history.removeListener("rumor", listener);
     };
-  }, [group]);
+  }, [group, addNewMessages]);
 
   return {
     messages,

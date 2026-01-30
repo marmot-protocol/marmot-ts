@@ -55,7 +55,7 @@ export interface BaseGroupHistory {
   /** Saves a new application message to the group history */
   saveMessage(message: Uint8Array): Promise<void>;
   /** Purge the group history, called when group is destroyed */
-  prugeMessages(): Promise<void>;
+  purgeMessages(): Promise<void>;
 }
 
 /** A factory function that creates a {@link BaseGroupHistory} instance for a group id */
@@ -904,7 +904,7 @@ export class MarmotGroup<
 
   /** Destroys the group and purges the group history */
   async destroy() {
-    if (this.history) await this.history.prugeMessages();
+    if (this.history) await this.history.purgeMessages();
 
     // Remove the group from the store
     await this.store.remove(this.id);

@@ -55,7 +55,7 @@ export class GroupRumorHistory
   }
 
   /** Purge all rumor events from the backend */
-  async prugeMessages(): Promise<void> {
+  async purgeMessages(): Promise<void> {
     await this.backend.clear();
   }
 
@@ -67,7 +67,8 @@ export class GroupRumorHistory
   /**
    * Creates an async generator for paginated loading of historical rumor events.
    *
-   * This method allows UI components to load historical messages in pages, enabling infinite scroll or paginated UI patterns.
+   * This method allows UI components to load historical messages in pages, enabling
+   * infinite scroll or paginated UI patterns.
    *
    * @param filter - Optional filter to apply to the query
    * @yields Batches of Rumor events, with each batch containing up to `filter.limit` messages

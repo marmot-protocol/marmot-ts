@@ -2,6 +2,7 @@ import { defined, mapEventsToTimeline, simpleTimeout } from "applesauce-core";
 import { onlyEvents } from "applesauce-relay";
 import {
   combineLatest,
+  filter,
   firstValueFrom,
   from,
   lastValueFrom,
@@ -10,17 +11,21 @@ import {
   shareReplay,
   startWith,
   switchMap,
-  withLatestFrom,
-  filter,
 } from "rxjs";
-import { MarmotClient } from "../../../src";
+import localforage from "localforage";
+import {
+  GroupStateStore,
+  KeyValueGroupStateBackend,
+  MarmotClient,
+  defaultMarmotClientConfig,
+} from "../../../src";
 import { MarmotGroup } from "../../../src/client/group/marmot-group";
 import {
   NostrNetworkInterface,
   PublishResponse,
 } from "../../../src/client/nostr-interface";
 import accounts from "./accounts";
-import { groupStore$, selectedGroupId$ } from "./group-store";
+import { selectedGroupId$ } from "./group-store";
 import { keyPackageStore$ } from "./key-package-store";
 import { eventStore, pool } from "./nostr";
 import { GroupSubscriptionManager } from "./group-subscription-manager";
@@ -66,18 +71,25 @@ export function getSubscriptionManager(): GroupSubscriptionManager | null {
 // Note: We use distinctUntilChanged on the account to avoid recreating the client unnecessarily.
 export const marmotClient$ = combineLatest([
   accounts.active$.pipe(defined()),
-  groupStore$,
   keyPackageStore$,
 ]).pipe(
-  map(
-    ([account, groupStore, keyPackageStore]) =>
-      new MarmotClient({
-        signer: account.signer,
-        groupStore,
-        keyPackageStore,
-        network: networkInterface,
+  map(([account, keyPackageStore]) => {
+    // Create a GroupStateStore with a KeyValueGroupStateBackend wrapping localforage
+    const groupStateBackend = new KeyValueGroupStateBackend(
+      localforage.createInstance({
+        name: "marmot-group-store",
       }),
-  ),
+    );
+    const groupStateStore = new GroupStateStore(groupStateBackend);
+
+    return new MarmotClient({
+      signer: account.signer,
+      groupStateBackend: groupStateStore,
+      keyPackageStore,
+      network: networkInterface,
+      clientConfig: defaultMarmotClientConfig,
+    });
+  }),
   startWith(undefined),
   shareReplay(1),
 );
@@ -110,15 +122,14 @@ marmotClient$.subscribe(async (client) => {
   }
 });
 
-// Reconcile subscriptions when group store changes, but only after manager is ready
+// Reconcile subscriptions when client changes and manager is ready
 // Use withLatestFrom to get the latest marmotClient$ value and filter for ready state
-groupStore$
+marmotClient$
   .pipe(
-    withLatestFrom(marmotClient$),
-    filter(([store, client]) => {
-      // Only proceed if store exists, client exists, and subscription manager is fully initialized
+    filter((client) => {
+      // Only proceed when client exists and subscription manager is fully initialized
       return Boolean(
-        store && client && isSubscriptionManagerReady && subscriptionManager,
+        client && isSubscriptionManagerReady && subscriptionManager,
       );
     }),
   )

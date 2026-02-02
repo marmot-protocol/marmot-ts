@@ -5,9 +5,8 @@ dist
 .vscode
 .fdignore
 lancedb
-models 
+models
 docs
-mcp.json
 plans
-ts-mls 
+ts-mls
 marmot

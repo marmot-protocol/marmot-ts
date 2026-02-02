@@ -72,3 +72,20 @@ jobs:
           name: examples-dist
           path: examples/dist/
           retention-days: 7
+
+      - name: Install Chat Dependencies
+        working-directory: chat
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Chat
+        working-directory: chat
+        env:
+          VITE_REPO_BRANCH: ${{ github.ref_name }}
+        run: pnpm build --base /marmot-ts
+
+      - name: Upload Chat Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-dist
+          path: chat/dist/
+          retention-days: 7

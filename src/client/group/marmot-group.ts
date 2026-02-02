@@ -25,7 +25,10 @@ import {
 import { MLSMessage } from "ts-mls/message.js";
 import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
 import { type LeafIndex, toLeafIndex } from "ts-mls/treemath.js";
-import { extractMarmotGroupData } from "../../core/client-state.js";
+import {
+  extractMarmotGroupData,
+  serializeClientState,
+} from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
 import {
   createGroupEvent,
@@ -178,7 +181,7 @@ export class MarmotGroup<
   readonly network: NostrNetworkInterface;
 
   /** The storage interface for the groups application message history */
-  readonly history: THistory | undefined;
+  readonly history: THistory;
 
   /** Whether group state has been modified */
   dirty = false;
@@ -242,7 +245,7 @@ export class MarmotGroup<
         this.history = options.history;
       }
     } else {
-      this.history = undefined;
+      this.history = undefined as THistory;
     }
 
     // Set useful fields
@@ -290,7 +293,6 @@ export class MarmotGroup<
     if (!this.dirty) return;
 
     // Import serializeClientState dynamically to avoid circular dependencies
-    const { serializeClientState } = await import("../../core/client-state.js");
     const stateBytes = serializeClientState(this.state);
     await this.stateStore.set(this.id, stateBytes);
     this.dirty = false;

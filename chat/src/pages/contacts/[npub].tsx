@@ -20,7 +20,6 @@ import {
 } from "marmot-ts";
 import { useMemo, useState } from "react";
 import { useParams } from "react-router";
-import { of, switchMap } from "rxjs";
 import { map } from "rxjs/operators";
 import { KeyPackage } from "ts-mls";
 

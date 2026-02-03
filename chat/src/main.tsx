@@ -46,7 +46,7 @@ createRoot(document.getElementById("root")!).render(
           } as React.CSSProperties
         }
       >
-        <BrowserRouter>
+        <BrowserRouter basename="/marmot-ts">
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/groups" element={<GroupsPage />}>

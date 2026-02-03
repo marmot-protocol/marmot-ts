@@ -3,6 +3,33 @@ import { use$ } from "applesauce-react/hooks";
 import { eventStore } from "../lib/nostr";
 import { cn } from "../lib/utils";
 
+interface UserBadgeProps {
+  pubkey: string;
+  size?: UserAvatarSize;
+  showAvatar?: boolean;
+  className?: string;
+}
+
+/**
+ * UserBadge - Displays a user's avatar and display name
+ * Falls back to truncated pubkey if no profile is found
+ */
+export function UserBadge({
+  pubkey,
+  size = "sm",
+  showAvatar = true,
+  className,
+}: UserBadgeProps) {
+  return (
+    <div className={cn("flex items-center gap-1.5 min-w-0", className)}>
+      {showAvatar && <UserAvatar pubkey={pubkey} size={size} />}
+      <span className="text-xs font-medium truncate">
+        <UserName pubkey={pubkey} />
+      </span>
+    </div>
+  );
+}
+
 export function UserName(props: { pubkey: string }) {
   const profile = use$(() => eventStore.profile(props.pubkey), [props.pubkey]);
 

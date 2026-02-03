@@ -48,7 +48,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { marmotClient$ } from "@/lib/marmot-client";
+import { liveGroups$, marmotClient$ } from "@/lib/marmot-client";
 import { eventStore, pool } from "@/lib/nostr";
 
 function KeyPackageCard({ event }: { event: NostrEvent }) {
@@ -393,13 +393,7 @@ function ContactDetailContent({ user }: { user: User }) {
       );
   }, [user.pubkey, keyPackageRelays?.join(",")]);
 
-  const groups = use$(
-    () =>
-      marmotClient$.pipe(
-        switchMap((client) => client?.groupStateStore.list() ?? of([])),
-      ),
-    [],
-  );
+  const groups = use$(liveGroups$);
 
   const client = use$(marmotClient$);
 
@@ -488,11 +482,17 @@ function ContactDetailContent({ user }: { user: User }) {
                         <SelectValue placeholder="Select a group" />
                       </SelectTrigger>
                       <SelectContent>
-                        {(groups ?? []).map((groupId: Uint8Array) => {
-                          const groupIdHex = bytesToHex(groupId);
+                        {(groups ?? []).map((group) => {
+                          const groupName =
+                            group.groupData?.name || "Unnamed Group";
                           return (
-                            <SelectItem key={groupIdHex} value={groupIdHex}>
-                              {groupIdHex.slice(0, 16)}...
+                            <SelectItem key={group.idStr} value={group.idStr}>
+                              <div className="flex flex-col items-start">
+                                <span className="font-medium">{groupName}</span>
+                                <span className="text-xs text-muted-foreground font-mono">
+                                  {group.idStr.slice(0, 16)}...
+                                </span>
+                              </div>
                             </SelectItem>
                           );
                         })}

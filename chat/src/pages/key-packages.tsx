@@ -54,16 +54,16 @@ function KeyPackageItem({
         isActive ? "bg-sidebar-accent text-sidebar-accent-foreground" : ""
       }`}
     >
-      <div className="flex w-full items-center gap-2">
+      <div className="flex w-full items-center gap-2 min-w-0">
         <span className="font-medium truncate">
           {client?.name || "Unknown Client"}
         </span>
         {!keyPackage.isLocal && (
-          <Badge variant="outline" className="text-xs ml-2">
+          <Badge variant="outline" className="text-xs ml-2 shrink-0">
             Not stored locally
           </Badge>
         )}
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ml-auto flex items-center gap-2 shrink-0">
           <span className="text-xs text-muted-foreground">{timeAgo}</span>
         </span>
       </div>

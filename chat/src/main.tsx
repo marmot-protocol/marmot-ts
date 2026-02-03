@@ -1,6 +1,12 @@
-import { StrictMode } from "react";
+import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router";
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useNavigate,
+} from "react-router";
 
 import "./index.css";
 
@@ -8,6 +14,37 @@ import "@/lib/runtime";
 
 import { ThemeProvider } from "./components/theme-providers";
 import { SidebarProvider } from "./components/ui/sidebar";
+
+/**
+ * GitHub Pages SPA Redirect Handler
+ *
+ * When 404.html redirects to index.html with ?redirect=/path,
+ * this component reads that path and navigates to it.
+ */
+function RedirectHandler() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const redirectPath = params.get("redirect");
+
+    if (redirectPath) {
+      // Remove the redirect param from URL without reloading
+      const newUrl =
+        window.location.pathname +
+        window.location.search
+          .replace(/[?&]redirect=[^&]+/, "")
+          .replace(/^\?/, "") +
+        window.location.hash;
+      window.history.replaceState({}, "", newUrl);
+
+      // Navigate to the intended route
+      navigate(redirectPath, { replace: true });
+    }
+  }, [navigate]);
+
+  return null;
+}
 
 import ContactsIndexPage from "./pages/contacts/index.tsx";
 import ContactsPage from "./pages/contacts.tsx";
@@ -42,11 +79,13 @@ createRoot(document.getElementById("root")!).render(
       <SidebarProvider
         style={
           {
-            "--sidebar-width": "400px",
+            "--sidebar-width": "16rem",
+            "--sidebar-width-mobile": "18rem",
           } as React.CSSProperties
         }
       >
         <BrowserRouter basename="/marmot-ts">
+          <RedirectHandler />
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/groups" element={<GroupsPage />}>

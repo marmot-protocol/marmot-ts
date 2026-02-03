@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Page Not Found</title>
+    <script>
+      /**
+       * GitHub Pages SPA Redirect
+       *
+       * GitHub Pages serves 404.html for unknown routes. This script
+       * captures the intended route and redirects to index.html with
+       * the path preserved in the query string. The app then reads
+       * this and uses navigate() to restore the route.
+       */
+      (function () {
+        // Get the current path (e.g., "/marmot-ts/groups/abc123")
+        const path = window.location.pathname;
+
+        // Get the base path from vite.config.ts ("/marmot-ts")
+        const basePath = "/marmot-ts";
+
+        // Calculate the route relative to base
+        // If path is "/marmot-ts/groups/abc", route is "/groups/abc"
+        let route = path;
+        if (path.startsWith(basePath)) {
+          route = path.slice(basePath.length) || "/";
+        }
+
+        // Preserve query string and hash
+        const search = window.location.search;
+        const hash = window.location.hash;
+
+        // Build redirect URL: index.html?redirect=/groups/abc
+        const redirectUrl =
+          basePath +
+          "/index.html?redirect=" +
+          encodeURIComponent(route + search + hash);
+
+        // Perform the redirect
+        window.location.replace(redirectUrl);
+      })();
+    </script>
+  </head>
+  <body>
+    <p>Redirecting...</p>
+  </body>
+</html>

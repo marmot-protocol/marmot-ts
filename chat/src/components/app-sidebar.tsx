@@ -86,15 +86,14 @@ export function AppSidebar({
   return (
     <Sidebar
       collapsible="icon"
-      className="overflow-hidden *:data-[sidebar=sidebar]:flex-row"
+      className="overflow-hidden *:data-[sidebar=sidebar]:flex-col md:*:data-[sidebar=sidebar]:flex-row"
       {...props}
     >
-      {/* This is the first sidebar */}
-      {/* We disable collapsible and adjust width to icon. */}
-      {/* This will make the sidebar appear as icons. */}
+      {/* This is the first sidebar - Icon navigation */}
+      {/* Hidden on mobile since we use Sheet for mobile nav */}
       <Sidebar
         collapsible="none"
-        className="w-[calc(var(--sidebar-width-icon)+1px)]! border-r"
+        className="hidden md:flex w-[calc(var(--sidebar-width-icon)+1px)]! border-r"
       >
         <SidebarHeader>
           <SidebarMenu>
@@ -188,11 +187,11 @@ export function AppSidebar({
         </SidebarFooter>
       </Sidebar>
 
-      {/* This is the second sidebar */}
-      {/* We disable collapsible and let it fill remaining space */}
+      {/* This is the second sidebar - Content area */}
+      {/* On mobile, this takes full width */}
       <Sidebar
         collapsible="none"
-        className="hidden flex-1 md:flex overflow-hidden"
+        className="flex flex-1 overflow-hidden w-full min-w-0 border-0 md:border-l"
       >
         <SidebarHeader className="gap-3.5 border-b p-4">
           <div className="flex w-full items-center justify-between gap-2">

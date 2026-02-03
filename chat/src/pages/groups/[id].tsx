@@ -46,6 +46,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { withSignIn } from "@/components/with-signIn";
+import { UserBadge } from "@/components/nostr-user";
 import { useGroupMessages } from "@/hooks/use-group-messages";
 import accountManager, { accounts, user$ } from "@/lib/accounts";
 import { marmotClient$ } from "@/lib/marmot-client";
@@ -79,10 +80,6 @@ const MessageItem = memo(function MessageItem({
     return date.toLocaleTimeString();
   };
 
-  const truncatePubkey = (pubkey: string) => {
-    return `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
-  };
-
   return (
     <div
       className={`flex flex-col gap-1 ${
@@ -90,9 +87,7 @@ const MessageItem = memo(function MessageItem({
       }`}
     >
       <div className="flex items-center gap-2">
-        <span className="text-xs font-mono text-muted-foreground">
-          {truncatePubkey(rumor.pubkey)}
-        </span>
+        <UserBadge pubkey={rumor.pubkey} size="sm" />
         <span className="text-xs text-muted-foreground/70">
           {formatTimestamp(rumor.created_at)}
         </span>

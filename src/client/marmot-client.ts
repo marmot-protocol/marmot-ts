@@ -44,28 +44,29 @@ import {
 } from "./group/marmot-group.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
 
-export type MarmotClientOptions<THistory extends BaseGroupHistory | undefined> =
-  {
-    /** The signer used for the clients identity */
-    signer: EventSigner;
-    /** The capabilities to use for the client */
-    capabilities?: Capabilities;
-    /** The backend to store and load the groups from */
-    groupStateBackend: GroupStateStoreBackend;
-    /** The backend to store and load the key packages from */
-    keyPackageStore: KeyPackageStore;
-    /** The crypto provider to use for cryptographic operations */
-    cryptoProvider?: CryptoProvider;
-    /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
-    network: NostrNetworkInterface;
-    /** The ClientConfig to use for state hydration (contains auth service and policy) */
-    clientConfig?: ClientConfig;
-  } & (THistory extends undefined
-    ? {}
-    : {
-        /** The group history interface to be passed to group instaces */
-        historyFactory: GroupHistoryFactory<THistory>;
-      });
+export type MarmotClientOptions<
+  THistory extends BaseGroupHistory | undefined = undefined,
+> = {
+  /** The signer used for the clients identity */
+  signer: EventSigner;
+  /** The capabilities to use for the client */
+  capabilities?: Capabilities;
+  /** The backend to store and load the groups from */
+  groupStateBackend: GroupStateStoreBackend;
+  /** The backend to store and load the key packages from */
+  keyPackageStore: KeyPackageStore;
+  /** The crypto provider to use for cryptographic operations */
+  cryptoProvider?: CryptoProvider;
+  /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
+  network: NostrNetworkInterface;
+  /** The ClientConfig to use for state hydration (contains auth service and policy) */
+  clientConfig?: ClientConfig;
+} & (THistory extends undefined
+  ? {}
+  : {
+      /** The group history interface to be passed to group instaces */
+      historyFactory: GroupHistoryFactory<THistory>;
+    });
 
 /** Given a MarmotClient type, returns the MarmotGroup class type with the same THistory. */
 export type InferGroupType<TClient extends MarmotClient<any>> =
@@ -227,14 +228,7 @@ export class MarmotClient<
   async loadAllGroups(): Promise<MarmotGroup<THistory>[]> {
     const groupIds = await this.groupStateStore.list();
 
-    // De-dupe group IDs defensively in case a backend returns duplicates.
-    const uniqueIds = Array.from(
-      new Map(groupIds.map((gid) => [bytesToHex(gid), gid] as const)).values(),
-    );
-
-    return await Promise.all(
-      uniqueIds.map((groupId) => this.getGroup(groupId)),
-    );
+    return await Promise.all(groupIds.map((groupId) => this.getGroup(groupId)));
   }
 
   /** Imports a new group from a ClientState object */

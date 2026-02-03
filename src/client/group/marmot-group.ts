@@ -1,6 +1,5 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { EventSigner } from "applesauce-core/event-factory";
-import { hexToBytes } from "@noble/hashes/utils.js";
 import { bytesToHex, type NostrEvent } from "applesauce-core/helpers/event";
 import { EventEmitter } from "eventemitter3";
 import {
@@ -63,8 +62,9 @@ export interface BaseGroupHistory {
 }
 
 /** A factory function that creates a {@link BaseGroupHistory} instance for a group id */
-export type GroupHistoryFactory<THistory extends BaseGroupHistory | undefined> =
-  (groupId: Uint8Array) => THistory;
+export type GroupHistoryFactory<
+  THistory extends BaseGroupHistory | undefined = undefined,
+> = (groupId: Uint8Array) => THistory;
 
 export type ProposalContext = {
   state: ClientState;
@@ -83,19 +83,20 @@ export type ProposalBuilder<
   T extends Proposal | Proposal[],
 > = (...args: Args) => ProposalAction<T>;
 
-export type MarmotGroupOptions<THistory extends BaseGroupHistory | undefined> =
-  {
-    /** The state store to store and load group state from */
-    stateStore: GroupStateStore;
-    /** The signer used for the clients identity */
-    signer: EventSigner;
-    /** The ciphersuite implementation to use for the group */
-    ciphersuite: CiphersuiteImpl;
-    /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
-    network: NostrNetworkInterface;
-    /** The storage interface for the groups application message history (optional) */
-    history?: THistory | GroupHistoryFactory<THistory>;
-  };
+export type MarmotGroupOptions<
+  THistory extends BaseGroupHistory | undefined = undefined,
+> = {
+  /** The state store to store and load group state from */
+  stateStore: GroupStateStore;
+  /** The signer used for the clients identity */
+  signer: EventSigner;
+  /** The ciphersuite implementation to use for the group */
+  ciphersuite: CiphersuiteImpl;
+  /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
+  network: NostrNetworkInterface;
+  /** The storage interface for the groups application message history (optional) */
+  history?: THistory | GroupHistoryFactory<THistory>;
+};
 
 /** Information about a welcome recipient */
 export type WelcomeRecipient = {
@@ -166,7 +167,7 @@ type MarmotGroupEvents<THistory extends BaseGroupHistory | undefined = any> = {
  * @template THistory - The type of the history store to use for the group, must implement the {@link BaseGroupHistory} interface. (Default is no history store)
  */
 export class MarmotGroup<
-  THistory extends BaseGroupHistory | undefined = any,
+  THistory extends BaseGroupHistory | undefined = undefined,
 > extends EventEmitter<MarmotGroupEvents<THistory>> {
   /** The state store to store and load group state from */
   readonly stateStore: GroupStateStore;
@@ -252,27 +253,9 @@ export class MarmotGroup<
     this.idStr = bytesToHex(this.id);
   }
 
-  /** Loads a {@link MarmotGroup} instance from the group store based on the group id */
-  static async load<THistory extends BaseGroupHistory | undefined = any>(
-    groupId: Uint8Array | string,
-    options: Omit<MarmotGroupOptions<THistory>, "ciphersuite"> & {
-      cryptoProvider?: CryptoProvider;
-    },
-  ): Promise<MarmotGroup<THistory>> {
-    const id = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
-    const stateBytes = await options.stateStore.get(id);
-    if (!stateBytes) throw new Error(`Group ${groupId} not found`);
-
-    // Note: The caller (MarmotClient) is responsible for hydrating the state
-    // This method is primarily used internally by MarmotClient which handles hydration
-    throw new Error(
-      "MarmotGroup.load() is deprecated. Use MarmotClient.getGroup() instead.",
-    );
-  }
-
   /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
   static async fromClientState<
-    THistory extends BaseGroupHistory | undefined = any,
+    THistory extends BaseGroupHistory | undefined = undefined,
   >(
     state: ClientState,
     options: Omit<MarmotGroupOptions<THistory>, "ciphersuite"> & {

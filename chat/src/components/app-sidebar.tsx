@@ -86,7 +86,7 @@ export function AppSidebar({
   return (
     <Sidebar
       collapsible="icon"
-      className="overflow-hidden *:data-[sidebar=sidebar]:flex-col md:*:data-[sidebar=sidebar]:flex-row"
+      className="overflow-hidden *:data-[sidebar=sidebar]:flex-row"
       {...props}
     >
       {/* This is the first sidebar - Icon navigation */}
@@ -191,7 +191,7 @@ export function AppSidebar({
       {/* On mobile, this takes full width */}
       <Sidebar
         collapsible="none"
-        className="flex flex-1 overflow-hidden w-full min-w-0 border-0 md:border-l"
+        className="flex flex-1 overflow-hidden w-full min-w-0 md:min-w-[16rem] border-0 md:border-l"
       >
         <SidebarHeader className="gap-3.5 border-b p-4">
           <div className="flex w-full items-center justify-between gap-2">

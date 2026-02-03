@@ -84,7 +84,7 @@ createRoot(document.getElementById("root")!).render(
           } as React.CSSProperties
         }
       >
-        <BrowserRouter basename="/marmot-ts">
+        <BrowserRouter basename={import.meta.env.VITE_BASE_PATH}>
           <RedirectHandler />
           <Routes>
             <Route path="/" element={<HomePage />} />

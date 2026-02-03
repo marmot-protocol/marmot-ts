@@ -7,14 +7,12 @@ import {
   MarmotGroup,
   NostrNetworkInterface,
   PublishResponse,
+  KeyPackageStore,
 } from "marmot-ts";
 import {
   firstValueFrom,
-  from,
-  fromEvent,
   lastValueFrom,
   map,
-  merge,
   Observable,
   of,
   shareReplay,
@@ -69,13 +67,13 @@ export const marmotClient$ = accounts.active$.pipe(
     if (!account) return;
 
     // Get storage interfaces for the account
-    const { groupStore, keyPackageStore, historyFactory } =
+    const { groupStateBackend, keyPackageStore, historyFactory } =
       await databaseBroker.getStorageInterfacesForAccount(account.pubkey);
 
     // Create a new marmot client for the active account
     return new MarmotClient({
       signer: account.signer,
-      groupStore,
+      groupStateBackend,
       keyPackageStore,
       network: networkInterface,
       historyFactory,
@@ -85,41 +83,76 @@ export const marmotClient$ = accounts.active$.pipe(
   shareReplay(1),
 );
 
-// TODO: this is ugly, MarmotClient or KeyPackageStore should expose a simple interface to subscribe to key package changes
-// Maybe an AsyncGenerator could be used as a simple stream of updates?
+/**
+ * Converts the client's watchKeyPackages async generator to an RxJS Observable.
+ * This provides a reactive stream of key package updates.
+ */
 export const liveKeyPackages$ = marmotClient$.pipe(
   switchMap((client) => {
     if (!client) return of([]);
 
-    return merge(
-      // Start with true to trigger load
-      of(true),
-      // Listen for key package events
-      fromEvent(client.keyPackageStore, "keyPackageAdded"),
-      fromEvent(client.keyPackageStore, "keyPackageRemoved"),
-    ).pipe(
-      switchMap(() =>
-        // Load key packages list
-        from(client.keyPackageStore.list()),
-      ),
+    // Use the new watchKeyPackages async generator from MarmotClient
+    return new Observable<Awaited<ReturnType<KeyPackageStore["list"]>>>(
+      (subscriber) => {
+        const abortController = new AbortController();
+        const iterator = client.watchKeyPackages()[Symbol.asyncIterator]();
+
+        (async () => {
+          try {
+            while (!abortController.signal.aborted) {
+              const { value, done } = await iterator.next();
+              if (done) break;
+              subscriber.next(value);
+            }
+          } catch (error) {
+            subscriber.error(error);
+          } finally {
+            subscriber.complete();
+          }
+        })();
+
+        return () => {
+          abortController.abort();
+          iterator.return?.(undefined);
+        };
+      },
     );
   }),
   shareReplay(1),
 );
 
-// TODO: this is a little better but still ugly
+/**
+ * Converts the client's watchGroups async generator to an RxJS Observable.
+ * This provides a reactive stream of group updates.
+ */
 export const liveGroups$ = marmotClient$.pipe(
   switchMap((client) => {
     if (!client) return of([]);
 
-    return merge(
-      // Start with true to trigger load
-      from(client.loadAllGroups()),
-      // Listen for group events
-      fromEvent(client, "groupsUpdated") as Observable<
-        MarmotGroup<GroupRumorHistory>[]
-      >,
-    );
+    // Use the new watchGroups async generator from MarmotClient
+    return new Observable<MarmotGroup<GroupRumorHistory>[]>((subscriber) => {
+      const abortController = new AbortController();
+      const iterator = client.watchGroups()[Symbol.asyncIterator]();
+
+      (async () => {
+        try {
+          while (!abortController.signal.aborted) {
+            const { value, done } = await iterator.next();
+            if (done) break;
+            subscriber.next(value);
+          }
+        } catch (error) {
+          subscriber.error(error);
+        } finally {
+          subscriber.complete();
+        }
+      })();
+
+      return () => {
+        abortController.abort();
+        iterator.return?.(undefined);
+      };
+    });
   }),
   shareReplay(1),
 );

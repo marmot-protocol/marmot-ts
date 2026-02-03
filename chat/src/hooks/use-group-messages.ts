@@ -75,7 +75,7 @@ export function useGroupMessages(
     const listener = (rumor: Rumor) => addNewMessages([rumor]);
     group.history.addListener("rumor", listener);
     return () => {
-      group.history.removeListener("rumor", listener);
+      group?.history?.removeListener("rumor", listener);
     };
   }, [group, addNewMessages]);
 

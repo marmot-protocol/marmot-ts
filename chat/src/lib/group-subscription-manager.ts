@@ -2,7 +2,6 @@ import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { NostrEvent } from "applesauce-core/helpers";
 import {
   deserializeApplicationRumor,
-  getNostrGroupIdHex,
   GROUP_EVENT_KIND,
   MarmotClient,
   MarmotGroup,
@@ -10,6 +9,7 @@ import {
 import { BehaviorSubject, Subscription } from "rxjs";
 
 import { pool } from "@/lib/nostr";
+import { bytesToHex } from "@noble/hashes/utils.js";
 
 /**
  * Manages persistent subscriptions for all groups in the store.
@@ -106,11 +106,11 @@ export class GroupSubscriptionManager {
     if (!this.isActive) return;
 
     try {
-      const groups = await this.client.groupStore.list();
+      const groups = await this.client.groupStateStore.list();
       const groupIds = new Set<string>();
 
-      for (const groupState of groups) {
-        const groupIdHex = getNostrGroupIdHex(groupState);
+      for (const groupId of groups) {
+        const groupIdHex = bytesToHex(groupId);
         groupIds.add(groupIdHex);
 
         if (!this.groupSubscriptions.has(groupIdHex)) {

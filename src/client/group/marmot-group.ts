@@ -24,7 +24,10 @@ import {
 import { MLSMessage } from "ts-mls/message.js";
 import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
 import { type LeafIndex, toLeafIndex } from "ts-mls/treemath.js";
-import { extractMarmotGroupData } from "../../core/client-state.js";
+import {
+  extractMarmotGroupData,
+  serializeClientState,
+} from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
 import {
   createGroupEvent,
@@ -37,7 +40,7 @@ import { getKeyPackage } from "../../core/key-package-event.js";
 import { isPrivateMessage } from "../../core/message.js";
 import { MarmotGroupData } from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
-import { GroupStore } from "../../store/group-store.js";
+import { GroupStateStore } from "../../store/group-state-store.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
 import {
   NoGroupRelaysError,
@@ -59,8 +62,9 @@ export interface BaseGroupHistory {
 }
 
 /** A factory function that creates a {@link BaseGroupHistory} instance for a group id */
-export type GroupHistoryFactory<THistory extends BaseGroupHistory | undefined> =
-  (groupId: Uint8Array) => THistory;
+export type GroupHistoryFactory<
+  THistory extends BaseGroupHistory | undefined = undefined,
+> = (groupId: Uint8Array) => THistory;
 
 export type ProposalContext = {
   state: ClientState;
@@ -79,19 +83,20 @@ export type ProposalBuilder<
   T extends Proposal | Proposal[],
 > = (...args: Args) => ProposalAction<T>;
 
-export type MarmotGroupOptions<THistory extends BaseGroupHistory | undefined> =
-  {
-    /** The backend to store and load of group from */
-    store: GroupStore;
-    /** The signer used for the clients identity */
-    signer: EventSigner;
-    /** The ciphersuite implementation to use for the group */
-    ciphersuite: CiphersuiteImpl;
-    /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
-    network: NostrNetworkInterface;
-    /** The storage interface for the groups application message history */
-    history: THistory | GroupHistoryFactory<THistory>;
-  };
+export type MarmotGroupOptions<
+  THistory extends BaseGroupHistory | undefined = undefined,
+> = {
+  /** The state store to store and load group state from */
+  stateStore: GroupStateStore;
+  /** The signer used for the clients identity */
+  signer: EventSigner;
+  /** The ciphersuite implementation to use for the group */
+  ciphersuite: CiphersuiteImpl;
+  /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
+  network: NostrNetworkInterface;
+  /** The storage interface for the groups application message history (optional) */
+  history?: THistory | GroupHistoryFactory<THistory>;
+};
 
 /** Information about a welcome recipient */
 export type WelcomeRecipient = {
@@ -162,10 +167,10 @@ type MarmotGroupEvents<THistory extends BaseGroupHistory | undefined = any> = {
  * @template THistory - The type of the history store to use for the group, must implement the {@link BaseGroupHistory} interface. (Default is no history store)
  */
 export class MarmotGroup<
-  THistory extends BaseGroupHistory | undefined = any,
+  THistory extends BaseGroupHistory | undefined = undefined,
 > extends EventEmitter<MarmotGroupEvents<THistory>> {
-  /** The backend to store and load of group from */
-  readonly store: GroupStore;
+  /** The state store to store and load group state from */
+  readonly stateStore: GroupStateStore;
 
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
@@ -228,42 +233,29 @@ export class MarmotGroup<
   constructor(state: ClientState, options: MarmotGroupOptions<THistory>) {
     super();
     this.#state = state;
-    this.store = options.store;
+    this.stateStore = options.stateStore;
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
     this.network = options.network;
 
-    // Create the history store
-    if (typeof options.history === "function") {
-      this.history = options.history(this.id);
-    } else this.history = options.history;
+    // Create the history store (optional)
+    if (options.history) {
+      if (typeof options.history === "function") {
+        this.history = options.history(this.id);
+      } else {
+        this.history = options.history;
+      }
+    } else {
+      this.history = undefined as THistory;
+    }
 
     // Set useful fields
     this.idStr = bytesToHex(this.id);
   }
 
-  /** Loads a {@link MarmotGroup} instance from the group store based on the group id */
-  static async load<THistory extends BaseGroupHistory | undefined = any>(
-    groupId: Uint8Array | string,
-    options: Omit<MarmotGroupOptions<THistory>, "ciphersuite"> & {
-      cryptoProvider?: CryptoProvider;
-    },
-  ): Promise<MarmotGroup<THistory>> {
-    const state = await options.store.get(groupId);
-    if (!state) throw new Error(`Group ${groupId} not found`);
-
-    // Get the group's ciphersuite implementation
-    const cipherSuite = await getCiphersuiteImpl(
-      getCiphersuiteFromName(state.groupContext.cipherSuite),
-      options.cryptoProvider,
-    );
-
-    return new MarmotGroup(state, { ...options, ciphersuite: cipherSuite });
-  }
-
   /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
   static async fromClientState<
-    THistory extends BaseGroupHistory | undefined = any,
+    THistory extends BaseGroupHistory | undefined = undefined,
   >(
     state: ClientState,
     options: Omit<MarmotGroupOptions<THistory>, "ciphersuite"> & {
@@ -283,7 +275,9 @@ export class MarmotGroup<
   async save() {
     if (!this.dirty) return;
 
-    await this.store.update(this.state);
+    // Import serializeClientState dynamically to avoid circular dependencies
+    const stateBytes = serializeClientState(this.state);
+    await this.stateStore.set(this.id, stateBytes);
     this.dirty = false;
     this.emit("stateSaved", this);
   }
@@ -913,7 +907,7 @@ export class MarmotGroup<
     if (this.history) await this.history.purgeMessages();
 
     // Remove the group from the store
-    await this.store.remove(this.id);
+    await this.stateStore.remove(this.id);
 
     // Emit the destroyed event
     this.emit("destroyed", this);

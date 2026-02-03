@@ -24,8 +24,9 @@ import {
   KEY_PACKAGE_KIND,
   WELCOME_EVENT_KIND,
 } from "../core/protocol";
-import { GroupStore } from "../store/group-store";
 import { KeyPackageStore } from "../store/key-package-store";
+import { GroupStateStore } from "../store/group-state-store";
+import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend";
 import { unixNow } from "../utils/nostr";
 import { MockNetwork } from "./helpers/mock-network";
 import { MemoryBackend } from "./ingest-commit-race.test";
@@ -58,25 +59,21 @@ describe("End-to-end: invite, join, first message", () => {
     // Create mock network
     mockNetwork = new MockNetwork();
 
-    // Create clients
-    const groupStore = new GroupStore(
+    // Create clients using the new bytes-first API
+    const groupStateBackend = new KeyValueGroupStateBackend(
       new MemoryBackend(),
-      defaultMarmotClientConfig,
     );
     const keyPackageStore = new KeyPackageStore(new MemoryBackend());
 
     adminClient = new MarmotClient({
-      groupStore,
+      groupStateBackend,
       keyPackageStore,
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      groupStore: new GroupStore(
-        new MemoryBackend(),
-        defaultMarmotClientConfig,
-      ),
+      groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
       keyPackageStore: new KeyPackageStore(new MemoryBackend()),
       signer: inviteeAccount.signer,
       network: mockNetwork,

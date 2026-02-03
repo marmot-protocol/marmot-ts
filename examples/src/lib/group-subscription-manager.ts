@@ -1,9 +1,9 @@
 import { Subscription } from "rxjs";
 import { NostrEvent } from "applesauce-core/helpers/event";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { MarmotClient } from "../../../src";
 import { MarmotGroup } from "../../../src/client/group/marmot-group";
 import { GROUP_EVENT_KIND } from "../../../src";
-import { getNostrGroupIdHex } from "../../../src";
 import { pool } from "./nostr";
 import { deserializeApplicationRumor } from "../../../src";
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
@@ -82,12 +82,12 @@ export class GroupSubscriptionManager {
 
     try {
       // Get all groups from the store
-      const groups = await this.client.groupStore.list();
+      const groups = await this.client.groupStateStore.list();
       const groupIds = new Set<string>();
 
       // Ensure we have subscriptions for all groups
-      for (const groupState of groups) {
-        const groupIdHex = getNostrGroupIdHex(groupState);
+      for (const groupId of groups) {
+        const groupIdHex = bytesToHex(groupId);
         groupIds.add(groupIdHex);
 
         if (!this.groupSubscriptions.has(groupIdHex)) {
@@ -247,7 +247,7 @@ export class GroupSubscriptionManager {
       const relays = group.relays;
       if (!relays || relays.length === 0) return;
 
-      const groupIdHex = getNostrGroupIdHex(group.state);
+      const groupIdHex = bytesToHex(group.state.groupContext.groupId);
 
       // Request existing events from relays
       const filters = {

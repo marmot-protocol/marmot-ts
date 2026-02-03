@@ -7,6 +7,7 @@ describe("exports", () => {
       [
         "GROUP_EVENT_KIND",
         "GroupRumorHistory",
+        "GroupStateStore",
         "GroupStore",
         "KEY_PACKAGE_CIPHER_SUITE_TAG",
         "KEY_PACKAGE_CLIENT_TAG",
@@ -17,6 +18,7 @@ describe("exports", () => {
         "KEY_PACKAGE_RELAY_LIST_KIND",
         "KEY_PACKAGE_RELAY_LIST_RELAY_TAG",
         "KeyPackageStore",
+        "KeyValueGroupStateBackend",
         "LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE",
         "MARMOT_GROUP_DATA_EXTENSION_TYPE",
         "MARMOT_GROUP_DATA_VERSION",

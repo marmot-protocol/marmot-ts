@@ -329,7 +329,7 @@ function GroupDetailPage() {
       const sentRumor = await sendMessage(text);
 
       // Optimistically save new messages to the groups history for immediate feedback
-      if (sentRumor) await group?.history.saveRumor(sentRumor);
+      if (sentRumor && group?.history) await group.history.saveRumor(sentRumor);
     } catch (err) {
       // Error is already set by useMessageSender
     }

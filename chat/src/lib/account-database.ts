@@ -8,12 +8,12 @@ import {
 import { IDBPDatabase, openDB } from "idb";
 import localforage from "localforage";
 import {
-  defaultMarmotClientConfig,
   GroupHistoryFactory,
   GroupRumorHistory,
   GroupRumorHistoryBackend,
-  GroupStore,
   KeyPackageStore,
+  GroupStateStoreBackend,
+  KeyValueGroupStateBackend,
 } from "marmot-ts";
 
 const DB_VERSION = 1;
@@ -35,10 +35,12 @@ export type RumorDatabaseSchema = {
 };
 
 /**
- * IndexedDB-backed implementation of {@link MarmotGroupHistoryStoreBackend}.
+ * IndexedDB-backed implementation of {@link GroupRumorHistoryBackend}.
  * Stores and retrieves group history (MIP-03 rumors) using the `idb` package.
  *
- * TODO: once this is stable this should be moved to the marmot-ts package
+ * NOTE: This is kept here for app-specific schema control. The marmot-ts package
+ * provides a reference implementation at `marmot-ts/backends/indexeddb` that can
+ * be used as an alternative.
  */
 class IdbRumorHistoryBackend implements GroupRumorHistoryBackend {
   private groupKey: string;
@@ -121,7 +123,7 @@ class IdbRumorHistoryBackend implements GroupRumorHistoryBackend {
 }
 
 type StorageInterfaces = {
-  groupStore: GroupStore;
+  groupStateBackend: GroupStateStoreBackend;
   historyFactory: GroupHistoryFactory<GroupRumorHistory>;
   keyPackageStore: KeyPackageStore;
 };
@@ -165,14 +167,16 @@ export class MultiAccountDatabaseBroker {
     const existing = this.#storageInterfaces.get(pubkey);
     if (existing) return existing;
 
-    const groupStore = new GroupStore(
-      localforage.createInstance({
-        name: `${pubkey}-key-value`,
-        storeName: "groups",
-      }),
-      // TODO: this should be provided by the MarmotClient somehow.
-      // this does not seem like something that should be passed to the generic group store interface
-      defaultMarmotClientConfig,
+    // Create a localforage instance for group state storage
+    // Namespacing is handled by the backend instance (per-account database)
+    const groupStateKeyValueBackend = localforage.createInstance({
+      name: `${pubkey}-key-value`,
+      storeName: "groups",
+    });
+
+    // Wrap the key-value backend with the adapter for bytes-only storage
+    const groupStateBackend = new KeyValueGroupStateBackend(
+      groupStateKeyValueBackend,
     );
 
     const keyPackageStore = new KeyPackageStore(
@@ -187,9 +191,9 @@ export class MultiAccountDatabaseBroker {
       new GroupRumorHistory(new IdbRumorHistoryBackend(rumorDatabase, groupId));
 
     const storageInterfaces: StorageInterfaces = {
-      groupStore,
-      keyPackageStore,
+      groupStateBackend,
       historyFactory,
+      keyPackageStore,
     };
 
     this.#storageInterfaces.set(pubkey, storageInterfaces);

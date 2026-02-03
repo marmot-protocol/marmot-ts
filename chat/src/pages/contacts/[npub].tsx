@@ -7,7 +7,6 @@ import {
 } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
 import {
-  extractMarmotGroupData,
   getCredentialPubkey,
   getKeyPackage,
   getKeyPackageCipherSuiteId,
@@ -397,7 +396,7 @@ function ContactDetailContent({ user }: { user: User }) {
   const groups = use$(
     () =>
       marmotClient$.pipe(
-        switchMap((client) => client?.groupStore.list() ?? of([])),
+        switchMap((client) => client?.groupStateStore.list() ?? of([])),
       ),
     [],
   );
@@ -489,13 +488,11 @@ function ContactDetailContent({ user }: { user: User }) {
                         <SelectValue placeholder="Select a group" />
                       </SelectTrigger>
                       <SelectContent>
-                        {(groups ?? []).map((g) => {
-                          const groupId = bytesToHex(g.groupContext.groupId);
-                          const name =
-                            extractMarmotGroupData(g)?.name || "Unnamed Group";
+                        {(groups ?? []).map((groupId: Uint8Array) => {
+                          const groupIdHex = bytesToHex(groupId);
                           return (
-                            <SelectItem key={groupId} value={groupId}>
-                              {name}
+                            <SelectItem key={groupIdHex} value={groupIdHex}>
+                              {groupIdHex.slice(0, 16)}...
                             </SelectItem>
                           );
                         })}

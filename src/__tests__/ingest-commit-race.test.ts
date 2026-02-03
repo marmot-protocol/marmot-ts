@@ -24,7 +24,8 @@ import { createCredential } from "../core/credential.js";
 import { createGroupEvent } from "../core/group-message.js";
 import { createSimpleGroup } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
-import { GroupStore } from "../store/group-store.js";
+import { GroupStateStore } from "../store/group-state-store.js";
+import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend.js";
 import type { KeyValueStoreBackend } from "../utils/key-value.js";
 
 export class MemoryBackend<T> implements KeyValueStoreBackend<T> {
@@ -173,13 +174,20 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     eventA.id = "a".repeat(64);
     eventB.id = "b".repeat(64);
 
-    const backend = new MemoryBackend<SerializedClientState>();
-    const store = new GroupStore(backend, defaultMarmotClientConfig);
+    // Create the new bytes-first storage
+    const kvBackend = new MemoryBackend<SerializedClientState>();
+    const stateStore = new GroupStateStore(
+      new KeyValueGroupStateBackend(kvBackend),
+    );
+
     // IMPORTANT: The receiver for this race test must NOT be the sender.
     // These are two competing commits from the admin leaf for the same epoch.
     // If the receiver is the admin itself, MLS update-path processing can fail because
     // UpdatePath secrets are encrypted to *other* members.
-    await store.add(memberStateEpoch1);
+    await stateStore.set(
+      memberStateEpoch1.groupContext.groupId,
+      encodeGroupState(memberStateEpoch1),
+    );
 
     const network: NostrNetworkInterface = {
       request: async () => {
@@ -201,7 +209,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     } as EventSigner;
 
     const group = new MarmotGroup(memberStateEpoch1, {
-      store,
+      stateStore,
       signer,
       ciphersuite: impl,
       network,
@@ -219,7 +227,11 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     );
 
     // Store should also reflect the post-commit epoch due to ingest() persistence.
-    const reloaded = await store.get(memberStateEpoch1.groupContext.groupId);
+    const reloadedBytes = await stateStore.get(
+      memberStateEpoch1.groupContext.groupId,
+    );
+    expect(reloadedBytes).not.toBeNull();
+    const reloaded = decodeGroupState(reloadedBytes!, 0)?.[0];
     expect(reloaded).not.toBeNull();
     expect(reloaded!.groupContext.epoch).toBe(group.state.groupContext.epoch);
   });
@@ -262,9 +274,14 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     expect(welcome).toBeTruthy();
 
     // Create backend and store
-    const backend = new MemoryBackend<any>();
-    const store = new GroupStore(backend, defaultMarmotClientConfig);
-    await store.add(adminStateEpoch1);
+    const kvBackend = new MemoryBackend<SerializedClientState>();
+    const stateStore = new GroupStateStore(
+      new KeyValueGroupStateBackend(kvBackend),
+    );
+    await stateStore.set(
+      adminStateEpoch1.groupContext.groupId,
+      encodeGroupState(adminStateEpoch1),
+    );
 
     const network: NostrNetworkInterface = {
       request: async () => {
@@ -286,7 +303,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     } as EventSigner;
 
     const group = new MarmotGroup(adminStateEpoch1, {
-      store,
+      stateStore,
       signer,
       ciphersuite: impl,
       network,
@@ -339,7 +356,11 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
 
     // CRITICAL: Verify the store persisted the state update
     // Even though epoch doesn't change, the key schedule advances for forward secrecy
-    const reloaded = await store.get(adminStateEpoch1.groupContext.groupId);
+    const reloadedBytes = await stateStore.get(
+      adminStateEpoch1.groupContext.groupId,
+    );
+    expect(reloadedBytes).not.toBeNull();
+    const reloaded = decodeGroupState(reloadedBytes!, 0)?.[0];
     expect(reloaded).not.toBeNull();
     expect(reloaded!.groupContext.epoch).toBe(initialEpoch);
   });
@@ -383,9 +404,14 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     expect(welcome1).toBeTruthy();
 
     // Create backend and store
-    const backend = new MemoryBackend<SerializedClientState>();
-    const store = new GroupStore(backend, defaultMarmotClientConfig);
-    await store.add(adminStateEpoch1);
+    const kvBackend = new MemoryBackend<SerializedClientState>();
+    const stateStore = new GroupStateStore(
+      new KeyValueGroupStateBackend(kvBackend),
+    );
+    await stateStore.set(
+      adminStateEpoch1.groupContext.groupId,
+      encodeGroupState(adminStateEpoch1),
+    );
 
     const network: NostrNetworkInterface = {
       request: async () => {
@@ -407,7 +433,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     } as EventSigner;
 
     const group = new MarmotGroup(adminStateEpoch1, {
-      store,
+      stateStore,
       signer,
       ciphersuite: impl,
       network,
@@ -488,7 +514,11 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     expect(Object.keys(group.state.unappliedProposals).length).toBe(0);
 
     // Verify persistence
-    const reloaded = await store.get(adminStateEpoch1.groupContext.groupId);
+    const reloadedBytes = await stateStore.get(
+      adminStateEpoch1.groupContext.groupId,
+    );
+    expect(reloadedBytes).not.toBeNull();
+    const reloaded = decodeGroupState(reloadedBytes!, 0)?.[0];
     expect(reloaded).not.toBeNull();
     expect(reloaded!.groupContext.epoch).toBe(group.state.groupContext.epoch);
   });

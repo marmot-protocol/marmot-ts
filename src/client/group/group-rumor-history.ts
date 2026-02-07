@@ -82,9 +82,7 @@ export class GroupRumorHistory
    * }
    * ```
    */
-  async *createPaginatedLoader(
-    filter?: Filter,
-  ): AsyncGenerator<Rumor[], Rumor[]> {
+  async *createPaginatedLoader(filter?: Filter): AsyncGenerator<Rumor[], void> {
     const limit = filter?.limit ?? 50;
     let cursor = filter?.until ?? undefined;
 
@@ -96,7 +94,7 @@ export class GroupRumorHistory
       });
 
       // If no rumors returned, we've reached the end
-      if (rumors.length === 0) return rumors;
+      if (rumors.length === 0) return;
 
       // Find the oldest timestamp in the current page
       // and set it as the new `until` for the next page (going backwards)
@@ -106,11 +104,12 @@ export class GroupRumorHistory
       // This ensures we get the next older page without duplicates
       if (!cursor || oldest < cursor) cursor = oldest - 1;
 
+      // Yield the current page
+      yield rumors;
+
       // If we got fewer than the limit, we've reached the end
       if (rumors.length < limit) {
-        return rumors;
-      } else {
-        yield rumors;
+        return;
       }
     }
   }

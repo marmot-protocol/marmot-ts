@@ -6,8 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "dev": "pnpm --filter chat dev",
-    "examples": "pnpm --filter examples dev",
+    "dev": "pnpm --filter examples dev",
     "build": "pnpm run clean && pnpm run compile",
     "clean": "rimraf ./dist",
     "compile": "tsc -b tsconfig.build.json",

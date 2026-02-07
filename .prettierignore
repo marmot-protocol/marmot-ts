@@ -4,5 +4,3 @@ node_modules/
 ts-mls/
 examples/node_modules/
 examples/dist/
-chat/node_modules/
-chat/dist/

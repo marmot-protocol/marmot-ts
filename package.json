@@ -1,6 +1,6 @@
 {
   "name": "@internet-privacy/marmots",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "description": "Marmot protocol implementation in TypeScript",
   "main": "dist/index.js",

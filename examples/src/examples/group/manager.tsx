@@ -1,9 +1,11 @@
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { useEffect, useState } from "react";
 import { ClientState } from "ts-mls/clientState.js";
 import {
   extractMarmotGroupData,
   getEpoch,
   getGroupIdHex,
+  getNostrGroupIdHex,
   getMemberCount,
 } from "../../../../src/core";
 import ClientStateDataView from "../../components/data-view/client-state";
@@ -30,7 +32,16 @@ function GroupCard({ clientState, onDelete }: GroupCardProps) {
   const epoch = getEpoch(clientState);
   const memberCount = getMemberCount(clientState);
   const name = marmotData?.name || "Unnamed Group";
-  const nostrGroupIdHex = marmotData?.nostrGroupId || groupIdHex;
+  // MIP-01 v2: nostr_group_id lives in MarmotGroupData and is bytes, not hex.
+  // Prefer the validated helper, but fall back to raw bytes-to-hex when needed.
+  let nostrGroupIdHex = groupIdHex;
+  try {
+    nostrGroupIdHex = getNostrGroupIdHex(clientState);
+  } catch {
+    if (marmotData?.nostrGroupId) {
+      nostrGroupIdHex = bytesToHex(marmotData.nostrGroupId);
+    }
+  }
 
   const handleDelete = async () => {
     if (

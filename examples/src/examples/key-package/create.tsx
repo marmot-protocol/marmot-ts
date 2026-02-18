@@ -1,6 +1,7 @@
-import { NostrEvent, relaySet, UnsignedEvent } from "applesauce-core/helpers";
+import { NostrEvent, relaySet } from "applesauce-core/helpers";
 import { useEffect, useState } from "react";
 import { combineLatest, EMPTY, map, switchMap } from "rxjs";
+import type { EventTemplate } from "nostr-tools";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import type { CiphersuiteName } from "ts-mls";
 import { KeyPackage } from "ts-mls/keyPackage.js";
@@ -152,7 +153,7 @@ function ErrorAlert({ error }: { error: string | null }) {
 // ============================================================================
 
 interface DraftDisplayProps {
-  event: UnsignedEvent | NostrEvent;
+  event: EventTemplate | NostrEvent;
   keyPackage: KeyPackage;
   isPublishing: boolean;
   onPublish: () => void;
@@ -274,7 +275,7 @@ function useKeyPackageCreation() {
   const [isCreating, setIsCreating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [createdEvent, setCreatedEvent] = useState<any>(null);
-  const [draftEvent, setDraftEvent] = useState<any>(null);
+  const [draftEvent, setDraftEvent] = useState<EventTemplate | null>(null);
   const [keyPackage, setKeyPackage] = useState<CompleteKeyPackage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [storageKey, setStorageKey] = useState<string | null>(null);
@@ -319,7 +320,7 @@ function useKeyPackageCreation() {
 
       // Create the unsigned event using the library function
       console.log("Creating key package event...");
-      const unsignedEvent = createKeyPackageEvent({
+      const unsignedEvent = await createKeyPackageEvent({
         keyPackage: keyPackage.publicPackage,
         relays,
         client: "marmot-examples",

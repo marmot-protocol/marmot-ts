@@ -6,7 +6,7 @@ dist
 .fdignore
 lancedb
 models
-# docs
+docs
 mcp.json
 plans
 

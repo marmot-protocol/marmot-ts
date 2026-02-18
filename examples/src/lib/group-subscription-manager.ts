@@ -115,6 +115,10 @@ export class GroupSubscriptionManager {
       const group = await this.client.getGroup(groupIdHex);
       const relays = group.relays;
 
+      // MIP-01 v2: Nostr relay-visible group events are keyed by the *nostr_group_id* ("#h" tag),
+      // not the private MLS group_id.
+      const nostrGroupIdHex = getNostrGroupIdHex(group.state);
+
       if (!relays || relays.length === 0) {
         console.warn(`No relays configured for group ${groupIdHex}`);
         return;
@@ -123,7 +127,7 @@ export class GroupSubscriptionManager {
       // Create subscription filter
       const filters = {
         kinds: [GROUP_EVENT_KIND],
-        "#h": [groupIdHex],
+        "#h": [nostrGroupIdHex],
       };
 
       // Set up subscription using the pool
@@ -137,7 +141,7 @@ export class GroupSubscriptionManager {
           const events: NostrEvent[] = Array.isArray(value) ? value : [value];
 
           // Process events immediately as they arrive
-          await this.processEvents(group, events, seenEventIds);
+          await this.processEvents(groupIdHex, group, events, seenEventIds);
         },
         error: (err) => {
           console.error(`Subscription error for group ${groupIdHex}:`, err);
@@ -183,12 +187,16 @@ export class GroupSubscriptionManager {
    * Process incoming events for a group.
    */
   private async processEvents(
+    groupKey: string,
     group: MarmotGroup,
     events: NostrEvent[],
     seenEventIds: Set<string>,
   ): Promise<void> {
     if (events.length === 0) return;
-    const groupIdHex = getNostrGroupIdHex(group.state);
+
+    // groupKey is the MLS group id (hex) used by the local store and UI.
+    // nostrGroupIdHex is only for relay filters / tags.
+    const nostrGroupIdHex = getNostrGroupIdHex(group.state);
     // Deduplicate events before processing
     const newEvents = events.filter((e) => !seenEventIds.has(e.id));
     if (newEvents.length === 0) return;
@@ -207,7 +215,7 @@ export class GroupSubscriptionManager {
         // Log commit processing for debugging
         if (result.kind === "newState") {
           console.log(
-            `Processed commit for group ${groupIdHex}, new epoch: ${group.state.groupContext.epoch}`,
+            `Processed commit for group ${nostrGroupIdHex}, new epoch: ${group.state.groupContext.epoch}`,
           );
         }
 
@@ -225,13 +233,16 @@ export class GroupSubscriptionManager {
 
       // Notify registered callbacks about new application messages
       if (newMessages.length > 0) {
-        const callback = this.applicationMessageCallbacks.get(groupIdHex);
+        const callback = this.applicationMessageCallbacks.get(groupKey);
         if (callback) {
           callback(newMessages);
         }
       }
     } catch (err) {
-      console.error(`Failed to process events for group ${groupIdHex}:`, err);
+      console.error(
+        `Failed to process events for group ${nostrGroupIdHex}:`,
+        err,
+      );
     }
   }
 
@@ -246,6 +257,7 @@ export class GroupSubscriptionManager {
       const relays = group.relays;
       if (!relays || relays.length === 0) return;
       const groupIdHex = getNostrGroupIdHex(group.state);
+      const groupKey = bytesToHex(group.state.groupContext.groupId);
       // Request existing events from relays
       const filters = {
         kinds: [GROUP_EVENT_KIND],
@@ -259,7 +271,7 @@ export class GroupSubscriptionManager {
         console.log(
           `[GroupSubscriptionManager] Fetched ${events.length} historical events for group ${groupIdHex}`,
         );
-        await this.processEvents(group, events, seenEventIds);
+        await this.processEvents(groupKey, group, events, seenEventIds);
       }
     } catch (error) {
       console.error(`Failed to fetch historical events:`, error);

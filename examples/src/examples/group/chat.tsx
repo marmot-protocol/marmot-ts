@@ -2,7 +2,7 @@ import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { getEventHash } from "nostr-tools";
 import { useEffect, useRef, useState } from "react";
 import type { GroupSummary } from "../../lib/groups";
-import { getNostrGroupIdHex } from "../../../../src";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { extractMarmotGroupData } from "../../../../src/core";
 import { MarmotGroup } from "../../../../src/client/group/marmot-group";
 import { unixNow } from "../../../../src/utils/nostr";
@@ -452,7 +452,8 @@ function Chat() {
   useEffect(() => {
     if (!selectedGroup) return;
 
-    const groupIdHex = getNostrGroupIdHex(selectedGroup.state);
+    // GroupSubscriptionManager callback keys are the MLS group_id (local store key), not nostr_group_id.
+    const groupIdHex = bytesToHex(selectedGroup.state.groupContext.groupId);
     const subscriptionManager = getSubscriptionManager();
 
     if (subscriptionManager) {

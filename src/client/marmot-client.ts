@@ -8,14 +8,13 @@ import {
   ClientState,
   CryptoProvider,
   defaultCryptoProvider,
-  getOwnLeafNode,
   joinGroup,
   KeyPackage,
   PrivateKeyPackage,
 } from "ts-mls";
 import { CiphersuiteName, ciphersuites } from "ts-mls/crypto/ciphersuite.js";
 import { marmotAuthService } from "../core/auth-service.js";
-import { createCredential, getCredentialPubkey } from "../core/credential.js";
+import { createCredential } from "../core/credential.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
@@ -481,16 +480,15 @@ export class MarmotClient<
     // - If we *don't* have an event id (out-of-band sharing / unknown publish
     //   status), we retain local private material for last_resort KeyPackages.
     if (consumedKeyPackageRef) {
-      const isLastResort =
-        !!consumedKeyPackage?.extensions?.some(
-          (ext) =>
-            typeof ext === "object" &&
-            ext !== null &&
-            "extensionType" in ext &&
-            // extensionType is numeric in ts-mls v2
-            (ext as { extensionType: number }).extensionType ===
-              LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
-        );
+      const isLastResort = !!consumedKeyPackage?.extensions?.some(
+        (ext) =>
+          typeof ext === "object" &&
+          ext !== null &&
+          "extensionType" in ext &&
+          // extensionType is numeric in ts-mls v2
+          (ext as { extensionType: number }).extensionType ===
+            LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+      );
 
       if (isLastResort && !keyPackageEventId) {
         console.warn(

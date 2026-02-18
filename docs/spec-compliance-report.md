@@ -43,16 +43,16 @@ Areas that are in better shape:
 
 ### KeyPackage Events (kind 443)
 
-| Requirement                                                   |           Status | Evidence                                                                                                                                                                                                            |
-| ------------------------------------------------------------- | ---------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Event kind 443                                                |     ✅ Compliant | [`KEY_PACKAGE_KIND`](src/core/protocol.ts:13), [`createKeyPackageEvent()`](src/core/key-package-event.ts:153)                                                                                                       |
-| `mls_protocol_version` tag                                    |     ✅ Compliant | Added in [`createKeyPackageEvent()`](src/core/key-package-event.ts:153)                                                                                                                                             |
-| `mls_ciphersuite` tag                                         |     ✅ Compliant | Added in [`createKeyPackageEvent()`](src/core/key-package-event.ts:153)                                                                                                                                             |
-| `mls_extensions` includes `0xf2ee` and `0x000a`               |     ✅ Compliant | Capabilities ensured by [`ensureMarmotCapabilities()`](src/core/capabilities.ts:8); emitted by [`createKeyPackageEvent()`](src/core/key-package-event.ts:153)                                                       |
-| Default MLS extensions not listed in capabilities             |     ✅ Compliant | Capabilities built using ts-mls defaults then amended; see [`defaultCapabilities()`](src/core/default-capabilities.ts:15) and tests in [`src/__tests__/capabilities.test.ts`](src/__tests__/capabilities.test.ts:1) |
-| `encoding` MUST be base64 and hex MUST be rejected            | ✅ Compliant | Enforced in [`getKeyPackage()`](src/core/key-package-event.ts:65) |
-| `i` tag (KeyPackageRef, hex) MUST be included                 | ✅ Compliant | Added in [`createKeyPackageEvent()`](src/core/key-package-event.ts:159) |
-| NIP-70 protected tag `["]-"]` SHOULD be omitted unless needed |     ✅ Compliant | Opt-in `protected` flag in [`createKeyPackageEvent()`](src/core/key-package-event.ts:133)                                                                                                                           |
+| Requirement                                                   |       Status | Evidence                                                                                                                                                                                                            |
+| ------------------------------------------------------------- | -----------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Event kind 443                                                | ✅ Compliant | [`KEY_PACKAGE_KIND`](src/core/protocol.ts:13), [`createKeyPackageEvent()`](src/core/key-package-event.ts:153)                                                                                                       |
+| `mls_protocol_version` tag                                    | ✅ Compliant | Added in [`createKeyPackageEvent()`](src/core/key-package-event.ts:153)                                                                                                                                             |
+| `mls_ciphersuite` tag                                         | ✅ Compliant | Added in [`createKeyPackageEvent()`](src/core/key-package-event.ts:153)                                                                                                                                             |
+| `mls_extensions` includes `0xf2ee` and `0x000a`               | ✅ Compliant | Capabilities ensured by [`ensureMarmotCapabilities()`](src/core/capabilities.ts:8); emitted by [`createKeyPackageEvent()`](src/core/key-package-event.ts:153)                                                       |
+| Default MLS extensions not listed in capabilities             | ✅ Compliant | Capabilities built using ts-mls defaults then amended; see [`defaultCapabilities()`](src/core/default-capabilities.ts:15) and tests in [`src/__tests__/capabilities.test.ts`](src/__tests__/capabilities.test.ts:1) |
+| `encoding` MUST be base64 and hex MUST be rejected            | ✅ Compliant | Enforced in [`getKeyPackage()`](src/core/key-package-event.ts:65)                                                                                                                                                   |
+| `i` tag (KeyPackageRef, hex) MUST be included                 | ✅ Compliant | Added in [`createKeyPackageEvent()`](src/core/key-package-event.ts:159)                                                                                                                                             |
+| NIP-70 protected tag `["]-"]` SHOULD be omitted unless needed | ✅ Compliant | Opt-in `protected` flag in [`createKeyPackageEvent()`](src/core/key-package-event.ts:133)                                                                                                                           |
 
 ### KeyPackageRef computation
 
@@ -62,12 +62,12 @@ Areas that are in better shape:
 
 ### KeyPackage lifecycle after join
 
-| Requirement                                                                                                                             |                              Status | Evidence                                                                                                                                                                                                       |
-| --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Delete consumed KeyPackage from local storage after successful join                                                                     |                        ✅ Compliant | [`MarmotClient.joinGroupFromWelcome()`](src/client/marmot-client.ts:348) removes via `keyPackageStore.remove(consumedKeyPackageRef)`                                                                           |
-| Best-effort request to delete relay-published KeyPackage event                                                                          |                        ✅ Compliant | Emits `keyPackageRelayDeleteRequested` in [`MarmotClient.joinGroupFromWelcome()`](src/client/marmot-client.ts:348)                                                                                             |
-| Secure deletion / zeroization of init_key bytes                                                                                         |       ⚠️ Not implemented explicitly | Persistent private material is removed via KeyPackageStore removal; “zeroize memory” semantics described in spec are not implemented (and are not generally enforceable in JS runtimes)                        |
-| **Last resort KeyPackages**: init_key MUST be retained while the KeyPackage remains published; do **not** delete immediately after join |                        ✅ Compliant | Best-effort retention is implemented for out-of-band joins (no KeyPackage event id) in [`MarmotClient.joinGroupFromWelcome()`](src/client/marmot-client.ts:348)                                              |
+| Requirement                                                                                                                             |                        Status | Evidence                                                                                                                                                                                |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Delete consumed KeyPackage from local storage after successful join                                                                     |                  ✅ Compliant | [`MarmotClient.joinGroupFromWelcome()`](src/client/marmot-client.ts:348) removes via `keyPackageStore.remove(consumedKeyPackageRef)`                                                    |
+| Best-effort request to delete relay-published KeyPackage event                                                                          |                  ✅ Compliant | Emits `keyPackageRelayDeleteRequested` in [`MarmotClient.joinGroupFromWelcome()`](src/client/marmot-client.ts:348)                                                                      |
+| Secure deletion / zeroization of init_key bytes                                                                                         | ⚠️ Not implemented explicitly | Persistent private material is removed via KeyPackageStore removal; “zeroize memory” semantics described in spec are not implemented (and are not generally enforceable in JS runtimes) |
+| **Last resort KeyPackages**: init_key MUST be retained while the KeyPackage remains published; do **not** delete immediately after join |                  ✅ Compliant | Best-effort retention is implemented for out-of-band joins (no KeyPackage event id) in [`MarmotClient.joinGroupFromWelcome()`](src/client/marmot-client.ts:348)                         |
 
 ---
 
@@ -77,38 +77,38 @@ MIP-01 specifies `marmot_group_data` (extension type `0xF2EE`) with **version 2*
 
 ### Extension identifier and version support
 
-| Requirement                                                                                   |           Status | Evidence                                                                                                                                                                 |
-| --------------------------------------------------------------------------------------------- | ---------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Extension type `0xF2EE`                                                                       |     ✅ Compliant | [`MARMOT_GROUP_DATA_EXTENSION_TYPE`](src/core/protocol.ts:40)                                                                                                            |
+| Requirement                                                                                   |       Status | Evidence                                                                                                                               |
+| --------------------------------------------------------------------------------------------- | -----------: | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Extension type `0xF2EE`                                                                       | ✅ Compliant | [`MARMOT_GROUP_DATA_EXTENSION_TYPE`](src/core/protocol.ts:40)                                                                          |
 | Current version is 2; implementation supports v2 and may decode v1 for backward compatibility | ✅ Compliant | [`MARMOT_GROUP_DATA_VERSION`](src/core/protocol.ts:44); v1/v2 decode in [`decodeMarmotGroupData()`](src/core/marmot-group-data.ts:392) |
 
 ### Serialization format (QUIC varint vectors)
 
-| Requirement                                                                 |           Status | Evidence                                                                                                                                                      |
-| --------------------------------------------------------------------------- | ---------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Variable-length vectors use QUIC varint length prefixes                     |     ✅ Compliant | QUIC varint helpers in [`encodeVarint()`](src/core/marmot-group-data.ts:78) / [`decodeVarint()`](src/core/marmot-group-data.ts:108); used by v2 codec in [`encodeMarmotGroupData()`](src/core/marmot-group-data.ts:290) |
-| `admin_pubkeys` are concatenated raw 32-byte x-only pubkeys (no separators) |     ✅ Compliant | v2 admin key encoding/decoding in [`encodeAdminPubkeysV2()`](src/core/marmot-group-data.ts:208) / [`decodeAdminPubkeysV2()`](src/core/marmot-group-data.ts:221) |
-| `relays` are a vector of individually length-prefixed URLs                  |     ✅ Compliant | v2 relay vector encoding/decoding in [`encodeRelaysV2()`](src/core/marmot-group-data.ts:232) / [`decodeRelaysV2()`](src/core/marmot-group-data.ts:256) |
-| Image fields are variable-length (0 or N) and include `image_upload_key`    |     ✅ Compliant | v2 variable-length image fields in [`encodeMarmotGroupData()`](src/core/marmot-group-data.ts:290) and v2 decode validation in [`decodeMarmotGroupData()`](src/core/marmot-group-data.ts:392) |
+| Requirement                                                                 |       Status | Evidence                                                                                                                                                                                                                |
+| --------------------------------------------------------------------------- | -----------: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Variable-length vectors use QUIC varint length prefixes                     | ✅ Compliant | QUIC varint helpers in [`encodeVarint()`](src/core/marmot-group-data.ts:78) / [`decodeVarint()`](src/core/marmot-group-data.ts:108); used by v2 codec in [`encodeMarmotGroupData()`](src/core/marmot-group-data.ts:290) |
+| `admin_pubkeys` are concatenated raw 32-byte x-only pubkeys (no separators) | ✅ Compliant | v2 admin key encoding/decoding in [`encodeAdminPubkeysV2()`](src/core/marmot-group-data.ts:208) / [`decodeAdminPubkeysV2()`](src/core/marmot-group-data.ts:221)                                                         |
+| `relays` are a vector of individually length-prefixed URLs                  | ✅ Compliant | v2 relay vector encoding/decoding in [`encodeRelaysV2()`](src/core/marmot-group-data.ts:232) / [`decodeRelaysV2()`](src/core/marmot-group-data.ts:256)                                                                  |
+| Image fields are variable-length (0 or N) and include `image_upload_key`    | ✅ Compliant | v2 variable-length image fields in [`encodeMarmotGroupData()`](src/core/marmot-group-data.ts:290) and v2 decode validation in [`decodeMarmotGroupData()`](src/core/marmot-group-data.ts:392)                            |
 
 ### Group ID privacy requirement
 
 MIP-01 states MLS `group_id` is private and distinct from `nostr_group_id`: see [`marmot/01.md`](marmot/01.md:13).
 
-| Requirement                                                          |                Status | Evidence                                                                                     |
-| -------------------------------------------------------------------- | --------------------: | -------------------------------------------------------------------------------------------- |
+| Requirement                                                          |       Status | Evidence                                                       |
+| -------------------------------------------------------------------- | -----------: | -------------------------------------------------------------- |
 | MLS `group_id` is distinct from `nostr_group_id` and never published | ✅ Compliant | Random MLS group_id in [`createGroup()`](src/core/group.ts:26) |
 
 ---
 
 ## MIP-02: Welcome Events
 
-| Requirement                                                        |           Status | Evidence                                                                                                                                           |
-| ------------------------------------------------------------------ | ---------------: | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Welcome kind 444                                                   |     ✅ Compliant | [`WELCOME_EVENT_KIND`](src/core/protocol.ts:84)                                                                                                    |
-| Welcome rumors created unsigned                                    |     ✅ Compliant | No `sig` field in [`createWelcomeRumor()`](src/core/welcome.ts:27)                                                                                 |
-| Commit MUST be relay-acked before Welcome is sent                  |     ✅ Compliant | [`MarmotGroup.commit()`](src/client/group/marmot-group.ts:443) publishes commit and checks ack before sending Welcomes                             |
-| Welcome `encoding` MUST be base64; hex MUST be rejected            | ✅ Compliant | Enforced in [`getWelcome()`](src/core/welcome.ts:83) |
+| Requirement                                                        |              Status | Evidence                                                                                                                                                                                                         |
+| ------------------------------------------------------------------ | ------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Welcome kind 444                                                   |        ✅ Compliant | [`WELCOME_EVENT_KIND`](src/core/protocol.ts:84)                                                                                                                                                                  |
+| Welcome rumors created unsigned                                    |        ✅ Compliant | No `sig` field in [`createWelcomeRumor()`](src/core/welcome.ts:27)                                                                                                                                               |
+| Commit MUST be relay-acked before Welcome is sent                  |        ✅ Compliant | [`MarmotGroup.commit()`](src/client/group/marmot-group.ts:443) publishes commit and checks ack before sending Welcomes                                                                                           |
+| Welcome `encoding` MUST be base64; hex MUST be rejected            |        ✅ Compliant | Enforced in [`getWelcome()`](src/core/welcome.ts:83)                                                                                                                                                             |
 | Post-join self-update SHOULD for all joiners; MUST within 24 hours | ⚠️ Best-effort only | Best-effort immediate self-update in [`MarmotClient.joinGroupFromWelcome()`](src/client/marmot-client.ts:348) via [`MarmotGroup.selfUpdate()`](src/client/group/marmot-group.ts:244); no persistent 24h tracking |
 
 **Clarification (last resort KeyPackages):** MIP-00’s `last_resort` affects **init_key retention and KeyPackage reuse**, not whether a joiner should self-update. The MIP-02 self-update guidance still applies; the “special case” is that clients MUST NOT treat a last-resort join as a reason to delete `init_key` material immediately (see [`marmot/00.md`](marmot/00.md:185)).
@@ -128,10 +128,10 @@ MIP-01 states MLS `group_id` is private and distinct from `nostr_group_id`: see 
 
 ### Commit authorization and ordering
 
-| Requirement                                                                               |           Status | Evidence                                                                                                                                                               |
-| ----------------------------------------------------------------------------------------- | ---------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Non-self-update commits must be from admin                                                |     ✅ Compliant | Admin policy helper [`createAdminCommitPolicyCallback()`](src/client/group/marmot-group.ts:114) used in [`MarmotGroup.ingest()`](src/client/group/marmot-group.ts:738) |
-| Competing commits resolution: earliest `created_at`, then lexicographically smallest `id` | ✅ Compliant | Implemented in [`sortGroupCommits()`](src/core/group-message.ts:277) |
+| Requirement                                                                               |       Status | Evidence                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------- | -----------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Non-self-update commits must be from admin                                                | ✅ Compliant | Admin policy helper [`createAdminCommitPolicyCallback()`](src/client/group/marmot-group.ts:114) used in [`MarmotGroup.ingest()`](src/client/group/marmot-group.ts:738) |
+| Competing commits resolution: earliest `created_at`, then lexicographically smallest `id` | ✅ Compliant | Implemented in [`sortGroupCommits()`](src/core/group-message.ts:277)                                                                                                   |
 
 ---
 

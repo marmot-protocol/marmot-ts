@@ -43,6 +43,8 @@ describe("MIP-01: group construction", () => {
     expect(extracted?.relays).toEqual(["wss://relay.example.com"]);
 
     // MIP-01 privacy: MLS group_id must be distinct from the public nostr_group_id.
-    expect(clientState.groupContext.groupId).not.toEqual(marmotGroupData.nostrGroupId);
+    expect(clientState.groupContext.groupId).not.toEqual(
+      marmotGroupData.nostrGroupId,
+    );
   });
 });

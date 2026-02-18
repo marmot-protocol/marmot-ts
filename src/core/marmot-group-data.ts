@@ -394,9 +394,7 @@ export function decodeMarmotGroupData(data: Uint8Array): MarmotGroupData {
   if (!versionRes) throw new Error("Extension data too short");
   const [version, versionOffset] = versionRes;
   if (version !== 1 && version !== 2) {
-    throw new Error(
-      `Unsupported MarmotGroupData version: ${version}`,
-    );
+    throw new Error(`Unsupported MarmotGroupData version: ${version}`);
   }
 
   let offset = versionOffset;
@@ -413,18 +411,14 @@ export function decodeMarmotGroupData(data: Uint8Array): MarmotGroupData {
   offset = nameOffset;
 
   const descriptionResult =
-    version >= 2
-      ? decodeOpaqueVar(data, offset)
-      : decodeOpaque16(data, offset);
+    version >= 2 ? decodeOpaqueVar(data, offset) : decodeOpaque16(data, offset);
   if (!descriptionResult) throw new Error("Extension data too short");
   const [descriptionBytes, descriptionOffset] = descriptionResult;
   const description = decodeUtf8(descriptionBytes);
   offset = descriptionOffset;
 
   const adminPubkeysResult =
-    version >= 2
-      ? decodeOpaqueVar(data, offset)
-      : decodeOpaque16(data, offset);
+    version >= 2 ? decodeOpaqueVar(data, offset) : decodeOpaque16(data, offset);
   if (!adminPubkeysResult) throw new Error("Extension data too short");
   const [adminPubkeysBytes, adminPubkeysOffset] = adminPubkeysResult;
   const adminPubkeys =
@@ -438,7 +432,9 @@ export function decodeMarmotGroupData(data: Uint8Array): MarmotGroupData {
   offset = adminPubkeysOffset;
 
   const relaysResult =
-    version >= 2 ? decodeRelaysV2(data, offset) : decodeCommaSeparated(data, offset);
+    version >= 2
+      ? decodeRelaysV2(data, offset)
+      : decodeCommaSeparated(data, offset);
   if (!relaysResult) throw new Error("Extension data too short");
   const [relays, relaysOffset] = relaysResult;
   offset = relaysOffset;
@@ -474,7 +470,9 @@ export function decodeMarmotGroupData(data: Uint8Array): MarmotGroupData {
   offset = imageNonceOffset;
 
   const imageUploadKeyRes =
-    version >= 2 ? decodeOpaqueVar(data, offset) : ([new Uint8Array(0), offset] as const);
+    version >= 2
+      ? decodeOpaqueVar(data, offset)
+      : ([new Uint8Array(0), offset] as const);
   if (!imageUploadKeyRes) throw new Error("Extension data too short");
   const [imageUploadKey, imageUploadKeyOffset] = imageUploadKeyRes;
   if (version >= 2) assertZeroOrFixed("image_upload_key", imageUploadKey, 32);

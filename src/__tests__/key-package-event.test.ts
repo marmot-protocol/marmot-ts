@@ -261,9 +261,7 @@ describe("createKeyPackageEvent encoding", () => {
       sig: "legacy-signature",
     };
 
-    expect(() => getKeyPackage(legacyEvent)).toThrow(
-      /encoding=base64 tag/i,
-    );
+    expect(() => getKeyPackage(legacyEvent)).toThrow(/encoding=base64 tag/i);
   });
 
   it("should decode hex-encoded events with explicit hex encoding tag", async () => {
@@ -390,6 +388,8 @@ describe("spec compliance (MIP-00) — pending", () => {
       sig: "hex-encoding-sig",
     };
 
-    expect(() => getKeyPackage(hexEncodingEvent)).toThrow(/encoding=base64 tag/i);
+    expect(() => getKeyPackage(hexEncodingEvent)).toThrow(
+      /encoding=base64 tag/i,
+    );
   });
 });

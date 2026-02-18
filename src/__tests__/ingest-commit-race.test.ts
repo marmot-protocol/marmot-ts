@@ -144,7 +144,10 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     const b = { event: eventB, message: commitB.commit };
 
     const sorted = sortGroupCommits([a, b]);
-    expect(sorted.map((p) => p.event.id)).toEqual(["a".repeat(64), "b".repeat(64)]);
+    expect(sorted.map((p) => p.event.id)).toEqual([
+      "a".repeat(64),
+      "b".repeat(64),
+    ]);
   });
 
   it("applies exactly one commit for an epoch (earliest created_at wins), even if events arrive reversed", async () => {

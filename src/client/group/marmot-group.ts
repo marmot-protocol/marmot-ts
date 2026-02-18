@@ -40,7 +40,11 @@ import { isPrivateMessage } from "../../core/message.js";
 import { MarmotGroupData } from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
 import { GroupStateStore } from "../../store/group-state-store.js";
-import { createGiftWrap, hasAck } from "../../utils/index.js";
+import {
+  createGiftWrap,
+  hasAck,
+  publishWithRetries,
+} from "../../utils/index.js";
 import { NoGroupRelaysError, NoMarmotGroupDataError } from "../errors.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { marmotAuthService } from "../../core/auth-service.js";

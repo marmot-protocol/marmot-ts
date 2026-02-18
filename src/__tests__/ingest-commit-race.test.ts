@@ -20,7 +20,7 @@ import { MarmotGroup } from "../client/group/marmot-group.js";
 import type { NostrNetworkInterface } from "../client/nostr-interface.js";
 import { SerializedClientState } from "../core/client-state.js";
 import { createCredential } from "../core/credential.js";
-import { createGroupEvent } from "../core/group-message.js";
+import { createGroupEvent, sortGroupCommits } from "../core/group-message.js";
 import { createSimpleGroup } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
 import { GroupStateStore } from "../store/group-state-store.js";
@@ -68,6 +68,85 @@ async function createTestGroupState(
 }
 
 describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
+  it("sortGroupCommits breaks created_at ties by lexicographically smallest event id (MIP-03)", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+
+    const { clientState: createdState } = await createTestGroupState(
+      adminPubkey,
+      impl,
+    );
+
+    // Make this a 2-member group (required for update paths).
+    const memberPubkey = "c".repeat(64);
+    const memberCredential = createCredential(memberPubkey);
+    const memberKeyPackage = await generateKeyPackage({
+      credential: memberCredential,
+      ciphersuiteImpl: impl,
+    });
+
+    const addProposal = {
+      proposalType: defaultProposalTypes.add,
+      add: { keyPackage: memberKeyPackage.publicPackage },
+    };
+
+    const { newState: adminStateEpoch1 } = await createCommit({
+      context: {
+        cipherSuite: impl,
+        authService: unsafeTestingAuthenticationService,
+      },
+      state: createdState,
+      wireAsPublicMessage: false,
+      extraProposals: [addProposal],
+      ratchetTreeExtension: true,
+    });
+
+    const commitA = await createCommit({
+      context: {
+        cipherSuite: impl,
+        authService: unsafeTestingAuthenticationService,
+      },
+      state: adminStateEpoch1,
+      extraProposals: [],
+    });
+
+    const commitB = await createCommit({
+      context: {
+        cipherSuite: impl,
+        authService: unsafeTestingAuthenticationService,
+      },
+      state: adminStateEpoch1,
+      extraProposals: [],
+    });
+
+    const eventA = await createGroupEvent({
+      message: commitA.commit,
+      state: adminStateEpoch1,
+      ciphersuite: impl,
+    });
+
+    const eventB = await createGroupEvent({
+      message: commitB.commit,
+      state: adminStateEpoch1,
+      ciphersuite: impl,
+    });
+
+    // Tie on created_at; order must be chosen by smallest id.
+    eventA.created_at = 1;
+    eventB.created_at = 1;
+    eventA.id = "b".repeat(64);
+    eventB.id = "a".repeat(64);
+
+    const a = { event: eventA, message: commitA.commit };
+    const b = { event: eventB, message: commitB.commit };
+
+    const sorted = sortGroupCommits([a, b]);
+    expect(sorted.map((p) => p.event.id)).toEqual(["a".repeat(64), "b".repeat(64)]);
+  });
+
   it("applies exactly one commit for an epoch (earliest created_at wins), even if events arrive reversed", async () => {
     const adminPubkey = "a".repeat(64);
     const impl = await getCiphersuiteImpl(
@@ -166,7 +245,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     });
 
     // Force deterministic race ordering according to MIP-03:
-    // created_at first, then event id.
+    // created_at first, then lexicographically smallest event id.
     eventA.created_at = 1;
     eventB.created_at = 2;
     // Signature validity is irrelevant for ingest; id is used only as a tie-breaker.

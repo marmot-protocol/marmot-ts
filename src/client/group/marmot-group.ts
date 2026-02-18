@@ -117,6 +117,10 @@ export function createAdminCommitPolicyCallback(args: {
   return (incoming) => {
     if (incoming.kind === "proposal") return "accept";
 
+    // MIP-02: post-join self-updates are expressed as commits with no proposals.
+    // These MUST be accepted from any member (admin or not) to allow key hygiene.
+    if (incoming.proposals.length === 0) return "accept";
+
     // Commit must be attributable to an admin.
     const senderLeafIndexUnknown = incoming.senderLeafIndex;
     if (senderLeafIndexUnknown === undefined) return "reject";
@@ -224,6 +228,52 @@ export class MarmotGroup<
   // Common accessors for marmot group data
   get relays() {
     return this.groupData?.relays;
+  }
+
+  /**
+   * Performs a self-update commit (no proposals) to rotate this member's leaf key material.
+   *
+   * This is required by MIP-02 for forward secrecy after joining from a Welcome.
+   *
+   * Unlike {@link commit}, this operation is allowed for non-admin members.
+   */
+  async selfUpdate(): Promise<Record<string, PublishResponse>> {
+    const groupData = this.groupData;
+    if (!groupData) throw new NoMarmotGroupDataError();
+
+    const relays = this.relays;
+    if (!relays) throw new NoGroupRelaysError();
+
+    // Create a commit with explicitly empty proposals. In ts-mls, this results in
+    // a self-update commit that includes an UpdatePath (rotating leaf secrets).
+    const { commit, newState } = await createCommit({
+      context: {
+        cipherSuite: this.ciphersuite,
+        authService: marmotAuthService,
+      },
+      state: this.state,
+      wireAsPublicMessage: false,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    const commitEvent = await createGroupEvent({
+      message: commit,
+      state: this.state,
+      ciphersuite: this.ciphersuite,
+    });
+
+    const response = await publishWithRetries(
+      this.network.publish.bind(this.network),
+      relays,
+      commitEvent,
+    );
+
+    // Advance local state after publish.
+    this.state = newState;
+    await this.save();
+
+    return response;
   }
 
   constructor(state: ClientState, options: MarmotGroupOptions<THistory>) {

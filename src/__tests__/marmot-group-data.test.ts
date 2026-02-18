@@ -28,7 +28,7 @@ import { MarmotGroupData } from "../core/protocol.js";
 describe("encodeMarmotGroupData and decodeMarmotGroupData", () => {
   it("should encode and decode group data correctly", () => {
     const groupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32).fill(1),
       name: "Test Group",
       description: "A test group for unit tests",
@@ -37,6 +37,7 @@ describe("encodeMarmotGroupData and decodeMarmotGroupData", () => {
       imageHash: new Uint8Array(32).fill(2),
       imageKey: new Uint8Array(32).fill(3),
       imageNonce: new Uint8Array(12).fill(4),
+      imageUploadKey: new Uint8Array(32).fill(6),
     };
 
     const encoded = encodeMarmotGroupData(groupData);
@@ -51,19 +52,21 @@ describe("encodeMarmotGroupData and decodeMarmotGroupData", () => {
     expect(decoded.imageHash).toEqual(groupData.imageHash);
     expect(decoded.imageKey).toEqual(groupData.imageKey);
     expect(decoded.imageNonce).toEqual(groupData.imageNonce);
+    expect(decoded.imageUploadKey).toEqual(groupData.imageUploadKey);
   });
 
   it("should handle empty arrays correctly", () => {
     const groupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32),
       name: "",
       description: "",
       adminPubkeys: [],
       relays: [],
-      imageHash: null,
-      imageKey: null,
-      imageNonce: null,
+      imageHash: new Uint8Array(0),
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     const encoded = encodeMarmotGroupData(groupData);
@@ -75,15 +78,16 @@ describe("encodeMarmotGroupData and decodeMarmotGroupData", () => {
 
   it("should handle UTF-8 strings correctly", () => {
     const groupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32),
       name: "Test 🚀 Group",
       description: "Description with émojis and spëcial çharacters",
       adminPubkeys: [],
       relays: [],
-      imageHash: null,
-      imageKey: null,
-      imageNonce: null,
+      imageHash: new Uint8Array(0),
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     const encoded = encodeMarmotGroupData(groupData);
@@ -93,42 +97,45 @@ describe("encodeMarmotGroupData and decodeMarmotGroupData", () => {
     expect(decoded.description).toBe(groupData.description);
   });
 
-  it("should handle null image fields correctly", () => {
+  it("should handle empty image fields correctly", () => {
     const groupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32).fill(5),
       name: "Group with null images",
       description: "Testing null image fields",
       adminPubkeys: ["a".repeat(64)],
       relays: ["wss://relay.example.com"],
-      imageHash: null,
-      imageKey: null,
-      imageNonce: null,
+      imageHash: new Uint8Array(0),
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     const encoded = encodeMarmotGroupData(groupData);
     const decoded = decodeMarmotGroupData(encoded);
 
-    expect(decoded.imageHash).toBeNull();
-    expect(decoded.imageKey).toBeNull();
-    expect(decoded.imageNonce).toBeNull();
+    expect(decoded.imageHash).toEqual(new Uint8Array(0));
+    expect(decoded.imageKey).toEqual(new Uint8Array(0));
+    expect(decoded.imageNonce).toEqual(new Uint8Array(0));
+    expect(decoded.imageUploadKey).toEqual(new Uint8Array(0));
   });
 
   it("should reject invalid image field lengths", () => {
     const groupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32),
       name: "",
       description: "",
       adminPubkeys: [],
       relays: [],
       imageHash: new Uint8Array(16), // Wrong size!
-      imageKey: null,
-      imageNonce: null,
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     expect(() => encodeMarmotGroupData(groupData)).toThrow(
-      /image_hash must be null or exactly 32 bytes/,
+      /image_hash must be empty or exactly 32 bytes/,
     );
   });
 });
@@ -138,12 +145,16 @@ describe("createMarmotGroupData", () => {
     const encoded = createMarmotGroupData();
     const decoded = decodeMarmotGroupData(encoded);
 
-    expect(decoded.version).toBe(1);
+    expect(decoded.version).toBe(2);
     expect(decoded.nostrGroupId.length).toBe(32);
     expect(decoded.name).toBe("");
     expect(decoded.description).toBe("");
     expect(decoded.adminPubkeys).toEqual([]);
     expect(decoded.relays).toEqual([]);
+    expect(decoded.imageHash).toEqual(new Uint8Array(0));
+    expect(decoded.imageKey).toEqual(new Uint8Array(0));
+    expect(decoded.imageNonce).toEqual(new Uint8Array(0));
+    expect(decoded.imageUploadKey).toEqual(new Uint8Array(0));
   });
 
   it("should create group data with custom values", () => {
@@ -169,15 +180,16 @@ describe("createMarmotGroupData", () => {
 describe("validation", () => {
   it("should reject invalid admin public keys", () => {
     const groupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32),
       name: "",
       description: "",
       adminPubkeys: ["invalid"],
       relays: [],
-      imageHash: null,
-      imageKey: null,
-      imageNonce: null,
+      imageHash: new Uint8Array(0),
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     expect(() => encodeMarmotGroupData(groupData)).toThrow(
@@ -187,15 +199,16 @@ describe("validation", () => {
 
   it("should reject invalid relay URLs", () => {
     const groupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32),
       name: "",
       description: "",
       adminPubkeys: [],
       relays: ["http://not-a-websocket.com"],
-      imageHash: null,
-      imageKey: null,
-      imageNonce: null,
+      imageHash: new Uint8Array(0),
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     expect(() => encodeMarmotGroupData(groupData)).toThrow(/Invalid relay URL/);
@@ -203,15 +216,16 @@ describe("validation", () => {
 
   it("should reject wrong-sized fields", () => {
     const groupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(16), // Wrong size!
       name: "",
       description: "",
       adminPubkeys: [],
       relays: [],
-      imageHash: null,
-      imageKey: null,
-      imageNonce: null,
+      imageHash: new Uint8Array(0),
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     expect(() => encodeMarmotGroupData(groupData)).toThrow(
@@ -233,15 +247,16 @@ describe("isAdmin", () => {
   it("should return true for authorized admin", () => {
     const adminKey = "a".repeat(64);
     const groupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32),
       name: "",
       description: "",
       adminPubkeys: [adminKey],
       relays: [],
-      imageHash: null,
-      imageKey: null,
-      imageNonce: null,
+      imageHash: new Uint8Array(0),
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     expect(isAdmin(groupData, adminKey)).toBe(true);
@@ -250,15 +265,16 @@ describe("isAdmin", () => {
 
   it("should return false for unauthorized admin", () => {
     const groupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32),
       name: "",
       description: "",
       adminPubkeys: ["a".repeat(64)],
       relays: [],
-      imageHash: null,
-      imageKey: null,
-      imageNonce: null,
+      imageHash: new Uint8Array(0),
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     expect(isAdmin(groupData, "b".repeat(64))).toBe(false);
@@ -285,15 +301,16 @@ describe("serialization with byteOffset handling", () => {
 
     // Create Marmot group data
     const marmotGroupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32).fill(42),
       name: "Test Group with Real MLS",
       description: "Testing byteOffset handling with real ClientState",
       adminPubkeys: [alicePubkey],
       relays: ["wss://relay.example.com"],
-      imageHash: null,
-      imageKey: null,
-      imageNonce: null,
+      imageHash: new Uint8Array(0),
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     // Create the Marmot extension
@@ -332,9 +349,10 @@ describe("serialization with byteOffset handling", () => {
     expect(decoded.description).toBe(marmotGroupData.description);
     expect(decoded.adminPubkeys).toEqual(marmotGroupData.adminPubkeys);
     expect(decoded.relays).toEqual(marmotGroupData.relays);
-    expect(decoded.imageHash).toBeNull();
-    expect(decoded.imageKey).toBeNull();
-    expect(decoded.imageNonce).toBeNull();
+    expect(decoded.imageHash).toEqual(new Uint8Array(0));
+    expect(decoded.imageKey).toEqual(new Uint8Array(0));
+    expect(decoded.imageNonce).toEqual(new Uint8Array(0));
+    expect(decoded.imageUploadKey).toEqual(new Uint8Array(0));
   });
 
   it("should correctly decode extension data after encodeGroupState/decodeGroupState round-trip", async () => {
@@ -356,7 +374,7 @@ describe("serialization with byteOffset handling", () => {
 
     // Create Marmot group data with long strings to test variable-length fields
     const marmotGroupData: MarmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32).fill(1),
       name: "Very Long Group Name That Tests Variable Length Field Encoding with Serialization",
       description:
@@ -370,6 +388,7 @@ describe("serialization with byteOffset handling", () => {
       imageHash: new Uint8Array(32).fill(2),
       imageKey: new Uint8Array(32).fill(3),
       imageNonce: new Uint8Array(12).fill(4),
+      imageUploadKey: new Uint8Array(32).fill(9),
     };
 
     // Create the Marmot extension

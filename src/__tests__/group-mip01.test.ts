@@ -18,15 +18,16 @@ describe("MIP-01: group construction", () => {
     const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
 
     const marmotGroupData = {
-      version: 1,
+      version: 2,
       nostrGroupId: new Uint8Array(32).fill(7),
       name: "Test Group",
       description: "",
       adminPubkeys: [adminPubkey],
       relays: ["wss://relay.example.com"],
-      imageHash: null,
-      imageKey: null,
-      imageNonce: null,
+      imageHash: new Uint8Array(0),
+      imageKey: new Uint8Array(0),
+      imageNonce: new Uint8Array(0),
+      imageUploadKey: new Uint8Array(0),
     };
 
     const { clientState } = await createGroup({
@@ -40,5 +41,8 @@ describe("MIP-01: group construction", () => {
     expect(extracted?.nostrGroupId).toEqual(marmotGroupData.nostrGroupId);
     expect(extracted?.adminPubkeys).toEqual([adminPubkey]);
     expect(extracted?.relays).toEqual(["wss://relay.example.com"]);
+
+    // MIP-01 privacy: MLS group_id must be distinct from the public nostr_group_id.
+    expect(clientState.groupContext.groupId).not.toEqual(marmotGroupData.nostrGroupId);
   });
 });

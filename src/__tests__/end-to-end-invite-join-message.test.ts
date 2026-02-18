@@ -89,7 +89,7 @@ describe("End-to-end: invite, join, first message", () => {
     // Store the KeyPackage in invitee's local store (required for joinGroupFromWelcome)
     await inviteeClient.keyPackageStore.add(inviteeKeyPackage);
 
-    const unsignedKeyPackageEvent = createKeyPackageEvent({
+    const unsignedKeyPackageEvent = await createKeyPackageEvent({
       keyPackage: inviteeKeyPackage.publicPackage,
       relays: ["wss://mock-relay.test"],
     });
@@ -151,11 +151,32 @@ describe("End-to-end: invite, join, first message", () => {
     const keyPackageEventId = welcomeRumor.tags.find((t) => t[0] === "e")?.[1];
     expect(keyPackageEventId).toBe(signedKeyPackageEvent.id);
 
+    // Join should request relay deletion of the consumed KeyPackage event (best-effort).
+    let relayDeleteRequested: string | null = null;
+    inviteeClient.on(
+      "keyPackageRelayDeleteRequested",
+      ({ keyPackageEventId }) => {
+        relayDeleteRequested = keyPackageEventId;
+      },
+    );
+
     // Join the group
     const inviteeGroup = await inviteeClient.joinGroupFromWelcome({
       welcomeRumor,
       keyPackageEventId,
     });
+
+    // MIP-02: joiners SHOULD self-update immediately after Welcome.
+    // This advances the epoch by 1 compared to the admin state immediately
+    // after the invite commit.
+    expect(inviteeGroup.state.groupContext.epoch).toBe(
+      adminGroup.state.groupContext.epoch + 1n,
+    );
+
+    // MIP-00: join should remove the consumed KeyPackage from local storage.
+    // We stored exactly one, so count should drop to 0.
+    expect(await inviteeClient.keyPackageStore.count()).toBe(0);
+    expect(relayDeleteRequested).toBe(keyPackageEventId);
 
     // Step 5: Invitee ingests group events to catch up
     // Extract nostr group ID from extensions
@@ -169,9 +190,14 @@ describe("End-to-end: invite, join, first message", () => {
       "#h": [nostrGroupIdHex],
     });
 
+    // Admin must ingest the joiner's post-join self-update commit to catch up.
+    for await (const _ of adminGroup.ingest(groupEvents)) {
+      // Drain iterator
+    }
+
     // NOTE: joining from Welcome yields a state that already includes the
-    // invite commit. Ingesting the backlog should be a no-op (but must not
-    // regress state or throw).
+    // invite commit and then performs a post-join self-update. Ingesting the
+    // backlog should be a no-op (but must not regress state or throw).
     const inviteeEpochBeforeCatchup = inviteeGroup.state.groupContext.epoch;
     for await (const _ of inviteeGroup.ingest(groupEvents)) {
       // Drain iterator

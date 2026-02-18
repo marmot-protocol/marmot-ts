@@ -69,8 +69,11 @@ export function getWelcomeKeyPackageEventId(event: Rumor): string | undefined {
 
 /** Returns the group relays from a welcome rumor */
 export function getWelcomeGroupRelays(event: Rumor): string[] {
-  const relaysTag = getTagValue(event, "relays");
-  return relaysTag ? relaysTag.split(",") : [];
+  // NOTE: The "relays" tag is a normal Nostr tag vector: ["relays", ...urls]
+  // (see MIP-02 and createWelcomeRumor()).
+  const tag = event.tags.find((t) => t[0] === "relays");
+  if (!tag) return [];
+  return tag.slice(1);
 }
 
 /**
@@ -86,8 +89,12 @@ export function getWelcome(event: NostrEvent | Rumor): Welcome {
       `Expected welcome event kind ${WELCOME_EVENT_KIND}, got ${event.kind}`,
     );
   }
-  // Check for encoding tag, default to hex for backward compatibility
-  const encodingFormat = getEncodingTag(event) ?? "hex";
+  const encodingFormat = getEncodingTag(event);
+  if (encodingFormat !== "base64") {
+    throw new Error(
+      "Welcome event must include encoding=base64 tag (hex and missing tags are rejected)",
+    );
+  }
   const content = decodeContent(event.content, encodingFormat);
   const welcome = decode(welcomeDecoder, content);
   if (!welcome) throw new Error("Failed to decode welcome message");

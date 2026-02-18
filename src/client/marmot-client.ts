@@ -19,6 +19,7 @@ import { createCredential, getCredentialPubkey } from "../core/credential.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
+import { LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE } from "../core/protocol.js";
 import {
   createKeyPackageEvent,
   createDeleteKeyPackageEvent,
@@ -79,6 +80,8 @@ type MarmotClientEvents<THistory extends BaseGroupHistory | undefined = any> = {
   groupImported: (group: MarmotGroup<THistory>) => void;
   /** Emitted when a group is joined */
   groupJoined: (group: MarmotGroup<THistory>) => void;
+  /** Emitted when a key package should be deleted from relays after successful join (MIP-00). */
+  keyPackageRelayDeleteRequested: (args: { keyPackageEventId: string }) => void;
   /** Emitted when a group is unloaded */
   groupUnloaded: (groupId: Uint8Array) => void;
   /** Emitted when a group is destroyed */
@@ -430,6 +433,8 @@ export class MarmotClient<
     // Try each key package in priority order until one successfully decrypts the Welcome message
     let clientState: ClientState | null = null;
     let lastError: Error | null = null;
+    let consumedKeyPackageRef: Uint8Array | null = null;
+    let consumedKeyPackage: KeyPackage | null = null;
 
     for (const keyPackage of prioritizedKeyPackages) {
       try {
@@ -445,6 +450,8 @@ export class MarmotClient<
           keyPackage: keyPackage.publicPackage,
           privateKeys: keyPackage.privatePackage,
         });
+        consumedKeyPackageRef = keyPackage.keyPackageRef;
+        consumedKeyPackage = keyPackage.publicPackage;
         // If successful, break out of the loop
         break;
       } catch (error) {
@@ -460,6 +467,38 @@ export class MarmotClient<
         ? `Failed to join group with any matching key package. Last error: ${lastError.message}`
         : "Failed to join group with any matching key package";
       throw new Error(errorMessage);
+    }
+
+    // MIP-00: After successfully processing a Welcome, clients SHOULD delete
+    // the consumed KeyPackage from local storage to minimize reuse/exposure.
+    // last_resort nuance (MIP-00): retain init_key private material while the
+    // KeyPackage remains published / expected to be needed for more Welcomes.
+    //
+    // Practical handling in this repo:
+    // - If we have a KeyPackage event id (relay-based distribution), we request
+    //   relay deletion best-effort and treat that as intent to unpublish/rotate,
+    //   so we delete local private material.
+    // - If we *don't* have an event id (out-of-band sharing / unknown publish
+    //   status), we retain local private material for last_resort KeyPackages.
+    if (consumedKeyPackageRef) {
+      const isLastResort =
+        !!consumedKeyPackage?.extensions?.some(
+          (ext) =>
+            typeof ext === "object" &&
+            ext !== null &&
+            "extensionType" in ext &&
+            // extensionType is numeric in ts-mls v2
+            (ext as { extensionType: number }).extensionType ===
+              LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+        );
+
+      if (isLastResort && !keyPackageEventId) {
+        console.warn(
+          "[MarmotClient.joinGroupFromWelcome] Consumed KeyPackage had last_resort extension and no event id; retaining local private material per MIP-00",
+        );
+      } else {
+        await this.keyPackageStore.remove(consumedKeyPackageRef);
+      }
     }
 
     // Save the group state to the store
@@ -482,32 +521,21 @@ export class MarmotClient<
     this.setGroupInstance(group);
     this.emit("groupJoined", group);
 
+    // MIP-00: best-effort request to delete the relay-published KeyPackage event.
+    // Even if the KeyPackage has last_resort, implementations typically rotate/
+    // unpublish after a successful join; in that common case, requesting relay
+    // deletion is still appropriate.
+    if (keyPackageEventId) {
+      this.emit("keyPackageRelayDeleteRequested", { keyPackageEventId });
+    }
+
     // MIP-02 SHOULD: post-join self-update to rotate leaf key material for forward secrecy.
-    // Admin joiners can commit directly (empty commit with UpdatePath rotates leaf
-    // keys). Non-admin joiners would need to send an Update proposal, but this
-    // requires ts-mls to manage both old and new HPKE private keys until the
-    // commit resolving the proposal is processed — without that, the proposer
-    // cannot decrypt the admin's commit and their group state breaks.
-    // See: ts-mls applyUpdatePathSecret uses privatePath which won't have the
-    // new HPKE private key from an externally-constructed ProposalUpdate.
+    // This is REQUIRED within 24 hours (MIP-02), and recommended immediately.
     try {
-      // Derive pubkey from the key package credential to avoid triggering
-      // a signer popup (e.g. hardware wallet) for getPublicKey().
-      const ownLeaf = getOwnLeafNode(clientState);
-      const pubkey = getCredentialPubkey(ownLeaf.credential);
-      const groupData = group.groupData;
-      if (groupData && groupData.adminPubkeys.includes(pubkey)) {
-        await group.commit({
-          extraProposals: [],
-          proposalRefs: [],
-        });
-        console.log(
-          `[MarmotClient.joinGroupFromWelcome] Post-join self-update commit sent (admin)`,
-        );
-      }
-      // TODO: non-admin self-update requires a ts-mls createSelfUpdateProposal()
-      // helper that internally retains the new HPKE private key in privatePath
-      // so processMessage can decrypt the commit that applies the Update.
+      await group.selfUpdate();
+      console.log(
+        `[MarmotClient.joinGroupFromWelcome] Post-join self-update commit sent`,
+      );
     } catch (err) {
       // Best-effort — failure to self-update is non-fatal.
       console.warn(
@@ -658,9 +686,11 @@ export class MarmotClient<
       ciphersuiteImpl,
     });
 
-    // Build the unsigned kind 443 event before persisting private material,
-    // so a serialization failure doesn't leave orphaned keys in the store.
-    const keyPackageEvent = createKeyPackageEvent({
+    // Store the private material locally
+    await this.keyPackageStore.add(keyPackage);
+
+    // Build the unsigned kind 443 event
+    const keyPackageEvent = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
       relays: options?.relays,
       client: options?.client,

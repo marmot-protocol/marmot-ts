@@ -32,7 +32,9 @@ export async function createGroup(
     extensions = [],
     ciphersuiteImpl,
   } = params;
-  const groupId = marmotGroupData.nostrGroupId;
+  // MIP-01: MLS group_id MUST be private and distinct from the public
+  // nostr_group_id stored in the Marmot Group Data extension.
+  const groupId = randomBytes(32);
   // Always include Marmot Group Data as a GroupContext extension.
   const marmotExtension = marmotGroupDataToExtension(marmotGroupData);
 
@@ -69,15 +71,16 @@ export async function createSimpleGroup(
   options?: SimpleGroupOptions,
 ): Promise<CreateGroupResult> {
   const marmotGroupData: MarmotGroupData = {
-    version: 1,
+    version: 2,
     nostrGroupId: randomBytes(32),
     name: groupName,
     description: options?.description || "",
     adminPubkeys: options?.adminPubkeys || [],
     relays: options?.relays || [],
-    imageHash: null,
-    imageKey: null,
-    imageNonce: null,
+    imageHash: new Uint8Array(0),
+    imageKey: new Uint8Array(0),
+    imageNonce: new Uint8Array(0),
+    imageUploadKey: new Uint8Array(0),
   };
 
   return createGroup({

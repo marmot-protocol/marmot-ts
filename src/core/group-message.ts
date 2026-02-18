@@ -269,8 +269,7 @@ export const deserializeApplicationRumor = deserializeApplicationData;
  *
  * Sorting order (MIP-03):
  * 1. First, sort by commit time (created_at) - older commits first
- * 2. If equal, sort by message sender (lexicographically by pubkey) - lower pubkey first
- * 3. If still equal, sort by message hash (lexicographically) - lower hash first
+ * 2. If equal, sort by event id (lexicographically) - lower id first
  *
  * @param commits - Array of commit message pairs to sort
  * @returns Sorted array of commits
@@ -284,12 +283,7 @@ export function sortGroupCommits(
       return a.event.created_at - b.event.created_at;
     }
 
-    // Rule 2: If equal, sort by sender pubkey (lexicographically)
-    if (a.event.pubkey !== b.event.pubkey) {
-      return a.event.pubkey.localeCompare(b.event.pubkey);
-    }
-
-    // Rule 3: If still equal, sort by event id (lexicographically)
+    // Rule 2: If equal, sort by event id (lexicographically)
     return a.event.id.localeCompare(b.event.id);
   });
 }

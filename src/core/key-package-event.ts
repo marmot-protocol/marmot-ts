@@ -1,4 +1,5 @@
 import { NostrEvent } from "applesauce-core/helpers/event";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { CiphersuiteId, ciphersuites } from "ts-mls/crypto/ciphersuite.js";
 import { protocolVersions } from "ts-mls/protocolVersion.js";
 import { CustomExtension, defaultCredentialTypes } from "ts-mls";
@@ -13,6 +14,7 @@ import {
 import { getTagValue, unixNow } from "../utils/nostr.js";
 import { isValidRelayUrl, normalizeRelayUrl } from "../utils/relay-url.js";
 import { getCredentialPubkey } from "./credential.js";
+import { calculateKeyPackageRef } from "./key-package.js";
 import {
   KEY_PACKAGE_CIPHER_SUITE_TAG,
   KEY_PACKAGE_CLIENT_TAG,
@@ -61,8 +63,12 @@ export function createDeleteKeyPackageEvent(
 
 /** Get the KeyPackage from a kind 443 event */
 export function getKeyPackage(event: NostrEvent): KeyPackage {
-  // Check for encoding tag, default to hex for backward compatibility
-  const encodingFormat = getEncodingTag(event) ?? "hex";
+  const encodingFormat = getEncodingTag(event);
+  if (encodingFormat !== "base64") {
+    throw new Error(
+      "KeyPackage event must include encoding=base64 tag (hex and missing tags are rejected)",
+    );
+  }
   const content = decodeContent(event.content, encodingFormat);
   const decoded = decode(keyPackageDecoder, content);
   if (!decoded) throw new Error("Failed to decode key package");
@@ -113,7 +119,12 @@ export function getKeyPackageExtensions(
 /** Gets the relays for a kind 443 event */
 export function getKeyPackageRelays(event: NostrEvent): string[] | undefined {
   const tag = event.tags.find((t) => t[0] === KEY_PACKAGE_RELAYS_TAG);
-  if (!tag) return undefined;
+  if (!tag) {
+    console.warn(
+      "KeyPackage event missing relays tag (MIP-00 expects published keypackages to include relays)",
+    );
+    return undefined;
+  }
   return tag.slice(1).filter(isValidRelayUrl).map(normalizeRelayUrl);
 }
 
@@ -152,8 +163,24 @@ export type CreateKeyPackageEventOptions = {
  */
 export function createKeyPackageEvent(
   options: CreateKeyPackageEventOptions,
-): EventTemplate {
+): Promise<EventTemplate> {
+  return createKeyPackageEventInternal(options);
+}
+
+async function createKeyPackageEventInternal(
+  options: CreateKeyPackageEventOptions,
+): Promise<EventTemplate> {
   const { keyPackage, relays, client } = options;
+
+  // MIP-00: Published KeyPackage events SHOULD include a relays tag so inviters
+  // know where to fetch commits and how to request deletion. We do not
+  // hard-enforce this because some callers may generate drafts/out-of-band
+  // key packages.
+  if (!relays || relays.length === 0) {
+    console.warn(
+      "createKeyPackageEvent: no relays provided; omitting relays tag (may reduce interoperability)",
+    );
+  }
 
   // Serialize the key package according to RFC 9420
   const encodedBytes = encode(keyPackageEncoder, keyPackage);
@@ -209,6 +236,10 @@ export function createKeyPackageEvent(
     [KEY_PACKAGE_EXTENSIONS_TAG, ...filteredExtensionTypes],
     ["encoding", "base64"],
   );
+
+  // MIP-00: required KeyPackageRef tag ("i")
+  const keyPackageRef = await calculateKeyPackageRef(keyPackage);
+  tags.push(["i", bytesToHex(keyPackageRef)]);
 
   // Add client tag if provided
   if (client) tags.push([KEY_PACKAGE_CLIENT_TAG, client]);

@@ -173,9 +173,10 @@ describe("End-to-end: invite, join, first message", () => {
       adminGroup.state.groupContext.epoch + 1n,
     );
 
-    // MIP-00: join should remove the consumed KeyPackage from local storage.
-    // We stored exactly one, so count should drop to 0.
-    expect(await inviteeClient.keyPackageStore.count()).toBe(0);
+    // MIP-00: last_resort key packages may be reused to handle race windows.
+    // Our default KeyPackages include last_resort, so the local private material
+    // is retained after a successful join.
+    expect(await inviteeClient.keyPackageStore.count()).toBe(1);
     expect(relayDeleteRequested).toBe(keyPackageEventId);
 
     // Step 5: Invitee ingests group events to catch up

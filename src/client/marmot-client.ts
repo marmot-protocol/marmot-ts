@@ -491,9 +491,12 @@ export class MarmotClient<
       );
 
       if (isLastResort) {
-        // MIP-00: last_resort key packages should retain their private init_key
-        // material as long as they may be needed to decrypt future Welcomes.
-        // Deleting the local private package here can break subsequent joins.
+        // MIP-00: last_resort key packages must retain their private init_key
+        // material as long as the KeyPackage may still be needed to decrypt
+        // other Welcomes (race window).
+        //
+        // Deletion should happen when the last_resort KeyPackage is rotated and
+        // unpublished, not immediately on first successful join.
         console.warn(
           "[MarmotClient.joinGroupFromWelcome] Consumed KeyPackage had last_resort extension; retaining local private material per MIP-00",
         );
@@ -523,20 +526,10 @@ export class MarmotClient<
     this.emit("groupJoined", group);
 
     // MIP-00: best-effort request to delete the relay-published KeyPackage event.
-    // Even if the KeyPackage has last_resort, implementations typically rotate/
-    // unpublish after a successful join; in that common case, requesting relay
-    // deletion is still appropriate.
-    if (
-      keyPackageEventId &&
-      !consumedKeyPackage?.extensions?.some(
-        (ext) =>
-          typeof ext === "object" &&
-          ext !== null &&
-          "extensionType" in ext &&
-          (ext as { extensionType: number }).extensionType ===
-            LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
-      )
-    ) {
+    // This is emitted whenever we have an event id (relay distribution).
+    // Note: even if the KeyPackage is last_resort, many implementations rotate/
+    // unpublish after a successful join.
+    if (keyPackageEventId) {
       this.emit("keyPackageRelayDeleteRequested", { keyPackageEventId });
     }
 

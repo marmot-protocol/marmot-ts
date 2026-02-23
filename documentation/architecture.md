@@ -1,6 +1,6 @@
 # Architecture & Protocol Design
 
-`marmot-ts` is a Typescript wrapper implementation of the **Marmot Protocol** (MIP). It bridges the [Nostr decentralized relay network](https://github.com/nostr-protocol/nips) with the cryptographic guarantees of [MLS (Messaging Layer Security)](https://messaginglayersecurity.rocks/) provided by `ts-mls`.
+`marmot-ts` is a Typescript implementation of the [Marmot Protocol](https://github.com/marmot-protocol/marmot). It bridges the [Nostr network](https://github.com/nostr-protocol/nips) with the cryptographic guarantees of [MLS (Messaging Layer Security)](https://messaginglayersecurity.rocks/) provided by `ts-mls`.
 
 ## High-Level Component Overview
 

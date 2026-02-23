@@ -89,9 +89,7 @@ function ExampleView(props: { example?: Example; isSettings?: boolean }) {
         </div>
 
         {/* Page content */}
-        <div className="p-4">
-          <RelayBanners />
-        </div>
+        <RelayBanners />
         {props.isSettings ? (
           <ErrorBoundary
             fallbackRender={({ error }) => (

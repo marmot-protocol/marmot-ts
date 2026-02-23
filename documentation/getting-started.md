@@ -63,7 +63,22 @@ const network: NostrNetworkInterface = {
     return [];
   },
   subscription: (relays, filters) => {
-    // Implement real-time subscription returning an AsyncIterable
+    // Returns a Subscribable<NostrEvent> that emits events matching the filters
+    // Implementers should return an object with a subscribe method that
+    // yields NostrEvent objects to the observer
+    return {
+      subscribe: (observer) => {
+        // Implement real-time subscription logic here
+        // Call observer.next(event) when events are received
+        // Call observer.error(err) on errors
+        // Call observer.complete() when subscription ends
+        return {
+          unsubscribe: () => {
+            // Implement cleanup logic here
+          },
+        };
+      },
+    };
   },
   publish: async (relays, event) => {
     // Implement event publishing logic

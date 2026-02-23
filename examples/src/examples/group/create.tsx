@@ -134,10 +134,20 @@ function ConfigurationForm({
 
         // Persist locally so we have the private init_key material when a Welcome arrives.
         // Without this, Join may fail with: "No matching KeyPackage found in local store".
-        try {
-          await keyPackageStore.add(generated);
-        } catch {
-          // Best-effort: do not block group creation.
+        if (keyPackageStore === undefined) {
+          console.error(
+            "[CreateGroup] keyPackageStore is undefined (keyPackageStore$ not ready). " +
+              "Cannot persist generated key package locally.",
+          );
+        } else {
+          try {
+            await keyPackageStore.add(generated);
+          } catch (err) {
+            console.error(
+              `[CreateGroup] Failed to persist key package to keyPackageStore: ${err instanceof Error ? err.message : String(err)}`,
+              { generated },
+            );
+          }
         }
 
         keyPackageToUse = generated;

@@ -24,10 +24,14 @@ export function RelayBanners({
 
   const has10051 = Boolean(keyPackageRelays && keyPackageRelays.length > 0);
 
-  if (!account) return null;
+  // Determine if any banner should be shown
+  const showNip65Banner = showNip65 && !hasNip65;
+  const showKeyPackageBanner = showKeyPackageRelayList && hasNip65 && !has10051;
+
+  if (!account || (!showNip65Banner && !showKeyPackageBanner)) return null;
 
   return (
-    <div className="space-y-3">
+    <div className="p-4 space-y-3">
       {showNip65 && !hasNip65 && (
         <div className="alert alert-warning">
           <svg

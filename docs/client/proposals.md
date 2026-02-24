@@ -7,7 +7,7 @@ Type-safe proposal builders for group operations.
 ### Invite User
 
 ```typescript
-import { Proposals } from 'marmot-ts/client';
+import { Proposals } from "@internet-privacy/marmots/client";
 
 await group.propose(Proposals.proposeInviteUser(keyPackageEvent));
 
@@ -22,7 +22,7 @@ await group.commit({
 Removes all devices for a user:
 
 ```typescript
-import { Proposals } from 'marmot-ts/client';
+import { Proposals } from "@internet-privacy/marmots/client";
 
 await group.propose(Proposals.proposeKickUser(targetPubkey));
 ```
@@ -32,14 +32,16 @@ await group.propose(Proposals.proposeKickUser(targetPubkey));
 Updates group metadata (partial updates supported):
 
 ```typescript
-import { Proposals } from 'marmot-ts/client';
+import { Proposals } from "@internet-privacy/marmots/client";
 
-await group.propose(Proposals.proposeUpdateMetadata({
-  name: 'New Group Name',
-  description: 'Updated description',
-  relays: ['wss://new-relay.com'],
-  adminPubkeys: [...existingAdmins, newAdmin],
-}));
+await group.propose(
+  Proposals.proposeUpdateMetadata({
+    name: "New Group Name",
+    description: "Updated description",
+    relays: ["wss://new-relay.com"],
+    adminPubkeys: [...existingAdmins, newAdmin],
+  }),
+);
 ```
 
 ## Custom Proposals
@@ -50,7 +52,7 @@ You can create custom proposal functions:
 // Define custom proposal action
 const myProposal: ProposalAction = async (context) => {
   const { state, ciphersuite, groupData } = context;
-  
+
   // Return Proposal or Proposal[]
   return createCustomProposal(/* ... */);
 };
@@ -70,12 +72,12 @@ interface ProposalContext {
 }
 
 // Proposal action function
-type ProposalAction<T extends Proposal | Proposal[]> = 
-  (context: ProposalContext) => Promise<T>;
+type ProposalAction<T extends Proposal | Proposal[]> = (
+  context: ProposalContext,
+) => Promise<T>;
 
 // Proposal builder (higher-order function)
-type ProposalBuilder<Args, T> = 
-  (...args: Args) => ProposalAction<T>;
+type ProposalBuilder<Args, T> = (...args: Args) => ProposalAction<T>;
 ```
 
 ## Workflow

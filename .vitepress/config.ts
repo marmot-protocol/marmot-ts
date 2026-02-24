@@ -25,6 +25,20 @@ export default defineConfig({
         ],
       },
       {
+        text: "Marmot Client",
+        items: [
+          { text: "Overview", link: "/client/" },
+          { text: "MarmotClient", link: "/client/marmot-client" },
+          { text: "MarmotGroup", link: "/client/marmot-group" },
+          { text: "UI Framework Integration", link: "/client/ui-frameworks" },
+          { text: "Proposals", link: "/client/proposals" },
+          { text: "History", link: "/client/history" },
+          { text: "Network", link: "/client/network" },
+          { text: "Storage", link: "/client/storage" },
+          { text: "Best Practices", link: "/client/best-practices" },
+        ],
+      },
+      {
         text: "Core Module",
         items: [
           { text: "Overview", link: "/core/" },
@@ -37,21 +51,6 @@ export default defineConfig({
           { text: "Welcome Messages", link: "/core/welcome" },
           { text: "Key Package Distribution", link: "/core/distribution" },
           { text: "Client State", link: "/core/state" },
-          { text: "API Reference", link: "/core/api" },
-        ],
-      },
-      {
-        text: "Client Module",
-        items: [
-          { text: "Overview", link: "/client/" },
-          { text: "MarmotClient", link: "/client/marmot-client" },
-          { text: "MarmotGroup", link: "/client/marmot-group" },
-          { text: "Proposals", link: "/client/proposals" },
-          { text: "History", link: "/client/history" },
-          { text: "Network", link: "/client/network" },
-          { text: "Storage", link: "/client/storage" },
-          { text: "Best Practices", link: "/client/best-practices" },
-          { text: "API Reference", link: "/client/api" },
         ],
       },
     ],

@@ -21,13 +21,14 @@ Nostr Event (kind 445)
 
 ```typescript
 // Derives encryption key from current MLS epoch
-exporter_secret = MLS_Exporter(clientState, "marmot group message", epoch)
+exporter_secret = MLS_Exporter(clientState, "marmot group message", epoch);
 
 // Uses exporter_secret as NIP-44 encryption key
-encrypted = NIP44_Encrypt(exporter_secret, mlsMessage)
+encrypted = NIP44_Encrypt(exporter_secret, mlsMessage);
 ```
 
 This approach:
+
 - Prevents key reuse across epochs
 - Provides epoch-based key rotation
 - Maintains forward secrecy
@@ -44,14 +45,14 @@ This approach:
 ### Encrypt and Create Event
 
 ```typescript
-import { createGroupEvent } from 'marmot-ts/core';
+import { createGroupEvent } from "@internet-privacy/marmots/core";
 
 const event = await createGroupEvent(
-  mlsMessage,           // MLSMessage from MLS operations
-  nostrGroupId,         // 32-byte group identifier
-  clientState,          // Current MLS group state
-  ciphersuiteImpl,      // Cryptographic implementation
-  ephemeralSignerFn     // Function to sign with ephemeral key
+  mlsMessage, // MLSMessage from MLS operations
+  nostrGroupId, // 32-byte group identifier
+  clientState, // Current MLS group state
+  ciphersuiteImpl, // Cryptographic implementation
+  ephemeralSignerFn, // Function to sign with ephemeral key
 );
 
 // event is an unsigned NostrEvent (rumor)
@@ -75,13 +76,13 @@ async function ephemeralSigner(event: UnsignedEvent): Promise<string> {
 ### Single Event Decryption
 
 ```typescript
-import { decryptGroupMessageEvent } from 'marmot-ts/core';
+import { decryptGroupMessageEvent } from "@internet-privacy/marmots/core";
 
 try {
   const mlsMessage = await decryptGroupMessageEvent(
-    event,             // Nostr event (kind 445)
-    clientState,       // Current MLS group state
-    ciphersuiteImpl    // Cryptographic implementation
+    event, // Nostr event (kind 445)
+    clientState, // Current MLS group state
+    ciphersuiteImpl, // Cryptographic implementation
   );
   // mlsMessage ready for MLS processing
 } catch (error) {
@@ -94,12 +95,12 @@ try {
 For multiple events with error handling:
 
 ```typescript
-import { readGroupMessages } from 'marmot-ts/core';
+import { readGroupMessages } from "@internet-privacy/marmots/core";
 
 const pairs = await readGroupMessages(
-  events,            // Array of kind 445 events
+  events, // Array of kind 445 events
   clientState,
-  ciphersuiteImpl
+  ciphersuiteImpl,
 );
 
 // pairs is an array of { event, message } objects
@@ -114,7 +115,7 @@ When multiple admins send commits for the same epoch, Marmot uses deterministic 
 ### Sorting Commits
 
 ```typescript
-import { sortGroupCommits } from 'marmot-ts/core';
+import { sortGroupCommits } from "@internet-privacy/marmots/core";
 
 // Sort commits by: epoch → timestamp → event ID
 const sortedPairs = sortGroupCommits(messagePairs);
@@ -140,18 +141,20 @@ Application messages are the actual content users send (chat messages, files, et
 ### What are Rumors?
 
 A rumor is an unsigned Nostr event:
+
 ```typescript
 interface Rumor {
   kind: number;
   content: string;
   tags: string[][];
   created_at: number;
-  pubkey: string;  // Sender's real pubkey
+  pubkey: string; // Sender's real pubkey
   // No 'id' or 'sig' - unsigned!
 }
 ```
 
 **Why unsigned?**
+
 - Cannot be republished if leaked (no signature to verify)
 - Only valid within encrypted MLS context
 - Protects against leak exploitation
@@ -159,11 +162,11 @@ interface Rumor {
 ### Serializing Rumors
 
 ```typescript
-import { serializeApplicationRumor } from 'marmot-ts/core';
+import { serializeApplicationRumor } from "@internet-privacy/marmots/core";
 
 const rumor = {
   kind: 1,
-  content: 'Hello, group!',
+  content: "Hello, group!",
   tags: [],
   created_at: Math.floor(Date.now() / 1000),
   pubkey: senderPubkey,
@@ -176,13 +179,13 @@ const serialized = serializeApplicationRumor(rumor);
 ### Deserializing Rumors
 
 ```typescript
-import { deserializeApplicationRumor } from 'marmot-ts/core';
+import { deserializeApplicationRumor } from "@internet-privacy/marmots/core";
 
 // After processing MLS message, extract application data
 const rumor = deserializeApplicationRumor(applicationData);
 
 console.log(rumor.content); // "Hello, group!"
-console.log(rumor.pubkey);  // Sender's pubkey
+console.log(rumor.pubkey); // Sender's pubkey
 ```
 
 ## Complete Message Flow
@@ -194,13 +197,13 @@ import {
   serializeApplicationRumor,
   createGroupEvent,
   getNostrGroupIdHex,
-} from 'marmot-ts/core';
-import { createApplicationMessage } from 'ts-mls';
+} from "@internet-privacy/marmots/core";
+import { createApplicationMessage } from "ts-mls";
 
 // 1. Create rumor
 const rumor = {
   kind: 1,
-  content: 'Hello!',
+  content: "Hello!",
   tags: [],
   created_at: Math.floor(Date.now() / 1000),
   pubkey: myPubkey,
@@ -213,7 +216,7 @@ const appData = serializeApplicationRumor(rumor);
 const mlsMessage = createApplicationMessage(
   clientState,
   appData,
-  ciphersuiteImpl
+  ciphersuiteImpl,
 );
 
 // 4. Create group event
@@ -222,7 +225,7 @@ const event = await createGroupEvent(
   hexToBytes(getNostrGroupIdHex(clientState)),
   clientState,
   ciphersuiteImpl,
-  ephemeralSigner
+  ephemeralSigner,
 );
 
 // 5. Publish to relays
@@ -236,8 +239,8 @@ import {
   readGroupMessages,
   sortGroupCommits,
   deserializeApplicationRumor,
-} from 'marmot-ts/core';
-import { processMessage } from 'ts-mls';
+} from "@internet-privacy/marmots/core";
+import { processMessage } from "ts-mls";
 
 // 1. Fetch events from relays
 const events = await fetchGroupEvents(relays, groupId);
@@ -246,8 +249,8 @@ const events = await fetchGroupEvents(relays, groupId);
 const pairs = await readGroupMessages(events, clientState, ciphersuiteImpl);
 
 // 3. Separate commits from application messages
-const commits = pairs.filter(p => isCommit(p.message));
-const appMessages = pairs.filter(p => isApplicationMessage(p.message));
+const commits = pairs.filter((p) => isCommit(p.message));
+const appMessages = pairs.filter((p) => isApplicationMessage(p.message));
 
 // 4. Sort and process commits first
 const sortedCommits = sortGroupCommits(commits);
@@ -267,6 +270,7 @@ for (const { message } of appMessages) {
 ### Ephemeral Signing
 
 Group events are signed with ephemeral keys:
+
 - Each event uses a different keypair
 - Events cannot be linked to sender's identity
 - Observers see random pubkeys, not real identities

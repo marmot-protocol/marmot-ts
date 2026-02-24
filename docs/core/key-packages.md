@@ -5,6 +5,7 @@ Key packages are cryptographic bundles that enable adding new members to groups.
 ## What are Key Packages?
 
 A key package is a pre-generated cryptographic bundle that contains:
+
 - Public key material for encryption
 - Identity credential (Nostr pubkey)
 - Supported capabilities and extensions
@@ -17,9 +18,9 @@ Think of it as a "invitation voucher" that someone can use to add you to a group
 
 ```typescript
 type CompleteKeyPackage = {
-  publicPackage: KeyPackage;        // Shareable public portion
+  publicPackage: KeyPackage; // Shareable public portion
   privatePackage: PrivateKeyPackage; // Secret private portion (store securely!)
-}
+};
 ```
 
 - **Public Package:** Published to Nostr relays (kind 443 events)
@@ -28,8 +29,8 @@ type CompleteKeyPackage = {
 ## Generating Key Packages
 
 ```typescript
-import { generateKeyPackage } from 'marmot-ts/core';
-import { CipherSuite } from 'ts-mls';
+import { generateKeyPackage } from "@internet-privacy/marmots/core";
+import { CipherSuite } from "ts-mls";
 
 const keyPackage = await generateKeyPackage({
   pubkey: nostrPubkey,
@@ -44,6 +45,7 @@ const keyPackage = await generateKeyPackage({
 ## Marmot Requirements
 
 All Marmot key packages must:
+
 - Use **basic credentials** (Nostr pubkeys)
 - Support **Marmot Group Data Extension** (0xf2ee)
 - Include **last_resort extension** (0x000a) for reusability
@@ -57,12 +59,9 @@ These requirements are automatically enforced by `generateKeyPackage()`.
 MLS identifies key packages by their "reference" (a hash):
 
 ```typescript
-import { calculateKeyPackageRef } from 'marmot-ts/core';
+import { calculateKeyPackageRef } from "@internet-privacy/marmots/core";
 
-const ref = calculateKeyPackageRef(
-  keyPackage.publicPackage,
-  ciphersuiteImpl
-);
+const ref = calculateKeyPackageRef(keyPackage.publicPackage, ciphersuiteImpl);
 
 // ref is a Uint8Array used as the key package identifier
 ```
@@ -70,7 +69,7 @@ const ref = calculateKeyPackageRef(
 ## Default Extensions
 
 ```typescript
-import { keyPackageDefaultExtensions } from 'marmot-ts/core';
+import { keyPackageDefaultExtensions } from "@internet-privacy/marmots/core";
 
 const extensions = keyPackageDefaultExtensions();
 // Returns: [{ extensionType: 0x000a, extensionData: ... }]
@@ -82,7 +81,10 @@ const extensions = keyPackageDefaultExtensions();
 Key packages declare which MLS features they support:
 
 ```typescript
-import { defaultCapabilities, ensureMarmotCapabilities } from 'marmot-ts/core';
+import {
+  defaultCapabilities,
+  ensureMarmotCapabilities,
+} from "@internet-privacy/marmots/core";
 
 // Get Marmot-compliant default capabilities
 const caps = defaultCapabilities();
@@ -102,17 +104,20 @@ const updated = ensureMarmotCapabilities(myCapabilities);
 ## Security Considerations
 
 ### Private Package Storage
+
 - **Never publish** the private package
 - Store encrypted and access-controlled
 - Treat like private keys
 - Delete after use (or keep for last_resort)
 
 ### Rotation Strategy
+
 - Generate new key packages after joining groups
 - Rotate every 30-90 days for security
 - Delete old private packages after use
 
 ### Last Resort Extension
+
 - Marks key package as reusable
 - Prevents key exhaustion attacks
 - Required by Marmot protocol
@@ -120,8 +125,11 @@ const updated = ensureMarmotCapabilities(myCapabilities);
 ## Example: Full Workflow
 
 ```typescript
-import { generateKeyPackage, calculateKeyPackageRef } from 'marmot-ts/core';
-import { CipherSuite } from 'ts-mls';
+import {
+  generateKeyPackage,
+  calculateKeyPackageRef,
+} from "@internet-privacy/marmots/core";
+import { CipherSuite } from "ts-mls";
 
 // 1. Generate key package
 const kp = await generateKeyPackage({

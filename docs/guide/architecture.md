@@ -37,6 +37,7 @@ The [Core module](/core/) implements the Marmot protocol layer and provides fund
 - **State Serialization:** Encoding/decoding group state for persistence
 
 **When to use Core directly:**
+
 - Building custom clients with specific requirements
 - Implementing protocol extensions or MIPs
 - Research and experimentation
@@ -54,6 +55,7 @@ The [Client module](/client/) provides a high-level, production-ready implementa
 - **Storage Abstraction:** Pluggable persistence backends
 
 **When to use Client:**
+
 - Building production applications
 - Need for group lifecycle management
 - Want history and message storage
@@ -62,15 +64,18 @@ The [Client module](/client/) provides a high-level, production-ready implementa
 ## Layered Architecture
 
 ### Application Layer
+
 Your chat UI, commands, and business logic.
 
 ### Client Layer (Orchestration)
+
 - **MarmotClient** manages multiple groups
 - Group lifecycle: create, join, load, destroy
 - State persistence and caching
 - Event emission for reactive UIs
 
 ### Client Layer (Group Operations)
+
 - **MarmotGroup** handles single group operations
 - Message sending and receiving
 - Proposal and commit creation
@@ -78,6 +83,7 @@ Your chat UI, commands, and business logic.
 - Admin policy enforcement
 
 ### Core Layer (Protocol)
+
 - Protocol constants and types
 - Credentials and key packages
 - Group creation and initialization
@@ -87,6 +93,7 @@ Your chat UI, commands, and business logic.
 - State serialization
 
 ### Foundation Layer
+
 - **ts-mls:** RFC 9420 compliant MLS implementation
 - **Nostr:** Decentralized event distribution
 - **Cryptography:** Noble libraries for hashing and encryption
@@ -136,28 +143,33 @@ Your chat UI, commands, and business logic.
 ## Design Principles
 
 ### Separation of Concerns
+
 - **Core:** Protocol implementation, no I/O or storage
 - **Client:** I/O, storage, lifecycle management, high-level APIs
 - **Application:** UI, user interactions, business logic
 
 ### Composability
+
 - Small, focused functions with clear contracts
 - Minimal side effects
 - Easy to test and reason about
 
 ### Privacy by Default
+
 - Ephemeral keys for signing group events
 - Gift wraps for sensitive messages (Welcome)
 - Rumors prevent leak exploitation
 - Unlinkable events
 
 ### Type Safety
+
 - Strong TypeScript typing throughout
 - Generic types for flexibility (history, storage)
 - Branded types for domain concepts
 - Exhaustive pattern matching
 
 ### Extensibility
+
 - Pluggable storage backends
 - Pluggable network interfaces
 - Pluggable crypto providers
@@ -165,12 +177,14 @@ Your chat UI, commands, and business logic.
 - MLS extension system
 
 ### Nostr Integration
+
 - Event-based distribution (no central server)
 - Relay-based discovery (decentralized)
 - Compatible with existing Nostr infrastructure
 - Uses standard NIPs (NIP-44, NIP-59, etc.)
 
 ### MLS Compliance
+
 - RFC 9420 conformance via ts-mls
 - Proper extension handling
 - Credential validation hooks
@@ -188,12 +202,14 @@ Marmot-TS implements the following Marmot Improvement Proposals:
 ## Security Properties
 
 ### MLS Properties
+
 - **Forward Secrecy:** Past messages remain secure even if current keys are compromised
 - **Post-Compromise Security:** Security is restored after a compromise through key rotation (commits)
 - **Authenticated Encryption:** All messages are authenticated and encrypted
 - **Group Key Agreement:** Efficient key agreement for large groups
 
 ### Marmot Additions
+
 - **Ephemeral Signing:** Group events signed with ephemeral keys, not user identity keys
 - **Unlinkability:** Events cannot be linked to specific users by observers
 - **Gift-Wrapped Welcome:** Welcome messages wrapped in NIP-59 gift wraps for privacy
@@ -201,6 +217,7 @@ Marmot-TS implements the following Marmot Improvement Proposals:
 - **Deterministic Ordering:** Commit conflicts resolved deterministically
 
 ### Nostr Properties
+
 - **Censorship Resistance:** Multiple relays, no single point of control
 - **Relay Independence:** Choose your own relays
 - **Event Authenticity:** All events are cryptographically signed

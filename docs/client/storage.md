@@ -2,6 +2,10 @@
 
 Pluggable storage backends for group state and key packages.
 
+::: warning Multi-Account Isolation
+If your application supports multiple user accounts, **each account must have completely isolated storage**. Sharing storage between accounts would leak private key material and compromise security. See the [Multi-Account Support](/client/marmot-client#multi-account-support) section for implementation patterns.
+:::
+
 ## GroupStateStore
 
 Stores serialized `ClientState` for groups.
@@ -22,21 +26,21 @@ interface GroupStateStore extends EventEmitter {
 ```typescript
 class MemoryGroupStateStore extends EventEmitter implements GroupStateStore {
   private states = new Map<string, Uint8Array>();
-  
+
   async get(groupId: string) {
     return this.states.get(groupId) ?? null;
   }
-  
+
   async set(groupId: string, state: Uint8Array) {
     this.states.set(groupId, state);
-    this.emit('updated');
+    this.emit("updated");
   }
-  
+
   async delete(groupId: string) {
     this.states.delete(groupId);
-    this.emit('updated');
+    this.emit("updated");
   }
-  
+
   async list() {
     return Array.from(this.states.keys());
   }
@@ -61,6 +65,7 @@ interface KeyPackageStore extends EventEmitter {
 ### Security Considerations
 
 Key packages contain private key material:
+
 - Store encrypted and access-controlled
 - Never transmit unencrypted
 - Clear from memory after use
@@ -72,28 +77,28 @@ class IndexedDBStateStore extends EventEmitter implements GroupStateStore {
   constructor(private db: IDBDatabase) {
     super();
   }
-  
+
   async get(groupId: string) {
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction('states', 'readonly');
-      const req = tx.objectStore('states').get(groupId);
+      const tx = this.db.transaction("states", "readonly");
+      const req = tx.objectStore("states").get(groupId);
       req.onsuccess = () => resolve(req.result?.state ?? null);
       req.onerror = () => reject(req.error);
     });
   }
-  
+
   async set(groupId: string, state: Uint8Array) {
     return new Promise((resolve, reject) => {
-      const tx = this.db.transaction('states', 'readwrite');
-      const req = tx.objectStore('states').put({ groupId, state });
+      const tx = this.db.transaction("states", "readwrite");
+      const req = tx.objectStore("states").put({ groupId, state });
       req.onsuccess = () => {
-        this.emit('updated');
+        this.emit("updated");
         resolve();
       };
       req.onerror = () => reject(req.error);
     });
   }
-  
+
   // ... delete and list implementations
 }
 ```
@@ -101,14 +106,14 @@ class IndexedDBStateStore extends EventEmitter implements GroupStateStore {
 ## Node.js: File System
 
 ```typescript
-import { promises as fs } from 'fs';
-import { join } from 'path';
+import { promises as fs } from "fs";
+import { join } from "path";
 
 class FileSystemStateStore extends EventEmitter implements GroupStateStore {
   constructor(private basePath: string) {
     super();
   }
-  
+
   async get(groupId: string) {
     try {
       const data = await fs.readFile(join(this.basePath, `${groupId}.bin`));
@@ -117,27 +122,29 @@ class FileSystemStateStore extends EventEmitter implements GroupStateStore {
       return null;
     }
   }
-  
+
   async set(groupId: string, state: Uint8Array) {
     await fs.writeFile(join(this.basePath, `${groupId}.bin`), state);
-    this.emit('updated');
+    this.emit("updated");
   }
-  
+
   async delete(groupId: string) {
     await fs.unlink(join(this.basePath, `${groupId}.bin`));
-    this.emit('updated');
+    this.emit("updated");
   }
-  
+
   async list() {
     const files = await fs.readdir(this.basePath);
     return files
-      .filter(f => f.endsWith('.bin'))
-      .map(f => f.replace('.bin', ''));
+      .filter((f) => f.endsWith(".bin"))
+      .map((f) => f.replace(".bin", ""));
   }
 }
 ```
 
 ## Usage
+
+### Single Account
 
 ```typescript
 const client = new MarmotClient({
@@ -147,6 +154,23 @@ const client = new MarmotClient({
 });
 ```
 
-Stores emit 'updated' events that trigger `watchGroups()` and `watchKeyPackages()` generators.
+### Multi-Account (Namespaced Storage)
 
-See [API Reference](./api) for complete interface documentation.
+```typescript
+function createClientForAccount(pubkey: string) {
+  return new MarmotClient({
+    signer: accountSigner,
+    network: sharedNetworkInterface,
+    groupStateStore: localforage.createInstance({
+      name: `marmot-${pubkey}`,
+      storeName: "groups",
+    }),
+    keyPackageStore: localforage.createInstance({
+      name: `marmot-${pubkey}`,
+      storeName: "keyPackages",
+    }),
+  });
+}
+```
+
+Stores emit 'updated' events that trigger `watchGroups()` and `watchKeyPackages()` generators.

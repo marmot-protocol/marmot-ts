@@ -15,6 +15,7 @@
     "lint": "prettier --check .",
     "format": "prettier --write .",
     "test": "vitest",
+    "docs": "vitepress dev",
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
     "docs:preview": "vitepress preview"

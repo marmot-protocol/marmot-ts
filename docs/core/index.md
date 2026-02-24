@@ -7,7 +7,7 @@ The Core module (`marmot-ts/core`) implements the Marmot protocol layer, providi
 The Core module is responsible for:
 
 - **Protocol Implementation:** MLS group operations following Marmot specifications (MIP-00 through MIP-03)
-- **Identity Bridging:** Converting Nostr public keys to MLS credentials  
+- **Identity Bridging:** Converting Nostr public keys to MLS credentials
 - **Message Encryption:** NIP-44 encryption layered over MLS for group messages
 - **Key Package Management:** Creating and handling cryptographic material for member addition
 - **State Serialization:** Encoding/decoding group state for persistence
@@ -21,44 +21,52 @@ The Core module is responsible for:
 ## Installation
 
 ```typescript
-import { 
+import {
   createCredential,
   generateKeyPackage,
   createGroup,
   // ... other exports
-} from 'marmot-ts/core';
+} from "@internet-privacy/marmots/core";
 ```
 
 ## Topics
 
 ### [Protocol Constants & Concepts](./protocol)
+
 Learn about Nostr event kinds, extension types, and core protocol concepts like MarmotGroupData.
 
 ### [Credentials](./credentials)
+
 Understand how Nostr identities are converted to MLS credentials.
 
 ### [Key Packages](./key-packages)
+
 Generate and manage key packages for adding members to groups.
 
 ### [Groups](./groups)
+
 Create and initialize MLS groups with Marmot metadata.
 
 ### [Messages](./messages)
+
 Handle message encryption, decryption, commit ordering, and application messages.
 
 ### [Members](./members)
+
 Query and manage group membership, including multi-device support.
 
 ### [Welcome Messages](./welcome)
+
 Create and process Welcome messages for new members.
 
 ### [Key Package Distribution](./distribution)
+
 Publish and discover key packages using Nostr events.
 
 ### [Client State](./state)
+
 Manage and serialize MLS group state for persistence.
 
-### [API Reference](./api)
 Complete API documentation for all Core module functions.
 
 ## When to Use Core

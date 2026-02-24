@@ -9,13 +9,13 @@ Stores decrypted application messages as rumors.
 ### Creating History
 
 ```typescript
-import { GroupRumorHistory } from 'marmot-ts/client';
+import { GroupRumorHistory } from "@internet-privacy/marmots/client";
 
 const history = new GroupRumorHistory(groupId, backend);
 
 // Or create factory for MarmotClient
 const factory = GroupRumorHistory.makeFactory(
-  (groupId) => new MyBackend(groupId)
+  (groupId) => new MyBackend(groupId),
 );
 
 const client = new MarmotClient({
@@ -77,27 +77,27 @@ interface BaseGroupHistory {
 ```typescript
 class MyCustomHistory implements BaseGroupHistory {
   async saveRumor(rumor: Rumor) {
-    await db.insert('rumors', rumor);
+    await db.insert("rumors", rumor);
   }
-  
+
   async queryRumors(filter: NostrFilter) {
-    return db.query('rumors', filter);
+    return db.query("rumors", filter);
   }
-  
+
   async *createPaginatedLoader(filter: NostrFilter) {
     let offset = 0;
     const limit = filter.limit || 20;
-    
+
     while (true) {
-      const page = await db.query('rumors', { ...filter, offset, limit });
+      const page = await db.query("rumors", { ...filter, offset, limit });
       if (page.length === 0) break;
       yield page;
       offset += limit;
     }
   }
-  
+
   async purgeMessages() {
-    await db.delete('rumors', { groupId: this.groupId });
+    await db.delete("rumors", { groupId: this.groupId });
   }
 }
 ```
@@ -105,11 +105,9 @@ class MyCustomHistory implements BaseGroupHistory {
 ## History Events
 
 ```typescript
-group.on('historyError', ({ error }) => {
-  console.error('Non-blocking history error:', error);
+group.on("historyError", ({ error }) => {
+  console.error("Non-blocking history error:", error);
 });
 ```
 
 History failures don't prevent message processing.
-
-See [API Reference](./api) for complete interface documentation.

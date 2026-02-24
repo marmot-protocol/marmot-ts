@@ -5,6 +5,7 @@ Groups are the foundation of Marmot messaging. A group contains members who can 
 ## What is a Group?
 
 An MLS group is a cryptographic context where:
+
 - Members share encryption keys
 - Messages are end-to-end encrypted
 - Members can be added or removed
@@ -15,11 +16,11 @@ Marmot extends MLS groups with Nostr-specific metadata via the MarmotGroupData e
 ## Creating a Group
 
 ```typescript
-import { createGroup } from 'marmot-ts/core';
-import { CipherSuite, getCipherSuiteById } from 'ts-mls';
+import { createGroup } from "@internet-privacy/marmots/core";
+import { CipherSuite, getCipherSuiteById } from "ts-mls";
 
 const ciphersuiteImpl = getCipherSuiteById(
-  CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
+  CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
 );
 
 const result = await createGroup({
@@ -43,7 +44,7 @@ const result = await createGroup({
 
 ```typescript
 interface CreateGroupResult {
-  clientState: ClientState;  // The MLS group state
+  clientState: ClientState; // The MLS group state
 }
 ```
 
@@ -52,14 +53,14 @@ interface CreateGroupResult {
 For testing or simple use cases:
 
 ```typescript
-import { createSimpleGroup } from 'marmot-ts/core';
+import { createSimpleGroup } from "@internet-privacy/marmots/core";
 
 const { clientState } = await createSimpleGroup(
   myKeyPackage,
-  'Group Name',
-  groupId,        // 32-byte Uint8Array
-  relays,         // string[]
-  adminPubkeys    // string[]
+  "Group Name",
+  groupId, // 32-byte Uint8Array
+  relays, // string[]
+  adminPubkeys, // string[]
 );
 ```
 
@@ -75,6 +76,7 @@ When you create a group:
 ## ClientState
 
 The `ClientState` object contains everything needed to operate the group:
+
 - Current encryption keys
 - Member list and their credentials
 - Group context (including MarmotGroupData)
@@ -86,12 +88,12 @@ The `ClientState` object contains everything needed to operate the group:
 ## Example: Complete Group Creation
 
 ```typescript
-import { 
-  generateKeyPackage, 
+import {
+  generateKeyPackage,
   createGroup,
-  marmotGroupDataToExtension 
-} from 'marmot-ts/core';
-import { CipherSuite, getCipherSuiteById } from 'ts-mls';
+  marmotGroupDataToExtension,
+} from "@internet-privacy/marmots/core";
+import { CipherSuite, getCipherSuiteById } from "ts-mls";
 
 // 1. Generate creator's key package
 const myKeyPackage = await generateKeyPackage({
@@ -103,13 +105,10 @@ const myKeyPackage = await generateKeyPackage({
 const groupData = {
   version: 1,
   nostrGroupId: crypto.getRandomValues(new Uint8Array(32)),
-  name: 'Developer Chat',
-  description: 'A group for TypeScript developers',
+  name: "Developer Chat",
+  description: "A group for TypeScript developers",
   adminPubkeys: [myPubkey],
-  relays: [
-    'wss://relay.damus.io',
-    'wss://relay.snort.social',
-  ],
+  relays: ["wss://relay.damus.io", "wss://relay.snort.social"],
   imageHash: null,
   imageKey: null,
   imageNonce: null,
@@ -117,7 +116,7 @@ const groupData = {
 
 // 3. Create the group
 const ciphersuiteImpl = getCipherSuiteById(
-  CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
+  CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
 );
 
 const { clientState } = await createGroup({
@@ -127,7 +126,7 @@ const { clientState } = await createGroup({
 });
 
 // 4. Group is ready to use!
-console.log('Group created with ID:', getNostrGroupIdHex(clientState));
+console.log("Group created with ID:", getNostrGroupIdHex(clientState));
 ```
 
 ## Group Metadata
@@ -135,13 +134,13 @@ console.log('Group created with ID:', getNostrGroupIdHex(clientState));
 Every Marmot group has associated metadata:
 
 ```typescript
-import { extractMarmotGroupData } from 'marmot-ts/core';
+import { extractMarmotGroupData } from "@internet-privacy/marmots/core";
 
 const groupData = extractMarmotGroupData(clientState);
 
-console.log(groupData.name);         // "Developer Chat"
-console.log(groupData.description);  // "A group for..."
-console.log(groupData.relays);       // ["wss://..."]
+console.log(groupData.name); // "Developer Chat"
+console.log(groupData.description); // "A group for..."
+console.log(groupData.relays); // ["wss://..."]
 console.log(groupData.adminPubkeys); // ["admin-hex"]
 ```
 

@@ -9,6 +9,7 @@ In MLS, every group member has a credential that identifies them. Marmot maps No
 ### Identity vs Signature Keys
 
 MLS separates two concepts:
+
 - **Identity:** Who you are (Nostr pubkey stored in credential)
 - **Signature Public Key:** Key used to sign MLS messages (separate from identity)
 
@@ -17,7 +18,7 @@ This separation allows for key rotation and device-specific signing keys while m
 ## Creating Credentials
 
 ```typescript
-import { createCredential } from 'marmot-ts/core';
+import { createCredential } from "@internet-privacy/marmots/core";
 
 // Create MLS credential from Nostr pubkey (hex string)
 const credential = createCredential(nostrPubkey);
@@ -28,7 +29,7 @@ The credential embeds the Nostr public key as the identity.
 ## Extracting Pubkeys
 
 ```typescript
-import { getCredentialPubkey } from 'marmot-ts/core';
+import { getCredentialPubkey } from "@internet-privacy/marmots/core";
 
 // Get Nostr pubkey from MLS credential
 const pubkey = getCredentialPubkey(credential);
@@ -39,7 +40,7 @@ Returns the Nostr public key as a hex string.
 ## Comparing Credentials
 
 ```typescript
-import { isSameCredential } from 'marmot-ts/core';
+import { isSameCredential } from "@internet-privacy/marmots/core";
 
 if (isSameCredential(credential1, credential2)) {
   // Same identity (same Nostr pubkey)
@@ -55,14 +56,14 @@ if (isSameCredential(credential1, credential2)) {
 ## Example: Full Flow
 
 ```typescript
-import { 
-  createCredential, 
+import {
+  createCredential,
   getCredentialPubkey,
-  isSameCredential 
-} from 'marmot-ts/core';
+  isSameCredential,
+} from "@internet-privacy/marmots/core";
 
 // User's Nostr pubkey
-const myPubkey = '0x1234...';
+const myPubkey = "0x1234...";
 
 // Create credential for group membership
 const myCredential = createCredential(myPubkey);
@@ -72,7 +73,7 @@ const extractedPubkey = getCredentialPubkey(myCredential);
 assert(extractedPubkey === myPubkey);
 
 // Compare with another credential
-const otherCredential = createCredential('0x5678...');
+const otherCredential = createCredential("0x5678...");
 assert(!isSameCredential(myCredential, otherCredential));
 ```
 
@@ -81,21 +82,23 @@ assert(!isSameCredential(myCredential, otherCredential));
 Credentials are validated by the `marmotAuthService`:
 
 ```typescript
-import { marmotAuthService } from 'marmot-ts/core';
+import { marmotAuthService } from "@internet-privacy/marmots/core";
 
 // Used internally by MLS library
 const isValid = await marmotAuthService.validateCredential(
   credential,
-  signaturePublicKey
+  signaturePublicKey,
 );
 ```
 
 **Current Implementation:**
+
 - Validates credential type is "basic"
 - Accepts all valid basic credentials
 - MLS library handles cryptographic signature verification
 
 **Future Extensions:**
+
 - Could add Nostr-specific validation (e.g., NIP-05 verification)
 - Could integrate with web-of-trust systems
 - Could require additional attestations

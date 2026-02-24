@@ -5,15 +5,15 @@
 ## Properties
 
 ```typescript
-group.groupId        // Nostr group ID (hex)
-group.name           // Group name
-group.description    // Group description
-group.relays         // Relay URLs
-group.adminPubkeys   // Admin pubkeys
-group.members        // Member pubkeys
-group.epoch          // Current epoch
-group.state          // ClientState
-group.history        // Optional history instance
+group.groupId; // Nostr group ID (hex)
+group.name; // Group name
+group.description; // Group description
+group.relays; // Relay URLs
+group.adminPubkeys; // Admin pubkeys
+group.members; // Member pubkeys
+group.epoch; // Current epoch
+group.state; // ClientState
+group.history; // Optional history instance
 ```
 
 ## Sending Messages
@@ -21,7 +21,7 @@ group.history        // Optional history instance
 ```typescript
 await group.sendApplicationRumor({
   kind: 1,
-  content: 'Hello, group!',
+  content: "Hello, group!",
   tags: [],
   created_at: Math.floor(Date.now() / 1000),
   pubkey: myPubkey,
@@ -31,7 +31,7 @@ await group.sendApplicationRumor({
 ## Creating Proposals
 
 ```typescript
-import { Proposals } from 'marmot-ts/client';
+import { Proposals } from "@internet-privacy/marmots/client";
 
 // Invite user
 await group.propose(Proposals.proposeInviteUser(keyPackageEvent));
@@ -40,10 +40,12 @@ await group.propose(Proposals.proposeInviteUser(keyPackageEvent));
 await group.propose(Proposals.proposeKickUser(targetPubkey));
 
 // Update metadata
-await group.propose(Proposals.proposeUpdateMetadata({
-  name: 'New Name',
-  description: 'New Description',
-}));
+await group.propose(
+  Proposals.proposeUpdateMetadata({
+    name: "New Name",
+    description: "New Description",
+  }),
+);
 ```
 
 ## Making Commits
@@ -74,7 +76,7 @@ const recipients = await group.inviteByKeyPackageEvent(keyPackageEvent);
 // Fetch and process group events
 const events = await network.request(groupRelays, {
   kinds: [GROUP_EVENT_KIND],
-  '#d': [group.groupId],
+  "#d": [group.groupId],
 });
 
 await group.ingest(events, {
@@ -83,14 +85,35 @@ await group.ingest(events, {
 });
 ```
 
+### How Ingest Works
+
+The `ingest()` method processes untrusted Nostr events through **dual-layer decryption**:
+
+1. **Outer Layer (NIP-44):** Events are decrypted using a symmetric key derived from the current MLS epoch. This shields the MLS engine from spam—malformed packets fail fast.
+2. **Inner Layer (MLS):** Valid payloads are processed by `ts-mls` to advance state, update membership, or extract application messages.
+
+**Out-of-Order Messages:** Nostr relays provide no ordering guarantees. When receiving "future" messages (encrypted for a later epoch), `ingest()` categorizes them as **unreadable** and retries after processing other events. This continues up to `maxRetries` (default: 5).
+
+**DoS Protection:** `ingest()` never throws on malformed network data. Bad packets are silently discarded to prevent permanently-broken messages from crashing your client.
+
 ## Events
 
 ```typescript
-group.on('stateChanged', ({ state }) => { /* ... */ });
-group.on('applicationMessage', ({ rumor }) => { /* ... */ });
-group.on('stateSaved', ({ groupId }) => { /* ... */ });
-group.on('historyError', ({ error }) => { /* ... */ });
-group.on('destroyed', ({ groupId }) => { /* ... */ });
+group.on("stateChanged", ({ state }) => {
+  /* ... */
+});
+group.on("applicationMessage", ({ rumor }) => {
+  /* ... */
+});
+group.on("stateSaved", ({ groupId }) => {
+  /* ... */
+});
+group.on("historyError", ({ error }) => {
+  /* ... */
+});
+group.on("destroyed", ({ groupId }) => {
+  /* ... */
+});
 ```
 
 ## State Management
@@ -102,5 +125,3 @@ await group.save();
 // Destroy
 await group.destroy();
 ```
-
-See [API Reference](./api) for complete method signatures.

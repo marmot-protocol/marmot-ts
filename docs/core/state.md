@@ -5,6 +5,7 @@ ClientState contains all the information needed to operate an MLS group.
 ## What is ClientState?
 
 ClientState is the MLS group state object containing:
+
 - Current encryption keys
 - Member list and their credentials
 - Group context (including MarmotGroupData)
@@ -19,19 +20,22 @@ Think of it as a snapshot of the group at a specific point in time.
 ### Get Marmot Group Data
 
 ```typescript
-import { extractMarmotGroupData } from 'marmot-ts/core';
+import { extractMarmotGroupData } from "@internet-privacy/marmots/core";
 
 const groupData = extractMarmotGroupData(clientState);
 
-console.log(groupData.name);         // "Developer Chat"
+console.log(groupData.name); // "Developer Chat"
 console.log(groupData.adminPubkeys); // ["admin-hex"]
-console.log(groupData.relays);       // ["wss://..."]
+console.log(groupData.relays); // ["wss://..."]
 ```
 
 ### Get Group Identifiers
 
 ```typescript
-import { getGroupIdHex, getNostrGroupIdHex } from 'marmot-ts/core';
+import {
+  getGroupIdHex,
+  getNostrGroupIdHex,
+} from "@internet-privacy/marmots/core";
 
 // MLS group ID
 const mlsGroupId = getGroupIdHex(clientState);
@@ -43,9 +47,9 @@ const nostrGroupId = getNostrGroupIdHex(clientState);
 ### Get Group Metadata
 
 ```typescript
-import { getEpoch, getMemberCount } from 'marmot-ts/core';
+import { getEpoch, getMemberCount } from "@internet-privacy/marmots/core";
 
-const epoch = getEpoch(clientState);           // Current epoch number
+const epoch = getEpoch(clientState); // Current epoch number
 const memberCount = getMemberCount(clientState); // Number of members
 ```
 
@@ -56,7 +60,7 @@ ClientState must be serialized for storage and deserialized when loading.
 ### Serialize for Storage
 
 ```typescript
-import { serializeClientState } from 'marmot-ts/core';
+import { serializeClientState } from "@internet-privacy/marmots/core";
 
 const serialized = serializeClientState(clientState);
 // serialized is Uint8Array (TLS binary format)
@@ -68,28 +72,28 @@ await storage.save(groupId, serialized);
 ### Deserialize from Storage
 
 ```typescript
-import { deserializeClientState } from 'marmot-ts/core';
-import { CipherSuite, getCipherSuiteById } from 'ts-mls';
+import { deserializeClientState } from "@internet-privacy/marmots/core";
+import { CipherSuite, getCipherSuiteById } from "ts-mls";
 
 const serialized = await storage.load(groupId);
 
 const clientState = deserializeClientState(
   serialized,
   getCipherSuiteById(CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519),
-  defaultMarmotClientConfig // Includes credential validation
+  defaultMarmotClientConfig, // Includes credential validation
 );
 ```
 
 ### Default Configuration
 
 ```typescript
-import { defaultMarmotClientConfig } from 'marmot-ts/core';
+import { defaultMarmotClientConfig } from "@internet-privacy/marmots/core";
 
 // Includes marmotAuthService for credential validation
 const clientState = deserializeClientState(
   data,
   ciphersuite,
-  defaultMarmotClientConfig
+  defaultMarmotClientConfig,
 );
 ```
 
@@ -98,14 +102,10 @@ const clientState = deserializeClientState(
 ClientState is immutable - operations return a new state:
 
 ```typescript
-import { processMessage } from 'ts-mls';
+import { processMessage } from "ts-mls";
 
 // Process a message (commit, proposal)
-const newState = processMessage(
-  clientState,
-  mlsMessage,
-  ciphersuiteImpl
-);
+const newState = processMessage(clientState, mlsMessage, ciphersuiteImpl);
 
 // Old state is unchanged, use newState going forward
 clientState = newState;
@@ -116,14 +116,14 @@ clientState = newState;
 The epoch advances with each commit:
 
 ```typescript
-import { getEpoch } from 'marmot-ts/core';
+import { getEpoch } from "@internet-privacy/marmots/core";
 
-console.log('Before commit:', getEpoch(clientState)); // 5
+console.log("Before commit:", getEpoch(clientState)); // 5
 
 // Process commit
 clientState = processMessage(clientState, commit, ciphersuiteImpl);
 
-console.log('After commit:', getEpoch(clientState)); // 6
+console.log("After commit:", getEpoch(clientState)); // 6
 ```
 
 Each epoch has unique encryption keys. Messages from epoch N can only be decrypted by members in epoch N.
@@ -131,16 +131,19 @@ Each epoch has unique encryption keys. Messages from epoch N can only be decrypt
 ## Storage Considerations
 
 ### Security
+
 - ClientState contains secret key material
 - Store encrypted and access-controlled
 - Never transmit over unencrypted channels
 
 ### Size
+
 - Grows with group history and member count
 - Binary format is compact (~few KB for typical groups)
 - Consider periodic re-initialization for very large groups
 
 ### Backup
+
 - Always back up ClientState after changes
 - Loss means inability to decrypt future messages
 - Cannot recover old states (forward secrecy)
@@ -148,13 +151,13 @@ Each epoch has unique encryption keys. Messages from epoch N can only be decrypt
 ## Example: Full State Lifecycle
 
 ```typescript
-import { 
+import {
   createGroup,
   serializeClientState,
   deserializeClientState,
   extractMarmotGroupData,
-  defaultMarmotClientConfig 
-} from 'marmot-ts/core';
+  defaultMarmotClientConfig,
+} from "@internet-privacy/marmots/core";
 
 // 1. Create group
 const { clientState } = await createGroup({
@@ -172,12 +175,12 @@ const loaded = await storage.load(groupId);
 let restoredState = deserializeClientState(
   loaded,
   ciphersuiteImpl,
-  defaultMarmotClientConfig
+  defaultMarmotClientConfig,
 );
 
 // 4. Use the restored state
 const groupData = extractMarmotGroupData(restoredState);
-console.log('Restored group:', groupData.name);
+console.log("Restored group:", groupData.name);
 ```
 
 ## Related

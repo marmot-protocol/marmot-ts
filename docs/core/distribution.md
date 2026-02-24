@@ -7,12 +7,12 @@ Key packages are published as Nostr events so others can add you to groups.
 ### Creating Key Package Events
 
 ```typescript
-import { createKeyPackageEvent } from 'marmot-ts/core';
+import { createKeyPackageEvent } from "@internet-privacy/marmots/core";
 
 const event = createKeyPackageEvent({
   keyPackage: keyPackage.publicPackage,
-  relays: ['wss://relay1.com', 'wss://relay2.com'],
-  client: 'my-app-v1.0', // Optional client identifier
+  relays: ["wss://relay1.com", "wss://relay2.com"],
+  client: "my-app-v1.0", // Optional client identifier
 });
 
 // Sign and publish to relays
@@ -37,7 +37,7 @@ tags:
 ### Extracting Key Packages
 
 ```typescript
-import { getKeyPackage } from 'marmot-ts/core';
+import { getKeyPackage } from "@internet-privacy/marmots/core";
 
 // Fetch from relays
 const events = await fetchEvents(relays, {
@@ -53,12 +53,12 @@ const keyPackage = getKeyPackage(events[0]);
 ### Deleting Key Packages
 
 ```typescript
-import { createDeleteKeyPackageEvent } from 'marmot-ts/core';
+import { createDeleteKeyPackageEvent } from "@internet-privacy/marmots/core";
 
 // Create kind 5 deletion event
 const deleteEvent = createDeleteKeyPackageEvent(
   keyPackageEventId,
-  'Key package consumed' // Optional reason
+  "Key package consumed", // Optional reason
 );
 
 await publishEvent(signEvent(deleteEvent), relays);
@@ -71,12 +71,12 @@ Tell others where to find your key packages.
 ### Creating Relay Lists
 
 ```typescript
-import { createKeyPackageRelayListEvent } from 'marmot-ts/core';
+import { createKeyPackageRelayListEvent } from "@internet-privacy/marmots/core";
 
 const event = createKeyPackageRelayListEvent([
-  'wss://relay.damus.io',
-  'wss://relay.snort.social',
-  'wss://nos.lol',
+  "wss://relay.damus.io",
+  "wss://relay.snort.social",
+  "wss://nos.lol",
 ]);
 
 // Sign and publish
@@ -86,10 +86,10 @@ await publishEvent(signEvent(event), relays);
 ### Reading Relay Lists
 
 ```typescript
-import { 
+import {
   getKeyPackageRelayList,
-  isValidKeyPackageRelayListEvent 
-} from 'marmot-ts/core';
+  isValidKeyPackageRelayListEvent,
+} from "@internet-privacy/marmots/core";
 
 // Fetch user's relay list
 const events = await fetchEvents(relays, {
@@ -115,16 +115,19 @@ if (isValidKeyPackageRelayListEvent(events[0])) {
 ## Best Practices
 
 ### Relay Selection
+
 - Use 3-5 relays for redundancy
 - Mix popular and niche relays
 - Update relay list when changing relays
 
 ### Key Package Lifecycle
+
 - Publish new key packages regularly (after use)
 - Delete old key packages after consumption
 - Keep last_resort packages available
 
 ### Privacy Considerations
+
 - Key packages are public (anyone can see)
 - Don't include sensitive info in client field
 - Rotate key packages periodically

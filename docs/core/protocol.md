@@ -7,12 +7,12 @@
 Marmot uses specific Nostr event kinds for different purposes:
 
 ```typescript
-import { 
-  KEY_PACKAGE_KIND,           // 443
-  WELCOME_EVENT_KIND,          // 444
-  GROUP_EVENT_KIND,            // 445
-  KEY_PACKAGE_RELAY_LIST_KIND  // 10051
-} from 'marmot-ts/core';
+import {
+  KEY_PACKAGE_KIND, // 443
+  WELCOME_EVENT_KIND, // 444
+  GROUP_EVENT_KIND, // 445
+  KEY_PACKAGE_RELAY_LIST_KIND, // 10051
+} from "@internet-privacy/marmots/core";
 ```
 
 - **443 (KEY_PACKAGE_KIND):** Key package advertisement events
@@ -26,9 +26,9 @@ MLS extensions used by Marmot:
 
 ```typescript
 import {
-  MARMOT_GROUP_DATA_EXTENSION_TYPE,      // 0xf2ee
-  LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE // 0x000a
-} from 'marmot-ts/core';
+  MARMOT_GROUP_DATA_EXTENSION_TYPE, // 0xf2ee
+  LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE, // 0x000a
+} from "@internet-privacy/marmots/core";
 ```
 
 - **0xf2ee (MARMOT_GROUP_DATA_EXTENSION_TYPE):** Custom extension containing Marmot group metadata ([MIP-01](https://github.com/parres-hq/marmot/blob/main/01.md))
@@ -37,7 +37,7 @@ import {
 ### Protocol Versions
 
 ```typescript
-import { MLS_VERSIONS } from 'marmot-ts/core';
+import { MLS_VERSIONS } from "@internet-privacy/marmots/core";
 
 console.log(MLS_VERSIONS); // "1.0"
 ```
@@ -50,14 +50,14 @@ The `MarmotGroupData` extension is the centerpiece of Marmot's integration betwe
 
 ```typescript
 interface MarmotGroupData {
-  version: number;                // Extension version (current: 1)
-  nostrGroupId: Uint8Array;      // 32-byte unique group identifier
-  name: string;                   // Human-readable group name
-  description: string;            // Group description
-  adminPubkeys: string[];        // Array of admin Nostr pubkeys (hex)
-  relays: string[];              // WebSocket URLs for group relays
-  imageHash: Uint8Array | null;  // SHA-256 hash of encrypted image
-  imageKey: Uint8Array | null;   // ChaCha20-Poly1305 encryption key for image
+  version: number; // Extension version (current: 1)
+  nostrGroupId: Uint8Array; // 32-byte unique group identifier
+  name: string; // Human-readable group name
+  description: string; // Group description
+  adminPubkeys: string[]; // Array of admin Nostr pubkeys (hex)
+  relays: string[]; // WebSocket URLs for group relays
+  imageHash: Uint8Array | null; // SHA-256 hash of encrypted image
+  imageKey: Uint8Array | null; // ChaCha20-Poly1305 encryption key for image
   imageNonce: Uint8Array | null; // ChaCha20-Poly1305 nonce for image
 }
 ```
@@ -72,20 +72,20 @@ interface MarmotGroupData {
 ### Encoding/Decoding
 
 ```typescript
-import { 
-  encodeMarmotGroupData, 
+import {
+  encodeMarmotGroupData,
   decodeMarmotGroupData,
-  marmotGroupDataToExtension 
-} from 'marmot-ts/core';
+  marmotGroupDataToExtension,
+} from "@internet-privacy/marmots/core";
 
 // Create group data
 const groupData: MarmotGroupData = {
   version: 1,
   nostrGroupId: crypto.getRandomValues(new Uint8Array(32)),
-  name: 'Developer Chat',
-  description: 'A group for TypeScript developers',
-  adminPubkeys: ['admin-pubkey-hex'],
-  relays: ['wss://relay.example.com'],
+  name: "Developer Chat",
+  description: "A group for TypeScript developers",
+  adminPubkeys: ["admin-pubkey-hex"],
+  relays: ["wss://relay.example.com"],
   imageHash: null,
   imageKey: null,
   imageNonce: null,
@@ -104,7 +104,7 @@ const decoded = decodeMarmotGroupData(encoded);
 ### Admin Verification
 
 ```typescript
-import { isAdmin } from 'marmot-ts/core';
+import { isAdmin } from "@internet-privacy/marmots/core";
 
 const userIsAdmin = isAdmin(groupData, userPubkey);
 if (userIsAdmin) {
@@ -115,6 +115,7 @@ if (userIsAdmin) {
 ### Forward Compatibility
 
 The `decodeMarmotGroupData` function handles future versions gracefully:
+
 - Unknown fields are ignored
 - Version field indicates structure version
 - Warnings are logged for newer versions

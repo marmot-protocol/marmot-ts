@@ -1,10 +1,27 @@
+import { UnsignedEvent, relaySet } from "applesauce-core/helpers";
 import { npubEncode } from "nostr-tools/nip19";
+import { useEffect, useState } from "react";
 import { RelayListCreator } from "../../components/form/relay-list-creator";
 import { UserAvatar, UserName } from "../../components/nostr-user";
 import QRButton from "../../components/qr-button";
 import { useObservable } from "../../hooks/use-observable";
 import accountManager from "../../lib/accounts";
-import { extraRelays$, lookupRelays$ } from "../../lib/settings";
+import { lookupRelays$ } from "../../lib/settings";
+import accounts, { mailboxes$ } from "../../lib/accounts";
+import { createNip65RelayListEvent } from "../../lib/nip65";
+import JsonBlock from "../../components/json-block";
+import { pool } from "../../lib/nostr";
+import { eventStore } from "../../lib/nostr";
+
+type Nip65RelayRow = { relay: string; read: boolean; write: boolean };
+
+function normalizeRelayUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith("wss://") || trimmed.startsWith("ws://"))
+    return trimmed;
+  return `wss://${trimmed}`;
+}
 
 function AccountManagement() {
   const accounts = useObservable(accountManager.accounts$) || [];
@@ -101,14 +118,115 @@ function AccountManagement() {
 
 export default function Settings() {
   const lookupRelays = useObservable(lookupRelays$) || [];
-  const extraRelays = useObservable(extraRelays$) || [];
+  const mailboxes = useObservable(mailboxes$);
+  const account = useObservable(accounts.active$);
+
+  const [nip65Draft, setNip65Draft] = useState<UnsignedEvent | null>(null);
+  const [nip65Published, setNip65Published] = useState<string | null>(null);
+  const [nip65Error, setNip65Error] = useState<string | null>(null);
+  const [isPublishingNip65, setIsPublishingNip65] = useState(false);
+
+  const [nip65Relays, setNip65Relays] = useState<Nip65RelayRow[]>([]);
+  const [newNip65Relay, setNewNip65Relay] = useState<string>("");
+
+  // Keep editable state in sync with what we observe from the network.
+  useEffect(() => {
+    if (!mailboxes) return;
+    const inboxes = new Set(mailboxes.inboxes ?? []);
+    const outboxes = new Set(mailboxes.outboxes ?? []);
+
+    const merged = new Set<string>([...inboxes, ...outboxes]);
+    const rows: Nip65RelayRow[] = [...merged].map((relay) => ({
+      relay,
+      read: inboxes.has(relay),
+      write: outboxes.has(relay),
+    }));
+    setNip65Relays(rows);
+  }, [mailboxes]);
 
   const handleLookupRelaysChange = (relays: string[]) => {
     lookupRelays$.next(relays);
   };
 
-  const handleExtraRelaysChange = (relays: string[]) => {
-    extraRelays$.next(relays);
+  const handleCreateNip65Draft = () => {
+    setNip65Error(null);
+    setNip65Published(null);
+
+    if (!account) {
+      setNip65Error("No active account");
+      return;
+    }
+
+    const inboxes = nip65Relays
+      .filter((r) => r.read)
+      .map((r) => r.relay)
+      .filter(Boolean);
+    const outboxes = nip65Relays
+      .filter((r) => r.write)
+      .map((r) => r.relay)
+      .filter(Boolean);
+
+    const draft = createNip65RelayListEvent({
+      pubkey: account.pubkey,
+      inboxes,
+      outboxes,
+    });
+
+    setNip65Draft(draft);
+  };
+
+  const handlePublishNip65 = async () => {
+    if (!account) {
+      setNip65Error("No active account");
+      return;
+    }
+    if (!nip65Draft) {
+      setNip65Error("No draft event to publish");
+      return;
+    }
+
+    try {
+      setIsPublishingNip65(true);
+      setNip65Error(null);
+
+      const signed = await account.signEvent(nip65Draft);
+
+      // Publish kind 10002 to the relays referenced by the event itself.
+      // This avoids a mismatch where a user adds a new relay but we publish to
+      // unrelated bootstrap relays (or nowhere).
+      const inboxes = nip65Relays
+        .filter((r) => r.read)
+        .map((r) => r.relay)
+        .filter(Boolean);
+      const outboxes = nip65Relays
+        .filter((r) => r.write)
+        .map((r) => r.relay)
+        .filter(Boolean);
+
+      // Publish to configured relays; this is examples UX, so be robust.
+      const publishingRelays = relaySet(inboxes, outboxes, lookupRelays);
+      if (publishingRelays.length === 0) {
+        throw new Error("No relays configured for publishing");
+      }
+
+      for (const relay of publishingRelays) {
+        try {
+          await pool.publish([relay], signed);
+        } catch (err) {
+          console.warn("Failed to publish NIP-65 to", relay, err);
+        }
+      }
+
+      // Add to local eventStore so mailboxes$ / banners update immediately.
+      eventStore.add(signed);
+
+      setNip65Published(signed.id);
+      setNip65Draft(null);
+    } catch (err) {
+      setNip65Error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsPublishingNip65(false);
+    }
   };
 
   return (
@@ -121,6 +239,200 @@ export default function Settings() {
 
       {/* Account Management Section */}
       <AccountManagement />
+
+      {/* NIP-65 Section */}
+      <div className="space-y-4">
+        <div>
+          <h2 className="text-xl font-semibold mb-2">
+            NIP-65 Relay List (kind 10002)
+          </h2>
+          <p className="text-base-content/70 text-sm">
+            This is your relay reachability configuration. Other users will use
+            it to know where to deliver private messages (giftwraps) to you.
+          </p>
+        </div>
+
+        {!account ? (
+          <div className="alert alert-info">
+            <span>Sign in to view and publish your NIP-65 relay list.</span>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="card bg-base-100 border border-base-300">
+              <div className="card-body">
+                <div className="alert alert-info">
+                  <div>
+                    <div className="font-semibold">Edit read/write relays</div>
+                    <div className="text-sm">
+                      NIP-65 uses <code className="px-1">read</code> and{" "}
+                      <code className="px-1">write</code>
+                      markers. In Marmot examples we treat:
+                      <div className="mt-1">
+                        <code className="px-1">read</code> = inbox relays
+                        (receive giftwraps)
+                        <br />
+                        <code className="px-1">write</code> = outbox relays
+                        (publish your metadata)
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="join w-full">
+                    <input
+                      type="text"
+                      className="input input-bordered join-item flex-1"
+                      placeholder="wss://relay.example.com"
+                      value={newNip65Relay}
+                      onChange={(e) => setNewNip65Relay(e.target.value)}
+                    />
+                    <button
+                      className="btn btn-primary join-item"
+                      onClick={() => {
+                        const normalized = normalizeRelayUrl(newNip65Relay);
+                        if (!normalized) return;
+                        if (nip65Relays.some((r) => r.relay === normalized)) {
+                          setNewNip65Relay("");
+                          return;
+                        }
+                        setNip65Relays([
+                          ...nip65Relays,
+                          { relay: normalized, read: true, write: true },
+                        ]);
+                        setNewNip65Relay("");
+                      }}
+                      disabled={!newNip65Relay.trim()}
+                    >
+                      Add
+                    </button>
+                  </div>
+
+                  {nip65Relays.length === 0 ? (
+                    <div className="italic p-4 text-center border border-dashed border-base-300 rounded opacity-50">
+                      No relays configured. Add 2-4 relays and mark them
+                      read/write.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>Relay</th>
+                            <th className="w-24">Read</th>
+                            <th className="w-24">Write</th>
+                            <th className="w-24"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {nip65Relays.map((row) => (
+                            <tr key={row.relay}>
+                              <td className="font-mono text-xs">{row.relay}</td>
+                              <td>
+                                <input
+                                  type="checkbox"
+                                  className="checkbox"
+                                  checked={row.read}
+                                  onChange={(e) => {
+                                    const next = nip65Relays.map((r) =>
+                                      r.relay === row.relay
+                                        ? { ...r, read: e.target.checked }
+                                        : r,
+                                    );
+                                    setNip65Relays(next);
+                                  }}
+                                />
+                              </td>
+                              <td>
+                                <input
+                                  type="checkbox"
+                                  className="checkbox"
+                                  checked={row.write}
+                                  onChange={(e) => {
+                                    const next = nip65Relays.map((r) =>
+                                      r.relay === row.relay
+                                        ? { ...r, write: e.target.checked }
+                                        : r,
+                                    );
+                                    setNip65Relays(next);
+                                  }}
+                                />
+                              </td>
+                              <td>
+                                <button
+                                  className="btn btn-xs btn-error"
+                                  onClick={() =>
+                                    setNip65Relays(
+                                      nip65Relays.filter(
+                                        (r) => r.relay !== row.relay,
+                                      ),
+                                    )
+                                  }
+                                >
+                                  Remove
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="card-actions justify-end mt-4">
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleCreateNip65Draft}
+                    disabled={
+                      nip65Relays.filter((r) => r.read).length === 0 ||
+                      nip65Relays.filter((r) => r.write).length === 0
+                    }
+                  >
+                    Create Draft 10002
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {nip65Error && (
+              <div className="alert alert-error">
+                <span>Error: {nip65Error}</span>
+              </div>
+            )}
+
+            {nip65Draft && (
+              <div className="card bg-base-200">
+                <div className="card-body">
+                  <h3 className="card-title">Draft Event (kind 10002)</h3>
+                  <JsonBlock value={nip65Draft} />
+                  <div className="card-actions justify-between">
+                    <button
+                      className="btn btn-outline"
+                      onClick={() => setNip65Draft(null)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="btn btn-success"
+                      onClick={handlePublishNip65}
+                      disabled={isPublishingNip65}
+                    >
+                      {isPublishingNip65 ? "Publishing…" : "Publish 10002"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {nip65Published && (
+              <div className="alert alert-success">
+                <span>Published kind 10002 event: {nip65Published}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Lookup Relays Section */}
       <div className="space-y-4">
@@ -140,24 +452,8 @@ export default function Settings() {
         />
       </div>
 
-      {/* Extra Relays Section */}
-      <div className="space-y-4">
-        <div>
-          <h2 className="text-xl font-semibold mb-2">Extra Relays</h2>
-          <p className="text-base-content/70 text-sm">
-            Extra relays that are always used when fetching events across the
-            application. These relays are included in addition to any other
-            specified relays.
-          </p>
-        </div>
-        <RelayListCreator
-          relays={extraRelays}
-          label="Extra Relays"
-          placeholder="wss://relay.example.com"
-          emptyMessage="No extra relays configured. Add relays below to always include them when fetching events."
-          onRelaysChange={handleExtraRelaysChange}
-        />
-      </div>
+      {/* Extra relays removed to avoid implicit fallbacks.
+          Relay behavior should be driven by explicit NIP-65 (10002) and key package relay list (10051). */}
     </div>
   );
 }

@@ -19,10 +19,12 @@ import { defaultLifetime, Lifetime } from "ts-mls";
  * ```
  */
 export function formatMlsTimestamp(timestamp: bigint): string {
-  if (timestamp === defaultLifetime.notAfter) {
+  const lifetime = defaultLifetime();
+
+  if (timestamp === lifetime.notAfter) {
     return "No expiration";
   }
-  if (timestamp === defaultLifetime.notBefore) {
+  if (timestamp === lifetime.notBefore) {
     return "Epoch (1970-01-01)";
   }
 
@@ -51,10 +53,11 @@ export function formatMlsTimestamp(timestamp: bigint): string {
  */
 export function isLifetimeValid(lifetime: Lifetime): boolean {
   const currentTime = BigInt(Math.floor(Date.now() / 1000));
+  const defaultLt = defaultLifetime();
 
   return (
     currentTime >= lifetime.notBefore &&
-    (lifetime.notAfter === defaultLifetime.notAfter ||
+    (lifetime.notAfter === defaultLt.notAfter ||
       currentTime <= lifetime.notAfter)
   );
 }

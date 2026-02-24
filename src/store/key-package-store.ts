@@ -28,9 +28,9 @@ export type KeyPackageStoreOptions = {
 
 type KeyPackageStoreEvents = {
   /** Emitted when a key package is added */
-  keyPackageAdded: (keyPackage: StoredKeyPackage) => any;
+  keyPackageAdded: (keyPackage: StoredKeyPackage) => void;
   /** Emitted when a key package is removed */
-  keyPackageRemoved: (keyPackageRef: Uint8Array) => any;
+  keyPackageRemoved: (keyPackageRef: Uint8Array) => void;
 };
 
 /**

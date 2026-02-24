@@ -1,10 +1,13 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { useMemo, useState } from "react";
-import { KeyPackage } from "ts-mls";
+import {
+  KeyPackage,
+  keyPackageDecoder,
+  decode,
+  protocolVersions,
+  defaultCredentialTypes,
+} from "ts-mls";
 import { CredentialBasic } from "ts-mls/credential.js";
-import { ciphersuites } from "ts-mls/crypto/ciphersuite.js";
-import { decodeKeyPackage } from "ts-mls/keyPackage.js";
-import { protocolVersions } from "ts-mls/protocolVersion.js";
 
 import CipherSuiteBadge from "../../components/cipher-suite-badge";
 import CredentialTypeBadge from "../../components/credential-type-badge";
@@ -65,11 +68,8 @@ function CredentialSection({ credential }: { credential: CredentialBasic }) {
 }
 
 function KeyPackageTopLevelInfo({ keyPackage }: { keyPackage: KeyPackage }) {
-  // Convert cipher suite to ID if it's a name
-  const cipherSuiteId =
-    typeof keyPackage.cipherSuite === "number"
-      ? keyPackage.cipherSuite
-      : ciphersuites[keyPackage.cipherSuite];
+  // cipherSuite is now always a number in ts-mls v2
+  const cipherSuiteId = keyPackage.cipherSuite;
 
   return (
     <div className="space-y-4">
@@ -89,7 +89,10 @@ function KeyPackageTopLevelInfo({ keyPackage }: { keyPackage: KeyPackage }) {
         <DetailsField label="MLS Version">
           <span className="badge badge-outline">
             {keyPackage.version} (
-            {(protocolVersions as any)[keyPackage.version] || "Unknown"})
+            {protocolVersions.mls10 === keyPackage.version
+              ? "mls10"
+              : "Unknown"}
+            )
           </span>
         </DetailsField>
 
@@ -147,15 +150,14 @@ export default function KeyPackageDecoder() {
       // Convert hex to bytes
       const bytes = hexToBytes(cleanInput);
 
-      // Decode the key package
-      const decoded = decodeKeyPackage(bytes, 0);
+      // Decode the key package using ts-mls v2 API
+      const decoded = decode(keyPackageDecoder, bytes);
       if (!decoded) {
         setError("Failed to decode key package");
         return;
       }
 
-      const [kp, _offset] = decoded;
-      setKeyPackage(kp);
+      setKeyPackage(decoded);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -277,9 +279,10 @@ export default function KeyPackageDecoder() {
           />
           <div className="tab-content bg-base-100 border-base-300 p-6">
             <ErrorBoundary>
-              {keyPackage.leafNode.credential.credentialType === "basic" ? (
+              {keyPackage.leafNode.credential.credentialType ===
+              defaultCredentialTypes.basic ? (
                 <CredentialSection
-                  credential={keyPackage.leafNode.credential}
+                  credential={keyPackage.leafNode.credential as CredentialBasic}
                 />
               ) : (
                 <div className="alert alert-warning">

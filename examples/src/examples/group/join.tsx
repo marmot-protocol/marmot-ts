@@ -3,15 +3,17 @@ import { mapEventsToTimeline } from "applesauce-core";
 import { NostrEvent, relaySet } from "applesauce-core/helpers";
 import { BehaviorSubject, of, from } from "rxjs";
 import { map } from "rxjs/operators";
+import type { CiphersuiteId } from "ts-mls";
 import { getMemberCount } from "../../../../src/core/client-state";
 import { extractMarmotGroupData } from "../../../../src/core/client-state";
 import { getWelcome } from "../../../../src/core/welcome";
+import { getCiphersuiteNameFromId } from "../../lib/ciphersuite";
 import { withSignIn } from "../../components/with-signIn";
 import { useObservable, useObservableMemo } from "../../hooks/use-observable";
-import accounts from "../../lib/accounts";
-import { marmotClient$ } from "../../lib/marmot-client";
+import accounts, { mailboxes$ } from "../../lib/accounts";
+import { getSubscriptionManager, marmotClient$ } from "../../lib/marmot-client";
 import { pool } from "../../lib/nostr";
-import { extraRelays$ } from "../../lib/settings";
+import { triggerGroupStoreRefresh } from "../../lib/groups";
 import { Rumor, unlockGiftWrap } from "applesauce-common/helpers";
 
 // ============================================================================
@@ -23,7 +25,8 @@ interface WelcomeMessage {
   welcomeRumor: Rumor;
   relays: string[];
   keyPackageEventId?: string;
-  cipherSuite?: string;
+  keyPackageRef?: string;
+  cipherSuite?: CiphersuiteId;
   timestamp: number;
 }
 
@@ -34,6 +37,7 @@ interface WelcomeMessage {
 const selectedWelcome$ = new BehaviorSubject<WelcomeMessage | null>(null);
 const isJoining$ = new BehaviorSubject<boolean>(false);
 const error$ = new BehaviorSubject<string | null>(null);
+const refreshTrigger$ = new BehaviorSubject<number>(0);
 const result$ = new BehaviorSubject<{
   groupId: string;
   groupName: string;
@@ -95,7 +99,7 @@ function WelcomeListItem({
           <div className="flex-1">
             <div className="text-sm text-base-content/70 mb-2">
               {welcome.cipherSuite
-                ? `CipherSuite: ${welcome.cipherSuite}`
+                ? `CipherSuite: ${getCiphersuiteNameFromId(welcome.cipherSuite) ?? "Unknown"} (0x${welcome.cipherSuite.toString(16).padStart(4, "0")})`
                 : "Welcome (kind 444)"}
             </div>
             <div className="text-xs text-base-content/60">
@@ -145,7 +149,9 @@ function WelcomeDetails({ welcome }: { welcome: WelcomeMessage }) {
         <div className="space-y-2">
           <div>
             <span className="font-semibold">CipherSuite:</span>{" "}
-            {welcome.cipherSuite ?? "Unknown"}
+            {welcome.cipherSuite
+              ? `${getCiphersuiteNameFromId(welcome.cipherSuite) ?? "Unknown"} (0x${welcome.cipherSuite.toString(16).padStart(4, "0")})`
+              : "Unknown"}
           </div>
           <div>
             <span className="font-semibold">Relays:</span>{" "}
@@ -156,6 +162,14 @@ function WelcomeDetails({ welcome }: { welcome: WelcomeMessage }) {
               <span className="font-semibold">KeyPackage Event ID:</span>{" "}
               <span className="font-mono text-sm">
                 {welcome.keyPackageEventId.slice(0, 16)}...
+              </span>
+            </div>
+          )}
+          {welcome.keyPackageRef && (
+            <div>
+              <span className="font-semibold">KeyPackageRef (i):</span>{" "}
+              <span className="font-mono text-sm">
+                {welcome.keyPackageRef.slice(0, 16)}...
               </span>
             </div>
           )}
@@ -242,9 +256,14 @@ function ResultsDisplay({
       </div>
 
       <div className="flex justify-end">
-        <button className="btn btn-outline" onClick={onReset}>
-          Join Another Group
-        </button>
+        <div className="flex gap-2">
+          <a className="btn btn-primary" href="#group/chat">
+            Go to group chat
+          </a>
+          <button className="btn btn-outline" onClick={onReset}>
+            Join Another Group
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -257,24 +276,29 @@ function ResultsDisplay({
 export default withSignIn(function JoinGroup() {
   const client = useObservable(marmotClient$);
   const account = accounts.active;
+  const mailboxes = useObservable(mailboxes$);
+
+  const refreshCount = useObservable(refreshTrigger$) ?? 0;
 
   // Subscribe to gift-wrapped events (kind 1059) for the current user
   const giftWraps =
     useObservableMemo(() => {
       if (!account) return of([]);
 
-      const relays = relaySet([], extraRelays$.value);
-
+      // Giftwraps (kind 1059) should be fetched from the user's inbox relays (NIP-65 "read").
+      const relays = relaySet(mailboxes?.inboxes ?? []);
+      console.log("Fetching gift wraps from", relays);
       return pool
         .request(relays, {
           kinds: [1059], // NIP-59 gift wrap
+          "#p": [account.pubkey],
           limit: 50,
         })
         .pipe(
           mapEventsToTimeline(),
           map((arr) => [...arr]),
         );
-    }, [account]) ?? [];
+    }, [account, refreshCount, mailboxes]) ?? [];
 
   // Process gift wraps to extract Welcome messages
   const welcomeMessages =
@@ -296,9 +320,10 @@ export default withSignIn(function JoinGroup() {
                   // Option A (simple): only use Nostr tags for preview.
                   // We can also decode the Welcome to show ciphersuite, but we do NOT attempt
                   // to extract GroupInfo / MarmotGroupData until we actually join.
-                  let cipherSuite: string | undefined;
+                  let cipherSuite: CiphersuiteId | undefined;
                   try {
-                    cipherSuite = getWelcome(rumor).cipherSuite;
+                    cipherSuite = getWelcome(rumor)
+                      .cipherSuite as CiphersuiteId;
                   } catch {
                     cipherSuite = undefined;
                   }
@@ -312,6 +337,7 @@ export default withSignIn(function JoinGroup() {
                     keyPackageEventId: rumor.tags.find(
                       (t) => t[0] === "e",
                     )?.[1],
+                    keyPackageRef: rumor.tags.find((t) => t[0] === "i")?.[1],
                     cipherSuite,
                     timestamp: giftWrap.created_at,
                   });
@@ -326,7 +352,7 @@ export default withSignIn(function JoinGroup() {
             return welcomes.sort((a, b) => b.timestamp - a.timestamp);
           })(),
         ),
-      [giftWraps, account],
+      [giftWraps, account, refreshCount],
     ) ?? [];
 
   const selectedWelcome = useObservable(
@@ -362,6 +388,17 @@ export default withSignIn(function JoinGroup() {
         keyPackageEventId: selectedWelcome.keyPackageEventId,
       });
 
+      // Ensure the group list reacts immediately across routes.
+      triggerGroupStoreRefresh();
+
+      // Ensure background subscriptions are started for the newly joined group.
+      // Without this, the user may need a refresh before receiving group messages.
+      getSubscriptionManager()
+        ?.reconcileSubscriptions()
+        .catch((err) => {
+          console.error("Failed to reconcile subscriptions after join:", err);
+        });
+
       const marmotData = extractMarmotGroupData(group.state);
       const groupName = marmotData?.name ?? "(unknown group name)";
       const groupId = bytesToHex(group.state.groupContext.groupId);
@@ -386,15 +423,44 @@ export default withSignIn(function JoinGroup() {
     selectedWelcome$.next(null);
   };
 
+  const handleRefresh = () => {
+    refreshTrigger$.next(refreshTrigger$.value + 1);
+  };
+
   return (
     <div className="container mx-auto p-6 space-y-6">
       {/* Header */}
       <div className="space-y-2">
-        <h1 className="text-3xl font-bold">Join Group from Welcome</h1>
-        <p className="text-base-content/70">
-          Join a group by accepting a Welcome message received via NIP-59 gift
-          wrap
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Join Group from Welcome</h1>
+            <p className="text-base-content/70">
+              Join a group by accepting a Welcome message received via NIP-59
+              gift wrap
+            </p>
+          </div>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={handleRefresh}
+            title="Refresh welcome messages"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Welcome Messages List */}

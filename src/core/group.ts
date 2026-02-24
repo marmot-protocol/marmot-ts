@@ -1,46 +1,28 @@
 import { randomBytes } from "@noble/hashes/utils.js";
-import {
-  CiphersuiteImpl,
-  Extension,
-  createGroup as MLSCreateGroup,
-} from "ts-mls";
+import { CiphersuiteImpl, createGroup as MLSCreateGroup } from "ts-mls";
 import { ClientState } from "ts-mls/clientState.js";
+import { GroupContextExtension } from "ts-mls";
+import { marmotAuthService } from "./auth-service.js";
 import { CompleteKeyPackage } from "./key-package.js";
 import { marmotGroupDataToExtension } from "./marmot-group-data.js";
 import { MarmotGroupData } from "./protocol.js";
 
-/**
- * Parameters for creating a new MLS group.
- */
 export interface CreateGroupParams {
   /** Creator's complete key package (public + private) */
   creatorKeyPackage: CompleteKeyPackage;
   /** Marmot Group Data configuration */
   marmotGroupData: MarmotGroupData;
   /** Additional group context extensions (optional) */
-  extensions?: Extension[];
+  extensions?: GroupContextExtension[];
   /** Cipher suite implementation for cryptographic operations */
   ciphersuiteImpl: CiphersuiteImpl;
 }
 
-/**
- * Result of a successful group creation operation.
- */
 export interface CreateGroupResult {
   /** The ClientState for the created group */
   clientState: ClientState;
 }
 
-/**
- * Creates a new MLS group with Marmot Group Data Extension.
- *
- * This function orchestrates the creation of an MLS group with the creator as the sole member,
- * including proper Marmot Group Data Extension integration and RFC 9420 compliance.
- *
- * @param params - Parameters for group creation
- * @returns Promise resolving to the created group and related messages
- * @throws Error if group creation fails or parameters are invalid
- */
 export async function createGroup(
   params: CreateGroupParams,
 ): Promise<CreateGroupResult> {
@@ -50,21 +32,26 @@ export async function createGroup(
     extensions = [],
     ciphersuiteImpl,
   } = params;
-  const groupId = marmotGroupData.nostrGroupId;
-  // Create Marmot Group Data Extension
+  // MIP-01: MLS group_id MUST be private and distinct from the public
+  // nostr_group_id stored in the Marmot Group Data extension.
+  const groupId = randomBytes(32);
+  // Always include Marmot Group Data as a GroupContext extension.
   const marmotExtension = marmotGroupDataToExtension(marmotGroupData);
 
   // Combine all extensions (Marmot extension + any additional extensions)
   const groupExtensions = [marmotExtension, ...extensions];
 
-  // Create the MLS group using ts-mls primitives and capture the ClientState
-  const clientState = await MLSCreateGroup(
+  // ts-mls v2: createGroup takes a single params object with `context`.
+  const clientState = await MLSCreateGroup({
+    context: {
+      cipherSuite: ciphersuiteImpl,
+      authService: marmotAuthService,
+    },
     groupId,
-    creatorKeyPackage.publicPackage,
-    creatorKeyPackage.privatePackage,
-    groupExtensions,
-    ciphersuiteImpl,
-  );
+    keyPackage: creatorKeyPackage.publicPackage,
+    privateKeyPackage: creatorKeyPackage.privatePackage,
+    extensions: groupExtensions,
+  });
 
   return {
     clientState,
@@ -77,14 +64,6 @@ export type SimpleGroupOptions = {
   relays?: string[];
 };
 
-/**
- * Creates a simple group with minimal configuration for testing.
- *
- * @param creatorKeyPackage - Creator's key package
- * @param ciphersuiteImpl - Cipher suite implementation
- * @param groupName - Optional group name
- * @returns Promise resolving to the created group
- */
 export async function createSimpleGroup(
   creatorKeyPackage: CompleteKeyPackage,
   ciphersuiteImpl: CiphersuiteImpl,
@@ -92,15 +71,16 @@ export async function createSimpleGroup(
   options?: SimpleGroupOptions,
 ): Promise<CreateGroupResult> {
   const marmotGroupData: MarmotGroupData = {
-    version: 1,
+    version: 2,
     nostrGroupId: randomBytes(32),
     name: groupName,
     description: options?.description || "",
     adminPubkeys: options?.adminPubkeys || [],
     relays: options?.relays || [],
-    imageHash: null,
-    imageKey: null,
-    imageNonce: null,
+    imageHash: new Uint8Array(0),
+    imageKey: new Uint8Array(0),
+    imageNonce: new Uint8Array(0),
+    imageUploadKey: new Uint8Array(0),
   };
 
   return createGroup({

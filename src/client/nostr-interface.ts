@@ -23,7 +23,7 @@ export interface NostrPoolWrite {
 /** Interop Observable interfaces */
 export interface Observer<T> {
   next: (value: T) => void;
-  error: (err: any) => void;
+  error: (err: unknown) => void;
   complete: () => void;
 }
 export interface Unsubscribable {

@@ -1,235 +1,482 @@
-import { randomBytes } from "@noble/hashes/utils.js";
-import { relaySet } from "applesauce-core/helpers";
-import { Extension } from "ts-mls";
-import { isHexKey } from "./credential.js";
+import {
+  type CustomExtension,
+  type GroupContextExtension,
+  makeCustomExtension,
+} from "ts-mls";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { isValidRelayUrl } from "../utils/relay-url.js";
 import {
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
   MARMOT_GROUP_DATA_VERSION,
   MarmotGroupData,
 } from "./protocol.js";
 
-// Avoid spamming the console with forward-compat warnings.
-// This decoder may be called frequently by UIs that re-render, and the warning
-// is informational only (we intentionally ignore trailing bytes for newer versions).
-const warnedExtraBytes = new Set<string>();
+// Encoder/decoder for MarmotGroupData (MIP-01)
+//
+// CRITICAL: This MUST follow TLS presentation language encoding:
+//
+// struct {
+//   uint16 version;
+//   opaque nostr_group_id[32];
+//   opaque name<0..2^16-1>;
+//   opaque description<0..2^16-1>;
+//   opaque admin_pubkeys<0..2^16-1>;
+//   RelayUrl relays<0..2^16-1>;
+//   opaque image_hash<0..32>;
+//   opaque image_key<0..32>;
+//   opaque image_nonce<0..12>;
+//   opaque image_upload_key<0..32>;
+// } NostrGroupData;
+
+const encodeUtf8 = (str: string): Uint8Array => new TextEncoder().encode(str);
+const decodeUtf8 = (bytes: Uint8Array): string =>
+  new TextDecoder().decode(bytes);
+
+function assertFixed(
+  field: string,
+  value: Uint8Array,
+  expectedLen: number,
+): void {
+  if (!(value instanceof Uint8Array)) {
+    throw new Error(`${field} must be a Uint8Array`);
+  }
+  if (value.length !== expectedLen) {
+    throw new Error(`${field} must be exactly ${expectedLen} bytes`);
+  }
+}
+
+function assertZeroOrFixed(
+  field: string,
+  value: Uint8Array,
+  expectedLen: number,
+): void {
+  if (!(value instanceof Uint8Array)) {
+    throw new Error(`${field} must be a Uint8Array`);
+  }
+  if (value.length !== 0 && value.length !== expectedLen) {
+    throw new Error(`${field} must be empty or exactly ${expectedLen} bytes`);
+  }
+}
+
+function encodeUint16(value: number): Uint8Array {
+  const out = new Uint8Array(2);
+  const view = new DataView(out.buffer);
+  view.setUint16(0, value, false);
+  return out;
+}
+
+function decodeUint16(
+  data: Uint8Array,
+  offset: number,
+): [number, number] | undefined {
+  if (offset + 2 > data.length) return undefined;
+  const view = new DataView(data.buffer, data.byteOffset);
+  return [view.getUint16(offset, false), offset + 2];
+}
+
+// QUIC varint encoding (RFC 9000 §16)
+function encodeVarint(value: number): Uint8Array {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`Invalid varint value: ${value}`);
+  }
+
+  if (value <= 63) {
+    return new Uint8Array([value & 0x3f]);
+  }
+
+  if (value <= 16383) {
+    const out = new Uint8Array(2);
+    const v = 0x4000 | (value & 0x3fff);
+    out[0] = (v >> 8) & 0xff;
+    out[1] = v & 0xff;
+    return out;
+  }
+
+  if (value <= 1073741823) {
+    const out = new Uint8Array(4);
+    const v = 0x80000000 | (value & 0x3fffffff);
+    out[0] = (v >>> 24) & 0xff;
+    out[1] = (v >>> 16) & 0xff;
+    out[2] = (v >>> 8) & 0xff;
+    out[3] = v & 0xff;
+    return out;
+  }
+
+  throw new Error(`varint too large: ${value}`);
+}
+
+function decodeVarint(
+  data: Uint8Array,
+  offset: number,
+): [number, number] | undefined {
+  if (offset >= data.length) return undefined;
+  const first = data[offset];
+  if (first === undefined) return undefined;
+
+  const prefix = first >>> 6;
+  const len = prefix === 0 ? 1 : prefix === 1 ? 2 : prefix === 2 ? 4 : 8;
+
+  if (offset + len > data.length) return undefined;
+
+  if (len === 1) {
+    return [first & 0x3f, offset + 1];
+  }
+
+  if (len === 2) {
+    const v = ((first & 0x3f) << 8) | data[offset + 1];
+    return [v >>> 0, offset + 2];
+  }
+
+  if (len === 4) {
+    const v =
+      ((first & 0x3f) << 24) |
+      (data[offset + 1] << 16) |
+      (data[offset + 2] << 8) |
+      data[offset + 3];
+    return [v >>> 0, offset + 4];
+  }
+
+  // 8-byte varints are not expected for any field we encode (2^16-1 limits);
+  // reject to avoid unsafe integer handling.
+  throw new Error("Unsupported 8-byte QUIC varint");
+}
+
+function encodeOpaque16(bytes: Uint8Array): Uint8Array {
+  if (bytes.length > 0xffff) {
+    throw new Error(`opaque value too long: ${bytes.length} bytes`);
+  }
+  const out = new Uint8Array(2 + bytes.length);
+  out.set(encodeUint16(bytes.length), 0);
+  out.set(bytes, 2);
+  return out;
+}
+
+function decodeOpaque16(
+  data: Uint8Array,
+  offset: number,
+): [Uint8Array, number] | undefined {
+  const lenRes = decodeUint16(data, offset);
+  if (!lenRes) return undefined;
+  const [len, next] = lenRes;
+  if (next + len > data.length) return undefined;
+  return [data.slice(next, next + len), next + len];
+}
+
+function encodeOpaqueVar(bytes: Uint8Array): Uint8Array {
+  if (bytes.length > 0xffff) {
+    throw new Error(`opaque value too long: ${bytes.length} bytes`);
+  }
+  const prefix = encodeVarint(bytes.length);
+  const out = new Uint8Array(prefix.length + bytes.length);
+  out.set(prefix, 0);
+  out.set(bytes, prefix.length);
+  return out;
+}
+
+function decodeOpaqueVar(
+  data: Uint8Array,
+  offset: number,
+): [Uint8Array, number] | undefined {
+  const lenRes = decodeVarint(data, offset);
+  if (!lenRes) return undefined;
+  const [len, next] = lenRes;
+  if (len > 0xffff) throw new Error(`opaque value too long: ${len} bytes`);
+  if (next + len > data.length) return undefined;
+  return [data.slice(next, next + len), next + len];
+}
+
+function isHexKey(str: string): boolean {
+  return /^[0-9a-fA-F]{64}$/.test(str);
+}
+
+function encodeCommaSeparated(strings: string[]): Uint8Array {
+  return encodeOpaque16(encodeUtf8(strings.join(",")));
+}
+
+function decodeCommaSeparated(
+  data: Uint8Array,
+  offset: number,
+): [string[], number] | undefined {
+  const res = decodeOpaque16(data, offset);
+  if (!res) return undefined;
+  const [bytes, next] = res;
+  const str = decodeUtf8(bytes);
+  if (str.length === 0) return [[], next];
+  return [str.split(","), next];
+}
+
+function encodeAdminPubkeysV2(adminPubkeys: string[]): Uint8Array {
+  for (const pk of adminPubkeys) {
+    if (!isHexKey(pk)) throw new Error("Invalid admin public key format");
+  }
+
+  const bytes = new Uint8Array(adminPubkeys.length * 32);
+  adminPubkeys.forEach((pk, i) => {
+    bytes.set(hexToBytes(pk), i * 32);
+  });
+
+  return encodeOpaqueVar(bytes);
+}
+
+function decodeAdminPubkeysV2(bytes: Uint8Array): string[] {
+  if (bytes.length % 32 !== 0) {
+    throw new Error("admin_pubkeys length must be a multiple of 32");
+  }
+  const out: string[] = [];
+  for (let i = 0; i < bytes.length; i += 32) {
+    out.push(bytesToHex(bytes.slice(i, i + 32)));
+  }
+  return out;
+}
+
+function encodeRelaysV2(relays: string[]): Uint8Array {
+  for (const relay of relays) {
+    if (!isValidRelayUrl(relay)) throw new Error("Invalid relay URL");
+  }
+
+  const encodedRelays = relays.map((r) => encodeUtf8(r));
+  const innerParts = encodedRelays.map((b) => encodeOpaqueVar(b));
+  const innerLen = innerParts.reduce((sum, p) => sum + p.length, 0);
+
+  if (innerLen > 0xffff) {
+    throw new Error(`relays vector too long: ${innerLen} bytes`);
+  }
+
+  const outerPrefix = encodeVarint(innerLen);
+  const out = new Uint8Array(outerPrefix.length + innerLen);
+  out.set(outerPrefix, 0);
+  let offset = outerPrefix.length;
+  for (const part of innerParts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function decodeRelaysV2(
+  data: Uint8Array,
+  offset: number,
+): [string[], number] | undefined {
+  const outerLenRes = decodeVarint(data, offset);
+  if (!outerLenRes) return undefined;
+  const [outerLen, outerNext] = outerLenRes;
+  if (outerLen > 0xffff) throw new Error(`relays vector too long: ${outerLen}`);
+  const end = outerNext + outerLen;
+  if (end > data.length) return undefined;
+
+  const relays: string[] = [];
+  let innerOffset = outerNext;
+  while (innerOffset < end) {
+    const partRes = decodeOpaqueVar(data, innerOffset);
+    if (!partRes) return undefined;
+    const [urlBytes, next] = partRes;
+    const url = decodeUtf8(urlBytes);
+    if (!isValidRelayUrl(url)) throw new Error("Invalid relay URL");
+    relays.push(url);
+    innerOffset = next;
+  }
+  if (innerOffset !== end) {
+    throw new Error("relays vector contains trailing bytes");
+  }
+  return [relays, end];
+}
 
 /**
- * Marmot Group Data Extension Implementation (MIP-01)
+ * Encodes MarmotGroupData to bytes.
  *
- * This module implements the mandatory Marmot Group Data Extension which links
- * MLS groups to Nostr metadata and provides cryptographically secure group state.
- *
- * Extension Identifier: 0xF2EE
- *
- * Note: Image encryption/decryption functions will be added in MIP-04 implementation.
- *
- * @see https://github.com/marmot-protocol/marmot/blob/master/01.md#marmot-group-data-extension
- */
-
-/**
- * Encodes a Marmot Group Data Extension according to TLS presentation language.
- *
- * @param data - The group data to encode
- * @returns TLS-encoded extension data
- * @throws Error if validation fails
+ * @param data - The MarmotGroupData to encode
+ * @returns Encoded bytes
  */
 export function encodeMarmotGroupData(data: MarmotGroupData): Uint8Array {
-  // Validate input
-  validateMarmotGroupData(data);
+  assertFixed("nostr_group_id", data.nostrGroupId, 32);
+  assertZeroOrFixed("image_hash", data.imageHash, 32);
+  assertZeroOrFixed("image_key", data.imageKey, 32);
+  assertZeroOrFixed("image_nonce", data.imageNonce, 12);
+  assertZeroOrFixed("image_upload_key", data.imageUploadKey, 32);
 
-  const textEncoder = new TextEncoder();
-
-  // Encode version (2 bytes, big-endian)
-  const versionBytes = new Uint8Array(2);
-  new DataView(versionBytes.buffer).setUint16(0, data.version, false);
-
-  // nostr_group_id (32 bytes)
-  if (data.nostrGroupId.length !== 32) {
-    throw new Error("nostr_group_id must be exactly 32 bytes");
-  }
+  const version = encodeUint16(data.version);
   const nostrGroupId = data.nostrGroupId;
+  const name =
+    data.version >= 2
+      ? encodeOpaqueVar(encodeUtf8(data.name))
+      : encodeOpaque16(encodeUtf8(data.name));
+  const description =
+    data.version >= 2
+      ? encodeOpaqueVar(encodeUtf8(data.description))
+      : encodeOpaque16(encodeUtf8(data.description));
 
-  // Encode name (variable-length with 2-byte length prefix)
-  const nameBytes = textEncoder.encode(data.name);
-  const nameWithLength = encodeVariableLengthField(nameBytes);
+  const adminPubkeys =
+    data.version >= 2
+      ? encodeAdminPubkeysV2(data.adminPubkeys)
+      : encodeCommaSeparated(data.adminPubkeys);
 
-  // Encode description (variable-length with 2-byte length prefix)
-  const descBytes = textEncoder.encode(data.description);
-  const descWithLength = encodeVariableLengthField(descBytes);
+  // v1: comma-separated string
+  // v2: varint-vector of individually length-prefixed URLs
+  const relays =
+    data.version >= 2
+      ? encodeRelaysV2(data.relays)
+      : encodeCommaSeparated(data.relays);
 
-  // Encode admin_pubkeys (comma-separated hex strings with 2-byte length prefix)
-  const adminStr = data.adminPubkeys.join(",");
-  const adminBytes = textEncoder.encode(adminStr);
-  const adminWithLength = encodeVariableLengthField(adminBytes);
+  const imageHash =
+    data.version >= 2
+      ? encodeOpaqueVar(data.imageHash)
+      : (() => {
+          assertFixed("image_hash", data.imageHash, 32);
+          return data.imageHash;
+        })();
+  const imageKey =
+    data.version >= 2
+      ? encodeOpaqueVar(data.imageKey)
+      : (() => {
+          assertFixed("image_key", data.imageKey, 32);
+          return data.imageKey;
+        })();
+  const imageNonce =
+    data.version >= 2
+      ? encodeOpaqueVar(data.imageNonce)
+      : (() => {
+          assertFixed("image_nonce", data.imageNonce, 12);
+          return data.imageNonce;
+        })();
+  const imageUploadKey =
+    data.version >= 2
+      ? encodeOpaqueVar(data.imageUploadKey)
+      : new Uint8Array(0);
 
-  // Encode relays (comma-separated URLs with 2-byte length prefix)
-  const relaysStr = data.relays.join(",");
-  const relaysBytes = textEncoder.encode(relaysStr);
-  const relaysWithLength = encodeVariableLengthField(relaysBytes);
+  const result = new Uint8Array(
+    version.length +
+      nostrGroupId.length +
+      name.length +
+      description.length +
+      adminPubkeys.length +
+      relays.length +
+      imageHash.length +
+      imageKey.length +
+      imageNonce.length +
+      imageUploadKey.length,
+  );
 
-  // Image fields (fixed-size per MIP-01 spec)
-  // Encode image_hash (always 32 bytes, zero-padded if null)
-  const imageHashBytes = data.imageHash || new Uint8Array(32);
-  if (imageHashBytes.length !== 32) {
-    throw new Error("image_hash must be exactly 32 bytes");
-  }
-
-  // Encode image_key (always 32 bytes, zero-padded if null)
-  const imageKeyBytes = data.imageKey || new Uint8Array(32);
-  if (imageKeyBytes.length !== 32) {
-    throw new Error("image_key must be exactly 32 bytes");
-  }
-
-  // Encode image_nonce (always 12 bytes, zero-padded if null)
-  const imageNonceBytes = data.imageNonce || new Uint8Array(12);
-  if (imageNonceBytes.length !== 12) {
-    throw new Error("image_nonce must be exactly 12 bytes");
-  }
-
-  // Calculate total length
-  const totalLength =
-    versionBytes.length +
-    nostrGroupId.length +
-    nameWithLength.length +
-    descWithLength.length +
-    adminWithLength.length +
-    relaysWithLength.length +
-    imageHashBytes.length +
-    imageKeyBytes.length +
-    imageNonceBytes.length;
-
-  // Concatenate all parts
-  const result = new Uint8Array(totalLength);
   let offset = 0;
-
-  result.set(versionBytes, offset);
-  offset += versionBytes.length;
-
+  result.set(version, offset);
+  offset += version.length;
   result.set(nostrGroupId, offset);
   offset += nostrGroupId.length;
-
-  result.set(nameWithLength, offset);
-  offset += nameWithLength.length;
-
-  result.set(descWithLength, offset);
-  offset += descWithLength.length;
-
-  result.set(adminWithLength, offset);
-  offset += adminWithLength.length;
-
-  result.set(relaysWithLength, offset);
-  offset += relaysWithLength.length;
-
-  result.set(imageHashBytes, offset);
-  offset += imageHashBytes.length;
-
-  result.set(imageKeyBytes, offset);
-  offset += imageKeyBytes.length;
-
-  result.set(imageNonceBytes, offset);
+  result.set(name, offset);
+  offset += name.length;
+  result.set(description, offset);
+  offset += description.length;
+  result.set(adminPubkeys, offset);
+  offset += adminPubkeys.length;
+  result.set(relays, offset);
+  offset += relays.length;
+  result.set(imageHash, offset);
+  offset += imageHash.length;
+  result.set(imageKey, offset);
+  offset += imageKey.length;
+  result.set(imageNonce, offset);
+  offset += imageNonce.length;
+  if (imageUploadKey.length > 0) {
+    result.set(imageUploadKey, offset);
+  }
 
   return result;
 }
 
 /**
- * Decodes a Marmot Group Data Extension from TLS-encoded bytes.
+ * Decodes MarmotGroupData from bytes.
  *
- * @param extensionData - The TLS-encoded extension data
- * @returns Decoded group data
- * @throws Error if the data is malformed or invalid
+ * @param data - The bytes to decode
+ * @returns Decoded MarmotGroupData
+ * @throws Error if decoding fails
  */
-export function decodeMarmotGroupData(
-  extensionData: Uint8Array,
-): MarmotGroupData {
-  // Minimum size with fixed-size image fields:
-  // version(2) + nostr_group_id(32) + name_len(2) + desc_len(2) + admin_len(2) + relays_len(2) + image_hash(32) + image_key(32) + image_nonce(12)
-  const MIN_SIZE = 2 + 32 + 2 + 2 + 2 + 2 + 32 + 32 + 12; // 118 bytes minimum
-
-  if (extensionData.length < MIN_SIZE) {
-    throw new Error(
-      `Extension data too short: expected at least ${MIN_SIZE} bytes, got ${extensionData.length}`,
-    );
+export function decodeMarmotGroupData(data: Uint8Array): MarmotGroupData {
+  const versionRes = decodeUint16(data, 0);
+  if (!versionRes) throw new Error("Extension data too short");
+  const [version, versionOffset] = versionRes;
+  if (version !== 1 && version !== 2) {
+    throw new Error(`Unsupported MarmotGroupData version: ${version}`);
   }
 
-  let offset = 0;
-  const textDecoder = new TextDecoder();
+  let offset = versionOffset;
 
-  // Read version (2 bytes, big-endian)
-  const version = new DataView(
-    extensionData.buffer,
-    extensionData.byteOffset + offset,
-    2,
-  ).getUint16(0, false);
-  offset += 2;
-
-  // Validate version
-  if (version < 1) {
-    throw new Error(`Invalid version: ${version}`);
-  }
-
-  // Read nostr_group_id (32 bytes)
-  const nostrGroupId = extensionData.slice(offset, offset + 32);
+  const nostrGroupId = data.slice(offset, offset + 32);
+  if (nostrGroupId.length !== 32) throw new Error("Extension data too short");
   offset += 32;
 
-  // Read name (variable-length with 2-byte length prefix)
-  const { data: nameBytes, nextOffset: nameOffset } = decodeVariableLengthField(
-    extensionData,
-    offset,
-  );
-  const name = textDecoder.decode(nameBytes);
+  const nameResult =
+    version >= 2 ? decodeOpaqueVar(data, offset) : decodeOpaque16(data, offset);
+  if (!nameResult) throw new Error("Extension data too short");
+  const [nameBytes, nameOffset] = nameResult;
+  const name = decodeUtf8(nameBytes);
   offset = nameOffset;
 
-  // Read description (variable-length with 2-byte length prefix)
-  const { data: descBytes, nextOffset: descOffset } = decodeVariableLengthField(
-    extensionData,
-    offset,
-  );
-  const description = textDecoder.decode(descBytes);
-  offset = descOffset;
+  const descriptionResult =
+    version >= 2 ? decodeOpaqueVar(data, offset) : decodeOpaque16(data, offset);
+  if (!descriptionResult) throw new Error("Extension data too short");
+  const [descriptionBytes, descriptionOffset] = descriptionResult;
+  const description = decodeUtf8(descriptionBytes);
+  offset = descriptionOffset;
 
-  // Read admin_pubkeys (variable-length with 2-byte length prefix)
-  const { data: adminBytes, nextOffset: adminOffset } =
-    decodeVariableLengthField(extensionData, offset);
-  const adminStr = textDecoder.decode(adminBytes);
-  const adminPubkeys = adminStr.length > 0 ? adminStr.split(",") : [];
-  offset = adminOffset;
+  const adminPubkeysResult =
+    version >= 2 ? decodeOpaqueVar(data, offset) : decodeOpaque16(data, offset);
+  if (!adminPubkeysResult) throw new Error("Extension data too short");
+  const [adminPubkeysBytes, adminPubkeysOffset] = adminPubkeysResult;
+  const adminPubkeys =
+    version >= 2
+      ? decodeAdminPubkeysV2(adminPubkeysBytes)
+      : (() => {
+          const str = decodeUtf8(adminPubkeysBytes);
+          if (str.length === 0) return [];
+          return str.split(",");
+        })();
+  offset = adminPubkeysOffset;
 
-  // Read relays (variable-length with 2-byte length prefix)
-  const { data: relaysBytes, nextOffset: relaysOffset } =
-    decodeVariableLengthField(extensionData, offset);
-  const relaysStr = textDecoder.decode(relaysBytes);
-  const relays = relaysStr.length > 0 ? relaysStr.split(",") : [];
+  const relaysResult =
+    version >= 2
+      ? decodeRelaysV2(data, offset)
+      : decodeCommaSeparated(data, offset);
+  if (!relaysResult) throw new Error("Extension data too short");
+  const [relays, relaysOffset] = relaysResult;
   offset = relaysOffset;
 
-  // Read image_hash (fixed 32 bytes)
-  const imageHashBytes = extensionData.slice(offset, offset + 32);
-  const imageHash = imageHashBytes.some((b) => b !== 0) ? imageHashBytes : null;
-  offset += 32;
+  const imageHashRes =
+    version >= 2
+      ? decodeOpaqueVar(data, offset)
+      : ([data.slice(offset, offset + 32), offset + 32] as const);
+  if (!imageHashRes) throw new Error("Extension data too short");
+  const [imageHash, imageHashOffset] = imageHashRes;
+  if (version === 1) assertFixed("image_hash", imageHash, 32);
+  if (version >= 2) assertZeroOrFixed("image_hash", imageHash, 32);
+  offset = imageHashOffset;
 
-  // Read image_key (fixed 32 bytes)
-  const imageKeyBytes = extensionData.slice(offset, offset + 32);
-  const imageKey = imageKeyBytes.some((b) => b !== 0) ? imageKeyBytes : null;
-  offset += 32;
+  const imageKeyRes =
+    version >= 2
+      ? decodeOpaqueVar(data, offset)
+      : ([data.slice(offset, offset + 32), offset + 32] as const);
+  if (!imageKeyRes) throw new Error("Extension data too short");
+  const [imageKey, imageKeyOffset] = imageKeyRes;
+  if (version === 1) assertFixed("image_key", imageKey, 32);
+  if (version >= 2) assertZeroOrFixed("image_key", imageKey, 32);
+  offset = imageKeyOffset;
 
-  // Read image_nonce (fixed 12 bytes)
-  const imageNonceBytes = extensionData.slice(offset, offset + 12);
-  const imageNonce = imageNonceBytes.some((b) => b !== 0)
-    ? imageNonceBytes
-    : null;
-  offset += 12;
+  const imageNonceRes =
+    version >= 2
+      ? decodeOpaqueVar(data, offset)
+      : ([data.slice(offset, offset + 12), offset + 12] as const);
+  if (!imageNonceRes) throw new Error("Extension data too short");
+  const [imageNonce, imageNonceOffset] = imageNonceRes;
+  if (version === 1) assertFixed("image_nonce", imageNonce, 12);
+  if (version >= 2) assertZeroOrFixed("image_nonce", imageNonce, 12);
+  offset = imageNonceOffset;
 
-  // Validate no extra data
-  if (offset !== extensionData.length) {
-    // For forward compatibility, log warning but continue
-    const extra = extensionData.length - offset;
-    const key = `${version}:${extra}`;
-    if (!warnedExtraBytes.has(key)) {
-      warnedExtraBytes.add(key);
-      console.warn(
-        `Extension has ${extra} extra bytes (version ${version} may have additional fields)`,
-      );
-    }
-  }
+  const imageUploadKeyRes =
+    version >= 2
+      ? decodeOpaqueVar(data, offset)
+      : ([new Uint8Array(0), offset] as const);
+  if (!imageUploadKeyRes) throw new Error("Extension data too short");
+  const [imageUploadKey, imageUploadKeyOffset] = imageUploadKeyRes;
+  if (version >= 2) assertZeroOrFixed("image_upload_key", imageUploadKey, 32);
+  offset = imageUploadKeyOffset;
 
   return {
     version,
@@ -241,152 +488,37 @@ export function decodeMarmotGroupData(
     imageHash,
     imageKey,
     imageNonce,
+    imageUploadKey,
   };
 }
 
-/**
- * Creates a new Marmot Group Data Extension with the provided parameters.
- *
- * @param params - Partial MarmotGroupData with optional fields
- * @returns Encoded extension data ready for use in MLS
- */
-export function createMarmotGroupData(
-  params: Partial<MarmotGroupData> = {},
-): Uint8Array {
-  const uniqueAdmins = Array.from(new Set(params.adminPubkeys));
+export type CreateMarmotGroupDataOptions = Partial<
+  Omit<MarmotGroupData, "version">
+>;
 
+/** Creates a valid MarmotGroupData byte payload (MIP-01). */
+export function createMarmotGroupData(
+  opts: CreateMarmotGroupDataOptions = {},
+): Uint8Array {
   const data: MarmotGroupData = {
     version: MARMOT_GROUP_DATA_VERSION,
-    nostrGroupId: params.nostrGroupId || randomBytes(32),
-    name: params.name || "",
-    description: params.description || "",
-    adminPubkeys: uniqueAdmins,
-    relays: relaySet(params.relays),
-    imageHash: params.imageHash ?? null,
-    imageKey: params.imageKey ?? null,
-    imageNonce: params.imageNonce ?? null,
+    nostrGroupId: opts.nostrGroupId ?? new Uint8Array(32),
+    name: opts.name ?? "",
+    description: opts.description ?? "",
+    adminPubkeys: opts.adminPubkeys ?? [],
+    relays: opts.relays ?? [],
+    imageHash: opts.imageHash ?? new Uint8Array(0),
+    imageKey: opts.imageKey ?? new Uint8Array(0),
+    imageNonce: opts.imageNonce ?? new Uint8Array(0),
+    imageUploadKey: opts.imageUploadKey ?? new Uint8Array(0),
   };
-
   return encodeMarmotGroupData(data);
 }
 
-// Image encryption/decryption functions will be implemented in MIP-04
-
-/**
- * Validates that an admin public key is authorized in the group data.
- *
- * @param groupData - The decoded group data
- * @param adminPubkey - The public key to check (hex-encoded)
- * @returns true if the admin is authorized
- */
-export function isAdmin(
-  groupData: MarmotGroupData,
-  adminPubkey: string,
-): boolean {
-  return groupData.adminPubkeys.includes(adminPubkey.toLowerCase());
-}
-
-// Helper functions
-
-/**
- * Encodes a variable-length field with a 2-byte length prefix (big-endian).
- */
-function encodeVariableLengthField(data: Uint8Array): Uint8Array {
-  if (data.length > 65535) {
-    throw new Error(
-      `Variable-length field too long: ${data.length} bytes (max 65535)`,
-    );
-  }
-
-  const result = new Uint8Array(2 + data.length);
-  new DataView(result.buffer).setUint16(0, data.length, false);
-  result.set(data, 2);
-
-  return result;
-}
-
-/**
- * Decodes a variable-length field with a 2-byte length prefix (big-endian).
- */
-function decodeVariableLengthField(
-  buffer: Uint8Array,
-  offset: number,
-): { data: Uint8Array; nextOffset: number } {
-  if (offset + 2 > buffer.length) {
-    throw new Error("Buffer too short to read length prefix");
-  }
-
-  // Create a DataView that accounts for the buffer's byteOffset
-  const length = new DataView(
-    buffer.buffer,
-    buffer.byteOffset + offset,
-    2,
-  ).getUint16(0, false);
-  offset += 2;
-
-  if (offset + length > buffer.length) {
-    throw new Error(
-      `Buffer too short: expected ${length} bytes, got ${buffer.length - offset}`,
-    );
-  }
-
-  const data = buffer.slice(offset, offset + length);
-  return {
-    data,
-    nextOffset: offset + length,
-  };
-}
-
-/**
- * Validates MarmotGroupData structure.
- */
-function validateMarmotGroupData(data: MarmotGroupData): void {
-  // Validate version
-  if (data.version < 1) {
-    throw new Error(`Invalid version: ${data.version}`);
-  }
-
-  // Validate nostr_group_id length
-  if (data.nostrGroupId.length !== 32) {
-    throw new Error("nostr_group_id must be exactly 32 bytes");
-  }
-
-  // Validate strings are valid UTF-8 (TextEncoder will throw if invalid)
-  try {
-    new TextEncoder().encode(data.name);
-    new TextEncoder().encode(data.description);
-  } catch (error) {
-    throw new Error(`Invalid UTF-8 encoding: ${error}`);
-  }
-
-  // Validate admin pubkeys
-  for (const pubkey of data.adminPubkeys) {
-    if (!isHexKey(pubkey)) {
-      throw new Error(
-        `Invalid admin public key format: ${pubkey} (must be 64 hex characters)`,
-      );
-    }
-  }
-
-  // Validate relays
-  for (const relay of data.relays) {
-    if (!relay.startsWith("ws://") && !relay.startsWith("wss://")) {
-      throw new Error(
-        `Invalid relay URL: ${relay} (must start with ws:// or wss://)`,
-      );
-    }
-  }
-
-  // Validate image field lengths (null or exact size)
-  if (data.imageHash !== null && data.imageHash.length !== 32) {
-    throw new Error("image_hash must be null or exactly 32 bytes");
-  }
-  if (data.imageKey !== null && data.imageKey.length !== 32) {
-    throw new Error("image_key must be null or exactly 32 bytes");
-  }
-  if (data.imageNonce !== null && data.imageNonce.length !== 12) {
-    throw new Error("image_nonce must be null or exactly 12 bytes");
-  }
+/** Returns true if pubkey is included in adminPubkeys (case-insensitive). */
+export function isAdmin(groupData: MarmotGroupData, pubkey: string): boolean {
+  const pk = pubkey.toLowerCase();
+  return groupData.adminPubkeys.some((a) => a.toLowerCase() === pk);
 }
 
 /**
@@ -395,9 +527,32 @@ function validateMarmotGroupData(data: MarmotGroupData): void {
  * @param data - The Marmot group data to convert
  * @returns Extension object with Marmot Group Data Extension type and encoded data
  */
-export function marmotGroupDataToExtension(data: MarmotGroupData): Extension {
-  return {
+export function marmotGroupDataToExtension(
+  data: MarmotGroupData,
+): GroupContextExtension {
+  return makeCustomExtension({
     extensionType: MARMOT_GROUP_DATA_EXTENSION_TYPE,
     extensionData: encodeMarmotGroupData(data),
-  };
+  });
+}
+
+/** Type guard for the Marmot Group Data custom extension (0xf2ee). */
+export function isMarmotGroupDataExtension(
+  ext: GroupContextExtension,
+): ext is CustomExtension {
+  return (
+    typeof ext.extensionType === "number" &&
+    ext.extensionType === MARMOT_GROUP_DATA_EXTENSION_TYPE &&
+    ext.extensionData instanceof Uint8Array
+  );
+}
+
+/** Extracts and validates the Marmot Group Data extension payload bytes. */
+export function getMarmotGroupDataExtensionBytes(
+  ext: GroupContextExtension,
+): Uint8Array {
+  if (!isMarmotGroupDataExtension(ext)) {
+    throw new Error("Not a MarmotGroupData extension");
+  }
+  return ext.extensionData;
 }

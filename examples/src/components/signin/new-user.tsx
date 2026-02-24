@@ -9,11 +9,10 @@ import {
   colors,
   uniqueNamesGenerator,
 } from "unique-names-generator";
-import { createKeyPackageRelayListEvent } from "../../../../src";
 import { useObservable } from "../../hooks/use-observable";
 import accountManager from "../../lib/accounts";
 import { eventStore, pool } from "../../lib/nostr";
-import { extraRelays$, lookupRelays$ } from "../../lib/settings";
+import { lookupRelays$ } from "../../lib/settings";
 
 interface NewUserProps {
   onSuccess?: () => void;
@@ -30,7 +29,6 @@ export default function NewUser({ onSuccess }: NewUserProps) {
   const [error, setError] = useState<string | null>(null);
   const [previewUser, setPreviewUser] = useState<PreviewUser | null>(null);
   const lookupRelays = useObservable(lookupRelays$);
-  const extraRelays = useObservable(extraRelays$);
 
   const generateRandomName = () => {
     return uniqueNamesGenerator({
@@ -80,19 +78,11 @@ export default function NewUser({ onSuccess }: NewUserProps) {
             }),
           ),
         );
-        await pool.publish(relaySet(lookupRelays, extraRelays), profile);
+        await pool.publish(relaySet(lookupRelays), profile);
 
-        // Create key package relay list event
-        const keyPackageRelays = await account.signEvent(
-          createKeyPackageRelayListEvent({
-            relays: extraRelays ?? [],
-            pubkey: account.pubkey,
-          }),
-        );
-        await pool.publish(
-          relaySet(lookupRelays, extraRelays),
-          keyPackageRelays,
-        );
+        // Intentionally do NOT auto-publish kind 10051 for new users.
+        // The examples app should surface the "missing 10051" state and
+        // require explicit user configuration.
 
         // Store locally in event store
         eventStore.add(profile);

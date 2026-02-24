@@ -1,13 +1,9 @@
-import {
-  CiphersuiteId,
-  CiphersuiteName,
-  ciphersuites,
-  getCiphersuiteNameFromId,
-} from "ts-mls/crypto/ciphersuite.js";
 import { greaseValues } from "ts-mls/grease.js";
+import { getCiphersuiteNameFromId } from "../lib/ciphersuite";
+import { CiphersuiteId } from "ts-mls";
 
 interface CipherSuiteBadgeProps {
-  cipherSuite: CiphersuiteId | CiphersuiteName;
+  cipherSuite: CiphersuiteId | number;
   className?: string;
 }
 
@@ -18,26 +14,15 @@ export default function CipherSuiteBadge({
   cipherSuite,
   className = "",
 }: CipherSuiteBadgeProps) {
-  // Convert to number if needed
-  const cipherSuiteId: CiphersuiteId =
-    typeof cipherSuite === "number"
-      ? cipherSuite
-      : ciphersuites[cipherSuite] || parseInt(cipherSuite);
-
-  const isGrease = greaseValues.includes(cipherSuiteId);
+  const isGrease = greaseValues.includes(cipherSuite);
 
   // Get the cipher suite name
-  let cipherSuiteName: string;
-  try {
-    cipherSuiteName = isGrease
-      ? "GREASE"
-      : getCiphersuiteNameFromId(cipherSuiteId);
-  } catch {
-    cipherSuiteName = "Unknown";
-  }
+  const cipherSuiteName = isGrease
+    ? "GREASE"
+    : (getCiphersuiteNameFromId(cipherSuite) ?? "Unknown");
 
   // Format the hex ID with 0x prefix
-  const hexId = `0x${cipherSuiteId.toString(16).padStart(4, "0")}`;
+  const hexId = `0x${cipherSuite.toString(16).padStart(4, "0")}`;
 
   return (
     <span

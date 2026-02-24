@@ -1,4 +1,4 @@
-import { Extension } from "ts-mls";
+import { type CustomExtension, makeCustomExtension } from "ts-mls";
 import {
   LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
@@ -10,7 +10,9 @@ import {
  * @param extensions - The extensions from a key package
  * @returns true if the Marmot Group Data Extension is supported
  */
-export function supportsMarmotExtensions(extensions: Extension[]): boolean {
+export function supportsMarmotExtensions(
+  extensions: Array<{ extensionType: number }>,
+): boolean {
   return extensions.some(
     (ext) =>
       typeof ext.extensionType === "number" &&
@@ -26,8 +28,8 @@ export function supportsMarmotExtensions(extensions: Extension[]): boolean {
  * @returns The modified extensions
  */
 export function ensureLastResortExtension(
-  extensions: Extension[],
-): Extension[] {
+  extensions: CustomExtension[],
+): CustomExtension[] {
   if (
     extensions.some(
       (ext) =>
@@ -39,18 +41,18 @@ export function ensureLastResortExtension(
 
   return [
     ...extensions,
-    {
+    makeCustomExtension({
       extensionType: LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
       extensionData: new Uint8Array(0),
-    },
+    }),
   ];
 }
 
 /** Replaces an extension in an array of extensions */
 export function replaceExtension(
-  extensions: Extension[],
-  extension: Extension,
-): Extension[] {
+  extensions: Array<{ extensionType: number }>,
+  extension: { extensionType: number },
+): Array<{ extensionType: number }> {
   return extensions.map((ext) =>
     ext.extensionType === extension.extensionType ? extension : ext,
   );

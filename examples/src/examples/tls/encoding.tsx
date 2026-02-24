@@ -1063,7 +1063,7 @@ const STRUCT_EXAMPLES = {
     name: "Marmot Group Data",
     description: "Nostr group metadata structure from marmot-ts",
     definition: `struct {
-    uint16 version;                    // Version number (current: 1)
+    uint16 version;                    // Version number (current: 2)
     opaque nostr_group_id[32];
     opaque name<0..2^16-1>;
     opaque description<0..2^16-1>;
@@ -1074,7 +1074,7 @@ const STRUCT_EXAMPLES = {
     opaque image_nonce[12];
 } NostrGroupData;`,
     sampleData:
-      "0001" + // version: 1
+      "0002" + // version: 2
       "0000000000000000000000000000000000000000000000000000000000000001" + // nostr_group_id (32 bytes)
       "000d4d7920546573742047726f7570" + // name: "My Test Group" (13 bytes)
       "00184120746573742067726f757020666f722074657374696e67" + // description: "A test group for testing" (24 bytes)

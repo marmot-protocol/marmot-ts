@@ -1,19 +1,19 @@
 import { useRef, useState } from "react";
-import { switchMap } from "rxjs";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { ClientState } from "ts-mls/clientState.js";
+import type { MarmotGroup } from "../../../src/client/group/marmot-group";
 
-import { useObservable, useObservableMemo } from "../hooks/use-observable";
-import { groupStore$ } from "../lib/group-store";
+import { useObservable } from "../hooks/use-observable";
+import { destroyGroup, groups$, groupSummaries$ } from "../lib/groups";
 import ClientStateDataView from "./data-view/client-state";
 import { extractMarmotGroupData, getMemberCount } from "../../../src/core";
 
 interface StoredGroupDetailsProps {
-  clientState: ClientState;
+  group: MarmotGroup;
   index: number;
 }
 
-function StoredGroupDetails({ clientState, index }: StoredGroupDetailsProps) {
+function StoredGroupDetails({ group, index }: StoredGroupDetailsProps) {
+  const clientState = group.state;
   // Extract metadata from the ClientState
   const marmotData = extractMarmotGroupData(clientState);
   const groupIdHex = bytesToHex(clientState.groupContext.groupId);
@@ -21,16 +21,12 @@ function StoredGroupDetails({ clientState, index }: StoredGroupDetailsProps) {
   const memberCount = getMemberCount(clientState);
   const name = marmotData?.name || `Group #${index + 1}`;
 
-  const handleActivate = () => {
-    try {
-      console.log("✅ Group activated (rehydrated) successfully!", clientState);
-      alert(
-        `Group "${name}" activated successfully! Check console for ClientState object.`,
-      );
-    } catch (e) {
-      console.error("Failed to activate group", e);
-      alert("Failed to activate group. Check console for details.");
-    }
+  const handleDelete = async () => {
+    const confirmed = window.confirm(
+      `Delete group "${name}"? This will remove it from local storage.`,
+    );
+    if (!confirmed) return;
+    await destroyGroup(groupIdHex);
   };
 
   // Helper function to format MarmotGroupData values for display
@@ -108,10 +104,13 @@ function StoredGroupDetails({ clientState, index }: StoredGroupDetailsProps) {
           </div>
         </details>
 
-        {/* Activate Button */}
+        {/* Delete Button */}
         <div className="flex justify-end pt-2">
-          <button className="btn btn-primary btn-sm" onClick={handleActivate}>
-            Activate Group (Test clientState Rehydration)
+          <button
+            className="btn btn-outline btn-error btn-sm"
+            onClick={handleDelete}
+          >
+            Delete Group
           </button>
         </div>
       </div>
@@ -121,26 +120,26 @@ function StoredGroupDetails({ clientState, index }: StoredGroupDetailsProps) {
 
 export default function GroupStoreModal() {
   const ref = useRef<HTMLDialogElement>(null);
-  const groupStore = useObservable(groupStore$);
-
-  const entries = useObservableMemo(
-    () => groupStore$.pipe(switchMap((store) => store.list())),
-    [],
-  );
+  const groups = useObservable(groups$);
+  const summaries = useObservable(groupSummaries$);
+  const entries = groups ?? [];
+  const summaryCount = summaries?.length ?? entries.length;
   const [clearing, setClearing] = useState(false);
 
   const handleClearAll = async () => {
-    if (!groupStore) return;
-
     const confirmed = window.confirm(
-      `Are you sure you want to clear all ${entries?.length ?? 0} group${entries?.length !== 1 ? "s" : ""}? This action cannot be undone.`,
+      `Are you sure you want to clear all ${summaryCount} group${summaryCount !== 1 ? "s" : ""}? This action cannot be undone.`,
     );
 
     if (!confirmed) return;
 
     setClearing(true);
     try {
-      await groupStore.clear();
+      await Promise.all(
+        entries.map((g) =>
+          destroyGroup(bytesToHex(g.state.groupContext.groupId)),
+        ),
+      );
     } catch (error) {
       console.error("Failed to clear groups:", error);
       alert("Failed to clear groups. Check console for details.");
@@ -186,7 +185,7 @@ export default function GroupStoreModal() {
 
         {/* Content */}
         <div className="space-y-3">
-          {entries === undefined ? (
+          {groups === undefined ? (
             <div className="flex justify-center p-8">
               <span className="loading loading-spinner loading-lg"></span>
             </div>
@@ -213,12 +212,8 @@ export default function GroupStoreModal() {
                 {entries.length} group{entries.length !== 1 ? "s" : ""} stored
               </div>
 
-              {entries.map((clientState, index) => (
-                <StoredGroupDetails
-                  key={index}
-                  clientState={clientState}
-                  index={index}
-                />
+              {entries.map((group, index) => (
+                <StoredGroupDetails key={index} group={group} index={index} />
               ))}
             </>
           )}

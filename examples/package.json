@@ -19,7 +19,7 @@
     "applesauce-relay": "^5.1.0",
     "applesauce-signers": "^5.1.0",
     "daisyui": "^5.5.14",
-    "marmot-ts": "workspace:*",
+    "@internet-privacy/marmots": "workspace:*",
     "localforage": "^1.10.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

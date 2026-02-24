@@ -4,7 +4,7 @@ import { getDisplayName, NostrEvent, relaySet } from "applesauce-core/helpers";
 import { useEffect, useRef, useState } from "react";
 import { BehaviorSubject, combineLatest, of, switchMap } from "rxjs";
 import { map } from "rxjs/operators";
-import { KeyPackage } from "ts-mls";
+import { KeyPackage, defaultCredentialTypes } from "ts-mls";
 import {
   getCredentialPubkey,
   getKeyPackage,
@@ -26,7 +26,6 @@ import QRButton from "../../components/qr-button";
 import { useObservable, useObservableMemo } from "../../hooks/use-observable";
 import accounts, { keyPackageRelays$ } from "../../lib/accounts";
 import { eventStore, pool } from "../../lib/nostr";
-import { extraRelays$ } from "../../lib/settings";
 
 const formatDate = (timestamp: number) => {
   return new Date(timestamp * 1000).toLocaleString();
@@ -156,7 +155,8 @@ function KeyPackageCard({ event }: { event: NostrEvent }) {
         {expanded && keyPackage && (
           <div className="mt-3 space-y-2 border-t border-base-300 pt-3">
             {/* Credential Info */}
-            {keyPackage.leafNode.credential.credentialType === "basic" && (
+            {keyPackage.leafNode.credential.credentialType ===
+              defaultCredentialTypes.basic && (
               <div>
                 <div className="text-xs text-base-content/60 mb-1">
                   Credential Pubkey
@@ -260,19 +260,17 @@ export default function UserKeyPackages() {
     selectedPubkey$.next(null);
   };
 
-  // Step 2: Fetch key packages from those relays (always include extra relays)
+  // Step 2: Fetch key packages from those relays
   const keyPackages = useObservableMemo(
     () =>
-      combineLatest([selectedPubkey$, keyPackageRelays$, extraRelays$]).pipe(
-        switchMap(([pubkey, keyPackageRelays, extraRelays]) => {
+      combineLatest([selectedPubkey$, keyPackageRelays$]).pipe(
+        switchMap(([pubkey, keyPackageRelays]) => {
           if (!pubkey) return of([]);
 
-          // Always include extra relays when fetching events
           const relays = relaySet(
             keyPackageRelays && keyPackageRelays.length > 0
               ? keyPackageRelays
               : [],
-            extraRelays,
           );
 
           return pool

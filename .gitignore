@@ -8,6 +8,6 @@ lancedb
 models
 mcp.json
 plans
-ts-mls
-marmot
-.vitepress/cache
+
+# Ignore agent references
+references/

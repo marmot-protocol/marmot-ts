@@ -1,12 +1,10 @@
 import { NostrEvent, relaySet, UnsignedEvent } from "applesauce-core/helpers";
 import { useEffect, useState } from "react";
-import { combineLatest, map, of, switchMap } from "rxjs";
 
 import {
   createKeyPackageRelayListEvent,
   getKeyPackageRelayList,
 } from "../../../../src/core/key-package-relay-list";
-import { KEY_PACKAGE_RELAY_LIST_KIND } from "../../../../src/core/protocol";
 import { RelayListCreator } from "../../components/form/relay-list-creator";
 import JsonBlock from "../../components/json-block";
 import RelayAvatar from "../../components/relay-avatar";
@@ -14,7 +12,6 @@ import { withSignIn } from "../../components/with-signIn";
 import { useObservable } from "../../hooks/use-observable";
 import accounts, { keyPackageRelays$, mailboxes$ } from "../../lib/accounts";
 import { eventStore, pool } from "../../lib/nostr";
-import { extraRelays$, lookupRelays$ } from "../../lib/settings";
 
 // ============================================================================
 // Component: RelayListForm
@@ -268,8 +265,6 @@ function SuccessDisplay({ event, relayList }: SuccessDisplayProps) {
 // ============================================================================
 
 function useRelayListManagement() {
-  const extraRelays = useObservable(extraRelays$);
-  const lookupRelays = useObservable(lookupRelays$);
   const [isCreating, setIsCreating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [createdEvent, setCreatedEvent] = useState<NostrEvent | null>(null);
@@ -330,21 +325,12 @@ function useRelayListManagement() {
       const signedEvent = await account.signEvent(draftEvent);
       console.log("Signed event:", signedEvent);
 
-      // Parse relay URLs from the signed event (these are the advertised relays)
-      const newRelays = getKeyPackageRelayList(signedEvent);
-
-      // Combine outbox relays with advertised relays and config-based relays, removing duplicates
-      const outboxRelays = mailboxes?.outboxes || [];
-      const allPublishingRelays = relaySet(
-        outboxRelays,
-        newRelays,
-        extraRelays,
-        lookupRelays,
-      );
+      // Publish replaceable metadata (kind 10051) to the user's NIP-65 outboxes.
+      const allPublishingRelays = relaySet(mailboxes?.outboxes);
 
       if (allPublishingRelays.length === 0) {
         throw new Error(
-          "No relays available for publishing. Configure your account or add relays.",
+          "No NIP-65 outbox relays configured. Configure kind 10002 (NIP-65) before publishing.",
         );
       }
 
@@ -358,6 +344,10 @@ function useRelayListManagement() {
           console.error("Failed to publish to", relay, err);
         }
       }
+
+      // Add to local eventStore so other screens (create key package, banners, etc)
+      // see the updated replaceable event immediately.
+      eventStore.add(signedEvent);
 
       setCreatedEvent(signedEvent);
       setDraftEvent(null);
@@ -389,44 +379,21 @@ function useRelayListManagement() {
 }
 
 // ============================================================================
-// Observable: Load existing relay list
-// ============================================================================
-
-const currentRelayList$ = combineLatest([
-  accounts.active$,
-  mailboxes$,
-  keyPackageRelays$,
-]).pipe(
-  switchMap(([account, mailboxes, keyPackageRelays]) =>
-    account
-      ? eventStore
-          .replaceable({
-            kind: KEY_PACKAGE_RELAY_LIST_KIND,
-            pubkey: account.pubkey,
-            relays: relaySet(mailboxes?.outboxes, keyPackageRelays),
-          })
-          .pipe(
-            map((event) => (event ? getKeyPackageRelayList(event) : undefined)),
-          )
-      : of(undefined),
-  ),
-);
-
-// ============================================================================
 // Main Component
 // ============================================================================
 
 export default withSignIn(function KeyPackageRelays() {
-  // Subscribe to the user's current relay list
-  const currentRelayList = useObservable(currentRelayList$);
+  // Subscribe to the user's current relay list (kind 10051)
+  const currentRelayList = useObservable(keyPackageRelays$);
   const mailboxes = useObservable(mailboxes$);
 
   const [relays, setRelays] = useState<string[]>([]);
 
   // Update relays when existing relay list changes
   useEffect(() => {
-    if (currentRelayList && currentRelayList.length > 0)
+    if (Array.isArray(currentRelayList) && currentRelayList.length > 0) {
       setRelays(currentRelayList);
+    }
   }, [currentRelayList]);
 
   const {

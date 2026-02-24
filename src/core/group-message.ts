@@ -1,4 +1,4 @@
-import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
+import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import {
   finalizeEvent,
   generateSecretKey,
@@ -10,10 +10,11 @@ import { bytesToHex, hexToBytes } from "nostr-tools/utils";
 import { ClientState } from "ts-mls/clientState.js";
 import { CiphersuiteImpl } from "ts-mls/crypto/ciphersuite.js";
 import { mlsExporter } from "ts-mls/keySchedule.js";
+import { contentTypes, decode, encode, wireformats } from "ts-mls";
 import {
-  decodeMlsMessage,
-  encodeMlsMessage,
-  type MLSMessage,
+  mlsMessageDecoder,
+  mlsMessageEncoder,
+  type MlsMessage,
 } from "ts-mls/message.js";
 import { unixNow } from "../utils/nostr.js";
 import { getNostrGroupIdHex } from "./client-state.js";
@@ -42,19 +43,19 @@ async function getExporterSecretForNip44(
 }
 
 /**
- * Reads a {@link NostrEvent} and returns the {@link MLSMessage} it contains.
+ * Reads a {@link NostrEvent} and returns the {@link MlsMessage} it contains.
  * Decrypts the NIP-44 encrypted content using the exporter_secret from the group state.
  *
  * @param message - The Nostr event containing the encrypted MLS message
  * @param clientState - The ClientState for the group (to get exporter_secret)
  * @param ciphersuite - The ciphersuite implementation
- * @returns The decoded MLSMessage
+ * @returns The decoded MlsMessage
  */
 export async function decryptGroupMessageEvent(
   message: NostrEvent,
   clientState: ClientState,
   ciphersuite: CiphersuiteImpl,
-): Promise<MLSMessage> {
+): Promise<MlsMessage> {
   // Step 1: Get exporter_secret for current epoch
   const exporterSecret = await getExporterSecretForNip44(
     clientState,
@@ -74,11 +75,11 @@ export async function decryptGroupMessageEvent(
   );
   const decryptedContent = nip44.decrypt(message.content, conversationKey);
 
-  // Step 4: Decode the serialized MLSMessage
+  // Step 4: Decode the serialized MlsMessage
   const serializedMessage = hexToBytes(decryptedContent);
-  const decoded = decodeMlsMessage(serializedMessage, 0);
+  const decoded = decode(mlsMessageDecoder, serializedMessage);
   if (!decoded) throw new Error("Failed to decode MLS message");
-  return decoded[0];
+  return decoded;
 }
 
 /**
@@ -96,10 +97,10 @@ export async function createEncryptedGroupEventContent({
 }: {
   state: ClientState;
   ciphersuite: CiphersuiteImpl;
-  message: MLSMessage;
+  message: MlsMessage;
 }): Promise<string> {
-  // Step 1: Serialize the MLSMessage
-  const serializedMessage = encodeMlsMessage(message);
+  // Step 1: Serialize the MLS message
+  const serializedMessage = encode(mlsMessageEncoder, message);
 
   // Step 2: Get exporter_secret for current epoch
   const exporterSecret = await getExporterSecretForNip44(state, ciphersuite);
@@ -108,162 +109,263 @@ export async function createEncryptedGroupEventContent({
   const encryptionPrivateKey = exporterSecret;
   const encryptionPublicKey = getPublicKey(encryptionPrivateKey);
 
-  // NOTE: its inefficient to encrypt the binary MLSMessage as binary -> hex string -> NIP-44 -> base64.
-  // It would be better to use the underlying encryption that NIP-44 uses to just encrypt the binary data with the exporter_secret
-
   // Step 4: Encrypt using NIP-44
+  // Use exporter_secret as sender key (private), and its public key as receiver key
   const conversationKey = nip44.getConversationKey(
     encryptionPrivateKey,
     encryptionPublicKey,
   );
-  const serializedHex = bytesToHex(serializedMessage);
-  return nip44.encrypt(serializedHex, conversationKey);
+  const encryptedContent = nip44.encrypt(
+    bytesToHex(serializedMessage),
+    conversationKey,
+  );
+
+  return encryptedContent;
 }
 
+export type GroupMessagePair = {
+  event: NostrEvent;
+  message: MlsMessage;
+};
+
 /**
- * Creates a signed Nostr event (kind 445) for a group message (commit, proposal, or application).
- * Encrypts the MLSMessage using NIP-44 with keys derived from the group's exporter_secret.
+ * Reads a kind 445 event and returns the {@link MlsMessage} it contains.
  *
- * According to MIP-03:
- * 1. Get exporter_secret from current group epoch
- * 2. Generate keypair using exporter_secret as private key
- * 3. Encrypt MLSMessage with NIP-44 using that keypair
- * 4. Publish using a separate ephemeral keypair (for privacy)
- *
- * @param message - The MLS message to encrypt and send
- * @param state - The ClientState for the group (to get exporter_secret and group ID)
+ * @param event - The Nostr event containing the encrypted MLS message
+ * @param clientState - The ClientState for the group (to get exporter_secret)
  * @param ciphersuite - The ciphersuite implementation
- * @returns Signed Nostr event ready to publish
+ * @returns The event and the decoded MlsMessage
  */
-export async function createGroupEvent({
-  message,
-  state,
-  ciphersuite,
-}: {
-  message: MLSMessage;
-  state: ClientState;
-  ciphersuite: CiphersuiteImpl;
-}): Promise<NostrEvent> {
-  const encryptedContent = await createEncryptedGroupEventContent({
-    state,
+export async function readGroupMessage(
+  event: NostrEvent,
+  clientState: ClientState,
+  ciphersuite: CiphersuiteImpl,
+): Promise<GroupMessagePair> {
+  const message = await decryptGroupMessageEvent(
+    event,
+    clientState,
     ciphersuite,
-    message,
-  });
-
-  // Step 5: Get group ID from ClientState
-  const groupId = getNostrGroupIdHex(state);
-
-  // Step 6: Generate a separate ephemeral keypair for publishing (privacy protection)
-  const ephemeralSecretKey = generateSecretKey();
-  const ephemeralPublicKey = getPublicKey(ephemeralSecretKey);
-
-  // Step 7: Create and sign the event
-  const unsignedEvent = {
-    kind: GROUP_EVENT_KIND,
-    pubkey: ephemeralPublicKey,
-    created_at: unixNow(),
-    content: encryptedContent,
-    tags: [["h", groupId]],
-  };
-
-  return finalizeEvent(unsignedEvent, ephemeralSecretKey);
-}
-
-/** A type for a decrypted group message event */
-export type GroupMessagePair = { event: NostrEvent; message: MLSMessage };
-
-/**
- * Serializes a Nostr event (rumor) to application data for use in MLS application messages.
- *
- * According to the Marmot spec (MIP-03), application messages contain unsigned Nostr events
- * (rumors) as their payload. This function:
- * 1. Ensures the event is unsigned (removes sig field if present)
- * 2. Serializes the event to JSON
- * 3. Converts the JSON string to UTF-8 bytes
- *
- * The inner Nostr events MUST:
- * - Be unsigned (no sig field) to prevent leaks from being publishable
- * - Use the member's Nostr identity key for the pubkey field
- * - NOT include "h" tags or other tags that would identify the group
- *
- * @param rumor - The unsigned Nostr event (rumor) to serialize
- * @returns The serialized event as Uint8Array (UTF-8 encoded JSON)
- */
-export function serializeApplicationRumor(rumor: Rumor): Uint8Array {
-  // Create a copy without the sig field (if present)
-  // According to spec, inner events MUST be unsigned
-  const { sig, ...unsignedEvent } = rumor as Rumor & { sig?: string };
-
-  // Serialize to JSON
-  const jsonString = JSON.stringify(unsignedEvent);
-
-  // Convert to UTF-8 bytes
-  return new TextEncoder().encode(jsonString);
-}
-
-/** Deserializes an application message into a MIP-03 rumor */
-export function deserializeApplicationRumor(data: Uint8Array): Rumor {
-  const jsonString = new TextDecoder().decode(data);
-  const rumor = JSON.parse(jsonString);
-  if (!isRumor(rumor)) throw new Error("Invalid rumor");
-  return rumor;
+  );
+  return { event, message };
 }
 
 /**
- * Sorts group commits according to MIP-03.
+ * Reads multiple kind 445 events and returns the {@link MlsMessage} they contain.
  *
- * When multiple admins send commits for the same epoch, we need to apply exactly one. The priority order is:
- * 1. Epoch number (process commits in epoch order)
- * 2. created_at timestamp (earliest wins)
- * 3. event id (lexicographically smallest wins as tiebreaker)
- *
- * @param commits - The commits to sort
- * @returns The sorted commits
+ * @param events - The Nostr events containing the encrypted MLS messages
+ * @param clientState - The ClientState for the group (to get exporter_secret)
+ * @param ciphersuite - The ciphersuite implementation
+ * @returns An array of event and decoded MlsMessage pairs
  */
-export function sortGroupCommits(
-  commits: GroupMessagePair[],
-): GroupMessagePair[] {
-  return Array.from(commits).sort((a, b) => {
-    if (!isPrivateMessage(a.message) || !isPrivateMessage(b.message)) return 0;
-
-    const pmA = a.message.privateMessage;
-    const pmB = b.message.privateMessage;
-
-    // First priority: Sort by epoch number
-    if (pmA.epoch !== pmB.epoch) {
-      if (pmA.epoch < pmB.epoch) return -1;
-      if (pmA.epoch > pmB.epoch) return 1;
-      return 0;
-    }
-
-    // Same epoch - second priority: Use timestamp (earliest wins)
-    if (a.event.created_at !== b.event.created_at) {
-      return a.event.created_at - b.event.created_at;
-    }
-
-    // Same timestamp - third priority: Use event id (lexicographically smallest wins)
-    return a.event.id.localeCompare(b.event.id);
-  });
-}
-
-/** Read an array of group message events into MLSMessages and an array of unreadable events */
 export async function readGroupMessages(
   events: NostrEvent[],
-  state: ClientState,
+  clientState: ClientState,
   ciphersuite: CiphersuiteImpl,
 ): Promise<{ read: GroupMessagePair[]; unreadable: NostrEvent[] }> {
   const read: GroupMessagePair[] = [];
   const unreadable: NostrEvent[] = [];
 
-  for (const event of events) {
-    try {
-      const message = await decryptGroupMessageEvent(event, state, ciphersuite);
-      read.push({ event, message });
-    } catch {
-      // Ignore reading errors, this is either a message or a past / future epoch or spam
-      unreadable.push(event);
-    }
-  }
+  await Promise.all(
+    events.map(async (event) => {
+      try {
+        read.push(await readGroupMessage(event, clientState, ciphersuite));
+      } catch {
+        unreadable.push(event);
+      }
+    }),
+  );
 
   return { read, unreadable };
+}
+
+export type CreateGroupEventOptions = {
+  /** The serialized MLS message */
+  message: MlsMessage;
+  /** The ClientState for the group */
+  state: ClientState;
+  /** The ciphersuite implementation */
+  ciphersuite: CiphersuiteImpl;
+};
+
+/**
+ * Creates a Nostr event containing an encrypted MLS message.
+ *
+ * @param options - The options for creating the event
+ * @returns A signed Nostr event
+ */
+export async function createGroupEvent(
+  options: CreateGroupEventOptions,
+): Promise<NostrEvent> {
+  const { message, state, ciphersuite } = options;
+
+  // Encrypt the MLS message
+  const content = await createEncryptedGroupEventContent({
+    state,
+    ciphersuite,
+    message,
+  });
+
+  // Get the Nostr group ID for the tags
+  const groupId = getNostrGroupIdHex(state);
+
+  const draft = {
+    kind: GROUP_EVENT_KIND,
+    created_at: unixNow(),
+    content,
+    tags: [["h", groupId]],
+  };
+
+  // Generate a random ephemeral key for signing
+  const ephemeralSecretKey = generateSecretKey();
+
+  // Finalize (sign) the event
+  return finalizeEvent(draft, ephemeralSecretKey);
+}
+
+/**
+ * Serializes an application rumor (unsigned Nostr event) to bytes.
+ * This is the format used for application messages in Marmot groups.
+ *
+ * @param rumor - The unsigned Nostr event to serialize
+ * @returns The serialized application data as bytes
+ */
+export function serializeApplicationRumor(rumor: Rumor): Uint8Array {
+  // Serialize the rumor to a JSON string
+  const json = JSON.stringify(rumor);
+  // Encode as UTF-8 bytes
+  return new TextEncoder().encode(json);
+}
+
+/**
+ * Deserializes application data bytes back into a rumor.
+ *
+ * @param data - The serialized application data
+ * @returns The deserialized Rumor
+ */
+export function deserializeApplicationData(data: Uint8Array): Rumor {
+  // Decode UTF-8 bytes to string
+  const json = new TextDecoder().decode(data);
+  // Parse JSON
+  const parsed = JSON.parse(json);
+
+  // Validate it's a rumor-like object
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Invalid application data: not an object");
+  }
+
+  // Check required fields for a rumor
+  if (!parsed.id || !parsed.pubkey || parsed.kind === undefined) {
+    throw new Error("Invalid application data: missing required fields");
+  }
+
+  return parsed as Rumor;
+}
+
+/** @deprecated Kept for internal compatibility. Prefer `deserializeApplicationData`. */
+export const deserializeApplicationRumor = deserializeApplicationData;
+
+/**
+ * Sorts group commits to handle race conditions according to MIP-03.
+ *
+ * Sorting order (MIP-03):
+ * 1. First, sort by commit time (created_at) - older commits first
+ * 2. If equal, sort by event id (lexicographically) - lower id first
+ *
+ * @param commits - Array of commit message pairs to sort
+ * @returns Sorted array of commits
+ */
+export function sortGroupCommits(
+  commits: GroupMessagePair[],
+): GroupMessagePair[] {
+  return commits.sort((a, b) => {
+    // Rule 1: Sort by created_at (older first)
+    if (a.event.created_at !== b.event.created_at) {
+      return a.event.created_at - b.event.created_at;
+    }
+
+    // Rule 2: If equal, sort by event id (lexicographically)
+    return a.event.id.localeCompare(b.event.id);
+  });
+}
+
+/**
+ * Creates a proposal event for a group.
+ *
+ * @param options - The options for creating the proposal event
+ * @returns A signed Nostr event
+ */
+export async function createProposalEvent(
+  options: CreateGroupEventOptions,
+): Promise<NostrEvent> {
+  return createGroupEvent(options);
+}
+
+/**
+ * Creates a commit event for a group.
+ *
+ * @param options - The options for creating the commit event
+ * @returns A signed Nostr event
+ */
+export async function createCommitEvent(
+  options: CreateGroupEventOptions,
+): Promise<NostrEvent> {
+  return createGroupEvent(options);
+}
+
+/**
+ * Type guard to check if a value is a Rumor
+ */
+export function isRumorLike(value: unknown): value is Rumor {
+  if (!value || typeof value !== "object") return false;
+  const r = value as Record<string, unknown>;
+  return (
+    typeof r.id === "string" &&
+    typeof r.pubkey === "string" &&
+    typeof r.kind === "number" &&
+    typeof r.created_at === "number" &&
+    typeof r.content === "string" &&
+    Array.isArray(r.tags)
+  );
+}
+
+/**
+ * Checks if a message is an application message (not a proposal or commit).
+ */
+export function isApplicationMessage(
+  pair: GroupMessagePair,
+): pair is GroupMessagePair & {
+  message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
+} {
+  return (
+    isPrivateMessage(pair.message) &&
+    pair.message.privateMessage.contentType === contentTypes.application
+  );
+}
+
+/**
+ * Checks if a message is a commit message.
+ */
+export function isCommitMessage(
+  pair: GroupMessagePair,
+): pair is GroupMessagePair & {
+  message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
+} {
+  return (
+    isPrivateMessage(pair.message) &&
+    pair.message.privateMessage.contentType === contentTypes.commit
+  );
+}
+
+/**
+ * Checks if a message is a proposal message.
+ */
+export function isProposalMessage(
+  pair: GroupMessagePair,
+): pair is GroupMessagePair & {
+  message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
+} {
+  return (
+    isPrivateMessage(pair.message) &&
+    pair.message.privateMessage.contentType === contentTypes.proposal
+  );
 }

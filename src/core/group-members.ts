@@ -1,4 +1,9 @@
-import { ClientState, Credential } from "ts-mls";
+import {
+  ClientState,
+  Credential,
+  defaultCredentialTypes,
+  nodeTypes,
+} from "ts-mls";
 import { nodeToLeafIndex, toNodeIndex } from "ts-mls/treemath.js";
 import { getCredentialPubkey, isSameCredential } from "./credential.js";
 import { LeafNode } from "ts-mls/leafNode.js";
@@ -8,8 +13,8 @@ export function getGroupMembers(state: ClientState): string[] {
   const pubkeys = new Set<string>();
   for (const node of state.ratchetTree) {
     if (
-      node?.nodeType === "leaf" &&
-      node.leaf.credential.credentialType === "basic"
+      node?.nodeType === nodeTypes.leaf &&
+      node.leaf.credential.credentialType === defaultCredentialTypes.basic
     ) {
       pubkeys.add(getCredentialPubkey(node.leaf.credential));
     }
@@ -23,10 +28,10 @@ export function getPubkeyLeafNodes(
   pubkey: string,
 ): LeafNode[] {
   return state.ratchetTree
-    .filter((node) => node?.nodeType === "leaf")
+    .filter((node) => node?.nodeType === nodeTypes.leaf)
     .filter(
       (node) =>
-        node.leaf.credential.credentialType === "basic" &&
+        node.leaf.credential.credentialType === defaultCredentialTypes.basic &&
         getCredentialPubkey(node.leaf.credential) === pubkey,
     )
     .map((node) => node.leaf);
@@ -49,8 +54,8 @@ export function getPubkeyLeafNodeIndexes(
     const node = state.ratchetTree[nodeIndex];
     if (
       node &&
-      node.nodeType === "leaf" &&
-      node.leaf.credential.credentialType === "basic"
+      node.nodeType === nodeTypes.leaf &&
+      node.leaf.credential.credentialType === defaultCredentialTypes.basic
     ) {
       if (getCredentialPubkey(node.leaf.credential) === pubkey)
         leafIndexes.push(Number(nodeToLeafIndex(toNodeIndex(nodeIndex))));
@@ -75,7 +80,7 @@ export function getCredentialLeafNodeIndexes(
 
   for (let nodeIndex = 0; nodeIndex < state.ratchetTree.length; nodeIndex++) {
     const node = state.ratchetTree[nodeIndex];
-    if (node && node.nodeType === "leaf") {
+    if (node && node.nodeType === nodeTypes.leaf) {
       if (isSameCredential(node.leaf.credential, credential))
         leafIndexes.push(Number(nodeToLeafIndex(toNodeIndex(nodeIndex))));
     }

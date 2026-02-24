@@ -4,27 +4,18 @@ import {
   combineLatest,
   filter,
   firstValueFrom,
-  from,
   lastValueFrom,
   map,
-  of,
   shareReplay,
   startWith,
-  switchMap,
 } from "rxjs";
 import localforage from "localforage";
-import {
-  KeyValueGroupStateBackend,
-  MarmotClient,
-  defaultMarmotClientConfig,
-} from "../../../src";
-import { MarmotGroup } from "../../../src/client/group/marmot-group";
+import { KeyValueGroupStateBackend, MarmotClient } from "../../../src";
 import {
   NostrNetworkInterface,
   PublishResponse,
 } from "../../../src/client/nostr-interface";
 import accounts from "./accounts";
-import { selectedGroupId$ } from "./group-store";
 import { keyPackageStore$ } from "./key-package-store";
 import { eventStore, pool } from "./nostr";
 import { GroupSubscriptionManager } from "./group-subscription-manager";
@@ -49,7 +40,9 @@ const networkInterface: NostrNetworkInterface = {
     firstValueFrom(
       eventStore.mailboxes(pubkey).pipe(
         defined(),
-        map((mailboxes) => mailboxes.outboxes),
+        // NIP-65: inboxes are where a user expects to *receive* messages.
+        // Gift-wrapped welcome messages (kind 1059) should be delivered there.
+        map((mailboxes) => mailboxes.inboxes),
         simpleTimeout(30_000, "Failed to fetch users inbox relays"),
       ),
     ),
@@ -57,6 +50,11 @@ const networkInterface: NostrNetworkInterface = {
 
 // Global subscription manager instance
 let subscriptionManager: GroupSubscriptionManager | null = null;
+
+// Track the current client + handler so we can detach event listeners when account changes
+let currentClient: MarmotClient | null = null;
+let groupsUpdatedHandler: (() => void) | null = null;
+let groupStateChangedHandler: (() => void) | null = null;
 
 // Track when subscription manager is fully initialized
 let isSubscriptionManagerReady = false;
@@ -85,7 +83,6 @@ export const marmotClient$ = combineLatest([
       groupStateBackend,
       keyPackageStore,
       network: networkInterface,
-      clientConfig: defaultMarmotClientConfig,
     });
   }),
   startWith(undefined),
@@ -100,6 +97,29 @@ marmotClient$.subscribe(async (client) => {
       subscriptionManager.stop();
       subscriptionManager = null;
     }
+
+    // Detach any previous client listeners
+    if (currentClient && groupsUpdatedHandler) {
+      currentClient.off("groupsUpdated", groupsUpdatedHandler);
+    }
+    if (currentClient && groupStateChangedHandler) {
+      currentClient.groupStateStore.off(
+        "groupStateAdded",
+        groupStateChangedHandler,
+      );
+      currentClient.groupStateStore.off(
+        "groupStateUpdated",
+        groupStateChangedHandler,
+      );
+      currentClient.groupStateStore.off(
+        "groupStateRemoved",
+        groupStateChangedHandler,
+      );
+    }
+    currentClient = null;
+    groupsUpdatedHandler = null;
+    groupStateChangedHandler = null;
+
     isSubscriptionManagerReady = false;
     return;
   }
@@ -112,6 +132,46 @@ marmotClient$.subscribe(async (client) => {
       await subscriptionManager.start();
       isSubscriptionManagerReady = true;
       console.log("Subscription manager started successfully");
+
+      // IMPORTANT: reconcile subscriptions when the client's group inventory changes.
+      // Without this, newly created/joined/imported groups won't get background
+      // subscriptions until a full page refresh.
+      if (currentClient && groupsUpdatedHandler) {
+        currentClient.off("groupsUpdated", groupsUpdatedHandler);
+      }
+      currentClient = client;
+      groupsUpdatedHandler = () => {
+        subscriptionManager?.reconcileSubscriptions().catch((err) => {
+          console.error("Failed to reconcile subscriptions:", err);
+        });
+      };
+      client.on("groupsUpdated", groupsUpdatedHandler);
+
+      // Also reconcile when the local group store changes so new groups start syncing
+      // without requiring a page refresh.
+      // We do this here (instead of importing groupStoreChanges$) to avoid a circular import.
+      if (groupStateChangedHandler) {
+        currentClient.groupStateStore.off(
+          "groupStateAdded",
+          groupStateChangedHandler,
+        );
+        currentClient.groupStateStore.off(
+          "groupStateUpdated",
+          groupStateChangedHandler,
+        );
+        currentClient.groupStateStore.off(
+          "groupStateRemoved",
+          groupStateChangedHandler,
+        );
+      }
+      groupStateChangedHandler = () => {
+        subscriptionManager?.reconcileSubscriptions().catch((err) => {
+          console.error("Failed to reconcile subscriptions:", err);
+        });
+      };
+      client.groupStateStore.on("groupStateAdded", groupStateChangedHandler);
+      client.groupStateStore.on("groupStateUpdated", groupStateChangedHandler);
+      client.groupStateStore.on("groupStateRemoved", groupStateChangedHandler);
     } catch (err) {
       console.error("Failed to start subscription manager:", err);
       subscriptionManager = null;
@@ -137,21 +197,3 @@ marmotClient$
       console.error("Failed to reconcile subscriptions:", err);
     });
   });
-
-// Observable for the currently selected group
-// Derives the MarmotGroup from the selectedGroupId$ and marmotClient$
-// Note: This only updates when groupId or client changes, not on every store update.
-// The group's internal state is reactive through the MarmotGroup instance.
-export const selectedGroup$ = combineLatest([
-  selectedGroupId$,
-  marmotClient$.pipe(defined()),
-]).pipe(
-  switchMap(([groupId, client]) => {
-    if (!groupId) {
-      return of<MarmotGroup | null>(null);
-    }
-    return from(client.getGroup(groupId));
-  }),
-  startWith<MarmotGroup | null>(null),
-  shareReplay(1),
-);

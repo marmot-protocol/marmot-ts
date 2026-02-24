@@ -33,8 +33,7 @@ type GroupStateStoreEvents = {
  * A bytes-only store for MLS group state.
  *
  * This class manages the persistence of MLS group state as raw bytes.
- * It does NOT handle serialization/deserialization - that is the responsibility
- * of the MarmotClient which owns the ClientConfig needed for hydration.
+ * It does NOT handle serialization/deserialization - that is the responsibility of the caller.
  *
  * This design ensures:
  * 1. Storage layer has no dependency on ClientConfig (policy concern)

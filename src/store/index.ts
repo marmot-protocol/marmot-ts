@@ -4,6 +4,9 @@ export * from "./group-state-store.js";
 // Adapters for common backend patterns
 export * from "./adapters/key-value-group-state-backend.js";
 
+// Invite storage
+export * from "./invite-store.js";
+
 // Legacy hydrated storage (deprecated, will be removed in a future version)
 export * from "./group-store.js";
 export * from "./key-package-store.js";

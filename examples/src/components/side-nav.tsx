@@ -3,7 +3,7 @@ import examples from "../examples";
 import useHash from "../hooks/use-hash";
 import { useObservable } from "../hooks/use-observable";
 import { keyPackageCount$ } from "../lib/key-package-store";
-import { groupCount$ } from "../lib/group-store";
+import { groupCount$ } from "../lib/groups";
 import AccountSwitcher from "./accounts/picker";
 
 export default function SideNav() {

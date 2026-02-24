@@ -60,19 +60,10 @@ export default function RelayPicker(props: {
   const relayConfig = useObservable(relayConfig$);
 
   const allRelayOptions = useMemo(() => {
-    const extra =
-      props.common ||
-      relayConfig?.extraRelays ||
-      relayConfig?.commonRelays ||
-      [];
+    const extra = props.common || relayConfig?.lookupRelays || [];
     if (!props.value || extra.includes(props.value)) return extra;
     else return [props.value, ...extra];
-  }, [
-    props.value,
-    props.common,
-    relayConfig?.extraRelays,
-    relayConfig?.commonRelays,
-  ]);
+  }, [props.value, props.common, relayConfig?.lookupRelays]);
 
   const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     props.onChange(e.target.value);

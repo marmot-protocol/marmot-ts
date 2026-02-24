@@ -8,30 +8,27 @@ import {
   ClientState,
   CryptoProvider,
   defaultCryptoProvider,
-  getCiphersuiteFromName,
-  getCiphersuiteImpl,
   joinGroup,
   KeyPackage,
-  makePskIndex,
   PrivateKeyPackage,
 } from "ts-mls";
-import {
-  CiphersuiteId,
-  CiphersuiteName,
-  getCiphersuiteFromId,
-} from "ts-mls/crypto/ciphersuite.js";
-import { ClientConfig } from "ts-mls/clientConfig.js";
+import { CiphersuiteName, ciphersuites } from "ts-mls/crypto/ciphersuite.js";
+import { marmotAuthService } from "../core/auth-service.js";
 import { createCredential } from "../core/credential.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
+import { LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE } from "../core/protocol.js";
+import {
+  createKeyPackageEvent,
+  createDeleteKeyPackageEvent,
+} from "../core/key-package-event.js";
 import { getWelcome } from "../core/welcome.js";
 import {
   deserializeClientState,
   serializeClientState,
   SerializedClientState,
 } from "../core/client-state.js";
-import { defaultMarmotClientConfig } from "../core/client-state.js";
 import {
   GroupStateStore,
   GroupStateStoreBackend,
@@ -43,6 +40,7 @@ import {
   MarmotGroup,
 } from "./group/marmot-group.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
+import type { EventTemplate } from "nostr-tools";
 
 export type MarmotClientOptions<
   THistory extends BaseGroupHistory | undefined = undefined,
@@ -59,8 +57,6 @@ export type MarmotClientOptions<
   cryptoProvider?: CryptoProvider;
   /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
-  /** The ClientConfig to use for state hydration (contains auth service and policy) */
-  clientConfig?: ClientConfig;
 } & (THistory extends undefined
   ? {}
   : {
@@ -74,19 +70,21 @@ export type InferGroupType<TClient extends MarmotClient<any>> =
 
 type MarmotClientEvents<THistory extends BaseGroupHistory | undefined = any> = {
   /** Emitted when the groups array is updated */
-  groupsUpdated: (groups: MarmotGroup<THistory>[]) => any;
+  groupsUpdated: (groups: MarmotGroup<THistory>[]) => void;
   /** Emitted when a group is loaded from the store */
-  groupLoaded: (group: MarmotGroup<THistory>) => any;
+  groupLoaded: (group: MarmotGroup<THistory>) => void;
   /** Emitted when a new group is created */
-  groupCreated: (group: MarmotGroup<THistory>) => any;
+  groupCreated: (group: MarmotGroup<THistory>) => void;
   /** Emitted when a group is imported from a ClientState object */
-  groupImported: (group: MarmotGroup<THistory>) => any;
+  groupImported: (group: MarmotGroup<THistory>) => void;
   /** Emitted when a group is joined */
-  groupJoined: (group: MarmotGroup<THistory>) => any;
+  groupJoined: (group: MarmotGroup<THistory>) => void;
+  /** Emitted when a key package should be deleted from relays after successful join (MIP-00). */
+  keyPackageRelayDeleteRequested: (args: { keyPackageEventId: string }) => void;
   /** Emitted when a group is unloaded */
-  groupUnloaded: (groupId: Uint8Array) => any;
+  groupUnloaded: (groupId: Uint8Array) => void;
   /** Emitted when a group is destroyed */
-  groupDestroyed: (groupId: Uint8Array) => any;
+  groupDestroyed: (groupId: Uint8Array) => void;
 };
 
 export class MarmotClient<
@@ -102,8 +100,6 @@ export class MarmotClient<
   readonly keyPackageStore: KeyPackageStore;
   /** The nostr relay pool to use for the client */
   readonly network: NostrNetworkInterface;
-  /** The ClientConfig used for state hydration */
-  readonly clientConfig: ClientConfig;
 
   /** Crypto provider for cryptographic operations */
   public cryptoProvider: CryptoProvider;
@@ -124,7 +120,6 @@ export class MarmotClient<
     this.keyPackageStore = options.keyPackageStore;
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
-    this.clientConfig = options.clientConfig ?? defaultMarmotClientConfig;
 
     // Set the history factory if its set in the options
     this.historyFactory = (
@@ -132,20 +127,19 @@ export class MarmotClient<
     ) as GroupHistoryFactory<THistory>;
   }
 
-  /** Get a ciphersuite implementation from a name or id */
-  private async getCiphersuiteImpl(name: CiphersuiteName | CiphersuiteId = 1) {
-    const suite =
-      typeof name === "string"
-        ? getCiphersuiteFromName(name)
-        : getCiphersuiteFromId(name);
-
-    // Get a new ciphersuite implementation
-    return await getCiphersuiteImpl(suite, this.cryptoProvider);
+  /** Get a ciphersuite implementation from a name */
+  private async getCiphersuiteImpl(name?: CiphersuiteName) {
+    // In v2, CryptoProvider.getCiphersuiteImpl takes a numeric ciphersuite id.
+    // We accept a name and map it via the exported `ciphersuites` table.
+    const ciphersuiteName =
+      name ?? "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
+    const id = ciphersuites[ciphersuiteName];
+    return await this.cryptoProvider.getCiphersuiteImpl(id);
   }
 
   /** Hydrates a SerializedClientState into a ClientState using this client's config */
   private hydrateState(serialized: SerializedClientState): ClientState {
-    return deserializeClientState(serialized, this.clientConfig);
+    return deserializeClientState(serialized);
   }
 
   /** Serializes a ClientState into bytes */
@@ -292,7 +286,7 @@ export class MarmotClient<
   async createGroup(
     name: string,
     options?: SimpleGroupOptions & {
-      ciphersuite?: CiphersuiteName | CiphersuiteId;
+      ciphersuite?: CiphersuiteName;
     },
   ): Promise<MarmotGroup<THistory>> {
     const ciphersuiteImpl = await this.getCiphersuiteImpl(options?.ciphersuite);
@@ -360,7 +354,8 @@ export class MarmotClient<
       options;
 
     // Decode the Welcome message from the kind 444 event
-    const welcome = getWelcome(welcomeRumor);
+    const mlsWelcome = getWelcome(welcomeRumor);
+    const welcome = mlsWelcome;
 
     // Extract keyPackageEventId from welcome rumor tags if not explicitly provided
     // The keyPackageEventId is stored as an "e" tag in the welcome message per MIP-00
@@ -369,8 +364,10 @@ export class MarmotClient<
       welcomeRumor.tags.find((tag) => tag[0] === "e")?.[1];
 
     // Get the ciphersuite implementation for the Welcome
-    const ciphersuiteImpl = await this.getCiphersuiteImpl(welcome.cipherSuite);
-
+    // ts-mls v2: welcome.cipherSuite is a numeric CiphersuiteId
+    const ciphersuiteImpl = await this.cryptoProvider.getCiphersuiteImpl(
+      welcome.cipherSuite,
+    );
     // Find all local KeyPackage candidates with matching cipherSuite
     const allKeyPackages = await this.keyPackageStore.list();
     const candidatePackages: Array<{
@@ -383,6 +380,7 @@ export class MarmotClient<
     // Collect all key packages with matching cipher suite and compute their KeyPackageRef
     // KeyPackageRef is used to identify which encrypted secret in the welcome is ours (RFC 9420)
     for (const keyPackage of allKeyPackages) {
+      // KeyPackage uses numeric ciphersuite ids; compare directly
       if (keyPackage.publicPackage.cipherSuite !== welcome.cipherSuite) {
         continue;
       }
@@ -394,12 +392,13 @@ export class MarmotClient<
 
       // Check if this key package's ref matches any secret in the welcome
       // This is the RFC 9420 KeyPackageRef matching semantics
-      const hasMatchingSecret = welcome.secrets.some(
-        (secret) =>
-          secret.newMember.length === keyPackage.keyPackageRef.length &&
-          secret.newMember.every(
-            (val, idx) => val === keyPackage.keyPackageRef[idx],
-          ),
+      const hasMatchingSecret = welcome.secrets.some((secret: any) =>
+        secret.newMember.length === keyPackage.keyPackageRef.length
+          ? secret.newMember.every(
+              (val: number, idx: number) =>
+                val === keyPackage.keyPackageRef[idx],
+            )
+          : false,
       );
 
       candidatePackages.push({
@@ -430,24 +429,28 @@ export class MarmotClient<
       ...candidatePackages.filter((p) => !p.hasMatchingSecret),
     ];
 
-    // Create an empty PSK index (no pre-shared keys for now)
-    const pskIndex = makePskIndex(undefined, {});
-
     // Try each key package in priority order until one successfully decrypts the Welcome message
     let clientState: ClientState | null = null;
     let lastError: Error | null = null;
+    let consumedKeyPackageRef: Uint8Array | null = null;
+    let consumedKeyPackage: KeyPackage | null = null;
 
     for (const keyPackage of prioritizedKeyPackages) {
       try {
         // Attempt to join the group with this key package
-        // The joinGroup function internally uses KeyPackageRef to find the correct secret
-        clientState = await joinGroup(
+        // In v2, joinGroup takes a single params object with context
+        clientState = await joinGroup({
+          context: {
+            cipherSuite: ciphersuiteImpl,
+            authService: marmotAuthService,
+            externalPsks: {},
+          },
           welcome,
-          keyPackage.publicPackage,
-          keyPackage.privatePackage,
-          pskIndex,
-          ciphersuiteImpl,
-        );
+          keyPackage: keyPackage.publicPackage,
+          privateKeys: keyPackage.privatePackage,
+        });
+        consumedKeyPackageRef = keyPackage.keyPackageRef;
+        consumedKeyPackage = keyPackage.publicPackage;
         // If successful, break out of the loop
         break;
       } catch (error) {
@@ -463,6 +466,43 @@ export class MarmotClient<
         ? `Failed to join group with any matching key package. Last error: ${lastError.message}`
         : "Failed to join group with any matching key package";
       throw new Error(errorMessage);
+    }
+
+    // MIP-00: After successfully processing a Welcome, clients SHOULD delete
+    // the consumed KeyPackage from local storage to minimize reuse/exposure.
+    // last_resort nuance (MIP-00): retain init_key private material while the
+    // KeyPackage remains published / expected to be needed for more Welcomes.
+    //
+    // Practical handling in this repo:
+    // - If we have a KeyPackage event id (relay-based distribution), we request
+    //   relay deletion best-effort and treat that as intent to unpublish/rotate,
+    //   so we delete local private material.
+    // - If we *don't* have an event id (out-of-band sharing / unknown publish
+    //   status), we retain local private material for last_resort KeyPackages.
+    if (consumedKeyPackageRef) {
+      const isLastResort = !!consumedKeyPackage?.extensions?.some(
+        (ext) =>
+          typeof ext === "object" &&
+          ext !== null &&
+          "extensionType" in ext &&
+          // extensionType is numeric in ts-mls v2
+          (ext as { extensionType: number }).extensionType ===
+            LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+      );
+
+      if (isLastResort) {
+        // MIP-00: last_resort key packages must retain their private init_key
+        // material as long as the KeyPackage may still be needed to decrypt
+        // other Welcomes (race window).
+        //
+        // Deletion should happen when the last_resort KeyPackage is rotated and
+        // unpublished, not immediately on first successful join.
+        console.warn(
+          "[MarmotClient.joinGroupFromWelcome] Consumed KeyPackage had last_resort extension; retaining local private material per MIP-00",
+        );
+      } else {
+        await this.keyPackageStore.remove(consumedKeyPackageRef);
+      }
     }
 
     // Save the group state to the store
@@ -484,6 +524,29 @@ export class MarmotClient<
     // Add the group to the cache
     this.setGroupInstance(group);
     this.emit("groupJoined", group);
+
+    // MIP-00: best-effort request to delete the relay-published KeyPackage event.
+    // This is emitted whenever we have an event id (relay distribution).
+    // Note: even if the KeyPackage is last_resort, many implementations rotate/
+    // unpublish after a successful join.
+    if (keyPackageEventId) {
+      this.emit("keyPackageRelayDeleteRequested", { keyPackageEventId });
+    }
+
+    // MIP-02 SHOULD: post-join self-update to rotate leaf key material for forward secrecy.
+    // This is REQUIRED within 24 hours (MIP-02), and recommended immediately.
+    try {
+      await group.selfUpdate();
+      console.log(
+        `[MarmotClient.joinGroupFromWelcome] Post-join self-update commit sent`,
+      );
+    } catch (err) {
+      // Best-effort — failure to self-update is non-fatal.
+      console.warn(
+        `[MarmotClient.joinGroupFromWelcome] Post-join self-update failed:`,
+        err,
+      );
+    }
 
     return group;
   }
@@ -584,5 +647,71 @@ export class MarmotClient<
       this.keyPackageStore.off("keyPackageAdded", handleChange);
       this.keyPackageStore.off("keyPackageRemoved", handleChange);
     }
+  }
+
+  /**
+   * Rotates key packages by generating a fresh one and retiring old ones.
+   *
+   * MIP-00 requires that key packages use unique init keys and are periodically
+   * rotated so compromised init keys cannot be used to add the client to groups.
+   *
+   * This method:
+   * 1. Generates a new key package with fresh init keys
+   * 2. Stores the private material locally
+   * 3. Returns unsigned event templates for the caller to sign and publish:
+   *    - A kind 443 event for the new key package
+   *    - A kind 5 (NIP-09) deletion event for old key packages (if eventIds provided)
+   *
+   * @param options - Options for key package rotation
+   * @param options.relays - Relay URLs to include in the key package event
+   * @param options.client - Client identifier string for the key package event
+   * @param options.oldEventIds - Event IDs of previous kind 443 events to delete
+   * @param options.ciphersuite - Ciphersuite to use (default: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519)
+   * @returns The new key package event template and optional delete event template
+   */
+  async rotateKeyPackage(options?: {
+    relays?: string[];
+    client?: string;
+    oldEventIds?: string[];
+    ciphersuite?: CiphersuiteName;
+    /** Whether the created KeyPackage should include the MLS `last_resort` extension (default: true). */
+    isLastResort?: boolean;
+    /** Whether to include the NIP-70 protected tag on the new key package event */
+    protected?: boolean;
+  }): Promise<{
+    keyPackageEvent: EventTemplate;
+    deleteEvent?: EventTemplate;
+  }> {
+    const ciphersuiteImpl = await this.getCiphersuiteImpl(options?.ciphersuite);
+
+    // Generate a new key package with fresh init keys
+    const pubkey = await this.signer.getPublicKey();
+    const credential = createCredential(pubkey);
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+      isLastResort: options?.isLastResort,
+    });
+
+    // Store the private material locally
+    await this.keyPackageStore.add(keyPackage);
+
+    // Build the unsigned kind 443 event
+    const keyPackageEvent = await createKeyPackageEvent({
+      keyPackage: keyPackage.publicPackage,
+      relays: options?.relays,
+      client: options?.client,
+      protected: options?.protected,
+    });
+
+    // Build a NIP-09 delete event for old key packages if IDs are provided
+    let deleteEvent: EventTemplate | undefined;
+    if (options?.oldEventIds && options.oldEventIds.length > 0) {
+      deleteEvent = createDeleteKeyPackageEvent({
+        events: options.oldEventIds,
+      });
+    }
+
+    return { keyPackageEvent, deleteEvent };
   }
 }

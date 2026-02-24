@@ -1,4 +1,4 @@
-import { CiphersuiteName, ciphersuites } from "ts-mls/crypto/ciphersuite.js";
+import { ciphersuites, CiphersuiteName } from "ts-mls";
 
 // Available cipher suites
 const CIPHER_SUITES = Object.keys(ciphersuites) as CiphersuiteName[];

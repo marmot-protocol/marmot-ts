@@ -1,61 +1,23 @@
-import { NostrEvent, relaySet, UnsignedEvent } from "applesauce-core/helpers";
+import { NostrEvent } from "applesauce-core/helpers";
 import { useEffect, useState } from "react";
-import { combineLatest, EMPTY, map, switchMap } from "rxjs";
-import {
-  defaultCryptoProvider,
-  getCiphersuiteFromName,
-  getCiphersuiteImpl,
-} from "ts-mls";
-import { CiphersuiteName } from "ts-mls/crypto/ciphersuite.js";
+import type { EventTemplate } from "nostr-tools";
+import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
+import type { CiphersuiteName } from "ts-mls";
 import { KeyPackage } from "ts-mls/keyPackage.js";
 
-import {
-  CompleteKeyPackage,
-  createKeyPackageEvent,
-  getKeyPackageRelayList,
-} from "../../../../src";
+import { CompleteKeyPackage, createKeyPackageEvent } from "../../../../src";
 import { createCredential } from "../../../../src/core/credential";
 import { generateKeyPackage } from "../../../../src/core/key-package";
-import {
-  KEY_PACKAGE_RELAY_LIST_KIND,
-  KEY_PACKAGE_RELAYS_TAG,
-} from "../../../../src/core/protocol";
+import { KEY_PACKAGE_RELAYS_TAG } from "../../../../src/core/protocol";
 import KeyPackageDataView from "../../components/data-view/key-package";
 import { CipherSuitePicker } from "../../components/form/cipher-suite-picker";
 import { RelayListCreator } from "../../components/form/relay-list-creator";
 import JsonBlock from "../../components/json-block";
 import { withSignIn } from "../../components/with-signIn";
 import { useObservable } from "../../hooks/use-observable";
-import accounts, { mailboxes$ } from "../../lib/accounts";
+import accounts, { keyPackageRelays$ } from "../../lib/accounts";
 import { keyPackageStore$ } from "../../lib/key-package-store";
-import { eventStore, pool } from "../../lib/nostr";
-import { relayConfig$ } from "../../lib/settings";
-
-/** Observable of current accounts key package relays */
-const keyPackageRelays$ = combineLatest([
-  accounts.active$,
-  mailboxes$,
-  relayConfig$,
-]).pipe(
-  switchMap(([account, mailboxes, relayConfig]) =>
-    account
-      ? eventStore
-          .replaceable({
-            kind: KEY_PACKAGE_RELAY_LIST_KIND,
-            pubkey: account.pubkey,
-            relays: relaySet(
-              mailboxes?.outboxes
-                ? mailboxes.outboxes
-                : relayConfig.lookupRelays,
-              relayConfig.manualRelays,
-            ),
-          })
-          .pipe(
-            map((event) => (event ? getKeyPackageRelayList(event) : undefined)),
-          )
-      : EMPTY,
-  ),
-);
+import { pool } from "../../lib/nostr";
 
 // ============================================================================
 // Component: ConfigurationForm
@@ -65,6 +27,7 @@ interface ConfigurationFormProps {
   relays: string[];
   cipherSuite: CiphersuiteName;
   isCreating: boolean;
+  hasKeyPackageRelayList: boolean;
   onRelaysChange: (relays: string[]) => void;
   onCipherSuiteChange: (suite: CiphersuiteName) => void;
   onSubmit: () => void;
@@ -74,10 +37,13 @@ function ConfigurationForm({
   relays,
   cipherSuite,
   isCreating,
+  hasKeyPackageRelayList,
   onRelaysChange,
   onCipherSuiteChange,
   onSubmit,
 }: ConfigurationFormProps) {
+  const isDisabled = isCreating || !hasKeyPackageRelayList;
+
   return (
     <div className="card bg-base-100 border border-base-300">
       <div className="card-body">
@@ -87,7 +53,7 @@ function ConfigurationForm({
         <CipherSuitePicker
           value={cipherSuite}
           onChange={onCipherSuiteChange}
-          disabled={isCreating}
+          disabled={isDisabled}
         />
 
         {/* Relays Configuration */}
@@ -96,8 +62,12 @@ function ConfigurationForm({
             relays={relays}
             label="Relays"
             placeholder="wss://relay.example.com"
-            disabled={isCreating}
-            emptyMessage="No relays configured. Add relays below to publish your key package."
+            disabled={isDisabled}
+            emptyMessage={
+              hasKeyPackageRelayList
+                ? "No relays configured. Configure your key package relay list (10051) first."
+                : "Key package relay list (10051) is missing. Configure it to publish key packages."
+            }
             onRelaysChange={onRelaysChange}
           />
         </div>
@@ -107,7 +77,7 @@ function ConfigurationForm({
           <button
             className="btn btn-primary"
             onClick={onSubmit}
-            disabled={isCreating || relays.length === 0}
+            disabled={isDisabled || relays.length === 0}
           >
             {isCreating ? (
               <>
@@ -156,7 +126,7 @@ function ErrorAlert({ error }: { error: string | null }) {
 // ============================================================================
 
 interface DraftDisplayProps {
-  event: UnsignedEvent | NostrEvent;
+  event: EventTemplate | NostrEvent;
   keyPackage: KeyPackage;
   isPublishing: boolean;
   onPublish: () => void;
@@ -278,7 +248,7 @@ function useKeyPackageCreation() {
   const [isCreating, setIsCreating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [createdEvent, setCreatedEvent] = useState<any>(null);
-  const [draftEvent, setDraftEvent] = useState<any>(null);
+  const [draftEvent, setDraftEvent] = useState<EventTemplate | null>(null);
   const [keyPackage, setKeyPackage] = useState<CompleteKeyPackage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [storageKey, setStorageKey] = useState<string | null>(null);
@@ -302,9 +272,8 @@ function useKeyPackageCreation() {
       const pubkey = account.pubkey;
 
       // Get cipher suite implementation
-      const selectedCiphersuite = getCiphersuiteFromName(cipherSuite);
       const ciphersuiteImpl = await getCiphersuiteImpl(
-        selectedCiphersuite,
+        cipherSuite,
         defaultCryptoProvider,
       );
 
@@ -324,9 +293,8 @@ function useKeyPackageCreation() {
 
       // Create the unsigned event using the library function
       console.log("Creating key package event...");
-      const unsignedEvent = createKeyPackageEvent({
+      const unsignedEvent = await createKeyPackageEvent({
         keyPackage: keyPackage.publicPackage,
-        pubkey,
         relays,
         client: "marmot-examples",
       });
@@ -431,7 +399,9 @@ function useKeyPackageCreation() {
 export default withSignIn(function KeyPackageCreate() {
   // Subscribe to the user's key package relays
   const keyPackageRelays = useObservable(keyPackageRelays$);
-  const relayConfig = useObservable(relayConfig$);
+
+  const hasKeyPackageRelayList =
+    Array.isArray(keyPackageRelays) && keyPackageRelays.length > 0;
 
   const [relays, setRelays] = useState<string[]>([]);
   const [cipherSuite, setCipherSuite] = useState<CiphersuiteName>(
@@ -440,18 +410,12 @@ export default withSignIn(function KeyPackageCreate() {
 
   // Update relays when saved relays change
   useEffect(() => {
-    if (keyPackageRelays && keyPackageRelays.length > 0) {
+    if (Array.isArray(keyPackageRelays) && keyPackageRelays.length > 0) {
       setRelays(keyPackageRelays);
-    } else if (relayConfig) {
-      // Fall back to config-based relays if no saved relay list
-      const defaultRelays = relaySet(
-        relayConfig.manualRelays,
-        relayConfig.extraRelays || relayConfig.commonRelays,
-        relayConfig.lookupRelays,
-      );
-      setRelays(defaultRelays);
+    } else {
+      setRelays([]);
     }
-  }, [keyPackageRelays, relayConfig]);
+  }, [keyPackageRelays]);
 
   const {
     isCreating,
@@ -483,14 +447,27 @@ export default withSignIn(function KeyPackageCreate() {
 
       {/* Configuration Form */}
       {!draftEvent && !createdEvent && (
-        <ConfigurationForm
-          relays={relays}
-          cipherSuite={cipherSuite}
-          isCreating={isCreating}
-          onRelaysChange={setRelays}
-          onCipherSuiteChange={setCipherSuite}
-          onSubmit={handleShowBinary}
-        />
+        <>
+          {!hasKeyPackageRelayList && (
+            <div className="alert alert-warning">
+              <span>
+                Key package relay list (kind 10051) is missing. Configure it to
+                publish key packages:{" "}
+                <a href="#key-package/relay-list">open relay list settings</a>.
+              </span>
+            </div>
+          )}
+
+          <ConfigurationForm
+            relays={relays}
+            cipherSuite={cipherSuite}
+            isCreating={isCreating}
+            hasKeyPackageRelayList={hasKeyPackageRelayList}
+            onRelaysChange={setRelays}
+            onCipherSuiteChange={setCipherSuite}
+            onSubmit={handleShowBinary}
+          />
+        </>
       )}
 
       {/* Error Display */}

@@ -1,22 +1,20 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { getEventHash } from "nostr-tools";
 import { useEffect, useRef, useState } from "react";
-import { ClientState } from "ts-mls/clientState.js";
-import {
-  extractMarmotGroupData,
-  getGroupIdHex,
-  getNostrGroupIdHex,
-} from "../../../../src";
+import type { GroupSummary } from "../../lib/groups";
+import { bytesToHex } from "@noble/hashes/utils.js";
+import { extractMarmotGroupData } from "../../../../src/core";
 import { MarmotGroup } from "../../../../src/client/group/marmot-group";
 import { unixNow } from "../../../../src/utils/nostr";
 import { withSignIn } from "../../components/with-signIn";
 import { useObservable, useObservableMemo } from "../../hooks/use-observable";
 import accounts from "../../lib/accounts";
-import { groupStore$, selectedGroupId$ } from "../../lib/group-store";
 import {
-  getSubscriptionManager,
+  groupSummaries$,
   selectedGroup$,
-} from "../../lib/marmot-client";
+  selectedGroupId$,
+} from "../../lib/groups";
+import { getSubscriptionManager } from "../../lib/marmot-client";
 import { pool } from "../../lib/nostr";
 
 // ============================================================================
@@ -42,7 +40,7 @@ function ErrorAlert({ error }: ErrorAlertProps) {
 // ============================================================================
 
 interface GroupSelectorProps {
-  groups: ClientState[];
+  groups: GroupSummary[];
   selectedGroupId: string | null;
   isLoading: boolean;
 }
@@ -70,12 +68,9 @@ function GroupSelector({
         >
           <option value="">-- Select a group --</option>
           {groups.map((group) => {
-            const groupIdHex = getGroupIdHex(group);
-            const marmotData = extractMarmotGroupData(group);
-            const name = marmotData?.name || "Unnamed Group";
             return (
-              <option key={groupIdHex} value={groupIdHex}>
-                {name}
+              <option key={group.groupId} value={group.groupId}>
+                {group.name}
               </option>
             );
           })}
@@ -342,35 +337,10 @@ function ChatInterface({
 // ============================================================================
 
 function useGroupLoader() {
-  const groupStore = useObservable(groupStore$);
-  const [groups, setGroups] = useState<ClientState[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!groupStore) {
-      setIsLoading(false);
-      return;
-    }
-
-    const loadGroups = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-        const groupList = await groupStore.list();
-        setGroups(groupList);
-      } catch (err) {
-        console.error("Failed to load groups:", err);
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadGroups();
-  }, [groupStore]);
-
-  return { groups, isLoading, error };
+  const groupsValue = useObservable(groupSummaries$);
+  const groups = groupsValue ?? [];
+  const isLoading = groupsValue === undefined;
+  return { groups, isLoading, error: null as string | null };
 }
 
 // ============================================================================
@@ -482,7 +452,8 @@ function Chat() {
   useEffect(() => {
     if (!selectedGroup) return;
 
-    const groupIdHex = getNostrGroupIdHex(selectedGroup.state);
+    // GroupSubscriptionManager callback keys are the MLS group_id (local store key), not nostr_group_id.
+    const groupIdHex = bytesToHex(selectedGroup.state.groupContext.groupId);
     const subscriptionManager = getSubscriptionManager();
 
     if (subscriptionManager) {

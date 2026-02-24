@@ -1,6 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventEmitter } from "eventemitter3";
-import { ClientConfig } from "ts-mls/clientConfig.js";
 import { ClientState } from "ts-mls/clientState.js";
 import {
   deserializeClientState,
@@ -19,11 +18,11 @@ export type GroupStoreOptions = {
 
 type GroupStoreEvents = {
   /** Emitted when a client state is added */
-  clientStateAdded: (clientState: ClientState) => any;
+  clientStateAdded: (clientState: ClientState) => void;
   /** Emitted when a client state is updated */
-  clientStateUpdated: (clientState: ClientState) => any;
+  clientStateUpdated: (clientState: ClientState) => void;
   /** Emitted when a client state is removed */
-  clientStateRemoved: (groupId: Uint8Array) => any;
+  clientStateRemoved: (groupId: Uint8Array) => void;
 };
 
 /**
@@ -31,27 +30,19 @@ type GroupStoreEvents = {
  *
  * This class manages the persistence of MLS groups, storing the serialized
  * ClientState internally but always returning deserialized ClientState objects.
- * The ClientConfig is stored in the instance and used for all deserialization.
  */
 export class GroupStore extends EventEmitter<GroupStoreEvents> {
   private backend: GroupStoreBackend;
   private readonly prefix?: string;
-  private readonly config: ClientConfig;
 
   /**
    * Creates a new GroupStore instance.
    * @param backend - The storage backend to use (e.g., localForage)
-   * @param config - The ClientConfig to use for deserialization
    * @param options - Optional configuration (prefix for namespacing)
    */
-  constructor(
-    backend: GroupStoreBackend,
-    config: ClientConfig,
-    { prefix }: GroupStoreOptions = {},
-  ) {
+  constructor(backend: GroupStoreBackend, { prefix }: GroupStoreOptions = {}) {
     super();
     this.backend = backend;
-    this.config = config;
     this.prefix = prefix;
   }
 
@@ -94,7 +85,7 @@ export class GroupStore extends EventEmitter<GroupStoreEvents> {
     const storedClientState = serializeClientState(clientState);
 
     await this.backend.setItem(key, storedClientState);
-    this.emit("clientStateAdded", clientState);
+    this.emit("clientStateUpdated", clientState);
 
     return key;
   }
@@ -111,7 +102,7 @@ export class GroupStore extends EventEmitter<GroupStoreEvents> {
 
     if (!entry) return null;
 
-    return deserializeClientState(entry, this.config);
+    return deserializeClientState(entry);
   }
 
   /**
@@ -147,9 +138,7 @@ export class GroupStore extends EventEmitter<GroupStoreEvents> {
       (entry): entry is SerializedClientState => entry !== null,
     );
 
-    return serializedEntries.map((entry) =>
-      deserializeClientState(entry, this.config),
-    );
+    return serializedEntries.map((entry) => deserializeClientState(entry));
   }
 
   /** Gets the count of groups stored. */

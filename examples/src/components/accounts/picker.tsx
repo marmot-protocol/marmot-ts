@@ -1,13 +1,10 @@
-import { useState } from "react";
 import { useObservable } from "../../hooks/use-observable";
 import accountManager from "../../lib/accounts";
 import { UserAvatar, UserName } from "../nostr-user";
-import RelayConfig from "../relay-config";
 
 export default function AccountSwitcher() {
   const activeAccount = useObservable(accountManager.active$);
   const accounts = useObservable(accountManager.accounts$);
-  const [showRelayConfig, setShowRelayConfig] = useState(false);
 
   const handleSignIn = () => {
     (document.getElementById("signin_modal") as HTMLDialogElement)?.showModal();
@@ -115,7 +112,7 @@ export default function AccountSwitcher() {
 
           {/* Relay Configuration */}
           <li className="border-t border-base-300 pt-2">
-            <a onClick={() => setShowRelayConfig(true)}>
+            <a href="#settings">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 fill="none"
@@ -135,12 +132,6 @@ export default function AccountSwitcher() {
           </li>
         </ul>
       </div>
-
-      {/* Relay Configuration Modal */}
-      <RelayConfig
-        isOpen={showRelayConfig}
-        onClose={() => setShowRelayConfig(false)}
-      />
     </>
   );
 }

@@ -9,6 +9,7 @@ import SignInModal from "./components/signin/modal.tsx";
 import KeyPackageStoreModal from "./components/key-package-store-modal.tsx";
 import GroupStoreModal from "./components/group-store-modal.tsx";
 import Settings from "./examples/settings/index.tsx";
+import { RelayBanners } from "./components/relay-banners";
 
 function ExampleView(props: { example?: Example; isSettings?: boolean }) {
   const [path, setPath] = useState("");
@@ -26,7 +27,6 @@ function ExampleView(props: { example?: Example; isSettings?: boolean }) {
         if (typeof module.default !== "function")
           throw new Error("Example must be a function");
 
-        console.log("Loaded Example", module.default);
         setComponent(() => module.default);
       })
       .catch((error) => {
@@ -80,7 +80,7 @@ function ExampleView(props: { example?: Example; isSettings?: boolean }) {
               <a
                 target="_blank"
                 className="btn btn-sm btn-ghost"
-                href={`https://github.com/parres-hq/marmot-ts/tree/${import.meta.env.VITE_REPO_BRANCH || "master"}/examples/src/${path}`}
+                href={`https://github.com/marmot-protocol/marmot-ts/tree/${import.meta.env.VITE_REPO_BRANCH || "master"}/examples/src/${path}`}
               >
                 <CodeIcon /> Source
               </a>
@@ -89,6 +89,7 @@ function ExampleView(props: { example?: Example; isSettings?: boolean }) {
         </div>
 
         {/* Page content */}
+        <RelayBanners />
         {props.isSettings ? (
           <ErrorBoundary
             fallbackRender={({ error }) => (

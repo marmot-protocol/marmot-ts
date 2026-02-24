@@ -12,7 +12,6 @@ import {
 } from "rxjs";
 import { map } from "rxjs/operators";
 import { ClientState } from "ts-mls/clientState.js";
-import { getCiphersuiteNameFromId } from "ts-mls/crypto/ciphersuite.js";
 import { getKeyPackageCipherSuiteId } from "../../../../src";
 import { MarmotGroup } from "../../../../src/client/group/marmot-group";
 import { proposeInviteUser } from "../../../../src/client/group/proposals/invite-user.js";
@@ -20,19 +19,17 @@ import {
   extractMarmotGroupData,
   getMemberCount,
 } from "../../../../src/core/client-state";
-import {
-  KEY_PACKAGE_KIND,
-  MarmotGroupData,
-} from "../../../../src/core/protocol.js";
+import { isAdmin } from "../../../../src/core/marmot-group-data";
+import { KEY_PACKAGE_KIND } from "../../../../src/core/protocol.js";
 import CipherSuiteBadge from "../../components/cipher-suite-badge";
 import UserSearch from "../../components/form/user-search";
 import { withSignIn } from "../../components/with-signIn";
 import { useObservable, useObservableMemo } from "../../hooks/use-observable";
 import accounts, { keyPackageRelays$ } from "../../lib/accounts";
-import { groupStore$ } from "../../lib/group-store";
 import { marmotClient$ } from "../../lib/marmot-client";
+import { groupSummaries$ } from "../../lib/groups";
 import { pool } from "../../lib/nostr";
-import { extraRelays$ } from "../../lib/settings";
+import { getCiphersuiteNameFromId } from "../../lib/ciphersuite.js";
 
 // ============================================================================
 // State Subjects
@@ -104,6 +101,7 @@ function KeyPackageListItem({
   isSelected: boolean;
   onSelect: (event: NostrEvent) => void;
 }) {
+  const keyPackageRef = event.tags.find((t) => t[0] === "i")?.[1];
   const cipherSuiteId = getKeyPackageCipherSuiteId(event);
   const cipherSuiteName = cipherSuiteId
     ? getCiphersuiteNameFromId(cipherSuiteId)
@@ -130,7 +128,9 @@ function KeyPackageListItem({
               </span>
             </div>
             <div className="text-xs font-mono text-base-content/60">
-              {event.id.slice(0, 16)}...
+              {keyPackageRef
+                ? `${keyPackageRef.slice(0, 16)}…`
+                : `${event.id.slice(0, 16)}…`}
             </div>
             <div className="text-xs text-base-content/60 mt-1">
               Created: {new Date(event.created_at * 1000).toLocaleString()}
@@ -169,8 +169,6 @@ interface GroupOption {
   name: string;
   epoch: number;
   memberCount: number;
-  state: ClientState;
-  marmotData: MarmotGroupData | null;
 }
 
 interface ConfigurationFormProps {
@@ -576,31 +574,7 @@ function reset() {
 // ============================================================================
 
 export default withSignIn(function AddMember() {
-  const clientStates =
-    useObservableMemo(
-      () =>
-        groupStore$.pipe(
-          switchMap((store) => (store ? store.list() : Promise.resolve([]))),
-        ),
-      [],
-    ) ?? [];
-
-  const groups = clientStates.map((state, index) => {
-    const marmotData = extractMarmotGroupData(state);
-    const groupIdHex = bytesToHex(state.groupContext.groupId);
-    const epoch = Number(state.groupContext.epoch);
-    const memberCount = getMemberCount(state);
-    const name = marmotData?.name || `Group #${index + 1}`;
-
-    return {
-      groupId: groupIdHex,
-      name,
-      epoch,
-      memberCount,
-      state,
-      marmotData,
-    };
-  });
+  const groups = useObservableMemo(() => groupSummaries$, []) ?? [];
 
   const selectedGroupKey = useObservable(selectedGroupKey$) as string;
   const selectedGroup = useObservable(group$) as MarmotGroup | null;
@@ -621,19 +595,14 @@ export default withSignIn(function AddMember() {
   const keyPackages =
     useObservableMemo(
       () =>
-        combineLatest([
-          selectedUserPubkey$,
-          keyPackageRelays$,
-          extraRelays$,
-        ]).pipe(
-          switchMap(([pubkey, keyPackageRelays, extraRelays]) => {
+        combineLatest([selectedUserPubkey$, keyPackageRelays$]).pipe(
+          switchMap(([pubkey, keyPackageRelays]) => {
             if (!pubkey) return of([]);
 
             const relays = relaySet(
               keyPackageRelays && keyPackageRelays.length > 0
                 ? keyPackageRelays
                 : [],
-              extraRelays,
             );
 
             return pool
@@ -685,11 +654,12 @@ export default withSignIn(function AddMember() {
     }
 
     const currentUserPubkey = await account.signer.getPublicKey();
-    const isAdmin =
-      selectedGroupData.marmotData?.adminPubkeys?.includes(currentUserPubkey) ||
-      false;
+    const groupData = selectedGroup.groupData;
+    const userIsAdmin = groupData
+      ? isAdmin(groupData, currentUserPubkey)
+      : false;
 
-    if (!isAdmin) {
+    if (!userIsAdmin) {
       error$.next(
         "You must be an admin to propose adding members to this group",
       );
@@ -720,11 +690,12 @@ export default withSignIn(function AddMember() {
     }
 
     const currentUserPubkey = await account.signer.getPublicKey();
-    const isAdmin =
-      selectedGroupData.marmotData?.adminPubkeys?.includes(currentUserPubkey) ||
-      false;
+    const groupData = selectedGroup.groupData;
+    const userIsAdmin = groupData
+      ? isAdmin(groupData, currentUserPubkey)
+      : false;
 
-    if (!isAdmin) {
+    if (!userIsAdmin) {
       error$.next(
         "You must be an admin to commit adding members to this group",
       );
@@ -755,11 +726,12 @@ export default withSignIn(function AddMember() {
     }
 
     const currentUserPubkey = await account.signer.getPublicKey();
-    const isAdmin =
-      selectedGroupData.marmotData?.adminPubkeys?.includes(currentUserPubkey) ||
-      false;
+    const groupData = selectedGroup.groupData;
+    const userIsAdmin = groupData
+      ? isAdmin(groupData, currentUserPubkey)
+      : false;
 
-    if (!isAdmin) {
+    if (!userIsAdmin) {
       error$.next("You must be an admin to invite members to this group");
       return;
     }

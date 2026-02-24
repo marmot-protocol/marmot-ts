@@ -1,9 +1,8 @@
-import { ExtensionType } from "ts-mls";
 import { greaseValues } from "ts-mls/grease.js";
 import { extendedExtensionTypes } from "../../../src/core/protocol.js";
 
 interface ExtensionBadgeProps {
-  extensionType: ExtensionType;
+  extensionType: number;
   className?: string;
 }
 
@@ -14,11 +13,8 @@ export default function ExtensionBadge({
   extensionType,
   className = "",
 }: ExtensionBadgeProps) {
-  // Convert to number if needed
-  const extensionTypeId =
-    typeof extensionType === "number"
-      ? extensionType
-      : extendedExtensionTypes[extensionType];
+  // Extension type is now always a number in ts-mls v2
+  const extensionTypeId = extensionType;
 
   const isGrease = greaseValues.includes(extensionTypeId);
 

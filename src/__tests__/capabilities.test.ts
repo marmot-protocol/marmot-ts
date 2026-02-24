@@ -1,4 +1,6 @@
-import { Capabilities } from "ts-mls";
+import { Capabilities, defaultCredentialTypes } from "ts-mls";
+import { ciphersuites } from "ts-mls/crypto/ciphersuite.js";
+import { protocolVersions } from "ts-mls/protocolVersion.js";
 import { describe, expect, it } from "vitest";
 import {
   ensureMarmotCapabilities,
@@ -9,11 +11,11 @@ import {
 describe("ensureMarmotCapabilities", () => {
   it("should add Marmot Group Data Extension if not present", () => {
     const capabilities: Capabilities = {
-      versions: ["mls10"],
-      ciphersuites: ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
+      versions: [protocolVersions.mls10],
+      ciphersuites: [ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519],
       extensions: [1, 2, 3],
       proposals: [],
-      credentials: ["basic"],
+      credentials: [defaultCredentialTypes.basic],
     };
 
     const result = ensureMarmotCapabilities(capabilities);
@@ -26,11 +28,11 @@ describe("ensureMarmotCapabilities", () => {
 
   it("should not duplicate Marmot Group Data Extension if already present", () => {
     const capabilities: Capabilities = {
-      versions: ["mls10"],
-      ciphersuites: ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
+      versions: [protocolVersions.mls10],
+      ciphersuites: [ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519],
       extensions: [1, 2, MARMOT_GROUP_DATA_EXTENSION_TYPE, 3],
       proposals: [],
-      credentials: ["basic"],
+      credentials: [defaultCredentialTypes.basic],
     };
 
     const result = ensureMarmotCapabilities(capabilities);
@@ -41,15 +43,15 @@ describe("ensureMarmotCapabilities", () => {
 
   it("should preserve all other capability fields", () => {
     const capabilities: Capabilities = {
-      versions: ["mls10"],
+      versions: [protocolVersions.mls10],
       ciphersuites: [
-        "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-        "MLS_128_DHKEMP256_AES128GCM_SHA256_P256",
-        "MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519",
+        ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+        ciphersuites.MLS_128_DHKEMP256_AES128GCM_SHA256_P256,
+        ciphersuites.MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
       ],
       extensions: [1, 2],
       proposals: [1, 2],
-      credentials: ["basic"],
+      credentials: [defaultCredentialTypes.basic],
     };
 
     const result = ensureMarmotCapabilities(capabilities);
@@ -62,11 +64,11 @@ describe("ensureMarmotCapabilities", () => {
 
   it("should work with empty extensions array", () => {
     const capabilities: Capabilities = {
-      versions: ["mls10"],
-      ciphersuites: ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
+      versions: [protocolVersions.mls10],
+      ciphersuites: [ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519],
       extensions: [],
       proposals: [],
-      credentials: ["basic"],
+      credentials: [defaultCredentialTypes.basic],
     };
 
     const result = ensureMarmotCapabilities(capabilities);

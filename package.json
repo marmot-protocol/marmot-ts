@@ -1,6 +1,6 @@
 {
-  "name": "marmot-ts",
-  "version": "0.0.1",
+  "name": "@internet-privacy/marmots",
+  "version": "0.1.0",
   "type": "module",
   "description": "Marmot protocol implementation in TypeScript",
   "main": "dist/index.js",
@@ -11,6 +11,7 @@
     "clean": "rimraf ./dist",
     "compile": "tsc -b tsconfig.build.json",
     "prepublishOnly": "pnpm run build",
+    "release": "pnpm build && changeset publish --provenance",
     "lint": "prettier --check .",
     "format": "prettier --write .",
     "test": "vitest",
@@ -37,7 +38,9 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.0.0",
+    "bun": ">=1.1.0",
+    "deno": ">=2.0.0"
   },
   "files": [
     "dist",
@@ -75,11 +78,12 @@
     "applesauce-common": "^5.1.0",
     "applesauce-core": "^5.1.0",
     "eventemitter3": "^5.0.4",
-    "nostr-tools": "^2.23.0",
-    "ts-mls": "^1.6.1"
+    "nostr-tools": "^2.23.1",
+    "ts-mls": "2.0.0-rc.7"
   },
   "devDependencies": {
-    "@types/node": "^24.10.12",
+    "@changesets/cli": "^2.29.8",
+    "@types/node": "^24.10.13",
     "applesauce-accounts": "^5.1.0",
     "husky": "^9.1.7",
     "prettier": "^3.8.1",

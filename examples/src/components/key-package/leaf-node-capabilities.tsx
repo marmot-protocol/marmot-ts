@@ -1,6 +1,6 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { LeafNodeKeyPackage } from "ts-mls/leafNode.js";
-import { protocolVersions } from "ts-mls/protocolVersion.js";
+import { protocolVersions } from "ts-mls";
 
 import CipherSuiteBadge from "../cipher-suite-badge";
 import CredentialTypeBadge from "../credential-type-badge";
@@ -37,7 +37,8 @@ export function LeafNodeCapabilitiesSection(props: {
           <div className="flex flex-wrap gap-2">
             {leafNode.capabilities.versions.map((version) => (
               <span key={version} className="badge badge-primary badge-outline">
-                {version} ({protocolVersions[version] || "Unknown"})
+                {version} (
+                {protocolVersions.mls10 === version ? "mls10" : "Unknown"})
               </span>
             ))}
           </div>

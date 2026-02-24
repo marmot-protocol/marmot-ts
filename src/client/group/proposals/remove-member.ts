@@ -1,6 +1,7 @@
 import { ProposalRemove } from "ts-mls/proposal.js";
 import { getPubkeyLeafNodeIndexes } from "../../../core/group-members.js";
 import { ProposalAction } from "../marmot-group.js";
+import { defaultProposalTypes } from "ts-mls";
 
 /**
  * Proposes removing all leaf nodes (devices/clients) for a given Nostr user.
@@ -9,7 +10,7 @@ import { ProposalAction } from "../marmot-group.js";
  * @param pubkey - The Nostr public key (hex string) of the user to kick
  * @returns A ProposalBuilder that returns an array of ProposalRemove proposals
  */
-export function proposeKickUser(
+export function proposeRemoveUser(
   pubkey: string,
 ): ProposalAction<ProposalRemove[]> {
   return async ({ state }) => {
@@ -22,7 +23,7 @@ export function proposeKickUser(
     return leafIndexes.map(
       (leafIndex) =>
         ({
-          proposalType: "remove",
+          proposalType: defaultProposalTypes.remove,
           remove: { removed: leafIndex },
         }) satisfies ProposalRemove,
     );

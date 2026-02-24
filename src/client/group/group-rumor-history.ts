@@ -2,7 +2,7 @@ import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { Filter } from "applesauce-core/helpers/filter";
 import { EventEmitter } from "eventemitter3";
 import { BaseGroupHistory, GroupHistoryFactory } from "../index.js";
-import { deserializeApplicationRumor } from "../../core/group-message.js";
+import { deserializeApplicationData } from "../../core/group-message.js";
 
 /** A rumor storage interface for the {@link GroupRumorHistory} class */
 export interface GroupRumorHistoryBackend {
@@ -39,7 +39,7 @@ export class GroupRumorHistory
   /** Parses an MLS message and saves it as a rumor event */
   async saveMessage(message: Uint8Array): Promise<void> {
     try {
-      const rumor = deserializeApplicationRumor(message);
+      const rumor = deserializeApplicationData(message);
       await this.saveRumor(rumor);
     } catch (error) {
       // Failed to read rumor, skip saving

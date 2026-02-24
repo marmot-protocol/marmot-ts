@@ -21,7 +21,7 @@ import { combineLatest, EMPTY, switchMap } from "rxjs";
 import { useObservableMemo } from "../../hooks/use-observable";
 import accounts, { contacts$ } from "../../lib/accounts";
 import { eventStore, pool } from "../../lib/nostr";
-import { extraRelays$ } from "../../lib/settings";
+import { lookupRelays$ } from "../../lib/settings";
 
 /** Create a hook for loading a users profile */
 function useProfile(user: ProfilePointer): ProfileContent | undefined {
@@ -284,7 +284,7 @@ function UserFollowersTab({
   onSelect: (pubkey: string) => void;
 }) {
   const followers = useObservableMemo(() => {
-    return combineLatest([accounts.active$, extraRelays$]).pipe(
+    return combineLatest([accounts.active$, lookupRelays$]).pipe(
       switchMap(([account, relays]) => {
         if (!account) return EMPTY;
 

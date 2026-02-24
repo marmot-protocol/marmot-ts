@@ -1,13 +1,11 @@
-import { NostrEvent, UnsignedEvent } from "applesauce-core/helpers/event";
+import { NostrEvent } from "applesauce-core/helpers/event";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { CiphersuiteId, ciphersuites } from "ts-mls/crypto/ciphersuite.js";
-import { Extension, ExtensionType } from "ts-mls/extension.js";
-import { greaseValues } from "ts-mls/grease.js";
-import {
-  KeyPackage,
-  decodeKeyPackage,
-  encodeKeyPackage,
-} from "ts-mls/keyPackage.js";
 import { protocolVersions } from "ts-mls/protocolVersion.js";
+import { CustomExtension, defaultCredentialTypes } from "ts-mls";
+import { greaseValues } from "ts-mls/grease.js";
+import { KeyPackage, decode, encode } from "ts-mls";
+import { keyPackageDecoder, keyPackageEncoder } from "ts-mls/keyPackage.js";
 import {
   decodeContent,
   encodeContent,
@@ -16,6 +14,7 @@ import {
 import { getTagValue, unixNow } from "../utils/nostr.js";
 import { isValidRelayUrl, normalizeRelayUrl } from "../utils/relay-url.js";
 import { getCredentialPubkey } from "./credential.js";
+import { calculateKeyPackageRef } from "./key-package.js";
 import {
   KEY_PACKAGE_CIPHER_SUITE_TAG,
   KEY_PACKAGE_CLIENT_TAG,
@@ -25,19 +24,56 @@ import {
   KEY_PACKAGE_RELAYS_TAG,
   KeyPackageClient,
   MLS_VERSIONS,
-  extendedExtensionTypes,
 } from "./protocol.js";
+import { EventTemplate } from "nostr-tools";
+
+export type DeleteKeyPackageEventInput = string | NostrEvent;
+
+export type CreateDeleteKeyPackageEventOptions = {
+  /** List of event ids (or full events) to delete */
+  events: DeleteKeyPackageEventInput[];
+};
+
+/**
+ * Creates a NIP-09 delete event (kind 5) to delete one or more key package events (kind 443).
+ */
+export function createDeleteKeyPackageEvent(
+  options: CreateDeleteKeyPackageEventOptions,
+): EventTemplate {
+  const { events } = options;
+  if (!events || events.length === 0)
+    throw new Error("At least one event must be provided for deletion");
+
+  const ids = events.map((e) => {
+    if (typeof e === "string") return e;
+    if (e.kind !== KEY_PACKAGE_KIND)
+      throw new Error(
+        `Event ${e.id} is not a key package event (kind ${e.kind} instead of ${KEY_PACKAGE_KIND})`,
+      );
+    return e.id;
+  });
+
+  return {
+    kind: 5,
+    created_at: unixNow(),
+    content: "",
+    tags: [["k", String(KEY_PACKAGE_KIND)], ...ids.map((id) => ["e", id])],
+  };
+}
 
 /** Get the KeyPackage from a kind 443 event */
 export function getKeyPackage(event: NostrEvent): KeyPackage {
-  // Check for encoding tag, default to hex for backward compatibility
-  const encodingFormat = getEncodingTag(event) ?? "hex";
+  const encodingFormat = getEncodingTag(event);
+  if (encodingFormat !== "base64") {
+    throw new Error(
+      "KeyPackage event must include encoding=base64 tag (hex and missing tags are rejected)",
+    );
+  }
   const content = decodeContent(event.content, encodingFormat);
-  const decoded = decodeKeyPackage(content, 0);
+  const decoded = decode(keyPackageDecoder, content);
   if (!decoded) throw new Error("Failed to decode key package");
 
-  const [keyPackage, _noIdeaWhatThisIs] = decoded;
-  return keyPackage;
+  return decoded;
 }
 
 /** Gets the MLS protocol version from a kind 443 event */
@@ -55,21 +91,19 @@ export function getKeyPackageCipherSuiteId(
   const cipherSuite = getTagValue(event, KEY_PACKAGE_CIPHER_SUITE_TAG);
   if (!cipherSuite) return undefined;
 
-  // NOTE: we are intentially not passing a radix to parseInt here so that it can handle base 10 and 16 (with leading 0x)
-  const id = parseInt(cipherSuite);
+  const id = parseInt(cipherSuite) as CiphersuiteId;
 
   // Verify that cipher suite is a valid ID
-  if (!Object.values(ciphersuites).includes(id as CiphersuiteId))
+  if (!(Object.values(ciphersuites) as number[]).includes(id))
     throw new Error(`Invalid MLS cipher suite ID ${id}`);
 
-  // Cast number to CiphersuiteId
-  return id as CiphersuiteId;
+  return id;
 }
 
 /** Gets the MLS extensions for a kind 443 event */
 export function getKeyPackageExtensions(
   event: NostrEvent,
-): ExtensionType[] | undefined {
+): number[] | undefined {
   const tag = event.tags.find((t) => t[0] === KEY_PACKAGE_EXTENSIONS_TAG);
   if (!tag) return undefined;
 
@@ -79,13 +113,18 @@ export function getKeyPackageExtensions(
     .map((t) => parseInt(t))
     .filter((id) => Number.isFinite(id));
 
-  return ids as ExtensionType[];
+  return ids;
 }
 
 /** Gets the relays for a kind 443 event */
 export function getKeyPackageRelays(event: NostrEvent): string[] | undefined {
   const tag = event.tags.find((t) => t[0] === KEY_PACKAGE_RELAYS_TAG);
-  if (!tag) return undefined;
+  if (!tag) {
+    console.warn(
+      "KeyPackage event missing relays tag (MIP-00 expects published keypackages to include relays)",
+    );
+    return undefined;
+  }
   return tag.slice(1).filter(isValidRelayUrl).map(normalizeRelayUrl);
 }
 
@@ -103,65 +142,58 @@ export function getKeyPackageClient(
 }
 
 export type CreateKeyPackageEventOptions = {
-  /** The MLS key package to encode in the event */
   keyPackage: KeyPackage;
-  /** The pubkey of the event author (must match the credential in the key package) */
-  pubkey: string;
-  /** The relays where this key package should be published */
-  relays: string[];
-  /** Optional client identifier (e.g., "marmot-examples") */
+  /** Pubkey of the author (optional for drafts; required for Nostr kind 443 events) */
+  relays?: string[];
   client?: string;
+  /**
+   * Whether to include the NIP-70 protected tag (["-"]).
+   *
+   * Per MIP-00 this SHOULD be omitted by default because many relays reject
+   * protected events.
+   */
+  protected?: boolean;
 };
 
 /**
- * Creates an unsigned Nostr event (kind 443) for a MLS key package.
- * The event can be signed and published to allow others to add the user to MLS groups.
+ * Creates a key package event (kind 443) from a key package.
  *
- * @param options - Configuration for creating the key package event
- * @returns An unsigned Nostr event ready to be signed and published
+ * @param options - The options for creating the key package event
+ * @returns The unsigned key package event
  */
 export function createKeyPackageEvent(
   options: CreateKeyPackageEventOptions,
-): UnsignedEvent {
-  const { keyPackage, pubkey, relays, client } = options;
+): Promise<EventTemplate> {
+  return createKeyPackageEventInternal(options);
+}
 
-  if (keyPackage.leafNode.credential.credentialType !== "basic")
-    throw new Error(
-      "Key package leaf node credential is not a basic credential",
+async function createKeyPackageEventInternal(
+  options: CreateKeyPackageEventOptions,
+): Promise<EventTemplate> {
+  const { keyPackage, relays, client } = options;
+
+  // MIP-00: Published KeyPackage events SHOULD include a relays tag so inviters
+  // know where to fetch commits and how to request deletion. We do not
+  // hard-enforce this because some callers may generate drafts/out-of-band
+  // key packages.
+  if (!relays || relays.length === 0) {
+    console.warn(
+      "createKeyPackageEvent: no relays provided; omitting relays tag (may reduce interoperability)",
     );
+  }
 
-  if (pubkey !== getCredentialPubkey(keyPackage.leafNode.credential))
-    throw new Error(
-      "Key package leaf node credential pubkey does not match the event pubkey",
-    );
-
-  // Encode the public key package to bytes
-  const encodedBytes = encodeKeyPackage(keyPackage);
+  // Serialize the key package according to RFC 9420
+  const encodedBytes = encode(keyPackageEncoder, keyPackage);
   const content = encodeContent(encodedBytes, "base64");
 
   // Get the cipher suite from the key package
-  const ciphersuiteId = ciphersuites[keyPackage.cipherSuite];
-  const ciphersuiteHex = `0x${ciphersuiteId.toString(16).padStart(4, "0")}`;
+  // ts-mls v2: keyPackage.cipherSuite is a numeric id already
+  const ciphersuiteHex = `0x${keyPackage.cipherSuite.toString(16).padStart(4, "0")}`;
 
   // Extract extension types from the key package extensions
-  const extensionTypes = keyPackage.extensions.map((ext: Extension) => {
-    let extType: number;
-
-    if (typeof ext.extensionType === "number") {
-      // Custom extension types (like Marmot Group Data Extension 0xF2EE or GREASE values)
-      extType = ext.extensionType;
-    } else {
-      // Extended extension types (including Marmot-specific extensions)
-      // Use the extendedExtensionTypes for proper mapping
-      extType = extendedExtensionTypes[ext.extensionType];
-
-      // Validate that we have a valid extension type
-      if (extType === undefined) {
-        throw new Error(`Unknown extension type: ${ext.extensionType}`);
-      }
-    }
-
-    return `0x${extType.toString(16).padStart(4, "0")}`;
+  const extensionTypes = keyPackage.extensions.map((ext: CustomExtension) => {
+    // Extension type is now always a number in v2
+    return `0x${ext.extensionType.toString(16).padStart(4, "0")}`;
   });
 
   // Also include extensions from leaf node capabilities to signal support
@@ -184,82 +216,83 @@ export function createKeyPackageEvent(
     return !greaseValues.includes(extType);
   });
 
-  const version = protocolVersions[keyPackage.version].toFixed(1);
+  // Get the protocol version - keyPackage.version is a numeric ProtocolVersionValue
+  // NIP tag expects a display string like "1.0".
+  const versionName = (
+    Object.keys(protocolVersions) as Array<keyof typeof protocolVersions>
+  ).find((k) => protocolVersions[k] === keyPackage.version);
+  const version = versionName === "mls10" ? "1.0" : String(keyPackage.version);
 
   // Build tags
-  const tags: string[][] = [
+  const tags: string[][] = [];
+
+  // NIP-70: protected event — relay must not serve this event to non-authors.
+  // NOTE: Optional/opt-in because many popular relays reject protected events.
+  if (options.protected) tags.push(["-"]);
+
+  tags.push(
     [KEY_PACKAGE_MLS_VERSION_TAG, version],
     [KEY_PACKAGE_CIPHER_SUITE_TAG, ciphersuiteHex],
     [KEY_PACKAGE_EXTENSIONS_TAG, ...filteredExtensionTypes],
     ["encoding", "base64"],
-  ];
+  );
+
+  // MIP-00: required KeyPackageRef tag ("i")
+  const keyPackageRef = await calculateKeyPackageRef(keyPackage);
+  tags.push(["i", bytesToHex(keyPackageRef)]);
 
   // Add client tag if provided
   if (client) tags.push([KEY_PACKAGE_CLIENT_TAG, client]);
 
-  // Add relays tag
-  tags.push([KEY_PACKAGE_RELAYS_TAG, ...relays]);
+  // Add relay tags if provided
+  if (relays && relays.length > 0) {
+    const validRelays = relays.filter(isValidRelayUrl).map(normalizeRelayUrl);
+    if (validRelays.length > 0) {
+      tags.push([KEY_PACKAGE_RELAYS_TAG, ...validRelays]);
+    }
+  }
 
   return {
     kind: KEY_PACKAGE_KIND,
     created_at: unixNow(),
-    tags,
     content,
-    pubkey,
+    tags,
   };
 }
 
-export type CreateDeleteKeyPackageEventOptions = {
-  /** The pubkey of the event author (must match the author of the key packages being deleted) */
-  pubkey: string;
-  /** Array of event IDs or full events to delete (must all be kind 443) */
-  events: (string | NostrEvent)[];
-};
+/**
+ * Gets the nostr public key from a key package event.
+ *
+ * @param event - The key package event
+ * @returns The nostr public key (hex string)
+ * @throws Error if the credential is not a basic credential
+ */
+export function getKeyPackageNostrPubkey(event: NostrEvent): string {
+  const keyPackage = getKeyPackage(event);
+
+  if (
+    keyPackage.leafNode.credential.credentialType !==
+    defaultCredentialTypes.basic
+  )
+    throw new Error(
+      "Key package does not use a basic credential, cannot get nostr public key",
+    );
+
+  return getCredentialPubkey(keyPackage.leafNode.credential);
+}
 
 /**
- * Creates an unsigned Nostr event (kind 5) to delete multiple key package events.
- * The event can be signed and published to request deletion of key packages.
+ * Returns the KeyPackageRef (MIP-00 `i` tag value) from a kind 443 KeyPackage event.
  *
- * @param options - Configuration for creating the delete event
- * @returns An unsigned Nostr event ready to be signed and published
- * @throws Error if any of the events are not kind 443
+ * Per MIP-00, new events MUST include this tag. Older events may not.
  */
-export function createDeleteKeyPackageEvent(
-  options: CreateDeleteKeyPackageEventOptions,
-): UnsignedEvent {
-  const { pubkey, events } = options;
-
-  if (events.length === 0)
-    throw new Error("At least one event must be provided for deletion");
-
-  // Extract event IDs and validate that all events are kind 443
-  const eventIds: string[] = [];
-  for (const event of events) {
-    if (typeof event === "string") {
-      // If it's just an ID, we can't validate the kind, so we trust the caller
-      eventIds.push(event);
-    } else {
-      // If it's a full event, validate it's kind 443
-      if (event.kind !== KEY_PACKAGE_KIND) {
-        throw new Error(
-          `Event ${event.id} is not a key package event (kind ${event.kind} instead of ${KEY_PACKAGE_KIND})`,
-        );
-      }
-      eventIds.push(event.id);
-    }
+export function getKeyPackageReference(event: NostrEvent): string | undefined {
+  if (event.kind !== KEY_PACKAGE_KIND) {
+    throw new Error(
+      `Event ${event.id} is not a key package event (kind ${event.kind} instead of ${KEY_PACKAGE_KIND})`,
+    );
   }
+  const ref = getTagValue(event, "i");
 
-  // Build tags with e tags for each event and a k tag for kind 443
-  const tags: string[][] = [
-    ["k", KEY_PACKAGE_KIND.toString()],
-    ...eventIds.map((id) => ["e", id]),
-  ];
-
-  return {
-    kind: 5,
-    created_at: unixNow(),
-    tags,
-    content: "",
-    pubkey,
-  };
+  return ref;
 }

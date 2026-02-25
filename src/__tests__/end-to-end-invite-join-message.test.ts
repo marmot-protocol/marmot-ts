@@ -16,10 +16,7 @@ import {
   KEY_PACKAGE_KIND,
   WELCOME_EVENT_KIND,
 } from "../core/protocol";
-import {
-  KeyPackageStore,
-  PublishedKeyPackageRecord,
-} from "../store/key-package-store";
+import { KeyPackageStore } from "../store/key-package-store";
 import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend";
 import { unixNow } from "../utils/nostr";
 import { MockNetwork } from "./helpers/mock-network";
@@ -63,9 +60,6 @@ describe("End-to-end: invite, join, first message", () => {
     adminClient = new MarmotClient({
       groupStateBackend,
       keyPackageStore,
-      publishedKeyPackageStore: new MemoryBackend<
-        PublishedKeyPackageRecord[]
-      >(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
@@ -73,9 +67,6 @@ describe("End-to-end: invite, join, first message", () => {
     inviteeClient = new MarmotClient({
       groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
       keyPackageStore: new KeyPackageStore(new MemoryBackend()),
-      publishedKeyPackageStore: new MemoryBackend<
-        PublishedKeyPackageRecord[]
-      >(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
     });

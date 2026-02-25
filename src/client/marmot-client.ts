@@ -29,10 +29,7 @@ import {
   GroupStateStore,
   GroupStateStoreBackend,
 } from "../store/group-state-store.js";
-import {
-  KeyPackageStore,
-  PublishedKeyPackageStoreBackend,
-} from "../store/key-package-store.js";
+import { KeyPackageStore } from "../store/key-package-store.js";
 import { KeyPackageManager } from "./key-package-manager.js";
 import {
   BaseGroupHistory,
@@ -50,10 +47,8 @@ export type MarmotClientOptions<
   capabilities?: Capabilities;
   /** The backend to store and load the groups from */
   groupStateBackend: GroupStateStoreBackend;
-  /** The store for key package private material */
+  /** The store for key package private material and publish tracking */
   keyPackageStore: KeyPackageStore;
-  /** Key-value backend for tracking published key package events (ref hex → publish records) */
-  publishedKeyPackageStore: PublishedKeyPackageStoreBackend;
   /** The crypto provider to use for cryptographic operations */
   cryptoProvider?: CryptoProvider;
   /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
@@ -120,7 +115,6 @@ export class MarmotClient<
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.keyPackages = new KeyPackageManager({
       keyPackageStore: options.keyPackageStore,
-      publishedKeyPackageStore: options.publishedKeyPackageStore,
       signer: options.signer,
       network: options.network,
     });

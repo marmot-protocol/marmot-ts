@@ -2,11 +2,9 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KeyPackageManager } from "../client/key-package-manager.js";
+import { getKeyPackageRelays } from "../core/key-package-event.js";
 import { KEY_PACKAGE_KIND } from "../core/protocol.js";
-import {
-  KeyPackageStore,
-  PublishedKeyPackageRecord,
-} from "../store/key-package-store.js";
+import { KeyPackageStore } from "../store/key-package-store.js";
 import type { KeyValueStoreBackend } from "../utils/key-value.js";
 import { MockNetwork } from "./helpers/mock-network.js";
 
@@ -41,14 +39,20 @@ class MemoryBackend<T> implements KeyValueStoreBackend<T> {
 
 function makeManager(network: MockNetwork, account: PrivateKeyAccount<any>) {
   const store = new KeyPackageStore(new MemoryBackend());
-  const publishedBackend = new MemoryBackend<PublishedKeyPackageRecord[]>();
   const manager = new KeyPackageManager({
     keyPackageStore: store,
-    publishedKeyPackageStore: publishedBackend,
     signer: account.signer,
     network,
   });
-  return { manager, store, publishedBackend };
+  return { manager, store };
+}
+
+/** Returns the published NostrEvent[] for a ref, or [] if none */
+async function getPublished(
+  manager: KeyPackageManager,
+  ref: Uint8Array | string,
+) {
+  return (await manager.get(ref))?.published ?? [];
 }
 
 // ---------------------------------------------------------------------------
@@ -94,23 +98,25 @@ describe("KeyPackageManager", () => {
       expect(published).toHaveLength(1);
     });
 
-    it("records the published event ID in the published store", async () => {
+    it("records the published event on the stored entry", async () => {
       const { manager } = makeManager(network, account);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
-      const eventIds = await manager.getPublishedEventIds(pkg.keyPackageRef);
-      expect(eventIds).toHaveLength(1);
+      const events = await getPublished(manager, pkg.keyPackageRef);
+      expect(events).toHaveLength(1);
 
-      const published = network.events.find((e) => e.kind === KEY_PACKAGE_KIND);
-      expect(eventIds[0]).toBe(published?.id);
+      const networkEvent = network.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      );
+      expect(events[0].id).toBe(networkEvent?.id);
     });
 
-    it("records the relay URLs alongside the event ID", async () => {
+    it("records relay URLs on the published event", async () => {
       const { manager } = makeManager(network, account);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
-      const records = await manager.getPublishedEvents(pkg.keyPackageRef);
-      expect(records[0].relays).toEqual(["wss://relay.test"]);
+      const events = await getPublished(manager, pkg.keyPackageRef);
+      expect(getKeyPackageRelays(events[0])).toEqual(["wss://relay.test/"]);
     });
 
     it("emits keyPackageAdded and keyPackagePublished events", async () => {
@@ -127,18 +133,18 @@ describe("KeyPackageManager", () => {
       expect(published).toHaveBeenCalledOnce();
     });
 
-    it("accumulates multiple event IDs for the same ref via recordPublished", async () => {
+    it("accumulates multiple published events for the same ref via track()", async () => {
       const { manager } = makeManager(network, account);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
-      await manager.recordPublished(
-        pkg.keyPackageRef,
-        "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233",
-        ["wss://relay2.test"],
-      );
+      // Simulate the same key package being observed again on another relay
+      const originalEvent = network.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      )!;
+      await manager.track({ ...originalEvent, id: "b".repeat(64) });
 
-      const eventIds = await manager.getPublishedEventIds(pkg.keyPackageRef);
-      expect(eventIds).toHaveLength(2);
+      const events = await getPublished(manager, pkg.keyPackageRef);
+      expect(events).toHaveLength(2);
     });
   });
 
@@ -182,14 +188,13 @@ describe("KeyPackageManager", () => {
 
     it("publishes a kind 5 deletion covering all known event IDs", async () => {
       const { manager } = makeManager(network, account);
-
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
-      // Simulate a second out-of-band publish for the same ref
-      await manager.recordPublished(
-        pkg.keyPackageRef,
-        "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233",
-        ["wss://relay2.test"],
-      );
+
+      // Simulate the same key package being observed a second time
+      const originalEvent = network.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      )!;
+      await manager.track({ ...originalEvent, id: "b".repeat(64) });
 
       await manager.rotate(pkg.keyPackageRef);
 
@@ -224,13 +229,13 @@ describe("KeyPackageManager", () => {
       expect(await manager.has(pkg.keyPackageRef)).toBe(false);
     });
 
-    it("removes the old publish records after rotation", async () => {
+    it("removes the old published events after rotation", async () => {
       const { manager } = makeManager(network, account);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
       await manager.rotate(pkg.keyPackageRef);
 
-      const remaining = await manager.getPublishedEventIds(pkg.keyPackageRef);
+      const remaining = await getPublished(manager, pkg.keyPackageRef);
       expect(remaining).toHaveLength(0);
     });
 
@@ -242,8 +247,10 @@ describe("KeyPackageManager", () => {
 
       const newPkg = await manager.rotate(pkg.keyPackageRef);
 
-      const records = await manager.getPublishedEvents(newPkg.keyPackageRef);
-      expect(records[0].relays).toContain("wss://specific-relay.test");
+      const events = await getPublished(manager, newPkg.keyPackageRef);
+      expect(getKeyPackageRelays(events[0])).toContain(
+        "wss://specific-relay.test/",
+      );
     });
 
     it("skips relay deletion if the old key package was never published", async () => {
@@ -324,15 +331,14 @@ describe("KeyPackageManager", () => {
       expect(removed).toHaveBeenCalledOnce();
     });
 
-    it("does not remove publish records (published store is independent)", async () => {
+    it("removes the entry including its published events", async () => {
       const { manager } = makeManager(network, account);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
       await manager.remove(pkg.keyPackageRef);
 
-      // Published records should still exist after local removal
-      const ids = await manager.getPublishedEventIds(pkg.keyPackageRef);
-      expect(ids).toHaveLength(1);
+      // Entry is gone — no published events retrievable
+      expect(await getPublished(manager, pkg.keyPackageRef)).toHaveLength(0);
     });
   });
 
@@ -354,26 +360,18 @@ describe("KeyPackageManager", () => {
     it("the deletion event references all known event IDs for the ref", async () => {
       const { manager } = makeManager(network, account);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
-      await manager.recordPublished(pkg.keyPackageRef, "b".repeat(64), [
-        "wss://relay2.test",
-      ]);
+
+      // Simulate a second observation of the same key package event
+      const originalEvent = network.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      )!;
+      await manager.track({ ...originalEvent, id: "b".repeat(64) });
 
       await manager.purge(pkg.keyPackageRef);
 
       const deleteEvent = network.events.find((e) => e.kind === 5)!;
       const eTags = deleteEvent.tags.filter((t) => t[0] === "e");
       expect(eTags).toHaveLength(2);
-    });
-
-    it("removes publish records", async () => {
-      const { manager } = makeManager(network, account);
-      const pkg = await manager.create({ relays: ["wss://relay.test"] });
-
-      await manager.purge(pkg.keyPackageRef);
-
-      expect(
-        await manager.getPublishedEventIds(pkg.keyPackageRef),
-      ).toHaveLength(0);
     });
 
     it("removes local private key material", async () => {
@@ -399,7 +397,7 @@ describe("KeyPackageManager", () => {
       expect(eTags).toHaveLength(2);
     });
 
-    it("removes private keys and publish records for all refs in a bulk purge", async () => {
+    it("removes private keys for all refs in a bulk purge", async () => {
       const { manager } = makeManager(network, account);
       const pkg1 = await manager.create({ relays: ["wss://relay.test"] });
       const pkg2 = await manager.create({ relays: ["wss://relay2.test"] });
@@ -408,12 +406,6 @@ describe("KeyPackageManager", () => {
 
       expect(await manager.has(pkg1.keyPackageRef)).toBe(false);
       expect(await manager.has(pkg2.keyPackageRef)).toBe(false);
-      expect(
-        await manager.getPublishedEventIds(pkg1.keyPackageRef),
-      ).toHaveLength(0);
-      expect(
-        await manager.getPublishedEventIds(pkg2.keyPackageRef),
-      ).toHaveLength(0);
     });
 
     it("silently skips relay deletion for refs with no published events but still removes private key", async () => {
@@ -492,177 +484,116 @@ describe("KeyPackageManager", () => {
       expect(await manager.list()).toHaveLength(0);
     });
 
-    it("returns true and records the event when a valid kind 443 with `i` tag is provided", async () => {
+    it("returns false if the event body cannot be decoded as a KeyPackage", async () => {
       const { manager } = makeManager(network, account);
-      const refHex = "a".repeat(64);
-
+      // Has a valid `i` tag but invalid (empty) content
       const result = await manager.track({
         id: "b".repeat(64),
         kind: KEY_PACKAGE_KIND,
         pubkey: "c".repeat(64),
         created_at: 1000,
         content: "",
-        tags: [
-          ["i", refHex],
-          ["relays", "wss://relay.test"],
-        ],
+        tags: [["i", "a".repeat(64)]],
         sig: "d".repeat(128),
       });
+      expect(result).toBe(false);
+    });
+
+    it("returns true and records a real published event", async () => {
+      const { manager } = makeManager(network, account);
+      // Use create() to produce a real kind-443 event, then track it again
+      const pkg = await manager.create({ relays: ["wss://relay.test"] });
+      const realEvent = network.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      )!;
+
+      // Reset and track the same event as if observed on a relay
+      const result = await manager.track({ ...realEvent, id: "e".repeat(64) });
 
       expect(result).toBe(true);
-      const records = await manager.getPublishedEvents(refHex);
-      expect(records).toHaveLength(1);
-      expect(records[0].eventId).toBe("b".repeat(64));
+      const events = await getPublished(manager, pkg.keyPackageRef);
+      expect(events).toHaveLength(2);
     });
 
     it("records relay URLs from the event's relays tag", async () => {
       const { manager } = makeManager(network, account);
-      const refHex = "a".repeat(64);
-
-      await manager.track({
-        id: "b".repeat(64),
-        kind: KEY_PACKAGE_KIND,
-        pubkey: "c".repeat(64),
-        created_at: 1000,
-        content: "",
-        tags: [
-          ["i", refHex],
-          ["relays", "wss://relay1.test", "wss://relay2.test"],
-        ],
-        sig: "d".repeat(128),
+      const pkg = await manager.create({
+        relays: ["wss://relay1.test", "wss://relay2.test"],
       });
+      const realEvent = network.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      )!;
 
-      const records = await manager.getPublishedEvents(refHex);
+      await manager.track({ ...realEvent, id: "e".repeat(64) });
+
+      const events = await getPublished(manager, pkg.keyPackageRef);
       // relay URLs are normalised (trailing slash added) by getKeyPackageRelays
-      expect(records[0].relays).toEqual([
+      expect(getKeyPackageRelays(events[1])).toEqual([
         "wss://relay1.test/",
         "wss://relay2.test/",
       ]);
     });
 
-    it("records a key package event even when we have no private key for it", async () => {
+    it("records a valid key package event from another device (no local private key)", async () => {
       const { manager } = makeManager(network, account);
-      // This ref is for a key package from another device — not in private store
-      const foreignRef = "f".repeat(64);
 
-      const result = await manager.track({
-        id: "e".repeat(64),
-        kind: KEY_PACKAGE_KIND,
-        pubkey: "c".repeat(64),
-        created_at: 1000,
-        content: "",
-        tags: [["i", foreignRef]],
-        sig: "d".repeat(128),
-      });
+      // Create a key package on a separate store to get a real event
+      const otherNetwork = new MockNetwork(["wss://relay.test"]);
+      const otherAccount = PrivateKeyAccount.generateNew();
+      const { manager: otherManager } = makeManager(otherNetwork, otherAccount);
+      await otherManager.create({ relays: ["wss://relay.test"] });
+
+      const foreignEvent = otherNetwork.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      )!;
+
+      const result = await manager.track(foreignEvent);
 
       expect(result).toBe(true);
-      // Not in private store
-      expect(await manager.has(foreignRef)).toBe(false);
-      // But is in published store
-      const records = await manager.getPublishedEvents(foreignRef);
-      expect(records).toHaveLength(1);
-    });
-
-    it("tracked event is queryable via getPublishedEvents()", async () => {
-      const { manager } = makeManager(network, account);
-      const refHex = "a".repeat(64);
-
-      await manager.track({
-        id: "b".repeat(64),
-        kind: KEY_PACKAGE_KIND,
-        pubkey: "c".repeat(64),
-        created_at: 1000,
-        content: "",
-        tags: [["i", refHex]],
-        sig: "d".repeat(128),
-      });
-
-      const records = await manager.getPublishedEvents(refHex);
-      expect(records).toHaveLength(1);
-      expect(records[0].eventId).toBe("b".repeat(64));
+      // Not in local private store
+      expect(
+        await manager.has(foreignEvent.tags.find((t) => t[0] === "i")![1]),
+      ).toBe(false);
+      // But tracked in the store
+      const refHex = foreignEvent.tags.find((t) => t[0] === "i")![1];
+      const stored = await manager.get(refHex);
+      expect(stored?.published).toHaveLength(1);
     });
 
     it("emits keyPackagePublished when a valid event is tracked", async () => {
       const { manager } = makeManager(network, account);
-      const refHex = "a".repeat(64);
-      const eventId = "b".repeat(64);
+      const pkg = await manager.create({ relays: ["wss://relay.test"] });
+      const realEvent = network.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      )!;
 
       const publishedHandler = vi.fn();
       manager.on("keyPackagePublished", publishedHandler);
 
-      await manager.track({
-        id: eventId,
-        kind: KEY_PACKAGE_KIND,
-        pubkey: "c".repeat(64),
-        created_at: 1000,
-        content: "",
-        tags: [["i", refHex]],
-        sig: "d".repeat(128),
-      });
+      const newId = "b".repeat(64);
+      await manager.track({ ...realEvent, id: newId });
 
       expect(publishedHandler).toHaveBeenCalledOnce();
-      expect(publishedHandler).toHaveBeenCalledWith(refHex, eventId, []);
+      expect(publishedHandler).toHaveBeenCalledWith(
+        Buffer.from(pkg.keyPackageRef).toString("hex"),
+        newId,
+        expect.any(Array),
+      );
     });
 
     it("accumulates multiple events for the same ref", async () => {
       const { manager } = makeManager(network, account);
-      const refHex = "a".repeat(64);
-
-      await manager.track({
-        id: "b".repeat(64),
-        kind: KEY_PACKAGE_KIND,
-        pubkey: "c".repeat(64),
-        created_at: 1000,
-        content: "",
-        tags: [["i", refHex]],
-        sig: "d".repeat(128),
-      });
-      await manager.track({
-        id: "e".repeat(64),
-        kind: KEY_PACKAGE_KIND,
-        pubkey: "c".repeat(64),
-        created_at: 2000,
-        content: "",
-        tags: [["i", refHex]],
-        sig: "d".repeat(128),
-      });
-
-      const ids = await manager.getPublishedEventIds(refHex);
-      expect(ids).toHaveLength(2);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // recordPublished()
-  // -------------------------------------------------------------------------
-
-  describe("recordPublished()", () => {
-    it("adds a publish record for any ref (does not require local private key)", async () => {
-      const { manager } = makeManager(network, account);
-      const foreignRef = "f".repeat(64);
-
-      await manager.recordPublished(foreignRef, "a".repeat(64), [
-        "wss://relay.test",
-      ]);
-
-      const ids = await manager.getPublishedEventIds(foreignRef);
-      expect(ids).toHaveLength(1);
-    });
-
-    it("accumulates multiple records for the same ref", async () => {
-      const { manager } = makeManager(network, account);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
+      const realEvent = network.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      )!;
 
-      await manager.recordPublished(pkg.keyPackageRef, "b".repeat(64), [
-        "wss://relay2.test",
-      ]);
-      await manager.recordPublished(pkg.keyPackageRef, "c".repeat(64), [
-        "wss://relay3.test",
-      ]);
+      await manager.track({ ...realEvent, id: "b".repeat(64) });
+      await manager.track({ ...realEvent, id: "e".repeat(64) });
 
-      const ids = await manager.getPublishedEventIds(pkg.keyPackageRef);
-      // One from create(), plus two manual records
-      expect(ids).toHaveLength(3);
+      const events = await getPublished(manager, pkg.keyPackageRef);
+      // 1 from create() + 2 from track()
+      expect(events).toHaveLength(3);
     });
   });
 
@@ -671,7 +602,7 @@ describe("KeyPackageManager", () => {
   // -------------------------------------------------------------------------
 
   describe("list()", () => {
-    it("returns all locally stored key packages enriched with publish records", async () => {
+    it("returns all locally stored key packages enriched with published events", async () => {
       const { manager } = makeManager(network, account);
       await manager.create({ relays: ["wss://relay.test"] });
       await manager.create({ relays: ["wss://relay.test"] });
@@ -679,7 +610,7 @@ describe("KeyPackageManager", () => {
       expect(await manager.list()).toHaveLength(2);
     });
 
-    it("each entry includes publishedEvents — filter for published packages", async () => {
+    it("each entry includes published — filter for packages with published events", async () => {
       const { manager, store } = makeManager(network, account);
 
       // One published package
@@ -703,54 +634,29 @@ describe("KeyPackageManager", () => {
 
       const all = await manager.list();
       expect(all).toHaveLength(2);
-      expect(all.filter((p) => p.published.length > 0)).toHaveLength(1);
+      expect(all.filter((p) => (p.published?.length ?? 0) > 0)).toHaveLength(1);
     });
 
-    it("tracked foreign ref (no private key) does not appear in list()", async () => {
+    it("tracked foreign packages (no private key) do not appear in list()", async () => {
       const { manager } = makeManager(network, account);
 
-      // Track a key package from another device — no private key locally
-      const foreignRef = "f".repeat(64);
-      await manager.track({
-        id: "b".repeat(64),
-        kind: KEY_PACKAGE_KIND,
-        pubkey: "c".repeat(64),
-        created_at: 1000,
-        content: "",
-        tags: [["i", foreignRef]],
-        sig: "d".repeat(128),
-      });
+      // Create a foreign key package from another account to get a real event
+      const otherNetwork = new MockNetwork(["wss://relay.test"]);
+      const otherAccount = PrivateKeyAccount.generateNew();
+      const { manager: otherManager } = makeManager(otherNetwork, otherAccount);
+      await otherManager.create({ relays: ["wss://relay.test"] });
+      const foreignEvent = otherNetwork.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      )!;
 
-      // list() is snapshot-based — only local private keys appear
+      await manager.track(foreignEvent);
+
+      // list() only returns local (private key) entries
       expect(await manager.list()).toHaveLength(0);
-      // But it is queryable directly
-      const records = await manager.getPublishedEvents(foreignRef);
-      expect(records).toHaveLength(1);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // getPublishedEvents()
-  // -------------------------------------------------------------------------
-
-  describe("getPublishedEvents()", () => {
-    it("returns empty array for an unknown ref", async () => {
-      const { manager } = makeManager(network, account);
-      const fakeRef = new Uint8Array(32).fill(0xcd);
-      expect(await manager.getPublishedEvents(fakeRef)).toEqual([]);
-    });
-
-    it("returns all records with correct shape", async () => {
-      const { manager } = makeManager(network, account);
-      const pkg = await manager.create({ relays: ["wss://relay.test"] });
-
-      const records = await manager.getPublishedEvents(pkg.keyPackageRef);
-      expect(records).toHaveLength(1);
-      expect(records[0]).toMatchObject({
-        eventId: expect.any(String),
-        relays: ["wss://relay.test"],
-        publishedAt: expect.any(Number),
-      });
+      // But the tracked entry is retrievable directly
+      const refHex = foreignEvent.tags.find((t) => t[0] === "i")![1];
+      const stored = await manager.get(refHex);
+      expect(stored?.published).toHaveLength(1);
     });
   });
 
@@ -771,7 +677,7 @@ describe("KeyPackageManager", () => {
       expect(value[0].published).toHaveLength(1);
     });
 
-    it("initial snapshot includes publishedEvents merged from published backend", async () => {
+    it("initial snapshot includes published events merged from store", async () => {
       const { manager } = makeManager(network, account);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
@@ -781,7 +687,9 @@ describe("KeyPackageManager", () => {
 
       expect(value[0].keyPackageRef).toEqual(pkg.keyPackageRef);
       expect(value[0].published).toHaveLength(1);
-      expect(value[0].published[0].relays).toContain("wss://relay.test");
+      expect(getKeyPackageRelays(value[0].published![0])).toContain(
+        "wss://relay.test/",
+      );
     });
 
     it("yields updated snapshot after a key package is added", async () => {
@@ -801,22 +709,21 @@ describe("KeyPackageManager", () => {
       expect(second.value).toHaveLength(1);
     });
 
-    it("yields updated snapshot after a publish is recorded", async () => {
+    it("yields updated snapshot after a publish is recorded via track()", async () => {
       const { manager } = makeManager(network, account);
-      const pkg = await manager.create({ relays: ["wss://relay.test"] });
+      await manager.create({ relays: ["wss://relay.test"] });
+      const realEvent = network.events.find(
+        (e) => e.kind === KEY_PACKAGE_KIND,
+      )!;
 
       const gen = manager.watchKeyPackages();
       // Consume initial snapshot (1 published event)
       await gen.next();
 
-      // Record another publish — should trigger a new yield
-      const record = manager.recordPublished(
-        pkg.keyPackageRef,
-        "b".repeat(64),
-        ["wss://relay2.test"],
-      );
+      // Track another observation of the same event — should trigger a new yield
+      const tracking = manager.track({ ...realEvent, id: "b".repeat(64) });
       const { value } = await gen.next();
-      await record;
+      await tracking;
       await gen.return(undefined);
 
       expect(value[0].published).toHaveLength(2);

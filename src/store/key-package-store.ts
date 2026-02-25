@@ -1,53 +1,68 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { NostrEvent } from "applesauce-core/helpers/event";
+import { EventEmitter } from "eventemitter3";
 import { CryptoProvider, defaultCryptoProvider } from "ts-mls";
 import { KeyPackage, PrivateKeyPackage } from "ts-mls/keyPackage.js";
+import { getKeyPackage } from "../core/key-package-event.js";
 import { calculateKeyPackageRef } from "../core/key-package.js";
 import { KeyValueStoreBackend } from "../utils/key-value.js";
-import { EventEmitter } from "eventemitter3";
 
 /**
- * A single publish record for a key package — one entry per kind 443 Nostr event.
+ * A key package that has local private material.
  *
- * Multiple records can exist for the same key package ref if the same key package
- * was published more than once (e.g. to different relay sets or by different devices).
+ * Created by {@link KeyPackageStore.add} when generating or importing a key
+ * package for which the private keys are held locally. Narrow from
+ * {@link StoredKeyPackage} by checking `privatePackage !== undefined`.
  */
-export type PublishedKeyPackageRecord = {
-  /** The Nostr event ID of the kind 443 event */
-  eventId: string;
-  /** The relay URLs this event was published to */
-  relays: string[];
-  /** Unix timestamp (seconds) when this record was created locally */
-  publishedAt: number;
-};
-
-/**
- * Backend type for the published key package store.
- *
- * Keys are keyPackageRef hex strings. Values are arrays of publish records.
- * Apps can implement this with any storage engine (localForage, IndexedDB,
- * in-memory Map, etc.) by satisfying the {@link KeyValueStoreBackend} interface.
- *
- * @example
- * ```typescript
- * // Using an in-memory backend
- * const backend: PublishedKeyPackageStoreBackend = new MemoryBackend();
- * const manager = new KeyPackageManager({ ..., publishedKeyPackageStore: backend });
- * ```
- */
-export type PublishedKeyPackageStoreBackend = KeyValueStoreBackend<
-  PublishedKeyPackageRecord[]
->;
-
-export type StoredKeyPackage = {
-  /** The calculated key package reference (should be used to identify the key package) */
+export type LocalKeyPackage = {
+  /** The calculated key package reference */
   keyPackageRef: Uint8Array;
   /** The public key package */
   publicPackage: KeyPackage;
-  /** The private key package */
+  /** The private key package — its presence is the discriminant for a local entry */
   privatePackage: PrivateKeyPackage;
+  /** Nostr kind-443 events this key package has been published under */
+  published?: NostrEvent[];
 };
 
-/** A type for listing the key package without the private package */
+/**
+ * A key package observed on relays for which no private material is held locally.
+ *
+ * Created by {@link KeyPackageStore.addPublished} when tracking a kind-443 event
+ * from another device. Enables cross-device deletion without requiring the
+ * private keys to be present. The public key package is always present — events
+ * that cannot be decoded are rejected as invalid.
+ *
+ * Narrow from {@link StoredKeyPackage} by checking `privatePackage === undefined`.
+ */
+export type TrackedKeyPackage = {
+  /** The calculated key package reference */
+  keyPackageRef: Uint8Array;
+  /** The public key package, decoded from the kind-443 event body */
+  publicPackage: KeyPackage;
+  /** Always undefined — the discriminant that identifies this as a tracked entry */
+  privatePackage?: undefined;
+  /** Nostr kind-443 events this key package has been published under */
+  published?: NostrEvent[];
+};
+
+/**
+ * A stored key package — either a locally-held one (with private material) or
+ * a tracked foreign one (without private material).
+ *
+ * Use `privatePackage` to narrow the type:
+ *
+ * ```ts
+ * if (pkg.privatePackage !== undefined) {
+ *   // pkg is LocalKeyPackage
+ * } else {
+ *   // pkg is TrackedKeyPackage
+ * }
+ * ```
+ */
+export type StoredKeyPackage = LocalKeyPackage | TrackedKeyPackage;
+
+/** A {@link LocalKeyPackage} without the private material, safe to expose in listings */
 export type ListedKeyPackage = Omit<StoredKeyPackage, "privatePackage">;
 
 /** Backend interface for the key package store */
@@ -60,7 +75,7 @@ export type KeyPackageStoreOptions = {
 };
 
 type KeyPackageStoreEvents = {
-  /** Emitted when a key package is added */
+  /** Emitted when a key package is added or first tracked */
   keyPackageAdded: (keyPackage: StoredKeyPackage) => void;
   /** Emitted when a key package is removed */
   keyPackageRemoved: (keyPackageRef: Uint8Array) => void;
@@ -69,21 +84,27 @@ type KeyPackageStoreEvents = {
 /**
  * Stores key packages in a {@link KeyPackageStoreBackend}.
  *
- * Manages private key material only — publish tracking is handled separately
- * by {@link PublishedKeyPackageStore}.
+ * Two kinds of entries coexist in the same backend:
+ * - {@link LocalKeyPackage} — has private material; created by {@link add}
+ * - {@link TrackedKeyPackage} — no private material; created by {@link addPublished}
+ *   for key packages observed on relays from other devices
+ *
+ * {@link list} and {@link has} only surface local key packages; use
+ * {@link getKeyPackage} to retrieve any entry regardless of type.
  *
  * @example
  * ```typescript
  * const store = new KeyPackageStore(backend);
  *
- * // Add a complete key package
+ * // Add a key package with local private material
  * await store.add({ publicPackage, privatePackage });
- * // List all key packages
+ * // List all key packages that have local private material
  * const packages = await store.list();
- * // Get a specific key package by its ref
- * const privatePackage = await store.getPrivateKey(ref);
- * // Remove a key package
- * await store.remove(ref);
+ * // Get any entry by ref (local or tracked)
+ * const entry = await store.getKeyPackage(ref);
+ * if (entry?.privatePackage !== undefined) { /* LocalKeyPackage *\/ }
+ * // Track a published kind-443 event from another device
+ * await store.addPublished(refHex, nostrEvent);
  * ```
  */
 export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
@@ -104,10 +125,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
     this.cryptoProvider = cryptoProvider ?? defaultCryptoProvider;
   }
 
-  /**
-   * Resolves the storage key from various input types.
-   * @param hashOrPackage - The hash or key package to resolve
-   */
+  /** Resolves a ref/package argument to a hex storage key */
   private async resolveStorageKey(
     hashOrPackage: Uint8Array | string | KeyPackage,
   ): Promise<string> {
@@ -122,100 +140,134 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
     );
   }
 
-  /** Ensures that a stored key package object has a key package reference */
-  private async ensureKeyPackageRef<T extends { publicPackage: KeyPackage }>(
-    keyPackage: T,
-  ): Promise<T & { keyPackageRef: Uint8Array }> {
-    if (
-      "keyPackageRef" in keyPackage &&
-      keyPackage.keyPackageRef instanceof Uint8Array
-    )
-      return keyPackage as T & { keyPackageRef: Uint8Array };
-
-    return {
-      ...keyPackage,
-      keyPackageRef: await calculateKeyPackageRef(
-        keyPackage.publicPackage,
-        this.cryptoProvider,
-      ),
-    };
-  }
-
   /**
-   * Adds a complete key package to the store.
+   * Adds a {@link LocalKeyPackage} to the store.
    *
-   * @param keyPackage - The complete key package containing both public and private components
-   * @returns A promise that resolves to the storage key used
+   * Use this for locally-generated key packages where the private material is
+   * available. For foreign-device publish tracking use {@link addPublished}.
+   *
+   * @param keyPackage - Must include `publicPackage` and `privatePackage`.
+   *   `keyPackageRef` is computed automatically.
+   * @returns The storage key (hex ref string)
    */
   async add(
-    keyPackage: Omit<StoredKeyPackage, "keyPackageRef">,
+    keyPackage: Pick<LocalKeyPackage, "publicPackage" | "privatePackage"> &
+      Partial<Pick<LocalKeyPackage, "published">>,
   ): Promise<string> {
     const key = await this.resolveStorageKey(keyPackage.publicPackage);
 
-    const serialized: StoredKeyPackage = {
-      keyPackageRef: await calculateKeyPackageRef(
-        keyPackage.publicPackage,
-        this.cryptoProvider,
-      ),
+    const keyPackageRef = await calculateKeyPackageRef(
+      keyPackage.publicPackage,
+      this.cryptoProvider,
+    );
+
+    const entry: LocalKeyPackage = {
+      keyPackageRef,
       publicPackage: keyPackage.publicPackage,
       privatePackage: keyPackage.privatePackage,
+      ...(keyPackage.published !== undefined
+        ? { published: keyPackage.published }
+        : {}),
     };
 
-    await this.backend.setItem(key, serialized);
-
-    const stored = await this.ensureKeyPackageRef(serialized);
-    this.emit("keyPackageAdded", stored);
+    await this.backend.setItem(key, entry);
+    this.emit("keyPackageAdded", entry);
 
     return key;
   }
 
   /**
+   * Appends a kind-443 Nostr event to the `published` list of the key package
+   * identified by `ref`. If no entry exists yet, a {@link TrackedKeyPackage} is
+   * created by decoding the public key package from the event body.
+   *
+   * Throws if the event body cannot be decoded as a valid key package — callers
+   * should validate events before calling this method (or use
+   * {@link KeyPackageManager.track} which catches decode errors automatically).
+   *
+   * @param ref - The key package reference hex string (from the event's `i` tag)
+   * @param event - The signed kind-443 Nostr event to record
+   * @throws If no entry exists and the event body cannot be decoded as a KeyPackage
+   */
+  async addPublished(ref: string, event: NostrEvent): Promise<void> {
+    const existing = await this.backend.getItem(ref);
+
+    if (existing) {
+      const updated: StoredKeyPackage = {
+        ...existing,
+        published: [...(existing.published ?? []), event],
+      };
+      await this.backend.setItem(ref, updated);
+    } else {
+      // No local entry — decode the public key package from the event body.
+      // Throws if the event content is not a valid encoded KeyPackage.
+      const publicPackage = getKeyPackage(event);
+
+      const keyPackageRef = await calculateKeyPackageRef(
+        publicPackage,
+        this.cryptoProvider,
+      );
+
+      const entry: TrackedKeyPackage = {
+        keyPackageRef,
+        publicPackage,
+        published: [event],
+      };
+      await this.backend.setItem(ref, entry);
+      this.emit("keyPackageAdded", entry);
+    }
+  }
+
+  /**
    * Retrieves only the public key package from the store.
    *
-   * @param ref - The key package reference (as Uint8Array or hex string) or the public key package
-   * @returns A promise that resolves to the public key package, or null if not found
+   * @param ref - The key package reference (as Uint8Array, hex string, or KeyPackage)
+   * @returns The public key package, or null if not found
    */
   async getPublicKey(
     ref: Uint8Array | string | KeyPackage,
   ): Promise<KeyPackage | null> {
     const key = await this.resolveStorageKey(ref);
     const stored = await this.backend.getItem(key);
-    return stored ? stored.publicPackage : null;
+    return stored?.publicPackage ?? null;
   }
 
   /**
    * Retrieves only the private key package from the store.
    *
-   * Use this method when you need access to the private keys for cryptographic operations.
+   * Returns null for {@link TrackedKeyPackage} entries (no private material).
    * Be cautious about keeping private keys in memory longer than necessary.
    *
-   * @param ref - The key package reference (as Uint8Array or hex string) or the public key package
+   * @param ref - The key package reference (as Uint8Array, hex string, or KeyPackage)
+   * @returns The private key package, or null if not found or if the entry is tracked-only
    */
   async getPrivateKey(
     ref: Uint8Array | string | KeyPackage,
   ): Promise<PrivateKeyPackage | null> {
     const key = await this.resolveStorageKey(ref);
     const stored = await this.backend.getItem(key);
-    return stored ? stored.privatePackage : null;
+    return stored?.privatePackage ?? null;
   }
 
   /**
-   * Retrieves the complete key package (both public and private) from the store.
+   * Retrieves the stored key package entry from the store.
    *
-   * @param ref - The key package reference (as Uint8Array or hex string) or the public key package
-   * @returns A promise that resolves to the complete key package, or null if not found
+   * Returns any entry regardless of whether it has private material.
+   * Check `privatePackage !== undefined` to narrow to a {@link LocalKeyPackage}.
+   *
+   * @param ref - The key package reference (as Uint8Array, hex string, or KeyPackage)
+   * @returns The stored entry, or null if not found
    */
   async getKeyPackage(
     ref: Uint8Array | string | KeyPackage,
   ): Promise<StoredKeyPackage | null> {
     const key = await this.resolveStorageKey(ref);
-    const stored = await this.backend.getItem(key);
-    return stored && (await this.ensureKeyPackageRef(stored));
+    return this.backend.getItem(key);
   }
 
   /**
-   * Removes a key package from the store.
-   * @param ref - The key package reference (as Uint8Array or hex string) or the public key package
+   * Removes a key package from the store (local or tracked).
+   * @param ref - The key package reference (as Uint8Array, hex string, or KeyPackage)
    */
   async remove(ref: Uint8Array | string | KeyPackage): Promise<void> {
     const key = await this.resolveStorageKey(ref);
@@ -223,60 +275,62 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
     await this.backend.removeItem(key);
 
     if (stored) {
-      const withRef = await this.ensureKeyPackageRef(stored);
-      this.emit("keyPackageRemoved", withRef.keyPackageRef);
+      this.emit("keyPackageRemoved", stored.keyPackageRef);
     }
   }
 
   /**
-   * Lists all key packages stored in the store (without private material).
-   * @returns An array of listed key packages
+   * Lists all {@link LocalKeyPackage} entries (those with private material),
+   * without the private package itself.
+   *
+   * {@link TrackedKeyPackage} entries are excluded — use {@link getKeyPackage}
+   * to retrieve a specific tracked entry by ref.
    */
   async list(): Promise<ListedKeyPackage[]> {
     const allKeys = await this.backend.keys();
 
     const packages = await Promise.all(
-      allKeys.map((key) =>
-        this.backend
-          .getItem(key)
-          .then((pkg) => pkg && this.ensureKeyPackageRef(pkg)),
-      ),
+      allKeys.map((key) => this.backend.getItem(key)),
     );
 
     return packages
-      .filter((pkg) => pkg !== null)
-      .map((pkg) => ({
-        keyPackageRef: pkg.keyPackageRef,
-        publicPackage: pkg.publicPackage,
+      .filter(
+        (pkg): pkg is LocalKeyPackage =>
+          pkg !== null && pkg.privatePackage !== undefined,
+      )
+      .map(({ keyPackageRef, publicPackage, published }) => ({
+        keyPackageRef,
+        publicPackage,
+        ...(published !== undefined ? { published } : {}),
       }));
   }
 
-  /** Gets the count of key packages stored. */
+  /** Gets the count of {@link LocalKeyPackage} entries (those with private material). */
   async count(): Promise<number> {
-    const packages = await this.list();
-    return packages.length;
+    return (await this.list()).length;
   }
 
-  /** Clears all key packages from the store. */
+  /** Clears all entries (local and tracked) from the store. */
   async clear(): Promise<void> {
     const allKeys = await this.backend.keys();
     for (const key of allKeys) {
       const stored = await this.backend.getItem(key);
       await this.backend.removeItem(key);
       if (stored) {
-        const withRef = await this.ensureKeyPackageRef(stored);
-        this.emit("keyPackageRemoved", withRef.keyPackageRef);
+        this.emit("keyPackageRemoved", stored.keyPackageRef);
       }
     }
   }
 
   /**
-   * Checks if a key package exists in the store.
-   * @param ref - The key package reference (as Uint8Array or hex string) or the public key package
+   * Returns `true` only if a {@link LocalKeyPackage} (with private material)
+   * exists for the given ref. Returns `false` for {@link TrackedKeyPackage} entries.
+   *
+   * @param ref - The key package reference (as Uint8Array, hex string, or KeyPackage)
    */
   async has(ref: Uint8Array | string | KeyPackage): Promise<boolean> {
     const key = await this.resolveStorageKey(ref);
     const item = await this.backend.getItem(key);
-    return item !== null;
+    return item !== null && item.privatePackage !== undefined;
   }
 }

@@ -12,7 +12,7 @@ import {
   WELCOME_EVENT_KIND, // 444
   GROUP_EVENT_KIND, // 445
   KEY_PACKAGE_RELAY_LIST_KIND, // 10051
-} from "@internet-privacy/marmots/core";
+} from "@internet-privacy/marmots";
 ```
 
 - **443 (KEY_PACKAGE_KIND):** Key package advertisement events
@@ -28,7 +28,7 @@ MLS extensions used by Marmot:
 import {
   MARMOT_GROUP_DATA_EXTENSION_TYPE, // 0xf2ee
   LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE, // 0x000a
-} from "@internet-privacy/marmots/core";
+} from "@internet-privacy/marmots";
 ```
 
 - **0xf2ee (MARMOT_GROUP_DATA_EXTENSION_TYPE):** Custom extension containing Marmot group metadata ([MIP-01](https://github.com/parres-hq/marmot/blob/main/01.md))
@@ -37,7 +37,7 @@ import {
 ### Protocol Versions
 
 ```typescript
-import { MLS_VERSIONS } from "@internet-privacy/marmots/core";
+import { MLS_VERSIONS } from "@internet-privacy/marmots";
 
 console.log(MLS_VERSIONS); // "1.0"
 ```
@@ -76,7 +76,7 @@ import {
   encodeMarmotGroupData,
   decodeMarmotGroupData,
   marmotGroupDataToExtension,
-} from "@internet-privacy/marmots/core";
+} from "@internet-privacy/marmots";
 
 // Create group data
 const groupData: MarmotGroupData = {
@@ -104,7 +104,7 @@ const decoded = decodeMarmotGroupData(encoded);
 ### Admin Verification
 
 ```typescript
-import { isAdmin } from "@internet-privacy/marmots/core";
+import { isAdmin } from "@internet-privacy/marmots";
 
 const userIsAdmin = isAdmin(groupData, userPubkey);
 if (userIsAdmin) {

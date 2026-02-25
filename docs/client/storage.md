@@ -24,7 +24,7 @@ interface GroupStateStore extends EventEmitter {
 ### In-Memory Example
 
 ```typescript
-class MemoryGroupStateStore extends EventEmitter implements GroupStateStore {
+class MemoryGroupStateBackend extends EventEmitter implements GroupStateStore {
   private states = new Map<string, Uint8Array>();
 
   async get(groupId: string) {
@@ -128,7 +128,7 @@ class FileSystemStateStore extends EventEmitter implements GroupStateStore {
     this.emit("updated");
   }
 
-  async delete(groupId: string) {
+  async remove(groupId: string) {
     await fs.unlink(join(this.basePath, `${groupId}.bin`));
     this.emit("updated");
   }
@@ -149,7 +149,7 @@ class FileSystemStateStore extends EventEmitter implements GroupStateStore {
 ```typescript
 const client = new MarmotClient({
   // ...
-  groupStateStore: new IndexedDBStateStore(db),
+  groupStateBackend: new IndexedDBStateStore(db),
   keyPackageStore: new IndexedDBKeyPackageStore(db),
 });
 ```
@@ -161,7 +161,7 @@ function createClientForAccount(pubkey: string) {
   return new MarmotClient({
     signer: accountSigner,
     network: sharedNetworkInterface,
-    groupStateStore: localforage.createInstance({
+    groupStateBackend: localforage.createInstance({
       name: `marmot-${pubkey}`,
       storeName: "groups",
     }),

@@ -7,7 +7,7 @@ Type-safe proposal builders for group operations.
 ### Invite User
 
 ```typescript
-import { Proposals } from "@internet-privacy/marmots/client";
+import { Proposals } from "@internet-privacy/marmots";
 
 await group.propose(Proposals.proposeInviteUser(keyPackageEvent));
 
@@ -22,7 +22,7 @@ await group.commit({
 Removes all devices for a user:
 
 ```typescript
-import { Proposals } from "@internet-privacy/marmots/client";
+import { Proposals } from "@internet-privacy/marmots";
 
 await group.propose(Proposals.proposeKickUser(targetPubkey));
 ```
@@ -32,7 +32,7 @@ await group.propose(Proposals.proposeKickUser(targetPubkey));
 Updates group metadata (partial updates supported):
 
 ```typescript
-import { Proposals } from "@internet-privacy/marmots/client";
+import { Proposals } from "@internet-privacy/marmots";
 
 await group.propose(
   Proposals.proposeUpdateMetadata({

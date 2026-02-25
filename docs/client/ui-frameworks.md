@@ -430,7 +430,7 @@ async function switchToAccount(account: Account) {
   currentClient = new MarmotClient({
     signer: account.signer,
     network: sharedNetworkInterface, // Can be shared
-    groupStateStore: getStorageForAccount(account.pubkey),
+    groupStateBackend: getStorageForAccount(account.pubkey),
     keyPackageStore: getKeyPackageStoreForAccount(account.pubkey),
   });
 

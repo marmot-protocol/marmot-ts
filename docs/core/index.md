@@ -26,7 +26,7 @@ import {
   generateKeyPackage,
   createGroup,
   // ... other exports
-} from "@internet-privacy/marmots/core";
+} from "@internet-privacy/marmots";
 ```
 
 ## Topics

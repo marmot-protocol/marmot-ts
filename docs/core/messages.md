@@ -45,18 +45,15 @@ This approach:
 ### Encrypt and Create Event
 
 ```typescript
-import { createGroupEvent } from "@internet-privacy/marmots/core";
+import { createGroupEvent } from "@internet-privacy/marmots";
 
-const event = await createGroupEvent(
-  mlsMessage, // MLSMessage from MLS operations
-  nostrGroupId, // 32-byte group identifier
-  clientState, // Current MLS group state
-  ciphersuiteImpl, // Cryptographic implementation
-  ephemeralSignerFn, // Function to sign with ephemeral key
-);
+const event = await createGroupEvent({
+  message: mlsMessage, // MLSMessage from MLS operations
+  state: clientState, // Current MLS ClientState
+  ciphersuite: ciphersuiteImpl, // Cryptographic implementation
+});
 
-// event is an unsigned NostrEvent (rumor)
-// Sign it before publishing to relays
+// event is a fully formed Nostr event (including signature)
 ```
 
 ### Ephemeral Signer
@@ -64,11 +61,7 @@ const event = await createGroupEvent(
 The ephemeral signer should generate a new keypair for each event:
 
 ```typescript
-async function ephemeralSigner(event: UnsignedEvent): Promise<string> {
-  const ephemeralKey = generatePrivateKey();
-  const signed = finishEvent(event, ephemeralKey);
-  return signed.id;
-}
+The Marmot implementation handles per-event ephemeral signing internally.
 ```
 
 ## Decrypting Group Events
@@ -76,7 +69,7 @@ async function ephemeralSigner(event: UnsignedEvent): Promise<string> {
 ### Single Event Decryption
 
 ```typescript
-import { decryptGroupMessageEvent } from "@internet-privacy/marmots/core";
+import { decryptGroupMessageEvent } from "@internet-privacy/marmots";
 
 try {
   const mlsMessage = await decryptGroupMessageEvent(
@@ -95,17 +88,16 @@ try {
 For multiple events with error handling:
 
 ```typescript
-import { readGroupMessages } from "@internet-privacy/marmots/core";
+import { readGroupMessages } from "@internet-privacy/marmots";
 
-const pairs = await readGroupMessages(
+const { read, unreadable } = await readGroupMessages(
   events, // Array of kind 445 events
   clientState,
   ciphersuiteImpl,
 );
 
-// pairs is an array of { event, message } objects
-// Only successfully decrypted messages are included
-// Failed decryptions are silently skipped
+// `read` contains successfully decrypted `{ event, message }` pairs.
+// `unreadable` contains events that could not be decrypted in the current epoch.
 ```
 
 ## Commit Ordering
@@ -115,7 +107,7 @@ When multiple admins send commits for the same epoch, Marmot uses deterministic 
 ### Sorting Commits
 
 ```typescript
-import { sortGroupCommits } from "@internet-privacy/marmots/core";
+import { sortGroupCommits } from "@internet-privacy/marmots";
 
 // Sort commits by: epoch → timestamp → event ID
 const sortedPairs = sortGroupCommits(messagePairs);
@@ -149,7 +141,8 @@ interface Rumor {
   tags: string[][];
   created_at: number;
   pubkey: string; // Sender's real pubkey
-  // No 'id' or 'sig' - unsigned!
+  id: string; // Required (Nostr event id), even though the rumor is unsigned
+  // No 'sig' - unsigned!
 }
 ```
 
@@ -162,7 +155,7 @@ interface Rumor {
 ### Serializing Rumors
 
 ```typescript
-import { serializeApplicationRumor } from "@internet-privacy/marmots/core";
+import { serializeApplicationRumor } from "@internet-privacy/marmots";
 
 const rumor = {
   kind: 1,
@@ -170,6 +163,7 @@ const rumor = {
   tags: [],
   created_at: Math.floor(Date.now() / 1000),
   pubkey: senderPubkey,
+  id: rumorId,
 };
 
 const serialized = serializeApplicationRumor(rumor);
@@ -179,7 +173,7 @@ const serialized = serializeApplicationRumor(rumor);
 ### Deserializing Rumors
 
 ```typescript
-import { deserializeApplicationRumor } from "@internet-privacy/marmots/core";
+import { deserializeApplicationRumor } from "@internet-privacy/marmots";
 
 // After processing MLS message, extract application data
 const rumor = deserializeApplicationRumor(applicationData);
@@ -197,7 +191,7 @@ import {
   serializeApplicationRumor,
   createGroupEvent,
   getNostrGroupIdHex,
-} from "@internet-privacy/marmots/core";
+} from "@internet-privacy/marmots";
 import { createApplicationMessage } from "ts-mls";
 
 // 1. Create rumor
@@ -207,6 +201,7 @@ const rumor = {
   tags: [],
   created_at: Math.floor(Date.now() / 1000),
   pubkey: myPubkey,
+  id: rumorId,
 };
 
 // 2. Serialize rumor
@@ -220,16 +215,14 @@ const mlsMessage = createApplicationMessage(
 );
 
 // 4. Create group event
-const event = await createGroupEvent(
-  mlsMessage,
-  hexToBytes(getNostrGroupIdHex(clientState)),
-  clientState,
-  ciphersuiteImpl,
-  ephemeralSigner,
-);
+const event = await createGroupEvent({
+  message: mlsMessage,
+  state: clientState,
+  ciphersuite: ciphersuiteImpl,
+});
 
 // 5. Publish to relays
-await publishEvent(signEvent(event), relays);
+await network.publish(relays, event);
 ```
 
 ### Receiving Messages
@@ -239,14 +232,18 @@ import {
   readGroupMessages,
   sortGroupCommits,
   deserializeApplicationRumor,
-} from "@internet-privacy/marmots/core";
+} from "@internet-privacy/marmots";
 import { processMessage } from "ts-mls";
 
 // 1. Fetch events from relays
 const events = await fetchGroupEvents(relays, groupId);
 
 // 2. Decrypt all events
-const pairs = await readGroupMessages(events, clientState, ciphersuiteImpl);
+const { read: pairs, unreadable } = await readGroupMessages(
+  events,
+  clientState,
+  ciphersuiteImpl,
+);
 
 // 3. Separate commits from application messages
 const commits = pairs.filter((p) => isCommit(p.message));

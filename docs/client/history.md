@@ -9,7 +9,7 @@ Stores decrypted application messages as rumors.
 ### Creating History
 
 ```typescript
-import { GroupRumorHistory } from "@internet-privacy/marmots/client";
+import { GroupRumorHistory } from "@internet-privacy/marmots";
 
 const history = new GroupRumorHistory(groupId, backend);
 

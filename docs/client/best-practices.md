@@ -99,7 +99,8 @@ const event = createKeyPackageEvent({
   keyPackage: newPackage.publicPackage,
   relays: myRelays,
 });
-await network.publish(myRelays, signEvent(event));
+const signed = await signer.signEvent(event);
+await network.publish(myRelays, signed);
 ```
 
 ## Admin Management

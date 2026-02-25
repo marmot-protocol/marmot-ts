@@ -18,16 +18,17 @@ The Welcome allows them to decrypt past messages from the current epoch and part
 After creating a commit that adds members, you get Welcome messages:
 
 ```typescript
-import { createWelcomeRumor } from "@internet-privacy/marmots/core";
+import { createWelcomeRumor } from "@internet-privacy/marmots";
 
 // After MLS createCommit with add proposals
 const { welcome } = commitResult;
 
-const welcomeRumor = createWelcomeRumor(
+const welcomeRumor = createWelcomeRumor({
   welcome, // Welcome from MLS commit
-  groupRelays, // Array of relay URLs
+  relays: groupRelays, // Array of relay URLs
   keyPackageEventId, // Optional: the key package event ID used
-);
+  author: myEphemeralPubkey, // Nostr pubkey for this rumor
+});
 
 // welcomeRumor is kind 444, ready to be gift-wrapped
 ```
@@ -40,6 +41,7 @@ content: base64-encoded Welcome message
 tags:
   - ["relays", ...groupRelays]
   - ["e", keyPackageEventId] (optional)
+  - ["encoding", "base64"]
 ```
 
 ## Distributing Welcome Messages
@@ -47,11 +49,16 @@ tags:
 Welcome messages are wrapped in NIP-59 gift wraps for privacy (MIP-00):
 
 ```typescript
-import { createWelcomeRumor } from "@internet-privacy/marmots/core";
+import { createWelcomeRumor } from "@internet-privacy/marmots";
 import { createGiftWrap } from "applesauce-core/nip59";
 
 // 1. Create welcome rumor
-const welcomeRumor = createWelcomeRumor(welcome, relays, kpEventId);
+const welcomeRumor = createWelcomeRumor({
+  welcome,
+  relays,
+  keyPackageEventId: kpEventId,
+  author: myEphemeralPubkey,
+});
 
 // 2. Wrap in gift wrap
 const giftWrap = await createGiftWrap(
@@ -61,7 +68,7 @@ const giftWrap = await createGiftWrap(
 );
 
 // 3. Send to recipient's relay list
-await publishEvent(giftWrap, recipientRelays);
+await network.publish(recipientRelays, giftWrap);
 ```
 
 See [MIP-00](https://github.com/parres-hq/marmot/blob/main/00.md) for gift wrap specifications.
@@ -71,7 +78,7 @@ See [MIP-00](https://github.com/parres-hq/marmot/blob/main/00.md) for gift wrap 
 When you receive a gift wrap with a Welcome:
 
 ```typescript
-import { getWelcome } from "@internet-privacy/marmots/core";
+import { getWelcome } from "@internet-privacy/marmots";
 import { unwrapGiftWrap } from "applesauce-core/nip59";
 
 // 1. Unwrap gift wrap
@@ -86,7 +93,7 @@ const welcome = getWelcome(rumor);
 ## Joining from Welcome
 
 ```typescript
-import { getWelcome } from "@internet-privacy/marmots/core";
+import { getWelcome } from "@internet-privacy/marmots";
 import { joinGroup } from "ts-mls";
 
 // Get Welcome from rumor

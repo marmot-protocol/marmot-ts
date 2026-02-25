@@ -20,7 +20,7 @@ Think of it as a snapshot of the group at a specific point in time.
 ### Get Marmot Group Data
 
 ```typescript
-import { extractMarmotGroupData } from "@internet-privacy/marmots/core";
+import { extractMarmotGroupData } from "@internet-privacy/marmots";
 
 const groupData = extractMarmotGroupData(clientState);
 
@@ -32,10 +32,7 @@ console.log(groupData.relays); // ["wss://..."]
 ### Get Group Identifiers
 
 ```typescript
-import {
-  getGroupIdHex,
-  getNostrGroupIdHex,
-} from "@internet-privacy/marmots/core";
+import { getGroupIdHex, getNostrGroupIdHex } from "@internet-privacy/marmots";
 
 // MLS group ID
 const mlsGroupId = getGroupIdHex(clientState);
@@ -47,7 +44,7 @@ const nostrGroupId = getNostrGroupIdHex(clientState);
 ### Get Group Metadata
 
 ```typescript
-import { getEpoch, getMemberCount } from "@internet-privacy/marmots/core";
+import { getEpoch, getMemberCount } from "@internet-privacy/marmots";
 
 const epoch = getEpoch(clientState); // Current epoch number
 const memberCount = getMemberCount(clientState); // Number of members
@@ -60,7 +57,7 @@ ClientState must be serialized for storage and deserialized when loading.
 ### Serialize for Storage
 
 ```typescript
-import { serializeClientState } from "@internet-privacy/marmots/core";
+import { serializeClientState } from "@internet-privacy/marmots";
 
 const serialized = serializeClientState(clientState);
 // serialized is Uint8Array (TLS binary format)
@@ -72,7 +69,7 @@ await storage.save(groupId, serialized);
 ### Deserialize from Storage
 
 ```typescript
-import { deserializeClientState } from "@internet-privacy/marmots/core";
+import { deserializeClientState } from "@internet-privacy/marmots";
 import { CipherSuite, getCipherSuiteById } from "ts-mls";
 
 const serialized = await storage.load(groupId);
@@ -87,7 +84,7 @@ const clientState = deserializeClientState(
 ### Default Configuration
 
 ```typescript
-import { defaultMarmotClientConfig } from "@internet-privacy/marmots/core";
+import { defaultMarmotClientConfig } from "@internet-privacy/marmots";
 
 // Includes marmotAuthService for credential validation
 const clientState = deserializeClientState(
@@ -116,7 +113,7 @@ clientState = newState;
 The epoch advances with each commit:
 
 ```typescript
-import { getEpoch } from "@internet-privacy/marmots/core";
+import { getEpoch } from "@internet-privacy/marmots";
 
 console.log("Before commit:", getEpoch(clientState)); // 5
 
@@ -157,7 +154,7 @@ import {
   deserializeClientState,
   extractMarmotGroupData,
   defaultMarmotClientConfig,
-} from "@internet-privacy/marmots/core";
+} from "@internet-privacy/marmots";
 
 // 1. Create group
 const { clientState } = await createGroup({

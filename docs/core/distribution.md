@@ -7,7 +7,7 @@ Key packages are published as Nostr events so others can add you to groups.
 ### Creating Key Package Events
 
 ```typescript
-import { createKeyPackageEvent } from "@internet-privacy/marmots/core";
+import { createKeyPackageEvent } from "@internet-privacy/marmots";
 
 const event = createKeyPackageEvent({
   keyPackage: keyPackage.publicPackage,
@@ -16,8 +16,8 @@ const event = createKeyPackageEvent({
 });
 
 // Sign and publish to relays
-const signed = signEvent(event);
-await publishToRelays(signed, relays);
+const signed = await signer.signEvent(event);
+await network.publish(["wss://relay1.com", "wss://relay2.com"], signed);
 ```
 
 ### Event Structure
@@ -37,7 +37,7 @@ tags:
 ### Extracting Key Packages
 
 ```typescript
-import { getKeyPackage } from "@internet-privacy/marmots/core";
+import { getKeyPackage } from "@internet-privacy/marmots";
 
 // Fetch from relays
 const events = await fetchEvents(relays, {
@@ -53,7 +53,7 @@ const keyPackage = getKeyPackage(events[0]);
 ### Deleting Key Packages
 
 ```typescript
-import { createDeleteKeyPackageEvent } from "@internet-privacy/marmots/core";
+import { createDeleteKeyPackageEvent } from "@internet-privacy/marmots";
 
 // Create kind 5 deletion event
 const deleteEvent = createDeleteKeyPackageEvent(
@@ -61,7 +61,8 @@ const deleteEvent = createDeleteKeyPackageEvent(
   "Key package consumed", // Optional reason
 );
 
-await publishEvent(signEvent(deleteEvent), relays);
+const signedDeleteEvent = await signer.signEvent(deleteEvent);
+await network.publish(relays, signedDeleteEvent);
 ```
 
 ## Relay List Events (Kind 10051)
@@ -71,16 +72,15 @@ Tell others where to find your key packages.
 ### Creating Relay Lists
 
 ```typescript
-import { createKeyPackageRelayListEvent } from "@internet-privacy/marmots/core";
+import { createKeyPackageRelayListEvent } from "@internet-privacy/marmots";
 
-const event = createKeyPackageRelayListEvent([
-  "wss://relay.damus.io",
-  "wss://relay.snort.social",
-  "wss://nos.lol",
-]);
+const eventTemplate = createKeyPackageRelayListEvent({
+  pubkey: myPubkey,
+  relays: ["wss://relay.damus.io", "wss://relay.snort.social", "wss://nos.lol"],
+});
 
-// Sign and publish
-await publishEvent(signEvent(event), relays);
+const signed = await signer.signEvent(eventTemplate);
+await network.publish(relays, signed);
 ```
 
 ### Reading Relay Lists
@@ -89,7 +89,7 @@ await publishEvent(signEvent(event), relays);
 import {
   getKeyPackageRelayList,
   isValidKeyPackageRelayListEvent,
-} from "@internet-privacy/marmots/core";
+} from "@internet-privacy/marmots";
 
 // Fetch user's relay list
 const events = await fetchEvents(relays, {

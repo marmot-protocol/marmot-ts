@@ -7,7 +7,7 @@ Query and manage group membership, including multi-device support.
 ### Get All Members
 
 ```typescript
-import { getGroupMembers } from "@internet-privacy/marmots/core";
+import { getGroupMembers } from "@internet-privacy/marmots";
 
 const members = getGroupMembers(clientState);
 // Returns array of Nostr pubkeys (hex strings)
@@ -22,7 +22,7 @@ Users can have multiple devices (leaf nodes) in the same group with the same Nos
 ### Get Leaf Nodes for a Pubkey
 
 ```typescript
-import { getPubkeyLeafNodes } from "@internet-privacy/marmots/core";
+import { getPubkeyLeafNodes } from "@internet-privacy/marmots";
 
 const leafNodes = getPubkeyLeafNodes(clientState, pubkey);
 console.log(`${pubkey} has ${leafNodes.length} devices`);
@@ -33,7 +33,7 @@ console.log(`${pubkey} has ${leafNodes.length} devices`);
 Needed for remove operations:
 
 ```typescript
-import { getPubkeyLeafNodeIndexes } from "@internet-privacy/marmots/core";
+import { getPubkeyLeafNodeIndexes } from "@internet-privacy/marmots";
 
 const indexes = getPubkeyLeafNodeIndexes(clientState, pubkey);
 // Returns array of leaf node indexes
@@ -42,7 +42,7 @@ const indexes = getPubkeyLeafNodeIndexes(clientState, pubkey);
 ### Get Indexes by Credential
 
 ```typescript
-import { getCredentialLeafNodeIndexes } from "@internet-privacy/marmots/core";
+import { getCredentialLeafNodeIndexes } from "@internet-privacy/marmots";
 
 const indexes = getCredentialLeafNodeIndexes(clientState, credential);
 ```
@@ -52,7 +52,7 @@ const indexes = getCredentialLeafNodeIndexes(clientState, credential);
 To remove a member, you need their leaf node indexes:
 
 ```typescript
-import { getPubkeyLeafNodeIndexes } from "@internet-privacy/marmots/core";
+import { getPubkeyLeafNodeIndexes } from "@internet-privacy/marmots";
 import { createRemove } from "ts-mls";
 
 // Get all leaf nodes for the user
@@ -75,7 +75,7 @@ import {
   getGroupMembers,
   getPubkeyLeafNodes,
   getPubkeyLeafNodeIndexes,
-} from "@internet-privacy/marmots/core";
+} from "@internet-privacy/marmots";
 
 // Get all unique members
 const members = getGroupMembers(clientState);

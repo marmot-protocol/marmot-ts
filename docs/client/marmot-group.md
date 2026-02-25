@@ -5,12 +5,14 @@
 ## Properties
 
 ```typescript
-group.groupId; // Nostr group ID (hex)
+group.id; // MLS group_id (Uint8Array)
+group.idStr; // MLS group_id (hex)
+group.groupData.nostrGroupId; // MarmotGroupData nostr_group_id (Uint8Array)
 group.name; // Group name
 group.description; // Group description
 group.relays; // Relay URLs
 group.adminPubkeys; // Admin pubkeys
-group.members; // Member pubkeys
+group.members; // Member pubkeys (from current state)
 group.epoch; // Current epoch
 group.state; // ClientState
 group.history; // Optional history instance
@@ -25,19 +27,20 @@ await group.sendApplicationRumor({
   tags: [],
   created_at: Math.floor(Date.now() / 1000),
   pubkey: myPubkey,
+  id: rumorId,
 });
 ```
 
 ## Creating Proposals
 
 ```typescript
-import { Proposals } from "@internet-privacy/marmots/client";
+import { Proposals } from "@internet-privacy/marmots";
 
 // Invite user
 await group.propose(Proposals.proposeInviteUser(keyPackageEvent));
 
 // Remove user
-await group.propose(Proposals.proposeKickUser(targetPubkey));
+await group.propose(Proposals.proposeRemoveUser(targetPubkey));
 
 // Update metadata
 await group.propose(
@@ -56,7 +59,7 @@ await group.commit();
 
 // Commit with inline proposals
 await group.commit({
-  by: [
+  extraProposals: [
     Proposals.proposeInviteUser(kpEvent1),
     Proposals.proposeInviteUser(kpEvent2),
   ],
@@ -76,13 +79,14 @@ const recipients = await group.inviteByKeyPackageEvent(keyPackageEvent);
 // Fetch and process group events
 const events = await network.request(groupRelays, {
   kinds: [GROUP_EVENT_KIND],
-  "#d": [group.groupId],
+  "#h": [bytesToHex(group.groupData.nostrGroupId)],
 });
 
-await group.ingest(events, {
-  maxRetries: 3,
-  rejectUnverifiable: false,
-});
+const results = group.ingest(events);
+
+for await (const result of results) {
+  // Handle commits, application messages, and unreadable packets
+}
 ```
 
 ### How Ingest Works

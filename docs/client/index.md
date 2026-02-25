@@ -30,7 +30,7 @@ import {
   MarmotClient,
   MarmotGroup,
   Proposals,
-} from "@internet-privacy/marmots/client";
+} from "@internet-privacy/marmots";
 ```
 
 ## Topics
@@ -79,13 +79,13 @@ For fine-grained control or protocol research, use the [Core module](/core/) dir
 ## Quick Example
 
 ```typescript
-import { MarmotClient } from "@internet-privacy/marmots/client";
+import { MarmotClient } from "@internet-privacy/marmots";
 
 // Create client
 const client = new MarmotClient({
   signer,
   network,
-  groupStateStore,
+  groupStateBackend,
   keyPackageStore,
 });
 
@@ -102,6 +102,7 @@ await group.sendApplicationRumor({
   tags: [],
   created_at: Math.floor(Date.now() / 1000),
   pubkey: myPubkey,
+  id: rumorId,
 });
 
 // Listen for messages

@@ -62,32 +62,37 @@ Marmot uses a bytes-first storage approach. You'll need to provide storage backe
 ```typescript
 import { EventEmitter } from "eventemitter3";
 
-// Simple in-memory storage for development
-class MemoryGroupStateStore extends EventEmitter {
+// Minimal in-memory GroupStateStoreBackend for development.
+// Notes:
+// - IDs are *bytes-first*; the backend receives `Uint8Array`, not hex strings.
+// - Implementations are expected to emit "updated" when state changes.
+class MemoryGroupStateBackend extends EventEmitter {
   private states = new Map<string, Uint8Array>();
 
-  async get(groupId: string) {
-    return this.states.get(groupId) ?? null;
+  async get(groupId: Uint8Array): Promise<Uint8Array | null> {
+    return this.states.get(bytesToHex(groupId)) ?? null;
   }
 
-  async set(groupId: string, state: Uint8Array) {
-    this.states.set(groupId, state);
+  async set(groupId: Uint8Array, state: Uint8Array): Promise<void> {
+    this.states.set(bytesToHex(groupId), state);
     this.emit("updated");
   }
 
-  async delete(groupId: string) {
-    this.states.delete(groupId);
+  async remove(groupId: Uint8Array): Promise<void> {
+    this.states.delete(bytesToHex(groupId));
     this.emit("updated");
   }
 
-  async list() {
-    return Array.from(this.states.keys());
+  async list(): Promise<Uint8Array[]> {
+    return Array.from(this.states.keys()).map((hex) => hexToBytes(hex));
   }
 }
 
-// Similar implementation for KeyPackageStore
-const groupStateStore = new MemoryGroupStateStore();
-const keyPackageStore = new MemoryKeyPackageStore();
+const groupStateBackend = new MemoryGroupStateBackend();
+
+// For KeyPackageStore, use the library's store with an app-provided key/value backend.
+// See the Storage docs for a complete example.
+const keyPackageStore = yourKeyPackageStore;
 ```
 
 ::: tip Production Storage
@@ -133,7 +138,7 @@ import { MarmotClient } from "@internet-privacy/marmots";
 const client = new MarmotClient({
   signer: yourNostrSigner, // EventSigner from applesauce-core or similar
   network,
-  groupStateStore,
+  groupStateBackend,
   keyPackageStore,
 });
 ```
@@ -187,7 +192,7 @@ await client.keyPackageStore.add(completeKeyPackage);
 ## Create a Group
 
 ```typescript
-import { bytesToHex } from "@noble/hashes/utils";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 
 const group = await client.createGroup("Engineering Team", {
   description: "Secure team communications",
@@ -195,7 +200,10 @@ const group = await client.createGroup("Engineering Team", {
   adminPubkeys: [myPubkey],
 });
 
-console.log(`Created group: ${bytesToHex(group.id)}`);
+console.log(`Created group (MLS group_id): ${bytesToHex(group.id)}`);
+console.log(
+  `Routing tag (nostr_group_id): ${bytesToHex(group.groupData.nostrGroupId)}`,
+);
 ```
 
 ## Invite a Member
@@ -228,9 +236,9 @@ const rumor = {
   created_at: Math.floor(Date.now() / 1000),
   content: "Hello team!",
   tags: [],
-  id: "",
+  id: rumorId,
 };
-rumor.id = getEventHash(rumor);
+const rumorId = getEventHash(rumor);
 
 await group.sendApplicationRumor(rumor);
 ```
@@ -239,10 +247,11 @@ await group.sendApplicationRumor(rumor);
 
 ```typescript
 import { deserializeApplicationRumor } from "@internet-privacy/marmots";
+import { bytesToHex } from "@noble/hashes/utils.js";
 
 // Subscribe to group events
-const subscription = client.network.subscription(group.groupInfo.relays, [
-  { kinds: [445], "#h": [bytesToHex(group.id)] },
+const subscription = client.network.subscription(group.relays, [
+  { kinds: [445], "#h": [bytesToHex(group.groupData.nostrGroupId)] },
 ]);
 
 subscription.subscribe({

@@ -23,7 +23,7 @@ import { MarmotClient } from "@internet-privacy/marmots";
 const client = new MarmotClient({
   signer: yourNostrSigner,
   network: yourNostrNetworkInterface,
-  groupStateStore: yourGroupStateStore,
+  groupStateBackend: yourGroupStateBackend,
   keyPackageStore: yourKeyPackageStore,
 });
 ```
@@ -32,7 +32,7 @@ const client = new MarmotClient({
 
 - **`signer`** - Signs Nostr events (compatible with NIP-07, `applesauce-signers` or similar)
 - **`network`** - Publishes/fetches events from Nostr relays (see [Network Interface](/client/network))
-- **`groupStateStore`** - Persists encrypted group state (see [Storage](/client/storage))
+- **`groupStateBackend`** - Persists encrypted group state (see [Storage](/client/storage))
 - **`keyPackageStore`** - Stores key packages with private material (see [Storage](/client/storage))
 
 ::: tip Complete Setup Guide
@@ -240,7 +240,7 @@ async function switchToAccount(newAccount: Account) {
   const newClient = new MarmotClient({
     signer: newAccount.signer,
     network: sharedNetworkInterface, // Can be reused across accounts
-    groupStateStore: getStorageForAccount(newAccount.pubkey),
+    groupStateBackend: getStorageForAccount(newAccount.pubkey),
     keyPackageStore: getKeyPackageStoreForAccount(newAccount.pubkey),
   });
 

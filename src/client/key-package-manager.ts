@@ -24,7 +24,7 @@ import { NostrNetworkInterface } from "./nostr-interface.js";
 
 /**
  * A key package entry as returned by {@link KeyPackageManager.list}
- * and {@link KeyPackageManager.watchKeyPackages}.
+ * and {@link KeyPackageManager.watch}.
  *
  * Merges the locally stored key package with its publish records from the
  * published backend, giving a unified view of both private storage state and
@@ -385,7 +385,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * Lists all locally stored key packages, each enriched with their publish
    * records from the published backend.
    *
-   * Returns the same shape as {@link watchKeyPackages} snapshots so apps can
+   * Returns the same shape as {@link watch} snapshots so apps can
    * use identical rendering logic for both the initial load and live updates.
    */
   async list(): Promise<KeyPackageEntry[]> {
@@ -462,7 +462,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * }
    * ```
    */
-  async *watchKeyPackages(): AsyncGenerator<KeyPackageEntry[]> {
+  async *watch(): AsyncGenerator<KeyPackageEntry[]> {
     let resolveNext: (() => void) | null = null;
 
     const signal = () => {

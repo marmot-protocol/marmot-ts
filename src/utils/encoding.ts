@@ -21,13 +21,7 @@ export function encodeContent(
   format: EncodingFormat,
 ): string {
   if (format === "base64") {
-    // Convert Uint8Array to base64
-    let binary = "";
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
+    return btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(""));
   } else {
     // hex format
     return bytesToHex(bytes);
@@ -50,12 +44,7 @@ export function decodeContent(
 
   if (actualFormat === "base64") {
     try {
-      const binaryString = atob(content);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return bytes;
+      return Uint8Array.from(atob(content), (c) => c.charCodeAt(0));
     } catch (error) {
       throw new Error(
         `Failed to decode base64 content: ${error instanceof Error ? error.message : String(error)}`,

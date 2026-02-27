@@ -1,12 +1,13 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { getTagValue, NostrEvent } from "applesauce-core/helpers/event";
 import { getEventHash } from "nostr-tools";
-import { decode, encode } from "ts-mls";
+import { decode, encode, protocolVersions, wireformats } from "ts-mls";
 import {
-  welcomeDecoder,
-  welcomeEncoder,
-  type Welcome,
-} from "ts-mls/welcome.js";
+  mlsMessageDecoder,
+  mlsMessageEncoder,
+  type MlsWelcomeMessage,
+} from "ts-mls/message.js";
+import { type Welcome } from "ts-mls/welcome.js";
 import {
   decodeContent,
   encodeContent,
@@ -36,8 +37,13 @@ export function createWelcomeRumor({
   keyPackageEvent?: NostrEvent;
   groupRelays: string[];
 }): Rumor {
-  // Serialize the welcome message according to RFC 9420
-  const serializedWelcome = encode(welcomeEncoder, welcome);
+  // Serialize the welcome message as a full MLSMessage (RFC 9420)
+  const mlsMessage: MlsWelcomeMessage = {
+    version: protocolVersions.mls10,
+    wireformat: wireformats.mls_welcome,
+    welcome,
+  };
+  const serializedWelcome = encode(mlsMessageEncoder, mlsMessage);
   const content = encodeContent(serializedWelcome, "base64");
 
   const draft = {
@@ -95,8 +101,13 @@ export function getWelcome(event: NostrEvent | Rumor): Welcome {
     throw new Error("Invalid welcome event: missing encoding=base64 tag");
   }
   const content = decodeContent(event.content, encodingFormat);
-  const welcome = decode(welcomeDecoder, content);
-  if (!welcome) throw new Error("Failed to decode welcome message");
+  const mlsMessage = decode(mlsMessageDecoder, content);
+  if (!mlsMessage) throw new Error("Failed to decode welcome message");
+  if (mlsMessage.wireformat !== wireformats.mls_welcome) {
+    throw new Error(
+      `Expected MLSMessage with mls_welcome wireformat, got wireformat ${mlsMessage.wireformat}`,
+    );
+  }
 
-  return welcome;
+  return (mlsMessage as MlsWelcomeMessage).welcome;
 }

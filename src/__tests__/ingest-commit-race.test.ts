@@ -17,7 +17,8 @@ import { decode, encode } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
 import { MarmotGroup } from "../client/group/marmot-group.js";
-import type { NostrNetworkInterface } from "../client/nostr-interface.js";
+import type { GroupTransport } from "../client/transports/group-transport.js";
+import type { InviteTransport } from "../client/transports/invite-transport.js";
 import { SerializedClientState } from "../core/client-state.js";
 import { createCredential } from "../core/credential.js";
 import { createGroupEvent, sortGroupCommits } from "../core/group-message.js";
@@ -26,6 +27,20 @@ import { generateKeyPackage } from "../core/key-package.js";
 import { GroupStateStore } from "../store/group-state-store.js";
 import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend.js";
 import type { KeyValueStoreBackend } from "../utils/key-value.js";
+
+/** Minimal no-op transports for tests that only exercise ingest()/processMessage() */
+const stubGroupTransport: GroupTransport = {
+  async send() {
+    throw new Error("send not used in this test");
+  },
+  async *subscribe() {},
+};
+
+const stubInviteTransport: InviteTransport = {
+  async send() {
+    throw new Error("send not used in this test");
+  },
+};
 
 export class MemoryBackend<T> implements KeyValueStoreBackend<T> {
   private map = new Map<string, T>();
@@ -270,21 +285,6 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       encode(clientStateEncoder, memberStateEpoch1),
     );
 
-    const network: NostrNetworkInterface = {
-      request: async () => {
-        throw new Error("not used in this unit test");
-      },
-      subscription: () => {
-        throw new Error("not used in this unit test");
-      },
-      publish: async () => {
-        throw new Error("not used in this unit test");
-      },
-      getUserInboxRelays: async () => {
-        throw new Error("not used in this unit test");
-      },
-    };
-
     const signer = {
       getPublicKey: async () => memberPubkey,
     } as EventSigner;
@@ -293,7 +293,8 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       stateStore,
       signer,
       ciphersuite: impl,
-      network,
+      groupTransport: stubGroupTransport,
+      inviteTransport: stubInviteTransport,
     });
 
     const seen: ClientState[] = [];
@@ -371,21 +372,6 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       encode(clientStateEncoder, adminStateEpoch1),
     );
 
-    const network: NostrNetworkInterface = {
-      request: async () => {
-        throw new Error("not used");
-      },
-      subscription: () => {
-        throw new Error("not used");
-      },
-      publish: async () => {
-        throw new Error("not used");
-      },
-      getUserInboxRelays: async () => {
-        throw new Error("not used");
-      },
-    };
-
     const signer = {
       getPublicKey: async () => adminPubkey,
     } as EventSigner;
@@ -394,7 +380,8 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       stateStore,
       signer,
       ciphersuite: impl,
-      network,
+      groupTransport: stubGroupTransport,
+      inviteTransport: stubInviteTransport,
     });
 
     // Record initial epoch
@@ -500,21 +487,6 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       encode(clientStateEncoder, adminStateEpoch1),
     );
 
-    const network: NostrNetworkInterface = {
-      request: async () => {
-        throw new Error("not used");
-      },
-      subscription: () => {
-        throw new Error("not used");
-      },
-      publish: async () => {
-        throw new Error("not used");
-      },
-      getUserInboxRelays: async () => {
-        throw new Error("not used");
-      },
-    };
-
     const signer = {
       getPublicKey: async () => adminPubkey,
     } as EventSigner;
@@ -523,7 +495,8 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       stateStore,
       signer,
       ciphersuite: impl,
-      network,
+      groupTransport: stubGroupTransport,
+      inviteTransport: stubInviteTransport,
     });
 
     // Create a proposal to add a second member

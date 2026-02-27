@@ -46,35 +46,3 @@ export interface NostrPoolRead {
 
 /** Merged interface for a nostr relay pool */
 export interface NostrPool extends NostrPoolWrite, NostrPoolRead {}
-
-/**
- * Interface for group-specific nostr operations.
- * This is the only network interface used by MarmotGroup.
- * It includes all NostrPool methods plus group-specific operations.
- */
-export interface NostrNetworkInterface {
-  /** Publish an event to the given relays */
-  publish(
-    relays: string[],
-    event: NostrEvent,
-  ): Promise<Record<string, PublishResponse>>;
-
-  /** Make a single request to the given relays with filters */
-  request(relays: string[], filters: Filter | Filter[]): Promise<NostrEvent[]>;
-
-  /** Open a subscription to the given relays and filters */
-  subscription(
-    relays: string[],
-    filters: Filter | Filter[],
-  ): Subscribable<NostrEvent>;
-
-  /**
-   * Request a user's inbox relays.
-   * This method should fetch the relays where a user receives their messages
-   * (e.g., from a kind 10051 key package relay list event).
-   *
-   * @param pubkey - The public key (hex string) of the user whose inbox relays to load
-   * @returns Promise resolving to an array of relay URLs for the user's inbox
-   */
-  getUserInboxRelays(pubkey: string): Promise<string[]>;
-}

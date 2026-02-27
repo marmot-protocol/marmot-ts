@@ -22,11 +22,13 @@ import {
 import { KeyPackageStore } from "../store/key-package-store";
 import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend";
 import { unixNow } from "../utils/nostr";
-import { MockNetwork } from "./helpers/mock-network";
+import {
+  MockEventStore,
+  MockGroupTransport,
+} from "./helpers/mock-group-transport";
+import { MockInviteTransport } from "./helpers/mock-invite-transport";
 import { MemoryBackend } from "./ingest-commit-race.test";
 import { deserializeApplicationData } from "../core/group-message";
-
-// NOTE: we use the shared test helper MockNetwork, not an inline version.
 
 // ============================================================================
 // Test Setup
@@ -36,7 +38,7 @@ describe("End-to-end: invite, join, first message", () => {
   let adminAccount: PrivateKeyAccount<any>;
   let inviteeAccount: PrivateKeyAccount<any>;
   let ciphersuite: CiphersuiteImpl;
-  let mockNetwork: MockNetwork;
+  let eventStore: MockEventStore;
   let adminClient: MarmotClient;
   let inviteeClient: MarmotClient;
 
@@ -51,10 +53,23 @@ describe("End-to-end: invite, join, first message", () => {
       defaultCryptoProvider,
     );
 
-    // Create mock network
-    mockNetwork = new MockNetwork();
+    // Shared event store simulates a relay
+    eventStore = new MockEventStore();
 
-    // Create clients using the new bytes-first API
+    // Group transport factory: creates a MockGroupTransport per group instance
+    const groupTransportFactory = (
+      _groupId: Uint8Array,
+      _stateAccessor: () => import("ts-mls").ClientState,
+    ) => new MockGroupTransport(eventStore, ciphersuite);
+
+    // Invite transport: shared, sends gift wraps into the event store
+    const adminInviteTransport = new MockInviteTransport(
+      eventStore,
+      adminAccount.signer,
+      ["wss://mock-relay.test"],
+    );
+
+    // Create clients using the new transport-based API
     const groupStateBackend = new KeyValueGroupStateBackend(
       new MemoryBackend(),
     );
@@ -64,14 +79,20 @@ describe("End-to-end: invite, join, first message", () => {
       groupStateBackend,
       keyPackageStore,
       signer: adminAccount.signer,
-      network: mockNetwork,
+      groupTransportFactory,
+      inviteTransport: adminInviteTransport,
     });
 
     inviteeClient = new MarmotClient({
       groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
       keyPackageStore: new KeyPackageStore(new MemoryBackend()),
       signer: inviteeAccount.signer,
-      network: mockNetwork,
+      groupTransportFactory,
+      inviteTransport: new MockInviteTransport(
+        eventStore,
+        inviteeAccount.signer,
+        ["wss://mock-relay.test"],
+      ),
     });
   });
 
@@ -98,7 +119,7 @@ describe("End-to-end: invite, join, first message", () => {
     const signedKeyPackageEvent: NostrEvent =
       await inviteeAccount.signer.signEvent(unsignedKeyPackageEvent);
 
-    await mockNetwork.publish(["wss://mock-relay.test"], signedKeyPackageEvent);
+    eventStore.publish(signedKeyPackageEvent);
 
     // Step 2: Admin creates group
     const adminGroup = await adminClient.createGroup("Test Group", {
@@ -107,14 +128,11 @@ describe("End-to-end: invite, join, first message", () => {
     });
 
     // Step 3: Admin invites invitee
-    // First, fetch the invitee's KeyPackage event
-    const keyPackageEvents = await mockNetwork.request(
-      ["wss://mock-relay.test"],
-      {
-        kinds: [KEY_PACKAGE_KIND],
-        authors: [inviteePubkey],
-      },
-    );
+    // First, fetch the invitee's KeyPackage event from the shared store
+    const keyPackageEvents = eventStore.request({
+      kinds: [KEY_PACKAGE_KIND],
+      authors: [inviteePubkey],
+    });
     expect(keyPackageEvents.length).toBe(1);
 
     // Invite using the KeyPackage event
@@ -124,17 +142,17 @@ describe("End-to-end: invite, join, first message", () => {
     // - group commit event (kind 445) published to group relays
     // - welcome giftwrap (kind 1059) published to invitee inbox relays
     // And that they were published in the required order (commit before welcome).
-    const commitIndex = mockNetwork.events.findIndex(
+    const commitIndex = eventStore.events.findIndex(
       (e) => e.kind === GROUP_EVENT_KIND,
     );
-    const giftwrapIndex = mockNetwork.events.findIndex((e) => e.kind === 1059);
+    const giftwrapIndex = eventStore.events.findIndex((e) => e.kind === 1059);
     expect(commitIndex).toBeGreaterThanOrEqual(0);
     expect(giftwrapIndex).toBeGreaterThanOrEqual(0);
     expect(commitIndex).toBeLessThan(giftwrapIndex);
 
     // Step 4: Invitee receives Welcome and joins
-    // Fetch gift wraps for invitee (filter by recipient pubkey in p tag, not author)
-    const giftWraps = await mockNetwork.request(["wss://mock-inbox.test"], {
+    // Fetch gift wraps for invitee (filter by recipient pubkey in p tag)
+    const giftWraps = eventStore.request({
       kinds: [1059],
       "#p": [inviteePubkey],
     });
@@ -186,7 +204,7 @@ describe("End-to-end: invite, join, first message", () => {
       throw new Error("Marmot Group Data extension not found");
     }
     const nostrGroupIdHex = bytesToHex(marmotGroupData.nostrGroupId);
-    const groupEvents = await mockNetwork.request(["wss://mock-relay.test"], {
+    const groupEvents = eventStore.request({
       kinds: [GROUP_EVENT_KIND],
       "#h": [nostrGroupIdHex],
     });
@@ -228,10 +246,10 @@ describe("End-to-end: invite, join, first message", () => {
 
     // Step 7: Admin receives and decrypts the message
     // Fetch new group events (the application message)
-    const newGroupEvents = await mockNetwork.request(
-      ["wss://mock-relay.test"],
-      { kinds: [GROUP_EVENT_KIND], "#h": [nostrGroupIdHex] },
-    );
+    const newGroupEvents = eventStore.request({
+      kinds: [GROUP_EVENT_KIND],
+      "#h": [nostrGroupIdHex],
+    });
 
     // Process the new events
     const receivedMessages: Rumor[] = [];

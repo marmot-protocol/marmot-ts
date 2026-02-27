@@ -25,6 +25,8 @@ describe("exports", () => {
         "MARMOT_GROUP_DATA_VERSION",
         "MarmotClient",
         "MarmotGroup",
+        "NostrGroupTransport",
+        "NostrInviteTransport",
         "Proposals",
         "WELCOME_EVENT_KIND",
         "calculateKeyPackageRef",

@@ -23,13 +23,13 @@ import {
 } from "ts-mls/incomingMessageAction.js";
 import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
 import { type LeafIndex, toLeafIndex } from "ts-mls/treemath.js";
+
 import {
   extractMarmotGroupData,
   serializeClientState,
 } from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
 import {
-  createGroupEvent,
   GroupMessagePair,
   readGroupMessages,
   serializeApplicationRumor,
@@ -38,11 +38,10 @@ import {
 import { getKeyPackage } from "../../core/key-package-event.js";
 import { isPrivateMessage } from "../../core/message.js";
 import { MarmotGroupData } from "../../core/protocol.js";
-import { createWelcomeRumor } from "../../core/welcome.js";
 import { GroupStateStore } from "../../store/group-state-store.js";
-import { createGiftWrap, hasAck } from "../../utils/index.js";
 import { NoGroupRelaysError, NoMarmotGroupDataError } from "../errors.js";
-import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
+import type { GroupTransport } from "../transports/group-transport.js";
+import type { InviteTransport } from "../transports/invite-transport.js";
 import { marmotAuthService } from "../../core/auth-service.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 
@@ -88,8 +87,18 @@ export type MarmotGroupOptions<
   signer: EventSigner;
   /** The ciphersuite implementation to use for the group */
   ciphersuite: CiphersuiteImpl;
-  /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
-  network: NostrNetworkInterface;
+  /**
+   * Transport for sending and receiving raw MLS messages on the group's relay
+   * set. Handles NIP-44 encryption/decryption and kind 445 Nostr event
+   * wrapping internally.
+   */
+  groupTransport: GroupTransport;
+  /**
+   * Transport for delivering MLS Welcome messages to new members.
+   * Handles credential resolution, gift wrapping, and kind 1059 publishing
+   * internally.
+   */
+  inviteTransport: InviteTransport;
   /** The storage interface for the groups application message history (optional) */
   history?: THistory | GroupHistoryFactory<THistory>;
 };
@@ -180,8 +189,17 @@ export class MarmotGroup<
   /** The ciphersuite implementation to use for the group */
   readonly ciphersuite: CiphersuiteImpl;
 
-  /** The nostr relay pool to use for the group */
-  readonly network: NostrNetworkInterface;
+  /**
+   * Transport for sending and receiving raw MLS messages.
+   * Handles NIP-44 encryption and kind 445 event wrapping.
+   */
+  readonly groupTransport: GroupTransport;
+
+  /**
+   * Transport for delivering MLS Welcome messages to new members.
+   * Handles gift wrapping and kind 1059 publishing.
+   */
+  readonly inviteTransport: InviteTransport;
 
   /** The storage interface for the groups application message history */
   readonly history: THistory;
@@ -239,12 +257,11 @@ export class MarmotGroup<
    *
    * Unlike {@link commit}, this operation is allowed for non-admin members.
    */
-  async selfUpdate(): Promise<Record<string, PublishResponse>> {
+  async selfUpdate(): Promise<void> {
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
+    if (!this.relays) throw new NoGroupRelaysError();
 
     // Create a commit with explicitly empty proposals. In ts-mls, this results in
     // a self-update commit that includes an UpdatePath (rotating leaf secrets).
@@ -259,22 +276,12 @@ export class MarmotGroup<
       extraProposals: [],
     });
 
-    const commitEvent = await createGroupEvent({
-      message: commit,
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-    });
-
-    const response = await this.network.publish(relays, commitEvent);
-    if (!hasAck(response)) {
-      throw new Error("Failed to publish commit event: no relay acknowledged");
-    }
+    // Send the MLS commit message via transport
+    await this.groupTransport.send(commit, this.state);
 
     // Advance local state after publish.
     this.state = newState;
     await this.save();
-
-    return response;
   }
 
   constructor(state: ClientState, options: MarmotGroupOptions<THistory>) {
@@ -283,7 +290,8 @@ export class MarmotGroup<
     this.stateStore = options.stateStore;
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
-    this.network = options.network;
+    this.groupTransport = options.groupTransport;
+    this.inviteTransport = options.inviteTransport;
 
     // Create the history store (optional)
     if (options.history) {
@@ -330,27 +338,20 @@ export class MarmotGroup<
     this.emit("stateSaved", this);
   }
 
-  /** Publish an event to the group relays */
-  async publish(event: NostrEvent): Promise<Record<string, PublishResponse>> {
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
-    return await this.network.publish(relays, event);
-  }
-
   /**
    * Creates and publishes a proposal as a private MLS message.
-   * @returns Promise resolving to the publish response from the relays
+   * @returns Promise resolving when the proposal has been sent
    */
   async propose<Args extends unknown[], T extends Proposal | Proposal[]>(
     action: ProposalBuilder<Args, T>,
     ...args: Args
-  ): Promise<Record<string, PublishResponse>>;
+  ): Promise<void>;
   async propose<Args extends unknown[], T extends Proposal | Proposal[]>(
     action: ProposalAction<T>,
-  ): Promise<Record<string, PublishResponse>>;
+  ): Promise<void>;
   async propose<Args extends unknown[], T extends Proposal | Proposal[]>(
     ...args: Args
-  ): Promise<Record<string, PublishResponse>> {
+  ): Promise<void> {
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
@@ -374,26 +375,17 @@ export class MarmotGroup<
     // Handle both single proposals and arrays of proposals
     const proposalArray = Array.isArray(proposals) ? proposals : [proposals];
 
-    // Send all proposals and collect responses
-    const responses: Record<string, PublishResponse> = {};
     for (const proposal of proposalArray) {
-      const response = await this.sendProposal(proposal as Proposal);
-      // Merge responses (later responses override earlier ones for the same relay)
-      Object.assign(responses, response);
+      await this.sendProposal(proposal as Proposal);
     }
-
-    return responses;
   }
 
-  /** Sends a proposal to the group relays */
-  async sendProposal(
-    proposal: Proposal,
-  ): Promise<Record<string, PublishResponse>> {
+  /** Sends a proposal to the group via the group transport */
+  async sendProposal(proposal: Proposal): Promise<void> {
     // NOTE: We don't update state here because:
     // 1. The proposal will be received back from relays and processed via ingest()
     // 2. When processed via ingest(), it will be added to state.unappliedProposals
     // 3. If you need to commit immediately with this proposal, pass it explicitly to commit()
-    // In v2, createProposal takes a single params object with context
     const { message } = await createProposal({
       context: {
         cipherSuite: this.ciphersuite,
@@ -405,15 +397,7 @@ export class MarmotGroup<
       wireAsPublicMessage: false,
     });
 
-    // Wrap the message in a group event
-    const proposalEvent = await createGroupEvent({
-      message,
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-    });
-
-    // Publish to the group's relays
-    return await this.publish(proposalEvent);
+    await this.groupTransport.send(message, this.state);
   }
 
   /**
@@ -424,16 +408,13 @@ export class MarmotGroup<
    * according to the Marmot spec.
    *
    * @param rumor - The unsigned Nostr event (rumor) to send as an application message
-   * @returns Promise resolving to the publish response from the relays
+   * @returns Promise resolving when the message has been sent
    */
-  async sendApplicationRumor(
-    rumor: Rumor,
-  ): Promise<Record<string, PublishResponse>> {
+  async sendApplicationRumor(rumor: Rumor): Promise<void> {
     // Serialize the Nostr event (rumor) to application data according to the Marmot spec
     const applicationData = serializeApplicationRumor(rumor);
 
     // Create the application message using ts-mls
-    // In v2, createApplicationMessage takes a single params object with context
     const { newState, message } = await createApplicationMessage({
       context: {
         cipherSuite: this.ciphersuite,
@@ -444,36 +425,13 @@ export class MarmotGroup<
       message: applicationData,
     });
 
-    // The message returned is the MLS message (not privateMessage directly)
-    const mlsMessage = message;
+    // Send via transport using this.state (not newState) so the transport
+    // derives the encryption key for the current epoch, not the rotated one.
+    await this.groupTransport.send(message, this.state);
 
-    // Wrap the message in a group event
-    // Use this.state (not newState) to get the exporter_secret for the current epoch
-    const applicationEvent = await createGroupEvent({
-      message: mlsMessage,
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-    });
-
-    // Publish to the group's relays
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
-    const response = await this.network.publish(relays, applicationEvent);
-    if (!hasAck(response)) {
-      const errors = Object.values(response)
-        .filter((r) => !r.ok && r.message)
-        .map((r) => r.message)
-        .join("; ");
-      throw new Error(
-        `Failed to publish application message: ${errors || "no relay acknowledged"}`,
-      );
-    }
-
-    // Update the group state after successful publish
+    // Update the group state after successful send
     // Application messages update state for forward secrecy (key schedule rotation)
     this.state = newState;
-
-    return response;
   }
 
   /**
@@ -500,7 +458,7 @@ export class MarmotGroup<
     )[];
     proposalRefs?: string[];
     welcomeRecipients?: WelcomeRecipient[];
-  }): Promise<Record<string, PublishResponse>> {
+  }): Promise<void> {
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
@@ -559,7 +517,6 @@ export class MarmotGroup<
     }
 
     // Create the commit
-    // In v2, createCommit takes a single params object with context
     const { commit, newState, welcome } = await createCommit({
       context: {
         cipherSuite: this.ciphersuite,
@@ -569,31 +526,12 @@ export class MarmotGroup<
       ...commitOptions,
     });
 
-    // Wrap the commit in a group event
-    // Use this.state (not newState) to get the exporter_secret for the current epoch
-    // This ensures all members at the current epoch can decrypt the commit
-    const commitEvent = await createGroupEvent({
-      message: commit,
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-    });
-
-    // Publish to the group's relays.
-    // MIP-02 REQUIRES: Commit MUST be published and acknowledged by relays BEFORE sending Welcome messages.
-    // This ordering is critical for protocol correctness - new members must be able to fetch the commit
-    // that added them before processing their Welcome.
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
-    const response = await this.network.publish(relays, commitEvent);
-    if (!hasAck(response)) {
-      const errors = Object.values(response)
-        .filter((r) => !r.ok && r.message)
-        .map((r) => r.message)
-        .join("; ");
-      throw new Error(
-        `Failed to publish commit: ${errors || "no relay acknowledged"}`,
-      );
-    }
+    // Send the commit via transport.
+    // MIP-02 REQUIRES: Commit MUST be published and acknowledged by relays BEFORE
+    // sending Welcome messages. The transport's send() throws if no relay
+    // acknowledges, ensuring ordering is preserved.
+    // Use this.state (pre-advance) so the transport derives the current epoch key.
+    await this.groupTransport.send(commit, this.state);
 
     // Update the group state after successful publish
     this.state = newState;
@@ -601,80 +539,24 @@ export class MarmotGroup<
     // Persist local-authoritative epoch transition immediately.
     await this.save();
 
-    // If new users were added, send welcome events
+    // If new users were added, send welcome events via the invite transport
     // The commit has been published and acked, so it's safe to send Welcomes now (MIP-02 compliance)
     if (
       welcome &&
       options?.welcomeRecipients &&
       options.welcomeRecipients.length > 0
     ) {
-      console.log(
-        `[MarmotGroup.commit] Sending Welcome messages to ${options.welcomeRecipients.length} recipient(s)`,
-      );
-
-      // Send all welcome events in parallel
-      // In v2, welcome is wrapped in MlsWelcomeMessage, need to access welcome.welcome
-      const innerWelcome = welcome?.welcome;
-      if (!innerWelcome) return response;
-
       const welcomeResults = await Promise.allSettled(
         options.welcomeRecipients.map(async (recipient) => {
-          const welcomeRumor = createWelcomeRumor({
-            welcome: innerWelcome,
-            author: actorPubkey,
-            groupRelays: groupData.relays,
+          // Resolve the recipient's MLS credential from their KeyPackage event
+          const keyPackage = getKeyPackage(recipient.keyPackageEvent);
+          const recipientCredential = keyPackage.leafNode.credential;
+
+          // Pass the full MlsWelcomeMessage to the transport; it extracts the
+          // inner Welcome and handles all Nostr delivery details.
+          await this.inviteTransport.send(recipientCredential, welcome, {
             keyPackageEventId: recipient.keyPackageEventId,
-            keyPackageEvent: recipient.keyPackageEvent,
           });
-
-          // Gift wrap the welcome event to the newly added user
-          const giftWrapEvent = await createGiftWrap({
-            rumor: welcomeRumor,
-            recipient: recipient.pubkey,
-            signer: this.signer,
-          });
-
-          // Get the newly added user's inbox relays using the GroupNostrInterface
-          // Fallback to group relays if inbox relays are not available
-          let inboxRelays: string[];
-          try {
-            inboxRelays = await this.network.getUserInboxRelays(
-              recipient.pubkey,
-            );
-            console.log(
-              `[MarmotGroup.commit] Retrieved inbox relays for recipient:`,
-              inboxRelays,
-            );
-          } catch (error) {
-            console.warn(
-              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${recipient.pubkey.slice(
-                0,
-                16,
-              )}...:`,
-              error,
-            );
-            // Fallback to group relays
-            inboxRelays = groupData.relays || [];
-          }
-
-          if (inboxRelays.length === 0) {
-            throw new Error(
-              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(0, 16)}...`,
-            );
-          }
-
-          // Welcome is the most critical delivery — new members can't join without it.
-          const publishResult = await this.network.publish(
-            inboxRelays,
-            giftWrapEvent,
-          );
-
-          console.log(
-            `[MarmotGroup.commit] Gift wrap publish result:`,
-            publishResult,
-          );
-
-          return publishResult;
         }),
       );
 
@@ -701,17 +583,11 @@ export class MarmotGroup<
         });
 
       if (failureDetails.length > 0) {
-        console.error(
-          `[MarmotGroup.commit] ${failureDetails.length}/${options.welcomeRecipients.length} Welcome(s) failed to deliver:`,
-          failureDetails,
-        );
         throw new Error(
           `Failed to deliver ${failureDetails.length}/${options.welcomeRecipients.length} Welcome message(s): ${failureDetails.join("; ")}`,
         );
       }
     }
-
-    return response;
   }
 
   /**
@@ -722,15 +598,13 @@ export class MarmotGroup<
    * 2. Validates that the credential identity matches the event pubkey
    * 3. Builds an Add proposal using the KeyPackage
    * 4. Commits the proposal
-   * 5. After commit ack, sends a Welcome message to the invitee via NIP-59 gift wrap
+   * 5. After commit ack, sends a Welcome message to the invitee via the invite transport
    *
    * @param keyPackageEvent - The KeyPackage event (kind 443) for the user to invite
-   * @returns Promise resolving to the publish response from the relays
+   * @returns Promise resolving when the invite commit and Welcome have been sent
    * @throws Error if the event is not kind 443 or if the credential identity doesn't match
    */
-  async inviteByKeyPackageEvent(
-    keyPackageEvent: NostrEvent,
-  ): Promise<Record<string, PublishResponse>> {
+  async inviteByKeyPackageEvent(keyPackageEvent: NostrEvent): Promise<void> {
     // Validate the event is a KeyPackage event (kind 443)
     if (keyPackageEvent.kind !== 443) {
       throw new Error(
@@ -753,7 +627,7 @@ export class MarmotGroup<
     const proposalAction = proposeInviteUser(keyPackageEvent);
 
     // Commit with the proposal and explicit welcome recipient
-    return await this.commit({
+    await this.commit({
       extraProposals: [proposalAction],
       welcomeRecipients: [
         {
@@ -889,7 +763,6 @@ export class MarmotGroup<
         // - Proposals: Adds them to state.unappliedProposals (keyed by proposal reference)
         // - Application messages: Decrypts content and returns it
         // - Both update state as needed (for forward secrecy)
-        // In v2, processMessage takes a single params object with context
         const result = await processMessage({
           context: {
             cipherSuite: this.ciphersuite,
@@ -970,7 +843,6 @@ export class MarmotGroup<
         // - Verifies message authenticity and sender
         // - Resolves proposal references from state.unappliedProposals (if needed)
         // - Applies the commit (updates ratchet tree, advances epoch, rotates keys)
-        // In v2, processMessage takes a single params object with context
         const result = await processMessage({
           context: {
             cipherSuite: this.ciphersuite,

@@ -15,7 +15,8 @@ import {
   createAdminCommitPolicyCallback,
   MarmotGroup,
 } from "../client/group/marmot-group.js";
-import type { NostrNetworkInterface } from "../client/nostr-interface.js";
+import type { GroupTransport } from "../client/transports/group-transport.js";
+import type { InviteTransport } from "../client/transports/invite-transport.js";
 import { SerializedClientState } from "../core/client-state.js";
 import { createCredential } from "../core/credential.js";
 import { createSimpleGroup } from "../core/group.js";
@@ -23,6 +24,20 @@ import { generateKeyPackage } from "../core/key-package.js";
 import type { GroupStateStoreBackend } from "../store/group-state-store.js";
 import { GroupStateStore } from "../store/group-state-store.js";
 import type { KeyValueStoreBackend } from "../utils/key-value.js";
+
+/** Minimal no-op transports for tests that only exercise ingest()/processMessage() */
+const stubGroupTransport: GroupTransport = {
+  async send() {
+    throw new Error("send not used in this test");
+  },
+  async *subscribe() {},
+};
+
+const stubInviteTransport: InviteTransport = {
+  async send() {
+    throw new Error("send not used in this test");
+  },
+};
 
 class MemoryBackend<T> implements KeyValueStoreBackend<T> {
   private map = new Map<string, T>();
@@ -171,21 +186,6 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
       adminStateEpoch1 as any,
     );
 
-    const network: NostrNetworkInterface = {
-      request: async () => {
-        throw new Error("not used");
-      },
-      subscription: () => {
-        throw new Error("not used");
-      },
-      publish: async () => {
-        throw new Error("not used");
-      },
-      getUserInboxRelays: async () => {
-        throw new Error("not used");
-      },
-    };
-
     const signer = {
       getPublicKey: async () => adminPubkey,
     } as EventSigner;
@@ -194,7 +194,8 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
       stateStore: store,
       signer,
       ciphersuite: impl,
-      network,
+      groupTransport: stubGroupTransport,
+      inviteTransport: stubInviteTransport,
     });
 
     // Use the same policy MarmotGroup.ingest() uses, but call ts-mls directly.
@@ -293,21 +294,6 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
       adminStateEpoch1 as any,
     );
 
-    const network: NostrNetworkInterface = {
-      request: async () => {
-        throw new Error("not used");
-      },
-      subscription: () => {
-        throw new Error("not used");
-      },
-      publish: async () => {
-        throw new Error("not used");
-      },
-      getUserInboxRelays: async () => {
-        throw new Error("not used");
-      },
-    };
-
     const signer = {
       getPublicKey: async () => adminPubkey,
     } as EventSigner;
@@ -316,7 +302,8 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
       stateStore: store,
       signer,
       ciphersuite: impl,
-      network,
+      groupTransport: stubGroupTransport,
+      inviteTransport: stubInviteTransport,
     });
 
     const adminCallback = createAdminCommitPolicyCallback({
@@ -415,30 +402,16 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
       memberStateEpoch1 as any,
     );
 
-    const network: NostrNetworkInterface = {
-      request: async () => {
-        throw new Error("not used");
-      },
-      subscription: () => {
-        throw new Error("not used");
-      },
-      publish: async () => {
-        throw new Error("not used");
-      },
-      getUserInboxRelays: async () => {
-        throw new Error("not used");
-      },
-    };
-
     const signer = {
-      getPublicKey: async () => memberPubkey,
+      getPublicKey: async () => adminPubkey,
     } as EventSigner;
 
     const group = new MarmotGroup(memberStateEpoch1, {
       stateStore: store,
       signer,
       ciphersuite: impl,
-      network,
+      groupTransport: stubGroupTransport,
+      inviteTransport: stubInviteTransport,
     });
 
     const initialEpoch = group.state.groupContext.epoch;

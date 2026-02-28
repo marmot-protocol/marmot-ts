@@ -1,11 +1,18 @@
-import { NostrEvent } from "applesauce-core/helpers/event";
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { NostrEvent } from "applesauce-core/helpers/event";
+
+import { EventTemplate } from "nostr-tools";
+import {
+  CustomExtension,
+  KeyPackage,
+  decode,
+  defaultCredentialTypes,
+  encode,
+} from "ts-mls";
 import { CiphersuiteId, ciphersuites } from "ts-mls/crypto/ciphersuite.js";
-import { protocolVersions } from "ts-mls/protocolVersion.js";
-import { CustomExtension, defaultCredentialTypes } from "ts-mls";
 import { greaseValues } from "ts-mls/grease.js";
-import { KeyPackage, decode, encode } from "ts-mls";
 import { keyPackageDecoder, keyPackageEncoder } from "ts-mls/keyPackage.js";
+import { protocolVersions } from "ts-mls/protocolVersion.js";
 import {
   decodeContent,
   encodeContent,
@@ -25,7 +32,6 @@ import {
   KeyPackageClient,
   MLS_VERSIONS,
 } from "./protocol.js";
-import { EventTemplate } from "nostr-tools";
 
 export type DeleteKeyPackageEventInput = string | NostrEvent;
 
@@ -119,12 +125,7 @@ export function getKeyPackageExtensions(
 /** Gets the relays for a kind 443 event */
 export function getKeyPackageRelays(event: NostrEvent): string[] | undefined {
   const tag = event.tags.find((t) => t[0] === KEY_PACKAGE_RELAYS_TAG);
-  if (!tag) {
-    console.warn(
-      "KeyPackage event missing relays tag (MIP-00 expects published keypackages to include relays)",
-    );
-    return undefined;
-  }
+  if (!tag) return;
   return tag.slice(1).filter(isValidRelayUrl).map(normalizeRelayUrl);
 }
 
@@ -171,16 +172,6 @@ async function createKeyPackageEventInternal(
   options: CreateKeyPackageEventOptions,
 ): Promise<EventTemplate> {
   const { keyPackage, relays, client } = options;
-
-  // MIP-00: Published KeyPackage events SHOULD include a relays tag so inviters
-  // know where to fetch commits and how to request deletion. We do not
-  // hard-enforce this because some callers may generate drafts/out-of-band
-  // key packages.
-  if (!relays || relays.length === 0) {
-    console.warn(
-      "createKeyPackageEvent: no relays provided; omitting relays tag (may reduce interoperability)",
-    );
-  }
 
   // Serialize the key package according to RFC 9420
   const encodedBytes = encode(keyPackageEncoder, keyPackage);

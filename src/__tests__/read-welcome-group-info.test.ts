@@ -168,7 +168,8 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
     );
 
     // Generate a completely different (unrelated) key package
-    const otherPubkey = (await PrivateKeyAccount.generateNew().signer.getPublicKey());
+    const otherPubkey =
+      await PrivateKeyAccount.generateNew().signer.getPublicKey();
     const wrongKeyPackage = await generateKeyPackage({
       credential: createCredential(otherPubkey),
       ciphersuiteImpl: ciphersuite,

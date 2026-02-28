@@ -19,6 +19,9 @@ import {
   StoredKeyPackage,
 } from "../store/key-package-store.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
+import { logger } from "../utils/debug.js";
+
+const log = logger.extend("key-packages");
 
 /**
  * A key package entry as returned by {@link KeyPackageManager.list}
@@ -151,6 +154,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       );
     }
 
+    log("creating key package on relays: %O", options.relays);
     const pubkey = await this.signer.getPublicKey();
     const credential = createCredential(pubkey);
     const ciphersuite = await this.#getCiphersuiteImpl(options.ciphersuite);
@@ -180,6 +184,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     const refHex = bytesToHex(stored.keyPackageRef);
     await this.store.addPublished(refHex, signed);
     this.emit("keyPackagePublished", refHex, signed.id, options.relays);
+    log("created and published key package %s", refHex);
 
     return {
       keyPackageRef: stored.keyPackageRef,
@@ -211,6 +216,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     options?: RotateKeyPackageOptions,
   ): Promise<ListedKeyPackage> {
     const refHex = typeof ref === "string" ? ref : bytesToHex(ref);
+    log("rotating key package %s", refHex);
 
     const existing = await this.store.getKeyPackage(ref);
     if (!existing) {
@@ -271,6 +277,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * @param ref - The key package reference to remove
    */
   async remove(ref: Uint8Array | string): Promise<void> {
+    const refHex = typeof ref === "string" ? ref : bytesToHex(ref);
+    log("removing key package %s from local store", refHex);
     await this.store.remove(ref);
   }
 
@@ -290,6 +298,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     refs: Uint8Array | string | Array<Uint8Array | string>,
   ): Promise<void> {
     const refList = Array.isArray(refs) ? refs : [refs];
+    log("purging %d key package(s)", refList.length);
 
     // Collect all event IDs and relays across the provided refs
     const allEventIds: string[] = [];
@@ -342,6 +351,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
 
     const refHex = getKeyPackageReference(event);
     if (!refHex) return false;
+
+    log("tracking observed key package event %s (ref: %s)", event.id, refHex);
 
     try {
       await this.store.addPublished(refHex, event);

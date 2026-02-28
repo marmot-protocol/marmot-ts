@@ -44,6 +44,9 @@ import {
 } from "./group/marmot-group.js";
 import { KeyPackageManager } from "./key-package-manager.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
+import { logger } from "../utils/debug.js";
+
+const log = logger.extend("client");
 
 export type MarmotClientOptions<
   THistory extends BaseGroupHistory | undefined = undefined,
@@ -177,6 +180,7 @@ export class MarmotClient<
     groupId: Uint8Array | string,
   ): Promise<MarmotGroup<THistory>> {
     const id = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
+    log("loading group %s from store", bytesToHex(id));
     const stateBytes = await this.groupStateStore.get(id);
 
     if (!stateBytes) {
@@ -235,6 +239,7 @@ export class MarmotClient<
     state: ClientState,
   ): Promise<MarmotGroup<THistory>> {
     const id = bytesToHex(state.groupContext.groupId);
+    log("importing group %s from ClientState", id);
     if (await this.groupStateStore.has(state.groupContext.groupId)) {
       throw new Error(`Group ${id} already exists`);
     }
@@ -269,6 +274,7 @@ export class MarmotClient<
   /** Destroys a group and purges the group history */
   async destroyGroup(groupId: Uint8Array | string): Promise<void> {
     const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
+    log("destroying group %s", id);
 
     // Get the existing instance or load a new one
     const group = this.#groups.get(id) || (await this.loadGroup(groupId));
@@ -294,6 +300,7 @@ export class MarmotClient<
       ciphersuite?: CiphersuiteName;
     },
   ): Promise<MarmotGroup<THistory>> {
+    log("creating group %o", name);
     const ciphersuiteImpl = await this.getCiphersuiteImpl(options?.ciphersuite);
 
     // generate a new key package
@@ -331,6 +338,7 @@ export class MarmotClient<
     // Save the group to the cache
     this.setGroupInstance(group);
     this.emit("groupCreated", group);
+    log("created group %s", group.idStr);
 
     return group;
   }
@@ -397,6 +405,7 @@ export class MarmotClient<
     consumedKeyPackageRef: Uint8Array | null;
   }> {
     const { welcomeRumor } = options;
+    log("joining group from welcome rumor %s", welcomeRumor.id);
 
     // Decode the Welcome message from the kind 444 event
     const welcome = getWelcome(welcomeRumor);
@@ -538,6 +547,7 @@ export class MarmotClient<
     // Add the group to the cache
     this.setGroupInstance(group);
     this.emit("groupJoined", group);
+    log("joined group %s", group.idStr);
 
     // MIP-02 SHOULD: callers are responsible for calling group.selfUpdate() after
     // joining to rotate leaf key material for forward secrecy. Doing it automatically

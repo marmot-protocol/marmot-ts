@@ -1,21 +1,23 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { EventSigner } from "applesauce-core/event-factory";
 import { bytesToHex, type NostrEvent } from "applesauce-core/helpers/event";
+import { Debugger } from "debug";
 import { EventEmitter } from "eventemitter3";
 import {
   CiphersuiteImpl,
   ClientState,
+  contentTypes,
   createApplicationMessage,
   createCommit,
   CreateCommitOptions,
   createProposal,
-  contentTypes,
   CryptoProvider,
+  defaultCryptoProvider,
+  MlsMessage,
   processMessage,
   type ProcessMessageResult,
   Proposal,
   wireformats,
-  defaultCryptoProvider,
 } from "ts-mls";
 import {
   acceptAll,
@@ -23,8 +25,10 @@ import {
 } from "ts-mls/incomingMessageAction.js";
 import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
 import { type LeafIndex, toLeafIndex } from "ts-mls/treemath.js";
+
+import { marmotAuthService } from "../../core/auth-service.js";
 import {
-  extractMarmotGroupData,
+  getMarmotGroupData,
   serializeClientState,
 } from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
@@ -40,11 +44,21 @@ import { isPrivateMessage } from "../../core/message.js";
 import { MarmotGroupData } from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
 import { GroupStateStore } from "../../store/group-state-store.js";
+import { logger } from "../../utils/debug.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
 import { NoGroupRelaysError, NoMarmotGroupDataError } from "../errors.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
-import { marmotAuthService } from "../../core/auth-service.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
+
+/** Result from ingesting a group event */
+export type IngestResult = {
+  /** The result of processing the event */
+  result: ProcessMessageResult;
+  /** The event that was processed */
+  event: NostrEvent;
+  /** The MLS message that was processed */
+  message: MlsMessage;
+};
 
 /**
  * The minimum interface for a group to store them MLS messages
@@ -206,7 +220,7 @@ export class MarmotGroup<
   }
   get groupData() {
     // If not cached, extract the group data from the state
-    if (!this.#groupData) this.#groupData = extractMarmotGroupData(this.state);
+    if (!this.#groupData) this.#groupData = getMarmotGroupData(this.state);
     return this.#groupData;
   }
   get unappliedProposals() {
@@ -219,7 +233,7 @@ export class MarmotGroup<
    */
   set state(newState: ClientState) {
     // Read new group data from the state
-    this.#groupData = extractMarmotGroupData(newState);
+    this.#groupData = getMarmotGroupData(newState);
 
     // Set new state and mark as dirty
     this.#state = newState;
@@ -232,50 +246,7 @@ export class MarmotGroup<
     return this.groupData?.relays;
   }
 
-  /**
-   * Performs a self-update commit (no proposals) to rotate this member's leaf key material.
-   *
-   * This is required by MIP-02 for forward secrecy after joining from a Welcome.
-   *
-   * Unlike {@link commit}, this operation is allowed for non-admin members.
-   */
-  async selfUpdate(): Promise<Record<string, PublishResponse>> {
-    const groupData = this.groupData;
-    if (!groupData) throw new NoMarmotGroupDataError();
-
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
-
-    // Create a commit with explicitly empty proposals. In ts-mls, this results in
-    // a self-update commit that includes an UpdatePath (rotating leaf secrets).
-    const { commit, newState } = await createCommit({
-      context: {
-        cipherSuite: this.ciphersuite,
-        authService: marmotAuthService,
-      },
-      state: this.state,
-      wireAsPublicMessage: false,
-      ratchetTreeExtension: true,
-      extraProposals: [],
-    });
-
-    const commitEvent = await createGroupEvent({
-      message: commit,
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-    });
-
-    const response = await this.network.publish(relays, commitEvent);
-    if (!hasAck(response)) {
-      throw new Error("Failed to publish commit event: no relay acknowledged");
-    }
-
-    // Advance local state after publish.
-    this.state = newState;
-    await this.save();
-
-    return response;
-  }
+  private log: Debugger;
 
   constructor(state: ClientState, options: MarmotGroupOptions<THistory>) {
     super();
@@ -298,6 +269,8 @@ export class MarmotGroup<
 
     // Set useful fields
     this.idStr = bytesToHex(this.id);
+
+    this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
   }
 
   /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
@@ -335,6 +308,52 @@ export class MarmotGroup<
     const relays = this.relays;
     if (!relays) throw new NoGroupRelaysError();
     return await this.network.publish(relays, event);
+  }
+
+  /**
+   * Performs a self-update commit (no proposals) to rotate this member's leaf key material.
+   *
+   * This is required by MIP-02 for forward secrecy after joining from a Welcome.
+   *
+   * Unlike {@link commit}, this operation is allowed for non-admin members.
+   */
+  async selfUpdate(): Promise<Record<string, PublishResponse>> {
+    this.log("self-update commit");
+    const groupData = this.groupData;
+    if (!groupData) throw new NoMarmotGroupDataError();
+
+    const relays = this.relays;
+    if (!relays) throw new NoGroupRelaysError();
+
+    // Create a commit with explicitly empty proposals. In ts-mls, this results in
+    // a self-update commit that includes an UpdatePath (rotating leaf secrets).
+    const { commit, newState } = await createCommit({
+      context: {
+        cipherSuite: this.ciphersuite,
+        authService: marmotAuthService,
+      },
+      state: this.state,
+      wireAsPublicMessage: false,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    const commitEvent = await createGroupEvent({
+      message: commit,
+      state: this.state,
+      ciphersuite: this.ciphersuite,
+    });
+
+    const response = await this.network.publish(relays, commitEvent);
+    if (!hasAck(response)) {
+      throw new Error("Failed to publish commit event: no relay acknowledged");
+    }
+
+    // Advance local state after publish.
+    this.state = newState;
+    await this.save();
+
+    return response;
   }
 
   /**
@@ -429,6 +448,7 @@ export class MarmotGroup<
   async sendApplicationRumor(
     rumor: Rumor,
   ): Promise<Record<string, PublishResponse>> {
+    this.log("sending application rumor kind:%d", rumor.kind);
     // Serialize the Nostr event (rumor) to application data according to the Marmot spec
     const applicationData = serializeApplicationRumor(rumor);
 
@@ -501,6 +521,11 @@ export class MarmotGroup<
     proposalRefs?: string[];
     welcomeRecipients?: WelcomeRecipient[];
   }): Promise<Record<string, PublishResponse>> {
+    this.log(
+      "committing (%d extra proposals, %d recipients)",
+      options?.extraProposals?.length ?? 0,
+      options?.welcomeRecipients?.length ?? 0,
+    );
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
@@ -608,8 +633,9 @@ export class MarmotGroup<
       options?.welcomeRecipients &&
       options.welcomeRecipients.length > 0
     ) {
-      console.log(
-        `[MarmotGroup.commit] Sending Welcome messages to ${options.welcomeRecipients.length} recipient(s)`,
+      this.log(
+        "Sending Welcome messages to %d recipient(s)",
+        options.welcomeRecipients.length,
       );
 
       // Send all welcome events in parallel
@@ -641,16 +667,11 @@ export class MarmotGroup<
             inboxRelays = await this.network.getUserInboxRelays(
               recipient.pubkey,
             );
-            console.log(
-              `[MarmotGroup.commit] Retrieved inbox relays for recipient:`,
-              inboxRelays,
-            );
+            this.log("Retrieved inbox relays for recipient: %O", inboxRelays);
           } catch (error) {
-            console.warn(
-              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${recipient.pubkey.slice(
-                0,
-                16,
-              )}...:`,
+            this.log(
+              "Failed to get inbox relays for recipient %s...: %O",
+              recipient.pubkey.slice(0, 16),
               error,
             );
             // Fallback to group relays
@@ -669,10 +690,7 @@ export class MarmotGroup<
             giftWrapEvent,
           );
 
-          console.log(
-            `[MarmotGroup.commit] Gift wrap publish result:`,
-            publishResult,
-          );
+          this.log("Gift wrap publish result: %O", publishResult);
 
           return publishResult;
         }),
@@ -701,8 +719,10 @@ export class MarmotGroup<
         });
 
       if (failureDetails.length > 0) {
-        console.error(
-          `[MarmotGroup.commit] ${failureDetails.length}/${options.welcomeRecipients.length} Welcome(s) failed to deliver:`,
+        this.log(
+          "%d/%d Welcome(s) failed to deliver: %O",
+          failureDetails.length,
+          options.welcomeRecipients.length,
           failureDetails,
         );
         throw new Error(
@@ -804,7 +824,7 @@ export class MarmotGroup<
    * @param options - Options for controlling retry behavior
    * @param options.retryCount - Current retry attempt count (internal use)
    * @param options.maxRetries - Maximum number of retry attempts (default: 5)
-   * @yields ProcessMessageResult - Either a new state (from commits/proposals) or an application message
+   * @yields IngestResult - The result of processing the event
    */
   async *ingest(
     events: NostrEvent[],
@@ -812,10 +832,11 @@ export class MarmotGroup<
       retryCount?: number;
       maxRetries?: number;
     },
-  ): AsyncGenerator<ProcessMessageResult> {
+  ): AsyncGenerator<IngestResult> {
     // Set default retry options
     const retryCount = options?.retryCount ?? 0;
     const maxRetries = options?.maxRetries ?? 5;
+    if (retryCount === 0) this.log("ingesting %d event(s)", events.length);
 
     // Check if we've exceeded the maximum retry attempts.
     //
@@ -904,7 +925,7 @@ export class MarmotGroup<
         // Update state if message changed it
         if (result.kind === "newState") {
           this.state = result.newState;
-          yield result;
+          yield { result, event, message };
         } else if (result.kind === "applicationMessage") {
           // Application messages also update state (for forward secrecy)
           this.state = result.newState;
@@ -918,7 +939,7 @@ export class MarmotGroup<
             }
           }
 
-          yield result;
+          yield { result, event, message };
           this.emit("applicationMessage", result.message);
         }
       } catch (error) {
@@ -992,7 +1013,7 @@ export class MarmotGroup<
           // Successfully processed the commit - update our state
           // After each commit, the epoch advances and keys rotate
           this.state = result.newState;
-          yield result;
+          yield { result, event, message };
         }
       } catch (error) {
         // Commit processing failed - add to unreadable for retry
@@ -1025,6 +1046,7 @@ export class MarmotGroup<
 
   /** Destroys the group and purges the group history */
   async destroy() {
+    this.log("destroying group");
     if (this.history) await this.history.purgeMessages();
 
     // Remove the group from the store

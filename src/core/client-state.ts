@@ -1,10 +1,9 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { ClientState, decode, encode, GroupInfo, nodeTypes } from "ts-mls";
 import { defaultClientConfig } from "ts-mls/clientConfig.js";
-import { ClientState, encode, decode, nodeTypes, GroupInfo } from "ts-mls";
-import { clientStateEncoder, clientStateDecoder } from "ts-mls/clientState.js";
+import { clientStateDecoder, clientStateEncoder } from "ts-mls/clientState.js";
 import {
   decodeMarmotGroupData,
-  getMarmotGroupDataExtensionBytes,
   isMarmotGroupDataExtension,
 } from "./marmot-group-data.js";
 import { MarmotGroupData } from "./protocol.js";
@@ -25,11 +24,8 @@ export function getMarmotGroupData(
 
     if (!marmotExtension) return null;
 
-    return decodeMarmotGroupData(
-      getMarmotGroupDataExtensionBytes(marmotExtension),
-    );
+    return decodeMarmotGroupData(marmotExtension.extensionData);
   } catch (error) {
-    console.error("Failed to extract MarmotGroupData:", error);
     return null;
   }
 }

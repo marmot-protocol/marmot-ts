@@ -97,17 +97,16 @@ export function getWelcome(event: NostrEvent | Rumor): Welcome {
     );
   }
   const encodingFormat = getEncodingTag(event);
-  if (encodingFormat !== "base64") {
+  if (encodingFormat !== "base64")
     throw new Error("Invalid welcome event: missing encoding=base64 tag");
-  }
+
   const content = decodeContent(event.content, encodingFormat);
   const mlsMessage = decode(mlsMessageDecoder, content);
   if (!mlsMessage) throw new Error("Failed to decode welcome message");
-  if (mlsMessage.wireformat !== wireformats.mls_welcome) {
+  if (mlsMessage.wireformat !== wireformats.mls_welcome)
     throw new Error(
       `Expected MLSMessage with mls_welcome wireformat, got wireformat ${mlsMessage.wireformat}`,
     );
-  }
 
-  return (mlsMessage as MlsWelcomeMessage).welcome;
+  return mlsMessage.welcome;
 }

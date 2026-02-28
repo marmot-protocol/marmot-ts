@@ -6,6 +6,7 @@ import { KeyPackage, PrivateKeyPackage } from "ts-mls/keyPackage.js";
 import { getKeyPackage } from "../core/key-package-event.js";
 import { calculateKeyPackageRef } from "../core/key-package.js";
 import { KeyValueStoreBackend } from "../utils/key-value.js";
+import { logger } from "../utils/debug.js";
 
 /**
  * A key package that has local private material.
@@ -79,6 +80,8 @@ type KeyPackageStoreEvents = {
   keyPackageAdded: (keyPackage: StoredKeyPackage) => void;
   /** Emitted when a key package is removed */
   keyPackageRemoved: (keyPackageRef: Uint8Array) => void;
+  /** Emitted when a key package is updated (publish event added) */
+  keyPackageUpdated: (keyPackage: StoredKeyPackage) => void;
 };
 
 /**
@@ -111,6 +114,8 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   private backend: KeyPackageStoreBackend;
   private readonly cryptoProvider: CryptoProvider;
 
+  #log = logger.extend("KeyPackageStore");
+
   /**
    * Creates a new KeyPackageStore instance.
    * @param backend - The storage backend to use (e.g., localForage)
@@ -129,12 +134,9 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   private async resolveStorageKey(
     hashOrPackage: Uint8Array | string | KeyPackage,
   ): Promise<string> {
-    if (typeof hashOrPackage === "string") {
-      return hashOrPackage;
-    }
-    if (hashOrPackage instanceof Uint8Array) {
-      return bytesToHex(hashOrPackage);
-    }
+    if (typeof hashOrPackage === "string") return hashOrPackage;
+    if (hashOrPackage instanceof Uint8Array) return bytesToHex(hashOrPackage);
+
     return bytesToHex(
       await calculateKeyPackageRef(hashOrPackage, this.cryptoProvider),
     );
@@ -172,6 +174,10 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
 
     await this.backend.setItem(key, entry);
     this.emit("keyPackageAdded", entry);
+    this.#log(
+      "added %s" + (entry.privatePackage ? " with private key" : ""),
+      key,
+    );
 
     return key;
   }
@@ -189,15 +195,25 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    * @param event - The signed kind-443 Nostr event to record
    * @throws If no entry exists and the event body cannot be decoded as a KeyPackage
    */
-  async addPublished(ref: string, event: NostrEvent): Promise<void> {
-    const existing = await this.backend.getItem(ref);
+  async addPublished(
+    ref: string | Uint8Array,
+    event: NostrEvent,
+  ): Promise<void> {
+    const key = typeof ref === "string" ? ref : bytesToHex(ref);
+    const existing = await this.backend.getItem(key);
 
     if (existing) {
+      // Skip if event is already in array
+      if (existing.published?.some((e) => e.id === event.id)) return;
+
       const updated: StoredKeyPackage = {
         ...existing,
         published: [...(existing.published ?? []), event],
       };
-      await this.backend.setItem(ref, updated);
+
+      await this.backend.setItem(key, updated);
+      this.emit("keyPackageUpdated", updated);
+      this.#log("stored published event %s for %s", event.id, ref);
     } else {
       // No local entry — decode the public key package from the event body.
       // Throws if the event content is not a valid encoded KeyPackage.
@@ -213,8 +229,10 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         publicPackage,
         published: [event],
       };
-      await this.backend.setItem(ref, entry);
+
+      await this.backend.setItem(key, entry);
       this.emit("keyPackageAdded", entry);
+      this.#log("added key package from event %s", event.id);
     }
   }
 
@@ -276,6 +294,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
 
     if (stored) {
       this.emit("keyPackageRemoved", stored.keyPackageRef);
+      this.#log("removed key package %s", key);
     }
   }
 

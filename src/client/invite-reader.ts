@@ -8,14 +8,12 @@ import {
 import { EventEmitter } from "eventemitter3";
 import { WELCOME_EVENT_KIND } from "../core/protocol.js";
 import { getWelcome } from "../core/welcome.js";
-import { logger } from "../utils/debug.js";
-
-const log = logger.extend("invites");
 import type {
   InviteStore,
   ReceivedGiftWrap,
   UnreadInvite,
 } from "../store/invite-store.js";
+import { logger } from "../utils/debug.js";
 
 function isGiftWrap(event: NostrEvent): event is KnownEvent<kinds.GiftWrap> {
   return event.kind === kinds.GiftWrap;
@@ -93,6 +91,8 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
   private signer: EventSigner;
   private store: InviteStore;
 
+  #log = logger.extend("InviteReader");
+
   constructor(options: InviteReaderOptions) {
     super();
     this.signer = options.signer;
@@ -118,7 +118,7 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
     const isSeen = await this.store.seen.getItem(event.id);
     if (isSeen) return false; // Skip duplicate
 
-    log("ingesting gift wrap %s", event.id);
+    this.#log("ingesting gift wrap %s", event.id);
 
     // Mark as seen
     await this.store.seen.setItem(event.id, true);
@@ -176,7 +176,7 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
     if (!giftwrap)
       throw new Error(`Event ${eventId} not found in received store`);
 
-    log("decrypting gift wrap %s", giftwrap.id);
+    this.#log("decrypting gift wrap %s", giftwrap.id);
     try {
       // Decrypt gift wrap (prompts user)
       const rumor = await unlockGiftWrap(giftwrap, this.signer);
@@ -192,7 +192,7 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
       // This will throw if the Welcome is malformed
       getWelcome(rumor);
 
-      log("decrypted gift wrap %s → rumor %s", giftwrap.id, rumor.id);
+      this.#log("decrypted gift wrap %s → rumor %s", giftwrap.id, rumor.id);
 
       // Move to unread state (store rumor directly using rumor ID as key)
       await this.store.unread.setItem(rumor.id, rumor);
@@ -286,7 +286,7 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
    * @param inviteId - The rumor ID (from the welcome rumor)
    */
   async markAsRead(inviteId: string): Promise<void> {
-    log("marking invite %s as read", inviteId);
+    this.#log("marking invite %s as read", inviteId);
     await this.store.unread.removeItem(inviteId);
     this.emit("inviteRead", inviteId);
   }

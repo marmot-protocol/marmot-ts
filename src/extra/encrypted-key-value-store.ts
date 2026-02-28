@@ -4,7 +4,10 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { KeyValueStoreBackend } from "../utils/key-value.js";
 import { utf8ToBytes } from "@noble/hashes/utils.js";
 
+/** A key to store the test value under */
 const TEST_KEY = "__test__";
+
+/** A value to test against to ensure the decryption worked */
 const TEST_VALUE = new TextEncoder().encode("decryption test value");
 
 /**

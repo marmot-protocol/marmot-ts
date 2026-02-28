@@ -21,8 +21,6 @@ import {
 import { NostrNetworkInterface } from "./nostr-interface.js";
 import { logger } from "../utils/debug.js";
 
-const log = logger.extend("key-packages");
-
 /**
  * A key package entry as returned by {@link KeyPackageManager.list}
  * and {@link KeyPackageManager.watchKeyPackages}.
@@ -68,9 +66,11 @@ export type RotateKeyPackageOptions = {
 
 type KeyPackageManagerEvents = {
   /** Emitted when a key package is stored locally */
-  keyPackageAdded: (keyPackage: ListedKeyPackage) => void;
+  keyPackageAdded: (keyPackage: StoredKeyPackage) => void;
   /** Emitted when a key package is removed from local storage */
   keyPackageRemoved: (keyPackageRef: Uint8Array) => void;
+  /** Emitted when a key package is updated */
+  keyPackageUpdated: (keyPackage: StoredKeyPackage) => void;
   /** Emitted when a key package publish is recorded (own publish or observed relay event) */
   keyPackagePublished: (
     refHex: string,
@@ -82,11 +82,6 @@ type KeyPackageManagerEvents = {
 /**
  * Manages the full lifecycle of MLS key packages — local private material and
  * the Nostr kind-443 events that advertise this client to potential inviters.
- *
- * Uses a single {@link KeyPackageStore} backend which stores both private key
- * material and published Nostr events on each {@link StoredKeyPackage} entry.
- * Key packages observed on relays without local private material are tracked
- * via {@link KeyPackageStore.addPublished}, enabling cross-device deletion.
  *
  * @example
  * ```typescript
@@ -111,6 +106,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   private readonly signer: EventSigner;
   private readonly network: NostrNetworkInterface;
 
+  #log = logger.extend("KeyPackageManger");
+
   constructor(options: {
     keyPackageStore: KeyPackageStore;
     signer: EventSigner;
@@ -123,16 +120,14 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
 
     // Forward store events — only surface LocalKeyPackage additions
     this.store.on("keyPackageAdded", (pkg) => {
-      if (pkg.privatePackage === undefined) return;
-      this.emit("keyPackageAdded", {
-        keyPackageRef: pkg.keyPackageRef,
-        publicPackage: pkg.publicPackage,
-        published: pkg.published,
-      });
+      this.emit("keyPackageAdded", pkg);
     });
-    this.store.on("keyPackageRemoved", (ref) => {
-      this.emit("keyPackageRemoved", ref);
-    });
+    this.store.on("keyPackageUpdated", (kp) =>
+      this.emit("keyPackageUpdated", kp),
+    );
+    this.store.on("keyPackageRemoved", (ref) =>
+      this.emit("keyPackageRemoved", ref),
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -148,13 +143,13 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * @throws Error if relays is empty
    */
   async create(options: CreateKeyPackageOptions): Promise<ListedKeyPackage> {
-    if (!options.relays || options.relays.length === 0) {
+    if (!options.relays || options.relays.length === 0)
       throw new Error(
         "At least one relay URL is required to publish a key package",
       );
-    }
 
-    log("creating key package on relays: %O", options.relays);
+    this.#log("creating key package on relays: %O", options.relays);
+
     const pubkey = await this.signer.getPublicKey();
     const credential = createCredential(pubkey);
     const ciphersuite = await this.#getCiphersuiteImpl(options.ciphersuite);
@@ -183,8 +178,9 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     if (!stored) throw new Error("Key package not found after store operation");
     const refHex = bytesToHex(stored.keyPackageRef);
     await this.store.addPublished(refHex, signed);
+
     this.emit("keyPackagePublished", refHex, signed.id, options.relays);
-    log("created and published key package %s", refHex);
+    this.#log("created and published key package %s", refHex);
 
     return {
       keyPackageRef: stored.keyPackageRef,
@@ -216,7 +212,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     options?: RotateKeyPackageOptions,
   ): Promise<ListedKeyPackage> {
     const refHex = typeof ref === "string" ? ref : bytesToHex(ref);
-    log("rotating key package %s", refHex);
+    this.#log("rotating key package %s", refHex);
 
     const existing = await this.store.getKeyPackage(ref);
     if (!existing) {
@@ -278,8 +274,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    */
   async remove(ref: Uint8Array | string): Promise<void> {
     const refHex = typeof ref === "string" ? ref : bytesToHex(ref);
-    log("removing key package %s from local store", refHex);
     await this.store.remove(ref);
+    this.#log("removed key package %s from local store", refHex);
   }
 
   /**
@@ -298,7 +294,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     refs: Uint8Array | string | Array<Uint8Array | string>,
   ): Promise<void> {
     const refList = Array.isArray(refs) ? refs : [refs];
-    log("purging %d key package(s)", refList.length);
+    this.#log("purging %d key package(s)", refList.length);
 
     // Collect all event IDs and relays across the provided refs
     const allEventIds: string[] = [];
@@ -317,11 +313,16 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
 
     // Publish a single kind 5 deletion covering all event IDs, if any
     if (allEventIds.length > 0) {
-      const deleteTemplate = createDeleteKeyPackageEvent({
+      const draft = createDeleteKeyPackageEvent({
         events: allEventIds,
       });
-      const signedDelete = await this.signer.signEvent(deleteTemplate);
-      await this.network.publish([...allRelays], signedDelete);
+      const signed = await this.signer.signEvent(draft);
+      await this.network.publish([...allRelays], signed);
+      this.#log(
+        "published %s delete event for %d key packages",
+        signed.id,
+        allEventIds.length,
+      );
     }
 
     // Remove local private key material for all refs
@@ -351,8 +352,6 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
 
     const refHex = getKeyPackageReference(event);
     if (!refHex) return false;
-
-    log("tracking observed key package event %s (ref: %s)", event.id, refHex);
 
     try {
       await this.store.addPublished(refHex, event);

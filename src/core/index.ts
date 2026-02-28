@@ -10,5 +10,6 @@ export * from "./key-package-event.js";
 export * from "./key-package-relay-list.js";
 export * from "./key-package.js";
 export * from "./marmot-group-data.js";
+export * from "./nostr.js";
 export * from "./protocol.js";
 export * from "./welcome.js";

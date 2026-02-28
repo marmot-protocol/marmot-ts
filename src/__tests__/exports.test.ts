@@ -18,6 +18,7 @@ describe("exports", () => {
         "KEY_PACKAGE_RELAYS_TAG",
         "KEY_PACKAGE_RELAY_LIST_KIND",
         "KEY_PACKAGE_RELAY_LIST_RELAY_TAG",
+        "KeyPackageManager",
         "KeyPackageStore",
         "KeyValueGroupStateBackend",
         "LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE",

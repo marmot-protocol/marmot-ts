@@ -12,10 +12,10 @@ import {
 import { KeyPackage } from "ts-mls";
 import type { CiphersuiteId } from "ts-mls";
 import {
-  createDeleteKeyPackageEvent,
   getKeyPackage,
   getKeyPackageCipherSuiteId,
   getKeyPackageClient,
+  getKeyPackageReference,
   KEY_PACKAGE_KIND,
 } from "../../../../src";
 import CipherSuiteBadge from "../../components/cipher-suite-badge";
@@ -25,7 +25,7 @@ import JsonBlock from "../../components/json-block";
 import { withSignIn } from "../../components/with-signIn";
 import { useObservable, useObservableMemo } from "../../hooks/use-observable";
 import accounts, { keyPackageRelays$, mailboxes$ } from "../../lib/accounts";
-import { keyPackageStore$ } from "../../lib/key-package-store";
+import { marmotClient$ } from "../../lib/marmot-client";
 import { eventStore, pool } from "../../lib/nostr";
 import { getCiphersuiteNameFromId } from "../../lib/ciphersuite";
 
@@ -38,7 +38,6 @@ const relays$ = combineLatest([mailboxes$, keyPackageRelays$]).pipe(
   map(([mailboxes, keyPackageRelays]) => {
     // Key packages are discovered/published via the key package relay list (10051).
     // We still include NIP-65 outboxes to improve discovery reliability.
-    // (No silent fallbacks in publishing flows elsewhere.)
     return relaySet(mailboxes?.outboxes, keyPackageRelays);
   }),
 );
@@ -180,7 +179,7 @@ function KeyPackageCard({
   onToggleSelect,
   onDelete,
 }: KeyPackageCardProps) {
-  const keyPackageStore = useObservable(keyPackageStore$);
+  const client = useObservable(marmotClient$);
   // Subscribe to event updates so that seen relays are updated
   const seenRelays = useObservableMemo(
     () =>
@@ -197,17 +196,17 @@ function KeyPackageCard({
   const [debugModalOpen, setDebugModalOpen] = useState(false);
 
   const cipherSuiteId = getKeyPackageCipherSuiteId(event);
-  const client = getKeyPackageClient(event);
+  const clientInfo = getKeyPackageClient(event);
   const timeAgo = formatTimeAgo(event.created_at);
 
-  // Check if private key exists in local storage
+  // Check if private key exists in local storage via KeyPackageManager
   useEffect(() => {
-    if (!keyPackageStore) return;
+    if (!client) return;
 
     const checkPrivateKey = async () => {
       try {
         const keyPackage = getKeyPackage(event);
-        const exists = await keyPackageStore.has(keyPackage);
+        const exists = await client.keyPackages.store.has(keyPackage);
         setHasPrivateKey(exists);
       } catch (error) {
         console.error("Error checking private key:", error);
@@ -217,7 +216,7 @@ function KeyPackageCard({
       }
     };
     checkPrivateKey();
-  }, [event, keyPackageStore]);
+  }, [event, client]);
 
   return (
     <div
@@ -266,7 +265,7 @@ function KeyPackageCard({
               <div>
                 <div className="label-text opacity-60 mb-1">Client</div>
                 <span className="badge badge-outline">
-                  {client?.name || "Unknown"}
+                  {clientInfo?.name || "Unknown"}
                 </span>
               </div>
 
@@ -549,7 +548,7 @@ function ConfirmationDialog({
 function KeyPackageManager() {
   // Observables
   const keyPackages = useObservable(keyPackageTimeline$);
-  const keyPackageStore = useObservable(keyPackageStore$);
+  const client = useObservable(marmotClient$);
 
   // Fetch key packages from relays
   useObservable(keyPackageSubscription$);
@@ -584,8 +583,8 @@ function KeyPackageManager() {
       const suite = getKeyPackageCipherSuiteId(pkg);
       if (suite !== undefined) suites.add(suite);
 
-      const client = getKeyPackageClient(pkg);
-      if (client?.name) clients.add(client.name);
+      const clientInfo = getKeyPackageClient(pkg);
+      if (clientInfo?.name) clients.add(clientInfo.name);
     });
 
     return {
@@ -661,9 +660,8 @@ function KeyPackageManager() {
   };
 
   const handleConfirmDelete = async () => {
-    const account = accounts.active;
-    if (!account) {
-      setDeleteError("No active account");
+    if (!client) {
+      setDeleteError("No active client");
       return;
     }
 
@@ -671,47 +669,26 @@ function KeyPackageManager() {
       setIsDeleting(true);
       setDeleteError(null);
 
-      if (!relays || relays.length === 0)
-        throw new Error(
-          "No relays available for publishing deletion event. Configure kind 10051 (and NIP-65 outboxes) first.",
-        );
-
       const eventsToDelete = confirmDialog.events;
 
-      // 1. Create deletion event
-      const draft = createDeleteKeyPackageEvent({
-        events: eventsToDelete,
-      });
-
-      // 2. Sign the event
-      const signed = await account.signEvent(draft);
-
-      // 4. Add to event store so UI can update
-      eventStore.add(signed);
-
-      // 5. Publish deletion event to relays
-      const results = await pool.publish(relays, signed);
-      for (const result of results) {
-        if (result.ok) {
-          console.log("Published deletion to", result.from);
-        } else {
-          console.error(
-            "Failed to publish deletion to",
-            result.from,
-            result.message,
-          );
-        }
+      // Track all events in the KeyPackageManager so it records their relay event IDs.
+      // This is necessary for purge() to know which event IDs to include in the
+      // kind-5 deletion and which relays to publish it to.
+      for (const event of eventsToDelete) {
+        await client.keyPackages.track(event);
       }
 
-      // 6. Remove from local storage
+      // Collect the keyPackageRef hex strings from the `i` tag of each event
+      const refs: string[] = [];
       for (const event of eventsToDelete) {
-        try {
-          const keyPackage = getKeyPackage(event);
-          await keyPackageStore?.remove(keyPackage);
-          console.log("Removed from local storage:", event.id);
-        } catch (err) {
-          console.error("Failed to remove from local storage:", event.id, err);
-        }
+        const refHex = getKeyPackageReference(event);
+        if (refHex) refs.push(refHex);
+      }
+
+      if (refs.length > 0) {
+        // purge() publishes a kind-5 deletion event to all recorded relays
+        // and removes local private key material for each ref.
+        await client.keyPackages.purge(refs);
       }
 
       // Clear selection
@@ -858,7 +835,7 @@ function KeyPackageManager() {
       <ConfirmationDialog
         isOpen={confirmDialog.isOpen}
         title="Delete Key Packages"
-        message={`Are you sure you want to delete ${confirmDialog.events.length} key package${confirmDialog.events.length !== 1 ? "s" : ""}? This will remove them from relays and local storage.`}
+        message={`Are you sure you want to delete ${confirmDialog.events.length} key package${confirmDialog.events.length !== 1 ? "s" : ""}? This will publish a deletion event to relays and remove local private key material.`}
         onConfirm={handleConfirmDelete}
         onCancel={handleCancelDelete}
         isLoading={isDeleting}

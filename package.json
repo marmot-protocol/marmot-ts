@@ -14,7 +14,11 @@
     "release": "pnpm build && changeset publish --provenance",
     "lint": "prettier --check .",
     "format": "prettier --write .",
-    "test": "vitest"
+    "test": "vitest",
+    "docs": "vitepress dev",
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
   },
   "repository": {
     "type": "git",
@@ -86,6 +90,7 @@
     "prettier": "^3.8.1",
     "rimraf": "~6.0.1",
     "typescript": "~5.9.3",
+    "vitepress": "2.0.0-alpha.16",
     "vitest": "^3.2.4"
   }
 }

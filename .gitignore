@@ -6,9 +6,10 @@ dist
 .fdignore
 lancedb
 models
-docs
 mcp.json
 plans
+
+.vitepress/cache
 
 # Ignore agent references
 references/

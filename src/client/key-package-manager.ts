@@ -106,7 +106,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   private readonly signer: EventSigner;
   private readonly network: NostrNetworkInterface;
 
-  #log = logger.extend("KeyPackageManger");
+  `#log` = logger.extend("KeyPackageManager");
 
   constructor(options: {
     keyPackageStore: KeyPackageStore;

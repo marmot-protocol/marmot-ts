@@ -919,12 +919,26 @@ export class MarmotGroup<
       _errors?: Array<{ eventId: string; error: unknown }>;
     },
   ): AsyncGenerator<IngestResult> {
+    // Each ingest call gets its own sub-namespace so concurrent or sequential
+    // batches can be distinguished at a glance in debug output.
+    const log = this.log.extend(`ingest:${Date.now().toString(36).slice(-5)}`);
+
     // Set default retry options
     const retryCount = options?.retryCount ?? 0;
     const maxRetries = options?.maxRetries ?? 5;
     const errorList: Array<{ eventId: string; error: unknown }> =
       options?._errors ?? [];
-    if (retryCount === 0) this.log("ingesting %d event(s)", events.length);
+
+    if (retryCount === 0) {
+      log("start – %d event(s), maxRetries=%d", events.length, maxRetries);
+    } else {
+      log(
+        "retry %d/%d – %d event(s) remaining",
+        retryCount,
+        maxRetries,
+        events.length,
+      );
+    }
 
     // Check if we've exceeded the maximum retry attempts.
     //
@@ -933,6 +947,10 @@ export class MarmotGroup<
     // can never decrypt, malformed ciphertext, spam) can DoS consumers.
     // Instead, stop retrying and yield the remaining events as unreadable.
     if (retryCount > maxRetries) {
+      log(
+        "max retries exceeded – yielding %d event(s) as unreadable",
+        events.length,
+      );
       for (const event of events) {
         yield {
           kind: "unreadable",
@@ -960,8 +978,16 @@ export class MarmotGroup<
       this.ciphersuite,
     );
 
+    log(
+      "decryption: %d/%d readable, %d failed",
+      read.length,
+      events.length,
+      decryptFailed.length,
+    );
+
     // Record a decryption error for each event that failed the NIP-44 layer.
     for (const event of decryptFailed) {
+      log("decrypt failed event:%s", event.id.slice(0, 8));
       errorList.push({
         eventId: event.id,
         error: new Error("Failed to decrypt group message"),
@@ -971,6 +997,10 @@ export class MarmotGroup<
     // If nothing was readable the exporter_secret cannot change this round, so
     // retrying would always fail the same way.  Yield decrypt failures now.
     if (read.length === 0) {
+      log(
+        "nothing readable – yielding %d decrypt failure(s) as unreadable",
+        decryptFailed.length,
+      );
       for (const event of decryptFailed) {
         yield {
           kind: "unreadable",
@@ -1008,6 +1038,12 @@ export class MarmotGroup<
       }
     }
 
+    log(
+      "split: %d commit(s), %d non-commit(s)",
+      commits.length,
+      nonCommits.length,
+    );
+
     // ============================================================================
     // STEP 3: Process all non-commit messages
     // ============================================================================
@@ -1024,6 +1060,7 @@ export class MarmotGroup<
           message.wireformat !== wireformats.mls_private_message &&
           message.wireformat !== wireformats.mls_public_message
         ) {
+          log("skip event:%s reason:wrong-wireformat", event.id.slice(0, 8));
           yield { kind: "skipped", event, message, reason: "wrong-wireformat" };
           continue;
         }
@@ -1046,9 +1083,15 @@ export class MarmotGroup<
 
         // Update state if message changed it
         if (result.kind === "newState") {
+          log(
+            "proposal accepted event:%s epoch:%d",
+            event.id.slice(0, 8),
+            this.state.groupContext.epoch,
+          );
           this.state = result.newState;
           yield { kind: "processed", result, event, message };
         } else if (result.kind === "applicationMessage") {
+          log("application message event:%s", event.id.slice(0, 8));
           // Application messages also update state (for forward secrecy)
           this.state = result.newState;
 
@@ -1067,6 +1110,11 @@ export class MarmotGroup<
       } catch (error) {
         // Message processing failed - might be invalid or from wrong epoch
         // Add to unreadable for retry later (might become readable after state updates)
+        log(
+          "non-commit failed event:%s – queued for retry: %O",
+          event.id.slice(0, 8),
+          error,
+        );
         errorList.push({ eventId: event.id, error });
         unreadable.push(event);
       }
@@ -1089,6 +1137,10 @@ export class MarmotGroup<
 
     for (const { event, message } of commits) {
       if (!isPrivateMessage(message)) {
+        log(
+          "skip commit event:%s reason:wrong-wireformat",
+          event.id.slice(0, 8),
+        );
         yield { kind: "skipped", event, message, reason: "wrong-wireformat" };
         continue;
       }
@@ -1101,6 +1153,12 @@ export class MarmotGroup<
 
       // Commits from past epochs were already applied — skip and report them.
       if (commitEpoch < currentEpoch) {
+        log(
+          "skip commit event:%s reason:past-epoch (commit=%d current=%d)",
+          event.id.slice(0, 8),
+          commitEpoch,
+          currentEpoch,
+        );
         yield { kind: "skipped", event, message, reason: "past-epoch" };
         continue;
       }
@@ -1108,6 +1166,12 @@ export class MarmotGroup<
       // Commits too far in the future can't be applied yet.
       // Add to unreadable so they are retried after state advances.
       if (commitEpoch > currentEpoch + 1n) {
+        log(
+          "defer commit event:%s epoch:%d too far ahead (current=%d)",
+          event.id.slice(0, 8),
+          commitEpoch,
+          currentEpoch,
+        );
         errorList.push({
           eventId: event.id,
           error: new Error(
@@ -1117,6 +1181,13 @@ export class MarmotGroup<
         unreadable.push(event);
         continue;
       }
+
+      log(
+        "processing commit event:%s epoch:%d->%d",
+        event.id.slice(0, 8),
+        currentEpoch,
+        commitEpoch,
+      );
 
       try {
         // processMessage handles:
@@ -1140,6 +1211,10 @@ export class MarmotGroup<
           // If the commit was rejected by the callback (admin verification),
           // do not advance state and do not retry — yield it so callers can observe it.
           if (result.actionTaken === "reject") {
+            log(
+              "commit event:%s rejected by admin policy",
+              event.id.slice(0, 8),
+            );
             yield { kind: "rejected", result, event, message };
             continue;
           }
@@ -1147,11 +1222,21 @@ export class MarmotGroup<
           // Successfully processed the commit - update our state
           // After each commit, the epoch advances and keys rotate
           this.state = result.newState;
+          log(
+            "commit event:%s applied – new epoch:%d",
+            event.id.slice(0, 8),
+            this.state.groupContext.epoch,
+          );
           yield { kind: "processed", result, event, message };
         }
       } catch (error) {
         // Commit processing failed - add to unreadable for retry
         // It might become valid after processing more proposals or state updates
+        log(
+          "commit failed event:%s – queued for retry: %O",
+          event.id.slice(0, 8),
+          error,
+        );
         errorList.push({ eventId: event.id, error });
         unreadable.push(event);
       }
@@ -1159,6 +1244,7 @@ export class MarmotGroup<
 
     // Save the group state after processing all messages
     await this.save();
+    log("state saved – epoch:%d", this.state.groupContext.epoch);
 
     // ============================================================================
     // STEP 6: Recursively retry unreadable events
@@ -1172,11 +1258,14 @@ export class MarmotGroup<
     // This continues until no more events can be read.
 
     if (unreadable.length > 0) {
+      log("scheduling retry for %d unreadable event(s)", unreadable.length);
       yield* this.ingest(unreadable, {
         retryCount: retryCount + 1,
         maxRetries: maxRetries,
         _errors: errorList,
       });
+    } else {
+      log("done – no unreadable events remain");
     }
   }
 

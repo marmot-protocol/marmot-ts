@@ -2,4 +2,4 @@
 "@internet-privacy/marmots": minor
 ---
 
-Remove `MarmorClient.rotateKeyPackage()` use `MarmotClient.keyPackages.rotate()` instead
+Removed `MarmotClient.rotateKeyPackage()`, use `MarmotClient.keyPackages.rotate()` instead

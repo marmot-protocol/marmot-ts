@@ -2,4 +2,4 @@
 "@internet-privacy/marmots": minor
 ---
 
-Update `MarmotGroup.ingest` to yeild processed nostr event
+Update `MarmotGroup.ingest` to yield a processed Nostr event

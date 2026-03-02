@@ -22,6 +22,42 @@ import { NostrNetworkInterface } from "./nostr-interface.js";
 import { logger } from "../utils/debug.js";
 
 /**
+ * Thrown by {@link KeyPackageManager.create} when no relay URLs are provided.
+ * Callers can catch this specifically to prompt the user for relay configuration.
+ */
+export class MissingRelayError extends Error {
+  constructor() {
+    super("At least one relay URL is required to publish a key package");
+    this.name = "MissingRelayError";
+  }
+}
+
+/**
+ * Thrown by {@link KeyPackageManager.rotate} when the given key package
+ * reference is not found in the local store.
+ */
+export class KeyPackageNotFoundError extends Error {
+  constructor(refHex: string) {
+    super(`Key package not found: ${refHex}`);
+    this.name = "KeyPackageNotFoundError";
+  }
+}
+
+/**
+ * Thrown by {@link KeyPackageManager.rotate} when no relay URLs can be
+ * determined for the replacement key package — neither passed explicitly
+ * nor recoverable from the old package's publish records.
+ */
+export class KeyPackageRotatePreconditionError extends Error {
+  constructor() {
+    super(
+      "Cannot rotate: no relay URLs available. Pass relays in options or ensure the old key package has published events.",
+    );
+    this.name = "KeyPackageRotatePreconditionError";
+  }
+}
+
+/**
  * A key package entry as returned by {@link KeyPackageManager.list}
  * and {@link KeyPackageManager.watchKeyPackages}.
  *
@@ -140,13 +176,11 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    *
    * @param options - Creation options, including required relay URLs
    * @returns The stored key package (without private material)
-   * @throws Error if relays is empty
+   * @throws {MissingRelayError} if relays is empty
    */
   async create(options: CreateKeyPackageOptions): Promise<ListedKeyPackage> {
     if (!options.relays || options.relays.length === 0) {
-      throw new Error(
-        "At least one relay URL is required to publish a key package",
-      );
+      throw new MissingRelayError();
     }
 
     this.#log("creating key package on relays: %O", options.relays);
@@ -205,8 +239,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * @param ref - The key package reference of the key package to rotate
    * @param options - Options for the new key package
    * @returns The new stored key package (without private material)
-   * @throws Error if the key package ref is not found in the private key store
-   * @throws Error if no relay URLs can be determined for the new key package
+   * @throws {KeyPackageNotFoundError} if the key package ref is not found in the local store
+   * @throws {KeyPackageRotatePreconditionError} if no relay URLs can be determined for the new key package
    */
   async rotate(
     ref: Uint8Array | string,
@@ -217,7 +251,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
 
     const existing = await this.store.getKeyPackage(ref);
     if (!existing) {
-      throw new Error(`Key package not found: ${refHex}`);
+      throw new KeyPackageNotFoundError(refHex);
     }
 
     // Determine relays for the new key package
@@ -229,9 +263,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
         : undefined);
 
     if (!relaysForNew || relaysForNew.length === 0) {
-      throw new Error(
-        "Cannot rotate: no relay URLs available. Pass relays in options or ensure the old key package has published events.",
-      );
+      throw new KeyPackageRotatePreconditionError();
     }
 
     // Publish kind 5 deletion for all known event IDs of the old key package
@@ -451,16 +483,20 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    */
   async *watchKeyPackages(): AsyncGenerator<KeyPackageEntry[]> {
     let resolveNext: (() => void) | null = null;
+    let pending = false;
 
     const signal = () => {
       if (resolveNext) {
         resolveNext();
         resolveNext = null;
+      } else {
+        pending = true;
       }
     };
 
     this.on("keyPackageAdded", signal);
     this.on("keyPackageRemoved", signal);
+    this.on("keyPackageUpdated", signal);
     this.on("keyPackagePublished", signal);
 
     try {
@@ -470,13 +506,19 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
 
       while (true) {
         await new Promise<void>((resolve) => {
-          resolveNext = resolve;
+          if (pending) {
+            pending = false;
+            resolve();
+          } else {
+            resolveNext = resolve;
+          }
         });
         yield await this.#buildSnapshot();
       }
     } finally {
       this.off("keyPackageAdded", signal);
       this.off("keyPackageRemoved", signal);
+      this.off("keyPackageUpdated", signal);
       this.off("keyPackagePublished", signal);
     }
   }

@@ -11,9 +11,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { MarmotClient } from "../client/marmot-client";
 import { extractMarmotGroupData } from "../core/client-state";
-import { createCredential } from "../core/credential";
-import { generateKeyPackage } from "../core/key-package";
-import { createKeyPackageEvent } from "../core/key-package-event";
 import {
   GROUP_EVENT_KIND,
   KEY_PACKAGE_KIND,
@@ -79,26 +76,15 @@ describe("End-to-end: invite, join, first message", () => {
     const adminPubkey = await adminAccount.signer.getPublicKey();
     const inviteePubkey = await inviteeAccount.signer.getPublicKey();
 
-    // Step 1: Invitee generates and stores KeyPackage, then publishes event
-    const inviteeCredential = createCredential(inviteePubkey);
-    const inviteeKeyPackage = await generateKeyPackage({
-      credential: inviteeCredential,
-      ciphersuiteImpl: ciphersuite,
-    });
-
-    // Store the KeyPackage in invitee's local store (required for joinGroupFromWelcome)
-    await inviteeClient.keyPackageStore.add(inviteeKeyPackage);
-
-    const unsignedKeyPackageEvent = await createKeyPackageEvent({
-      keyPackage: inviteeKeyPackage.publicPackage,
+    // Step 1: Invitee creates and publishes a KeyPackage via the manager
+    const inviteePkg = await inviteeClient.keyPackages.create({
       relays: ["wss://mock-relay.test"],
     });
 
-    // Sign the event
-    const signedKeyPackageEvent: NostrEvent =
-      await inviteeAccount.signer.signEvent(unsignedKeyPackageEvent);
-
-    await mockNetwork.publish(["wss://mock-relay.test"], signedKeyPackageEvent);
+    // Retrieve the published event so we can verify the event ID later
+    const signedKeyPackageEvent = mockNetwork.events.find(
+      (e) => e.kind === KEY_PACKAGE_KIND,
+    ) as NostrEvent;
 
     // Step 2: Admin creates group
     const adminGroup = await adminClient.createGroup("Test Group", {
@@ -147,37 +133,29 @@ describe("End-to-end: invite, join, first message", () => {
     );
     expect(welcomeRumor.kind).toBe(WELCOME_EVENT_KIND);
 
-    // Get the keyPackageEventId from the rumor tags
+    // Get the keyPackageEventId from the rumor tags — should match what was published
     const keyPackageEventId = welcomeRumor.tags.find((t) => t[0] === "e")?.[1];
     expect(keyPackageEventId).toBe(signedKeyPackageEvent.id);
 
-    // Join should request relay deletion of the consumed KeyPackage event (best-effort).
-    let relayDeleteRequested: string | null = null;
-    inviteeClient.on(
-      "keyPackageRelayDeleteRequested",
-      ({ keyPackageEventId }) => {
-        relayDeleteRequested = keyPackageEventId;
-      },
-    );
-
-    // Join the group
-    const inviteeGroup = await inviteeClient.joinGroupFromWelcome({
+    // Join the group — returns { group }
+    const { group: inviteeGroup } = await inviteeClient.joinGroupFromWelcome({
       welcomeRumor,
-      keyPackageEventId,
     });
 
-    // MIP-02: joiners SHOULD self-update immediately after Welcome.
-    // This advances the epoch by 1 compared to the admin state immediately
-    // after the invite commit.
+    // Invitee joins at the same epoch as admin (no automatic self-update).
+    // MIP-02 self-update is the caller's responsibility.
     expect(inviteeGroup.state.groupContext.epoch).toBe(
-      adminGroup.state.groupContext.epoch + 1n,
+      adminGroup.state.groupContext.epoch,
     );
 
-    // MIP-00: last_resort key packages may be reused to handle race windows.
-    // Our default KeyPackages include last_resort, so the local private material
-    // is retained after a successful join.
-    expect(await inviteeClient.keyPackageStore.count()).toBe(1);
-    expect(relayDeleteRequested).toBe(keyPackageEventId);
+    // The consumed key package is marked as used; private material is retained.
+    // The caller can rotate it via client.keyPackages.rotate(ref) when ready.
+    expect(await inviteeClient.keyPackages.count()).toBe(1);
+    const listedPkgs = await inviteeClient.keyPackages.list();
+    expect(listedPkgs.some((p) => p.used)).toBe(true);
+
+    // The caller can now rotate the consumed key package to clean up relays
+    expect(inviteePkg.keyPackageRef).toBeDefined();
 
     // Step 5: Invitee ingests group events to catch up
     // Extract nostr group ID from extensions
@@ -191,14 +169,8 @@ describe("End-to-end: invite, join, first message", () => {
       "#h": [nostrGroupIdHex],
     });
 
-    // Admin must ingest the joiner's post-join self-update commit to catch up.
-    for await (const _ of adminGroup.ingest(groupEvents)) {
-      // Drain iterator
-    }
-
-    // NOTE: joining from Welcome yields a state that already includes the
-    // invite commit and then performs a post-join self-update. Ingesting the
-    // backlog should be a no-op (but must not regress state or throw).
+    // Invitee ingests the group backlog (the invite commit). This should be a
+    // no-op since joining from Welcome already incorporates that commit.
     const inviteeEpochBeforeCatchup = inviteeGroup.state.groupContext.epoch;
     for await (const _ of inviteeGroup.ingest(groupEvents)) {
       // Drain iterator
@@ -207,7 +179,7 @@ describe("End-to-end: invite, join, first message", () => {
       inviteeEpochBeforeCatchup,
     );
 
-    // Verify both clients are at the same epoch
+    // Both clients are already at the same epoch — no self-update was sent.
     expect(inviteeGroup.state.groupContext.epoch).toBe(
       adminGroup.state.groupContext.epoch,
     );
@@ -236,8 +208,11 @@ describe("End-to-end: invite, join, first message", () => {
     // Process the new events
     const receivedMessages: Rumor[] = [];
     for await (const result of adminGroup.ingest(newGroupEvents)) {
-      if (result.kind === "applicationMessage") {
-        const rumor = deserializeApplicationData(result.message);
+      if (
+        result.kind === "processed" &&
+        result.result.kind === "applicationMessage"
+      ) {
+        const rumor = deserializeApplicationData(result.result.message);
         receivedMessages.push(rumor);
       }
     }

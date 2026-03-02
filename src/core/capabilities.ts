@@ -1,6 +1,6 @@
 import { Capabilities } from "ts-mls/capabilities.js";
 import {
-  LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+  LAST_RESORT_EXTENSION_TYPE,
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
 } from "./protocol.js";
 
@@ -15,8 +15,8 @@ export function ensureMarmotCapabilities(
     extensions.push(MARMOT_GROUP_DATA_EXTENSION_TYPE);
 
   // Ensure the last_resort is included in the capabilities
-  if (!extensions.includes(LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE))
-    extensions.push(LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE);
+  if (!extensions.includes(LAST_RESORT_EXTENSION_TYPE))
+    extensions.push(LAST_RESORT_EXTENSION_TYPE);
 
   return {
     ...capabilities,

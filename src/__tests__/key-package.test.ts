@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import { createCredential } from "../core/credential.js";
 import { generateKeyPackage } from "../core/key-package.js";
 import {
-  LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+  LAST_RESORT_EXTENSION_TYPE,
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
 } from "../core/protocol.js";
 
@@ -75,7 +75,7 @@ describe("generateKeyPackage", () => {
     const hasLastResort = keyPackage.publicPackage.extensions.some(
       (ext) =>
         typeof ext.extensionType === "number" &&
-        ext.extensionType === LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+        ext.extensionType === LAST_RESORT_EXTENSION_TYPE,
     );
 
     expect(hasLastResort).toBe(true);
@@ -97,7 +97,7 @@ describe("generateKeyPackage", () => {
     const hasLastResort = keyPackage.publicPackage.extensions.some(
       (ext) =>
         typeof ext.extensionType === "number" &&
-        ext.extensionType === LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+        ext.extensionType === LAST_RESORT_EXTENSION_TYPE,
     );
 
     expect(hasLastResort).toBe(false);
@@ -163,7 +163,7 @@ describe("generateKeyPackage", () => {
     const hasLastResort = extensions.some(
       (ext) =>
         typeof ext.extensionType === "number" &&
-        ext.extensionType === LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+        ext.extensionType === LAST_RESORT_EXTENSION_TYPE,
     );
 
     expect(hasCustom).toBe(true);
@@ -200,7 +200,7 @@ describe("generateKeyPackage", () => {
     const hasLastResort = extensions.some(
       (ext) =>
         typeof ext.extensionType === "number" &&
-        ext.extensionType === LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+        ext.extensionType === LAST_RESORT_EXTENSION_TYPE,
     );
 
     expect(hasCustom).toBe(true);

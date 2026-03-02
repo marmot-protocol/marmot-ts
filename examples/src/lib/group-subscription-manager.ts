@@ -213,16 +213,19 @@ export class GroupSubscriptionManager {
         // already updates the group state and persists it via group.save()
 
         // Log commit processing for debugging
-        if (result.kind === "newState") {
+        if (result.kind === "processed" && result.result.kind === "newState") {
           console.log(
             `Processed commit for group ${nostrGroupIdHex}, new epoch: ${group.state.groupContext.epoch}`,
           );
         }
 
         // Collect application messages for UI
-        if (result.kind === "applicationMessage") {
+        if (
+          result.kind === "processed" &&
+          result.result.kind === "applicationMessage"
+        ) {
           try {
-            const applicationData = result.message;
+            const applicationData = result.result.message;
             const rumor = deserializeApplicationData(applicationData);
             newMessages.push(rumor);
           } catch (parseErr) {

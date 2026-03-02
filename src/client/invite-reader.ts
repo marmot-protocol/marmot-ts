@@ -13,6 +13,7 @@ import type {
   ReceivedGiftWrap,
   UnreadInvite,
 } from "../store/invite-store.js";
+import { logger } from "../utils/debug.js";
 
 function isGiftWrap(event: NostrEvent): event is KnownEvent<kinds.GiftWrap> {
   return event.kind === kinds.GiftWrap;
@@ -90,6 +91,8 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
   private signer: EventSigner;
   private store: InviteStore;
 
+  #log = logger.extend("InviteReader");
+
   constructor(options: InviteReaderOptions) {
     super();
     this.signer = options.signer;
@@ -114,6 +117,8 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
     // Check if already seen
     const isSeen = await this.store.seen.getItem(event.id);
     if (isSeen) return false; // Skip duplicate
+
+    this.#log("ingesting gift wrap %s", event.id);
 
     // Mark as seen
     await this.store.seen.setItem(event.id, true);
@@ -171,6 +176,7 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
     if (!giftwrap)
       throw new Error(`Event ${eventId} not found in received store`);
 
+    this.#log("decrypting gift wrap %s", giftwrap.id);
     try {
       // Decrypt gift wrap (prompts user)
       const rumor = await unlockGiftWrap(giftwrap, this.signer);
@@ -185,6 +191,8 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
       // Parse and validate the Welcome message
       // This will throw if the Welcome is malformed
       getWelcome(rumor);
+
+      this.#log("decrypted gift wrap %s → rumor %s", giftwrap.id, rumor.id);
 
       // Move to unread state (store rumor directly using rumor ID as key)
       await this.store.unread.setItem(rumor.id, rumor);
@@ -278,6 +286,7 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
    * @param inviteId - The rumor ID (from the welcome rumor)
    */
   async markAsRead(inviteId: string): Promise<void> {
+    this.#log("marking invite %s as read", inviteId);
     await this.store.unread.removeItem(inviteId);
     this.emit("inviteRead", inviteId);
   }

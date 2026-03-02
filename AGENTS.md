@@ -310,6 +310,20 @@ Add `getGroupMembers()` method to retrieve all members in a group
 **Breaking:** Remove deprecated `sendMessage()` method. Use `send()` instead.
 ```
 
+### One Changeset Per Logical Change
+
+**IMPORTANT: When a single PR or commit contains multiple distinct user-facing changes, create one changeset per change — not one combined changeset.**
+
+Each changeset should describe exactly one thing. This keeps the generated changelog readable: entries map to individual features, fixes, or breaking changes rather than a mixed list.
+
+```bash
+# Example: a PR that adds a new method AND removes a deprecated one
+pnpm changeset add --empty   # changeset 1: minor — Add foo() method
+pnpm changeset add --empty   # changeset 2: major — Remove deprecated bar() method
+```
+
+Multiple changesets are combined automatically at release time; separate entries produce cleaner per-item changelog lines.
+
 ### How to Create a Changeset
 
 **IMPORTANT: Always use the CLI to create changesets. Never manually create changeset files.**

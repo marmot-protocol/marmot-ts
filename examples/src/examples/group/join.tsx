@@ -383,9 +383,8 @@ export default withSignIn(function JoinGroup() {
       result$.next(null);
 
       // Join the group from the Welcome message
-      const group = await client.joinGroupFromWelcome({
+      const { group } = await client.joinGroupFromWelcome({
         welcomeRumor: selectedWelcome.welcomeRumor,
-        keyPackageEventId: selectedWelcome.keyPackageEventId,
       });
 
       // Ensure the group list reacts immediately across routes.

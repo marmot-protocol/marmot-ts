@@ -298,7 +298,8 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
 
     const seen: ClientState[] = [];
     for await (const res of group.ingest([eventB, eventA])) {
-      if (res.kind === "newState") seen.push(res.newState);
+      if (res.kind === "processed" && res.result.kind === "newState")
+        seen.push(res.result.newState);
     }
 
     // Exactly one epoch transition should have occurred.
@@ -430,8 +431,11 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     // Process the application message through ingest
     const results: ClientState[] = [];
     for await (const res of group.ingest([applicationEvent])) {
-      if (res.kind === "applicationMessage") {
-        results.push(res.newState);
+      if (
+        res.kind === "processed" &&
+        res.result.kind === "applicationMessage"
+      ) {
+        results.push(res.result.newState);
       }
     }
 
@@ -559,8 +563,8 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     // First, ingest the proposal to add it to unappliedProposals
     const proposalResults: ClientState[] = [];
     for await (const res of group.ingest([proposalEvent])) {
-      if (res.kind === "newState") {
-        proposalResults.push(res.newState);
+      if (res.kind === "processed" && res.result.kind === "newState") {
+        proposalResults.push(res.result.newState);
       }
     }
 
@@ -589,8 +593,8 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     // Ingest the commit
     const commitResults: ClientState[] = [];
     for await (const res of group.ingest([commitEvent])) {
-      if (res.kind === "newState") {
-        commitResults.push(res.newState);
+      if (res.kind === "processed" && res.result.kind === "newState") {
+        commitResults.push(res.result.newState);
       }
     }
 

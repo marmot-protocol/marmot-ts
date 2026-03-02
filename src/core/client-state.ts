@@ -1,10 +1,9 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { ClientState, decode, encode, GroupInfo, nodeTypes } from "ts-mls";
 import { defaultClientConfig } from "ts-mls/clientConfig.js";
-import { ClientState, encode, decode, nodeTypes } from "ts-mls";
-import { clientStateEncoder, clientStateDecoder } from "ts-mls/clientState.js";
+import { clientStateDecoder, clientStateEncoder } from "ts-mls/clientState.js";
 import {
   decodeMarmotGroupData,
-  getMarmotGroupDataExtensionBytes,
   isMarmotGroupDataExtension,
 } from "./marmot-group-data.js";
 import { MarmotGroupData } from "./protocol.js";
@@ -14,8 +13,9 @@ export const defaultMarmotClientConfig = {
   ...defaultClientConfig,
 };
 
-export function extractMarmotGroupData(
-  clientState: ClientState,
+/** Reads the MarmotGroupData from a ClientState or GroupInfo objects */
+export function getMarmotGroupData(
+  clientState: ClientState | GroupInfo,
 ): MarmotGroupData | null {
   try {
     const marmotExtension = clientState.groupContext.extensions.find(
@@ -24,31 +24,33 @@ export function extractMarmotGroupData(
 
     if (!marmotExtension) return null;
 
-    return decodeMarmotGroupData(
-      getMarmotGroupDataExtensionBytes(marmotExtension),
-    );
+    return decodeMarmotGroupData(marmotExtension.extensionData);
   } catch (error) {
-    console.error("Failed to extract MarmotGroupData:", error);
     return null;
   }
 }
 
-export function getGroupIdHex(clientState: ClientState): string {
+/** @deprecated use getMarmotGroupData instead */
+export const extractMarmotGroupData = getMarmotGroupData;
+
+/** Reads the hex id of the group from a ClientState or GroupInfo object */
+export function getGroupIdHex(clientState: ClientState | GroupInfo): string {
   return bytesToHex(clientState.groupContext.groupId);
 }
 
 export function getNostrGroupIdHex(clientState: ClientState): string {
-  const marmotData = extractMarmotGroupData(clientState);
-  if (!marmotData) {
-    throw new Error("MarmotGroupData not found in ClientState");
-  }
+  const marmotData = getMarmotGroupData(clientState);
+  if (!marmotData) throw new Error("MarmotGroupData not found in ClientState");
+
   return bytesToHex(marmotData.nostrGroupId);
 }
 
-export function getEpoch(clientState: ClientState): number {
+/** Reads the epoch number from a ClientState or GroupInfo object */
+export function getEpoch(clientState: ClientState | GroupInfo): number {
   return Number(clientState.groupContext.epoch);
 }
 
+/** Reads the number of members in the group from a ClientState ratchet tree */
 export function getMemberCount(clientState: ClientState): number {
   return clientState.ratchetTree.filter(
     (node) => node && node.nodeType === nodeTypes.leaf,
@@ -58,6 +60,7 @@ export function getMemberCount(clientState: ClientState): number {
 /** The serialized form of ClientState for storage (ts-mls TLS encoding). */
 export type SerializedClientState = Uint8Array;
 
+/** Serializes a ClientState object to a bytes array */
 export function serializeClientState(
   state: ClientState,
 ): SerializedClientState {
@@ -70,16 +73,16 @@ export function deserializeClientState(
 ): ClientState {
   try {
     const decoded = decode(clientStateDecoder, stored);
-    if (!decoded) {
+    if (!decoded)
       throw new Error(
         "Failed to deserialize ClientState: clientStateDecoder returned null",
       );
-    }
+
     return decoded;
   } catch (error) {
-    if (error instanceof Error) {
+    if (error instanceof Error)
       throw new Error(`Failed to deserialize ClientState: ${error.message}`);
-    }
+
     throw new Error("Failed to deserialize ClientState: Unknown error");
   }
 }

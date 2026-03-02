@@ -4,7 +4,7 @@ import { protocolVersions } from "ts-mls/protocolVersion.js";
 import { describe, expect, it } from "vitest";
 import {
   ensureMarmotCapabilities,
-  LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+  LAST_RESORT_EXTENSION_TYPE,
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
 } from "../core";
 
@@ -38,7 +38,7 @@ describe("ensureMarmotCapabilities", () => {
     const result = ensureMarmotCapabilities(capabilities);
 
     expect(result.extensions).toContain(MARMOT_GROUP_DATA_EXTENSION_TYPE);
-    expect(result.extensions).toContain(LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE);
+    expect(result.extensions).toContain(LAST_RESORT_EXTENSION_TYPE);
   });
 
   it("should preserve all other capability fields", () => {
@@ -75,7 +75,7 @@ describe("ensureMarmotCapabilities", () => {
 
     expect(result.extensions).toEqual([
       MARMOT_GROUP_DATA_EXTENSION_TYPE,
-      LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+      LAST_RESORT_EXTENSION_TYPE,
     ]);
   });
 });

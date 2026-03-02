@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CustomExtension, makeCustomExtension } from "ts-mls";
 import { ensureLastResortExtension } from "../core/extensions";
-import { LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE } from "../core/protocol";
+import { LAST_RESORT_EXTENSION_TYPE } from "../core/protocol";
 
 describe("ensureLastResortExtension", () => {
   it("should add last resort extension when not present", () => {
@@ -18,7 +18,7 @@ describe("ensureLastResortExtension", () => {
     expect(result[0]).toEqual(extensions[0]);
     expect(result[1]).toEqual(
       makeCustomExtension({
-        extensionType: LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+        extensionType: LAST_RESORT_EXTENSION_TYPE,
         extensionData: new Uint8Array(0),
       }),
     );
@@ -31,7 +31,7 @@ describe("ensureLastResortExtension", () => {
         extensionData: new Uint8Array([1, 2, 3]),
       }),
       makeCustomExtension({
-        extensionType: LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+        extensionType: LAST_RESORT_EXTENSION_TYPE,
         extensionData: new Uint8Array(0),
       }),
     ];
@@ -50,7 +50,7 @@ describe("ensureLastResortExtension", () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toEqual(
       makeCustomExtension({
-        extensionType: LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+        extensionType: LAST_RESORT_EXTENSION_TYPE,
         extensionData: new Uint8Array(0),
       }),
     );
@@ -59,7 +59,7 @@ describe("ensureLastResortExtension", () => {
   it("should preserve original array when last resort extension is present", () => {
     const extensions: CustomExtension[] = [
       makeCustomExtension({
-        extensionType: LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+        extensionType: LAST_RESORT_EXTENSION_TYPE,
         extensionData: new Uint8Array(0),
       }),
       makeCustomExtension({

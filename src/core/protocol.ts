@@ -1,8 +1,8 @@
 // Constants for the Marmot protocol
 import { defaultExtensionTypes } from "ts-mls";
 
-/** The extension id for the last_resort key package extension for key packages */
-export const LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE = 0x000a;
+/** The extension id for the last_resort extension for key packages */
+export const LAST_RESORT_EXTENSION_TYPE = 0x000a;
 
 /** Event kind for key package relay list events */
 export const KEY_PACKAGE_RELAY_LIST_KIND = 10051;
@@ -47,7 +47,7 @@ export const MARMOT_GROUP_DATA_VERSION = 2;
 export const extendedExtensionTypes = {
   ...defaultExtensionTypes,
   marmot_group_data: MARMOT_GROUP_DATA_EXTENSION_TYPE,
-  last_resort: LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+  last_resort: LAST_RESORT_EXTENSION_TYPE,
 } as const;
 
 export type ExtendedExtensionTypeName = keyof typeof extendedExtensionTypes;

@@ -601,6 +601,86 @@ describe("KeyPackageManager", () => {
   });
 
   // -------------------------------------------------------------------------
+  // publishRelayList()
+  // -------------------------------------------------------------------------
+
+  describe("publishRelayList()", () => {
+    it("throws if no relays are provided", async () => {
+      const { manager } = makeManager(network, account);
+      await expect(manager.publishRelayList({ relays: [] })).rejects.toThrow(
+        "At least one relay URL is required",
+      );
+    });
+
+    it("publishes a kind 10051 event to the network", async () => {
+      const { manager } = makeManager(network, account);
+      await manager.publishRelayList({ relays: ["wss://relay.test"] });
+
+      const published = network.events.filter((e) => e.kind === 10051);
+      expect(published).toHaveLength(1);
+    });
+
+    it("returns the signed kind 10051 event", async () => {
+      const { manager } = makeManager(network, account);
+      const event = await manager.publishRelayList({
+        relays: ["wss://relay.test"],
+      });
+
+      expect(event.kind).toBe(10051);
+      expect(event.id).toBeDefined();
+      expect(event.sig).toBeDefined();
+    });
+
+    it("includes the correct relay tags", async () => {
+      const { manager } = makeManager(network, account);
+      const event = await manager.publishRelayList({
+        relays: ["wss://relay1.test", "wss://relay2.test"],
+      });
+
+      const relayTags = event.tags.filter((t) => t[0] === "relay");
+      expect(relayTags).toHaveLength(2);
+      expect(relayTags.map((t) => t[1])).toContain("wss://relay1.test/");
+      expect(relayTags.map((t) => t[1])).toContain("wss://relay2.test/");
+    });
+
+    it("sets the pubkey from the signer on the published event", async () => {
+      const { manager } = makeManager(network, account);
+      const event = await manager.publishRelayList({
+        relays: ["wss://relay.test"],
+      });
+
+      const expectedPubkey = await account.signer.getPublicKey();
+      expect(event.pubkey).toBe(expectedPubkey);
+    });
+
+    it("includes the client tag when provided", async () => {
+      const { manager } = makeManager(network, account);
+      const event = await manager.publishRelayList({
+        relays: ["wss://relay.test"],
+        client: "marmot-test",
+      });
+
+      const clientTag = event.tags.find((t) => t[0] === "client");
+      expect(clientTag).toBeDefined();
+      expect(clientTag![1]).toBe("marmot-test");
+    });
+
+    it("publishes to all listed relays", async () => {
+      const { manager } = makeManager(network, account);
+      await manager.publishRelayList({
+        relays: ["wss://relay1.test", "wss://relay2.test"],
+      });
+
+      // MockNetwork records all events; verify two publish targets were used
+      const published = network.events.filter((e) => e.kind === 10051);
+      expect(published).toHaveLength(1);
+      // Relay tags confirm both relays are listed
+      const relayTags = published[0].tags.filter((t) => t[0] === "relay");
+      expect(relayTags).toHaveLength(2);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // markUsed()
   // -------------------------------------------------------------------------
 

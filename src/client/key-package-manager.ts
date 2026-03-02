@@ -11,6 +11,7 @@ import {
   getKeyPackageReference,
   getKeyPackageRelays,
 } from "../core/key-package-event.js";
+import { createKeyPackageRelayListEvent } from "../core/key-package-relay-list.js";
 import { generateKeyPackage } from "../core/key-package.js";
 import { KEY_PACKAGE_KIND } from "../core/protocol.js";
 import {
@@ -98,6 +99,14 @@ export type RotateKeyPackageOptions = {
   client?: string;
   /** Whether to include the NIP-70 protected tag on the new event */
   protected?: boolean;
+};
+
+/** Options for publishing a key package relay list */
+export type PublishRelayListOptions = {
+  /** The relay URLs to advertise as key package relays (also published to) */
+  relays: string[];
+  /** Optional client identifier */
+  client?: string;
 };
 
 type KeyPackageManagerEvents = {
@@ -221,6 +230,56 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       keyPackageRef: stored.keyPackageRef,
       publicPackage: stored.publicPackage,
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Relay list
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Publishes a kind 10051 key package relay list event announcing which relays
+   * this user uses for key package publication. The event is published to the
+   * same relay set it lists (self-referential), making the list discoverable
+   * from those relays.
+   *
+   * Kind 10051 is a replaceable event, so publishing a new one supersedes any
+   * previously published relay list for this pubkey.
+   *
+   * @param options - The relay URLs to advertise and optional client tag
+   * @returns The signed kind 10051 event that was published
+   * @throws {MissingRelayError} if relays is empty
+   *
+   * @example
+   * ```typescript
+   * const event = await client.keyPackages.publishRelayList({
+   *   relays: ["wss://inbox.nostr.wine", "wss://myrelay.nostr1.com"],
+   * });
+   * ```
+   */
+  async publishRelayList(
+    options: PublishRelayListOptions,
+  ): Promise<NostrEvent> {
+    if (!options.relays || options.relays.length === 0) {
+      throw new MissingRelayError();
+    }
+
+    this.#log(
+      "publishing key package relay list to relays: %O",
+      options.relays,
+    );
+
+    const pubkey = await this.signer.getPublicKey();
+    const template = createKeyPackageRelayListEvent({
+      pubkey,
+      relays: options.relays,
+      client: options.client,
+    });
+    const signed = await this.signer.signEvent(template);
+    await this.network.publish(options.relays, signed);
+
+    this.#log("published key package relay list %s", signed.id);
+
+    return signed;
   }
 
   // ---------------------------------------------------------------------------

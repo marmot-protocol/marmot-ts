@@ -11,6 +11,7 @@ import {
   mlsMessageEncoder,
   type MlsMessage,
 } from "ts-mls/message.js";
+import { decodeContent, encodeContent } from "../utils/encoding.js";
 import { unixNow } from "../utils/nostr.js";
 import { decryptLegacyGroupMessageEventContent } from "./group-message-legacy.js";
 import { getNostrGroupIdHex } from "./client-state.js";
@@ -340,7 +341,7 @@ export function isProposalMessage(
 
 function decodeBase64(value: string): Uint8Array {
   try {
-    return Uint8Array.from(atob(value), (ch) => ch.charCodeAt(0));
+    return decodeContent(value, "base64");
   } catch (error) {
     throw new Error(
       `Invalid base64 group event content: ${formatError(error)}`,
@@ -349,7 +350,7 @@ function decodeBase64(value: string): Uint8Array {
 }
 
 function encodeBase64(value: Uint8Array): string {
-  return btoa(String.fromCharCode(...value));
+  return encodeContent(value, "base64");
 }
 
 function formatError(error: unknown): string {

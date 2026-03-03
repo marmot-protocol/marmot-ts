@@ -786,12 +786,10 @@ export class MarmotGroup<
 
           if (inboxRelays.length === 0) {
             throw new Error(
-              `No relays available to send Welcome to recipient ${
-                recipient.pubkey.slice(
-                  0,
-                  16,
-                )
-              }...`,
+              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(
+                0,
+                16,
+              )}...`,
             );
           }
 
@@ -822,9 +820,10 @@ export class MarmotGroup<
           } => x.result.status === "rejected",
         )
         .map((x) => {
-          const msg = x.result.reason instanceof Error
-            ? x.result.reason.message
-            : String(x.result.reason);
+          const msg =
+            x.result.reason instanceof Error
+              ? x.result.reason.message
+              : String(x.result.reason);
           return `${x.recipient.pubkey.slice(0, 16)}…: ${msg}`;
         });
 
@@ -836,11 +835,9 @@ export class MarmotGroup<
           failureDetails,
         );
         throw new Error(
-          `Failed to deliver ${failureDetails.length}/${options.welcomeRecipients.length} Welcome message(s): ${
-            failureDetails.join(
-              "; ",
-            )
-          }`,
+          `Failed to deliver ${failureDetails.length}/${options.welcomeRecipients.length} Welcome message(s): ${failureDetails.join(
+            "; ",
+          )}`,
         );
       }
     }
@@ -1192,9 +1189,10 @@ export class MarmotGroup<
         continue;
       }
 
-      const commitEpoch = typeof message.privateMessage.epoch === "bigint"
-        ? message.privateMessage.epoch
-        : BigInt(message.privateMessage.epoch);
+      const commitEpoch =
+        typeof message.privateMessage.epoch === "bigint"
+          ? message.privateMessage.epoch
+          : BigInt(message.privateMessage.epoch);
       const currentEpoch = this.state.groupContext.epoch;
 
       // Commits from past epochs were already applied — skip and report them.

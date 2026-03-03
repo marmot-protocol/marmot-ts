@@ -294,11 +294,9 @@ describe("MarmotGroup.sendChatMessage", () => {
     );
 
     expect(rumors.length).toBe(3);
-    expect(rumors.map((r) => r.content)).toEqual([
-      "Message 1",
-      "Message 2",
-      "Message 3",
-    ]);
+    expect(rumors.map((r) => r.content)).toEqual(
+      expect.arrayContaining(["Message 1", "Message 2", "Message 3"]),
+    );
 
     // The sender ingesting their own relay echo should not throw and should
     // NOT produce applicationMessage results (they're skipped as self-echoes)

@@ -1,7 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { NostrEvent } from "applesauce-core/helpers/event";
-
-import { EventTemplate } from "nostr-tools";
+import { EventTemplate, NostrEvent } from "applesauce-core/helpers/event";
 import {
   CustomExtension,
   KeyPackage,

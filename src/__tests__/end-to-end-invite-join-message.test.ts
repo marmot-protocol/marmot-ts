@@ -1,7 +1,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { Rumor, unlockGiftWrap } from "applesauce-common/helpers/gift-wrap";
-import { getEventHash, type NostrEvent } from "nostr-tools";
+import { getEventHash, type NostrEvent } from "applesauce-core/helpers/event";
 import {
   CiphersuiteImpl,
   defaultCryptoProvider,

@@ -1,5 +1,4 @@
-import { UnsignedEvent, relaySet } from "applesauce-core/helpers";
-import { npubEncode } from "nostr-tools/nip19";
+import { UnsignedEvent, npubEncode, relaySet } from "applesauce-core/helpers";
 import { useEffect, useState } from "react";
 import { RelayListCreator } from "../../components/form/relay-list-creator";
 import { UserAvatar, UserName } from "../../components/nostr-user";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { NostrEvent } from "nostr-tools";
+import type { NostrEvent } from "applesauce-core/helpers/event";
 import { getWelcome } from "../core/welcome";
 import { WELCOME_EVENT_KIND } from "../core/protocol";
 

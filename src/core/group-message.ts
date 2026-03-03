@@ -1,10 +1,6 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
-import {
-  finalizeEvent,
-  generateSecretKey,
-  getPublicKey,
-  NostrEvent,
-} from "nostr-tools";
+import { finalizeEvent, NostrEvent } from "applesauce-core/helpers/event";
+import { generateSecretKey, getPublicKey } from "applesauce-core/helpers/keys";
 import { ClientState } from "ts-mls/clientState.js";
 import { CiphersuiteImpl } from "ts-mls/crypto/ciphersuite.js";
 import { mlsExporter } from "ts-mls/keySchedule.js";

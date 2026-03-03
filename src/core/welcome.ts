@@ -1,6 +1,9 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
-import { getTagValue, NostrEvent } from "applesauce-core/helpers/event";
-import { getEventHash } from "nostr-tools";
+import {
+  getEventHash,
+  getTagValue,
+  NostrEvent,
+} from "applesauce-core/helpers/event";
 import {
   decode,
   encode,

@@ -76,7 +76,6 @@
     "applesauce-core": "^5.1.0",
     "debug": "^4.4.3",
     "eventemitter3": "^5.0.4",
-    "nostr-tools": "^2.23.3",
     "ts-mls": "2.0.0-rc.7"
   },
   "devDependencies": {

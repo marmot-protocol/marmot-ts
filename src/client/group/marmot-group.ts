@@ -13,6 +13,7 @@ import {
   CreateCommitOptions,
   createProposal,
   CryptoProvider,
+  defaultProposalTypes,
   defaultCryptoProvider,
   MlsMessage,
   processMessage,
@@ -178,11 +179,7 @@ export function createAdminCommitPolicyCallback(args: {
   return (incoming) => {
     if (incoming.kind === "proposal") return "accept";
 
-    // MIP-02: post-join self-updates are expressed as commits with no proposals.
-    // These MUST be accepted from any member (admin or not) to allow key hygiene.
-    if (incoming.proposals.length === 0) return "accept";
-
-    // Commit must be attributable to an admin.
+    // Commit must be attributable to a concrete member leaf.
     const senderLeafIndexUnknown = incoming.senderLeafIndex;
     if (senderLeafIndexUnknown === undefined) return "reject";
 
@@ -197,7 +194,23 @@ export function createAdminCommitPolicyCallback(args: {
         senderLeafIndex,
       );
       const senderPubkey = getCredentialPubkey(senderCredential);
-      return adminPubkeys.includes(senderPubkey) ? "accept" : "reject";
+
+      // Admins may commit any proposal set.
+      if (adminPubkeys.includes(senderPubkey)) return "accept";
+
+      // Non-admin compatibility path:
+      // - accept no-proposal commits (current ts-mls self-update shape), OR
+      // - accept commits whose proposals are ONLY update proposals authored by sender.
+      if (incoming.proposals.length === 0) return "accept";
+
+      const isSelfUpdateOnly = incoming.proposals.every(
+        (p) =>
+          p.proposal.proposalType === defaultProposalTypes.update &&
+          p.senderLeafIndex !== undefined &&
+          Number(p.senderLeafIndex) === Number(senderLeafIndex),
+      );
+
+      return isSelfUpdateOnly ? "accept" : "reject";
     } catch {
       // "retry" here means we don't want to permanently reject the commit;
       // MarmotGroup.ingest() will treat processing errors as unreadable/retryable.

@@ -43,8 +43,8 @@ const enc = new TextEncoder();
 const MIP04_V2_SCHEME = enc.encode("mip04-v2");
 
 /** MLS exporter label and context used to obtain the base exporter secret. */
-const MLS_EXPORTER_LABEL = "nostr";
-const MLS_EXPORTER_CONTEXT = enc.encode("nostr");
+const MLS_EXPORTER_LABEL = "marmot";
+const MLS_EXPORTER_CONTEXT = enc.encode("encrypted-media");
 
 // ---------------------------------------------------------------------------
 // Types
@@ -154,7 +154,7 @@ function buildMip04Aad(attachment: Mip04MediaAttachment): Uint8Array {
  *
  * Key derivation:
  * ```
- * exporter_secret = MLS-Exporter("nostr", "nostr", 32)
+ * exporter_secret = MLS-Exporter("marmot", "encrypted-media", 32)
  * context = "mip04-v2" || 0x00 || file_hash_bytes || 0x00 ||
  *           mime_type_bytes || 0x00 || filename_bytes || 0x00 || "key"
  * file_key = HKDF-Expand(exporter_secret, context, 32)

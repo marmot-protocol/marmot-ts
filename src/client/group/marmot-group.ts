@@ -396,6 +396,12 @@ export class MarmotGroup<
       extraProposals: [],
     });
 
+    this.log(
+      "self-update diagnostics: epoch=%d -> %d",
+      this.state.groupContext.epoch,
+      newState.groupContext.epoch,
+    );
+
     const commitEvent = await createGroupEvent({
       message: commit,
       state: this.state,
@@ -685,6 +691,13 @@ export class MarmotGroup<
       state: this.state,
       ...commitOptions,
     });
+
+    this.log(
+      "commit diagnostics: local epoch=%d next epoch=%d proposals=%d",
+      this.state.groupContext.epoch,
+      newState.groupContext.epoch,
+      allProposals.length,
+    );
 
     // Wrap the commit in a group event
     // Use this.state (not newState) to get the exporter_secret for the current epoch
@@ -1137,6 +1150,16 @@ export class MarmotGroup<
     // STEP 4: Sort commits to handle race conditions (MIP-03)
     // ============================================================================
     commits = sortGroupCommits(commits);
+    log(
+      "sorted commits: %O",
+      commits.map((x) => ({
+        id: x.event.id,
+        created_at: x.event.created_at,
+        epoch: isPrivateMessage(x.message)
+          ? String(x.message.privateMessage.epoch)
+          : "n/a",
+      })),
+    );
 
     // ============================================================================
     // STEP 5: Process commits sequentially

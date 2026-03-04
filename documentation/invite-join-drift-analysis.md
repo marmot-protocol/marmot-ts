@@ -108,4 +108,3 @@ Do **not** weaken MLS tree validation to “accept” inconsistent state. Robust
 3. Add interop-safe commit policy mode.
 4. Add drift preflight checks before commit creation.
 5. Add new interop race tests based on this incident.
-

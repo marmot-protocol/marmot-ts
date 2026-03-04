@@ -415,6 +415,12 @@ export class MarmotClient<
     const ciphersuiteImpl = await this.cryptoProvider.getCiphersuiteImpl(
       welcome.cipherSuite,
     );
+    log(
+      "join diagnostics: welcome secrets=%d ciphersuite=%d rumor=%s",
+      welcome.secrets.length,
+      welcome.cipherSuite,
+      welcomeRumor.id,
+    );
 
     // Find all local KeyPackage candidates with matching cipherSuite
     const allKeyPackages = await this.keyPackages.list();
@@ -461,6 +467,12 @@ export class MarmotClient<
         "No matching KeyPackage found in local store. Make sure you have published a KeyPackage event.",
       );
 
+    log(
+      "join diagnostics: %d candidate key packages (%d with matching secret)",
+      candidatePackages.length,
+      candidatePackages.filter((p) => p.hasMatchingSecret).length,
+    );
+
     // Prioritize packages that have matching secrets in the welcome
     // This ensures we try the most likely candidates first (RFC 9420 compliance)
     const prioritizedKeyPackages = [
@@ -475,6 +487,11 @@ export class MarmotClient<
 
     for (const keyPackage of prioritizedKeyPackages) {
       try {
+        log(
+          "join attempt: keyPackageRef=%s hasMatchingSecret=%s",
+          bytesToHex(keyPackage.keyPackageRef),
+          keyPackage.hasMatchingSecret,
+        );
         // Attempt to join the group with this key package
         // In v2, joinGroup takes a single params object with context
         clientState = await joinGroup({
@@ -488,11 +505,22 @@ export class MarmotClient<
           privateKeys: keyPackage.privatePackage,
         });
         consumedKeyPackageRef = keyPackage.keyPackageRef;
+        log(
+          "join success: keyPackageRef=%s groupId=%s epoch=%s",
+          bytesToHex(keyPackage.keyPackageRef),
+          bytesToHex(clientState.groupContext.groupId),
+          clientState.groupContext.epoch.toString(),
+        );
         // If successful, break out of the loop
         break;
       } catch (error) {
         // Store the error and continue to the next candidate
         lastError = error instanceof Error ? error : new Error(String(error));
+        log(
+          "join attempt failed: keyPackageRef=%s error=%s",
+          bytesToHex(keyPackage.keyPackageRef),
+          lastError.message,
+        );
         // Continue trying with the next key package
       }
     }

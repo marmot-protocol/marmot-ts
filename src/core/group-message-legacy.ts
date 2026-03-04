@@ -1,4 +1,3 @@
-import { getPublicKey } from "nostr-tools";
 import { decode } from "ts-mls";
 import { ClientState } from "ts-mls/clientState.js";
 import { CiphersuiteImpl } from "ts-mls/crypto/ciphersuite.js";
@@ -9,6 +8,7 @@ import {
   encryptBytes,
   getConversationKey,
 } from "../utils/nip44-binary.js";
+import { getPublicKey } from "applesauce-core/helpers";
 
 let hasWarnedLegacyGroupMessage = false;
 

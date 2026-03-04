@@ -72,6 +72,7 @@
     "@noble/ciphers": "^2.1.1",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
+    "@scure/base": "^2.0.0",
     "applesauce-common": "^5.1.0",
     "applesauce-core": "^5.1.0",
     "debug": "^4.4.3",

@@ -1,4 +1,4 @@
-import { NostrEvent } from "applesauce-core/helpers";
+import type { NostrEvent } from "applesauce-core/helpers/event";
 import { describe, expect, it } from "vitest";
 import { WELCOME_EVENT_KIND } from "../core/protocol";
 import { getWelcome } from "../core/welcome";

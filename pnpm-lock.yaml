@@ -19,6 +19,9 @@ importers:
       "@noble/hashes":
         specifier: ^2.0.1
         version: 2.0.1
+      "@scure/base":
+        specifier: ^2.0.0
+        version: 2.0.0
       applesauce-common:
         specifier: ^5.1.0
         version: 5.1.0(typescript@5.9.3)

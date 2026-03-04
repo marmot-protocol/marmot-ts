@@ -125,8 +125,6 @@ export class GroupMediaStore
    * consuming iterator is garbage-collected (via the `finally` cleanup).
    */
   async *subscribe(): AsyncGenerator<MediaAttachment[]> {
-    yield await this.listMedia();
-
     let pending = false;
     let nextResolve: (() => void) | null = null;
 
@@ -144,6 +142,8 @@ export class GroupMediaStore
     this.on("cleared", notify);
 
     try {
+      yield await this.listMedia();
+
       while (true) {
         if (!pending) {
           await new Promise<void>((r) => {

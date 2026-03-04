@@ -1,5 +1,7 @@
 # marmot-ts
 
+![marmot-ts header](https://blossom.primal.net/1d960c24e36f4ba0e13b3aa0a19c72bcf2d00c79a584debbf47e328c7ca4b8ca.png)
+
 TypeScript implementation of the [Marmot protocol](https://github.com/marmot-protocol/marmot) - bringing end-to-end encrypted group messaging to Nostr using [MLS (Messaging Layer Security)](https://messaginglayersecurity.rocks/).
 
 > [!WARNING]
@@ -8,6 +10,8 @@ TypeScript implementation of the [Marmot protocol](https://github.com/marmot-pro
 This library provides the building blocks for creating secure, decentralized group chat applications on Nostr. It wraps `ts-mls` with Nostr-specific functionality, similar to how [MDK](https://github.com/marmot-protocol/mdk) wraps [OpenMLS](https://github.com/openmls/openmls).
 
 ## Features
+
+![Features](https://blossom.primal.net/574075bf6c694523e1ee8fb49a166a20e70250bfa0508f9b74d1874701a3b66a.png)
 
 - 🔐 **End-to-end encrypted group messaging** using MLS protocol
 - 🌐 **Decentralized** - groups operate across Nostr relays
@@ -18,6 +22,8 @@ This library provides the building blocks for creating secure, decentralized gro
 
 ## Installation
 
+![Installation](https://blossom.primal.net/ec3f74a4846f186dea74460216ed6cd166533af46fb2fa18b8ae82ab7b4307a0.png)
+
 ```bash
 npm install @internet-privacy/marmots
 # or
@@ -25,6 +31,8 @@ pnpm add @internet-privacy/marmots
 ```
 
 ## Marmot Protocol Compliance
+
+![Protocol Compliance](https://blossom.primal.net/67d3d24ffd7e55ff8cf64370333305accefdac91dd36d7353d41ecf754e3b184.png)
 
 Currently, `marmot-ts` supports the following [Marmot Improvement Proposals (MIPs)](https://github.com/marmot-protocol/mips):
 
@@ -37,6 +45,8 @@ Currently, `marmot-ts` supports the following [Marmot Improvement Proposals (MIP
 
 ## Documentation
 
+![Documentation](https://blossom.primal.net/7afdf9b3b5a5ec1011c976653ee0c661b3364c5300b85d9684d9b75c63e6ee37.png)
+
 Comprehensive documentation is available in the `documentation/` directory:
 
 - [Getting Started](documentation/getting-started.md) - A fast track to initializing the library.
@@ -47,6 +57,8 @@ Comprehensive documentation is available in the `documentation/` directory:
 - [Examples](documentation/examples.md) - Concise snippets for group creation, invitations, sending messages, and more.
 
 ## Quick Start Overview
+
+![Quick Start](https://blossom.primal.net/e31edb9865f78ee77dfb5b0c80d0dba301e4e0d238b2755ddb337a672ce10d05.png)
 
 To begin using the client, you need an established `EventSigner` interface and proper storage backends:
 
@@ -77,6 +89,8 @@ const keyPackageStore = new KeyPackageStore(/* ... */);
 See [Getting Started](documentation/getting-started.md) and [Examples](documentation/examples.md) for full usage instructions.
 
 ## Development
+
+![Development](https://blossom.primal.net/8f60812a956160b0fe37ce5f1ffa22ff0646e89e88ec62f984ba7f164c2c773f.png)
 
 ```bash
 pnpm install   # Install dependencies

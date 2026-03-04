@@ -1455,7 +1455,7 @@ export class MarmotGroup<
    *
    * On the first call for a given file the plaintext bytes are derived via
    * key-derivation + ChaCha20-Poly1305 decryption and stored in
-   * {@link blobCache}. Subsequent calls for the same `attachment.sha256`
+   * {`@link` media}. Subsequent calls for the same `attachment.sha256`
    * are served directly from the cache, skipping key-derivation entirely.
    */
   async decryptMedia(

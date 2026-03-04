@@ -1,3 +1,8 @@
+---
+heroImage: /images/marmot-features.png
+heroImageAlt: A pixel-art marmot surrounded by glowing icons for encryption, decentralization, key management, and relay connectivity
+---
+
 # Client Module
 
 The Client module (`marmot-ts/client`) provides a high-level, production-ready implementation for building Marmot applications.

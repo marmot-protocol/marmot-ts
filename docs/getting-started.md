@@ -1,3 +1,8 @@
+---
+heroImage: /images/marmot-quickstart.png
+heroImageAlt: A pixel-art marmot wizard conjuring code in a underground burrow
+---
+
 # Getting Started
 
 ## What is Marmot?

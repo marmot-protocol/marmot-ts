@@ -1,3 +1,8 @@
+---
+heroImage: /images/marmot-protocol.png
+heroImageAlt: A pixel-art marmot in uniform holding a clipboard next to a stone tablet with checkmarks
+---
+
 # Protocol Constants & Concepts
 
 ## Protocol Constants

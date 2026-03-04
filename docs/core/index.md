@@ -1,3 +1,8 @@
+---
+heroImage: /images/marmot-header.png
+heroImageAlt: A pixel-art marmot in a wizard hat pointing a wand at a glowing code editor in an underground burrow
+---
+
 # Core Module
 
 The Core module (`marmot-ts/core`) implements the Marmot protocol layer, providing the fundamental building blocks for privacy-preserving group messaging. It bridges MLS (Message Layer Security) cryptographic operations with Nostr's decentralized event distribution.

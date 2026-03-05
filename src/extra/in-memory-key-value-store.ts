@@ -11,7 +11,7 @@ import type { KeyValueStoreBackend } from "../utils/key-value.js";
  *
  * @example
  * ```ts
- * import { InMemoryKeyValueStore } from "@internet-privacy/marmots/extra";
+ * import { InMemoryKeyValueStore } from "@internet-privacy/marmot-ts/extra";
  *
  * const store = new InMemoryKeyValueStore<MyRecord>();
  * await store.setItem("key", { foo: "bar" });

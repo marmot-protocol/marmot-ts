@@ -1,11 +1,17 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
-import { describe, expect, it } from "vitest";
+import type { NostrEvent } from "applesauce-core/helpers";
+import { describe, expect, it, vi } from "vitest";
 
+import { MarmotGroup } from "../client/group/marmot-group.js";
+import { GroupMediaStore } from "../client/group/group-media-store.js";
 import { createCredential } from "../core/credential.js";
 import { generateKeyPackage } from "../core/key-package.js";
 import { createSimpleGroup } from "../core/group.js";
+import { InMemoryKeyValueStore } from "../extra/in-memory-key-value-store.js";
+import { GroupStateStore } from "../store/group-state-store.js";
+import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend.js";
 import {
   canonicalizeMimeType,
   decryptMediaFile,
@@ -558,6 +564,18 @@ describe("parseMediaImetaTag", () => {
     expect(parseMediaImetaTag(tag)).toBeNull();
   });
 
+  it("returns null when n is not valid hex", () => {
+    const tag = [
+      "imeta",
+      "x " + bytesToHex(sha256(randomBytes(32))),
+      "m image/jpeg",
+      "filename photo.jpg",
+      "n zzzzzzzzzzzzzzzzzzzzzzzz",
+      "v " + MIP04_VERSION,
+    ];
+    expect(parseMediaImetaTag(tag)).toBeNull();
+  });
+
   it("returns null when x (sha256) is absent", () => {
     const tag = [
       "imeta",
@@ -573,6 +591,18 @@ describe("parseMediaImetaTag", () => {
     const tag = [
       "imeta",
       "x " + bytesToHex(randomBytes(31)), // 62 chars instead of 64
+      "m image/jpeg",
+      "filename photo.jpg",
+      "n " + bytesToHex(randomBytes(12)),
+      "v " + MIP04_VERSION,
+    ];
+    expect(parseMediaImetaTag(tag)).toBeNull();
+  });
+
+  it("returns null when x is not valid hex", () => {
+    const tag = [
+      "imeta",
+      "x " + "g".repeat(64),
       "m image/jpeg",
       "filename photo.jpg",
       "n " + bytesToHex(randomBytes(12)),
@@ -834,6 +864,20 @@ describe("getMediaAttachmentFromFileEvent", () => {
     expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
   });
 
+  it("returns null when n is not valid hex", () => {
+    const event = buildKind1063Event({
+      sha256: bytesToHex(sha256(randomBytes(32))),
+      type: "image/jpeg",
+      filename: "photo.jpg",
+      nonce: bytesToHex(randomBytes(12)),
+      version: MIP04_VERSION,
+    });
+    event.tags = event.tags.map((t) =>
+      t[0] === "n" ? ["n", "zzzzzzzzzzzzzzzzzzzzzzzz"] : t,
+    );
+    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
+  });
+
   it("returns null when x (sha256) tag is absent", () => {
     const attachment: MediaAttachment = {
       sha256: bytesToHex(sha256(randomBytes(32))),
@@ -858,6 +902,20 @@ describe("getMediaAttachmentFromFileEvent", () => {
     // Replace x with a 31-byte (62 char) hash
     event.tags = event.tags.map((t) =>
       t[0] === "x" ? ["x", bytesToHex(randomBytes(31))] : t,
+    );
+    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
+  });
+
+  it("returns null when x is not valid hex", () => {
+    const event = buildKind1063Event({
+      sha256: bytesToHex(sha256(randomBytes(32))),
+      type: "image/jpeg",
+      filename: "photo.jpg",
+      nonce: bytesToHex(randomBytes(12)),
+      version: MIP04_VERSION,
+    });
+    event.tags = event.tags.map((t) =>
+      t[0] === "x" ? ["x", "g".repeat(64)] : t,
     );
     expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
   });
@@ -949,5 +1007,54 @@ describe("getMediaAttachmentFromFileEvent", () => {
     expect(result!.size).toBe(8192);
     expect(result!.type).toBe("video/mp4");
     expect(result!.sha256).toBe(sha);
+  });
+});
+
+describe("MarmotGroup.decryptMedia", () => {
+  it("deduplicates concurrent decrypts for the same attachment", async () => {
+    const { clientState, ciphersuite } = await makeClientState();
+    const stateStore = new GroupStateStore(
+      new KeyValueGroupStateBackend(new InMemoryKeyValueStore()),
+    );
+    const group = new MarmotGroup(clientState, {
+      stateStore,
+      signer: {
+        getPublicKey: async () => "a".repeat(64),
+        signEvent: async (event) => event as NostrEvent,
+      },
+      ciphersuite,
+      media: new GroupMediaStore(),
+      network: {
+        request: async () => [],
+        subscription: () => {
+          throw new Error("not implemented");
+        },
+        publish: async () => ({}),
+        getUserInboxRelays: async () => [],
+      },
+    });
+
+    const file = randomBytes(128);
+    const attachment = makeAttachment(file, "image/png", "image.png");
+    const fileKey = await deriveMediaEncryptionKey(
+      clientState,
+      ciphersuite,
+      attachment,
+    );
+    const { encrypted, attachment: filled } = encryptMediaFile(
+      file,
+      fileKey,
+      attachment,
+    );
+
+    const addMediaSpy = vi.spyOn(group.media, "addMedia");
+    const [first, second] = await Promise.all([
+      group.decryptMedia(encrypted, filled),
+      group.decryptMedia(encrypted, filled),
+    ]);
+
+    expect(first.data).toEqual(file);
+    expect(second.data).toEqual(file);
+    expect(addMediaSpy).toHaveBeenCalledTimes(1);
   });
 });

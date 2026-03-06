@@ -325,6 +325,9 @@ export class MarmotGroup<
    */
   readonly #sentEventIds = new Set<string>();
 
+  /** In-flight media decrypts keyed by plaintext SHA-256 hex. */
+  readonly #decryptingMedia = new Map<string, Promise<StoredMedia>>();
+
   get id() {
     return this.state.groupContext.groupId;
   }
@@ -1470,21 +1473,32 @@ export class MarmotGroup<
     const cached = await this.media?.getMedia(attachment.sha256);
     if (cached) return cached;
 
-    // Cache miss — derive key and decrypt
-    const fileKey = await deriveMediaEncryptionKey(
-      this.state,
-      this.ciphersuite,
-      attachment,
-    );
-    const plaintext = decryptMediaFile(encrypted, fileKey, attachment);
+    const inFlight = this.#decryptingMedia.get(attachment.sha256);
+    if (inFlight) return inFlight;
 
-    // Populate cache for future calls
-    await this.media?.addMedia(attachment.sha256, {
-      data: plaintext,
-      attachment,
-    });
+    const decryptPromise = (async () => {
+      const fileKey = await deriveMediaEncryptionKey(
+        this.state,
+        this.ciphersuite,
+        attachment,
+      );
+      const plaintext = decryptMediaFile(encrypted, fileKey, attachment);
 
-    return { data: plaintext, attachment };
+      await this.media?.addMedia(attachment.sha256, {
+        data: plaintext,
+        attachment,
+      });
+
+      return { data: plaintext, attachment };
+    })();
+
+    this.#decryptingMedia.set(attachment.sha256, decryptPromise);
+
+    try {
+      return await decryptPromise;
+    } finally {
+      this.#decryptingMedia.delete(attachment.sha256);
+    }
   }
 
   /** Destroys the group and purges the group history */

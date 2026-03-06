@@ -327,6 +327,15 @@ function isValidMimeType(value: string): boolean {
   return slash > 0 && slash < bare.length - 1;
 }
 
+/**
+ * Returns true iff `value` is valid hex with the expected encoded byte length.
+ *
+ * @internal
+ */
+function isValidHex(value: string, expectedBytes: number): boolean {
+  return value.length === expectedBytes * 2 && /^[0-9a-f]+$/i.test(value);
+}
+
 // ---------------------------------------------------------------------------
 // Internal imeta parser
 // ---------------------------------------------------------------------------
@@ -385,15 +394,13 @@ export function parseMediaImetaTag(tag: string[]): MediaAttachment | null {
   const filename = raw.get("filename");
 
   if (version !== MIP04_VERSION) return null;
-  // n encodes a 12-byte nonce as hex → must be exactly 24 characters
-  if (!nonce || nonce.length !== 24) return null;
+  if (!nonce || !isValidHex(nonce, 12)) return null;
   if (!filename || filename.length === 0) return null;
 
   // Delegate standard NIP-92 field parsing to applesauce.
   const base = getFileMetadataFromImetaTag(tag);
 
-  // x encodes a 32-byte SHA-256 as hex → must be exactly 64 characters
-  if (!base.sha256 || base.sha256.length !== 64) return null;
+  if (!base.sha256 || !isValidHex(base.sha256, 32)) return null;
   // m must be a valid MIME type
   if (!base.type || !isValidMimeType(base.type)) return null;
 
@@ -454,15 +461,13 @@ export function getMediaAttachmentFromFileEvent(
   const filename = getTag("filename");
 
   if (version !== MIP04_VERSION) return null;
-  // n encodes a 12-byte nonce as hex → must be exactly 24 characters
-  if (!nonce || nonce.length !== 24) return null;
+  if (!nonce || !isValidHex(nonce, 12)) return null;
   if (!filename || filename.length === 0) return null;
 
   // Delegate standard NIP-94 tag parsing to applesauce.
   const base = getFileMetadata(event);
 
-  // x encodes a 32-byte SHA-256 as hex → must be exactly 64 characters
-  if (!base.sha256 || base.sha256.length !== 64) return null;
+  if (!base.sha256 || !isValidHex(base.sha256, 32)) return null;
   // m must be a valid MIME type
   if (!base.type || !isValidMimeType(base.type)) return null;
 

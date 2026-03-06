@@ -64,6 +64,7 @@ import { unixNow } from "../../utils/nostr.js";
 import { NoGroupRelaysError, NoMarmotGroupDataError } from "../errors.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
+import { proposeLeaveGroup } from "./proposals/leave-group.js";
 
 /** An event whose MLS message was successfully processed */
 export type ProcessedIngestResult = {
@@ -489,6 +490,58 @@ export class MarmotGroup<
     await this.save();
 
     return response;
+  }
+
+  /**
+   * Leaves the group by publishing a self-remove proposal for each of the
+   * caller's leaf nodes, then purging all local group data from storage.
+   *
+   * Per RFC 9420 §12.4 a member cannot commit a Remove targeting their own
+   * leaf. Instead, a Remove *proposal* is sent so that the next committer
+   * (e.g. an admin calling {@link commit}) can include it and finalise the
+   * departure. At least one relay must acknowledge the proposals before local
+   * state is destroyed; if no relay acks, an error is thrown and local state
+   * is preserved so the caller can retry.
+   *
+   * Unlike {@link commit}, this operation is allowed for non-admin members.
+   *
+   * @returns The relay publish responses for the leave proposal event(s).
+   */
+  async leave(): Promise<Record<string, PublishResponse>> {
+    this.log("leave group");
+    const groupData = this.groupData;
+    if (!groupData) throw new NoMarmotGroupDataError();
+
+    const relays = this.relays;
+    if (!relays) throw new NoGroupRelaysError();
+
+    // Resolve own pubkey and build self-remove proposals via the shared action.
+    const ownPubkey = await this.signer.getPublicKey();
+    const removeProposals = await proposeLeaveGroup(ownPubkey)({
+      state: this.state,
+      ciphersuite: this.ciphersuite,
+      groupData,
+    });
+
+    // Publish one proposal event per leaf index (handles multi-device members).
+    // RFC 9420 §12.4 forbids committing a Remove targeting own leaf, so we
+    // send proposals and let the next admin commit pick them up.
+    const responses: Record<string, PublishResponse> = {};
+    for (const proposal of removeProposals) {
+      const response = await this.sendProposal(proposal);
+      Object.assign(responses, response);
+    }
+
+    if (!hasAck(responses)) {
+      throw new Error(
+        "Failed to publish leave proposals: no relay acknowledged. Local state preserved — retry leave() to try again.",
+      );
+    }
+
+    // Purge all local group data (history, media, state store).
+    await this.destroy();
+
+    return responses;
   }
 
   /**

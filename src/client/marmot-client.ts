@@ -96,6 +96,8 @@ type MarmotClientEvents<
   groupUnloaded: (groupId: Uint8Array) => void;
   /** Emitted when a group is destroyed */
   groupDestroyed: (groupId: Uint8Array) => void;
+  /** Emitted when the client leaves a group via a self-remove commit */
+  groupLeft: (groupId: Uint8Array) => void;
 };
 
 export class MarmotClient<
@@ -314,6 +316,42 @@ export class MarmotClient<
     // Emit events
     this.emit("groupDestroyed", hexId);
     this.emit("groupsUpdated", this.groups);
+  }
+
+  /**
+   * Leaves a group by publishing a self-remove proposal and purging all
+   * local group data from storage.
+   *
+   * At least one relay must acknowledge the proposals before local state is
+   * destroyed. If no relay acks, an error is thrown and local state is
+   * preserved so the caller can retry.
+   *
+   * @param groupId - The group ID as a hex string or Uint8Array.
+   * @returns The relay publish responses for the leave proposal event(s).
+   */
+  async leaveGroup(
+    groupId: Uint8Array | string,
+  ): Promise<Record<string, import("./nostr-interface.js").PublishResponse>> {
+    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
+    log("leaving group %s", id);
+
+    // Get the existing instance or load a new one.
+    const group = this.#groups.get(id) || (await this.loadGroup(groupId));
+
+    const groupIdBytes =
+      typeof groupId === "string" ? hexToBytes(groupId) : groupId;
+
+    // Publish the self-remove commit and destroy local state.
+    const response = await group.leave();
+
+    // Evict from the in-memory cache (destroy() already removed from store).
+    this.#groups.delete(id);
+
+    // Emit events.
+    this.emit("groupLeft", groupIdBytes);
+    this.emit("groupsUpdated", this.groups);
+
+    return response;
   }
 
   /** Creates a new simple group */

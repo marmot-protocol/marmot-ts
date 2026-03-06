@@ -1,5 +1,11 @@
 # @internet-privacy/marmot-ts
 
+## 0.3.1
+
+### Patch Changes
+
+- c00262f: Fix hex string validation and add deduplication for concurrent media decryption
+
 ## 0.3.0
 
 ### Minor Changes

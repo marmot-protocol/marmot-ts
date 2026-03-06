@@ -209,6 +209,7 @@ describe("GroupRumorHistory.subscribe", () => {
     const history = new GroupRumorHistory(makeInMemoryBackend());
 
     const listenersBefore = history.listenerCount("rumor");
+    const clearedListenersBefore = history.listenerCount("cleared");
 
     const gen = history.subscribe();
     await nextValue(gen); // consume initial snapshot
@@ -217,6 +218,7 @@ describe("GroupRumorHistory.subscribe", () => {
     await gen.return(undefined);
 
     expect(history.listenerCount("rumor")).toBe(listenersBefore);
+    expect(history.listenerCount("cleared")).toBe(clearedListenersBefore);
   });
 
   it("multiple concurrent subscribers each receive independent snapshots", async () => {
@@ -257,6 +259,44 @@ describe("GroupRumorHistory.subscribe", () => {
 
     const snap = await nextValue(gen);
     expect(snap).toHaveLength(1);
+
+    await gen.return(undefined);
+  });
+
+  it("yields an empty snapshot when the history is purged", async () => {
+    const history = new GroupRumorHistory(makeInMemoryBackend());
+    const rumor = makeRumor({ id: nextId() });
+
+    await history.saveRumor(rumor);
+
+    const gen = history.subscribe();
+    const first = await nextValue(gen);
+    expect(first).toHaveLength(1);
+
+    const yieldPromise = nextValue(gen, 1000);
+    await history.purgeMessages();
+
+    const second = await yieldPromise;
+    expect(second).toEqual([]);
+
+    await gen.return(undefined);
+  });
+
+  it("purge wakes up filtered subscribers even when no rumor matches", async () => {
+    const history = new GroupRumorHistory(makeInMemoryBackend());
+    const rumor = makeRumor({ id: nextId(), kind: 9 });
+
+    await history.saveRumor(rumor);
+
+    const gen = history.subscribe({ kinds: [1] });
+    const first = await nextValue(gen);
+    expect(first).toEqual([]);
+
+    const yieldPromise = nextValue(gen, 1000);
+    await history.purgeMessages();
+
+    const second = await yieldPromise;
+    expect(second).toEqual([]);
 
     await gen.return(undefined);
   });

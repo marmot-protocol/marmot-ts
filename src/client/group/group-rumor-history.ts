@@ -18,6 +18,7 @@ export interface GroupRumorHistoryBackend {
 /** A map of events that can be emitted by a {@link GroupRumorHistory} */
 type GroupRumorHistoryEvents = {
   rumor: (rumor: Rumor) => void;
+  cleared: () => void;
 };
 
 /** A group.history implementation that stores the parsed rumor events for a group and provies methods for querying */
@@ -58,6 +59,9 @@ export class GroupRumorHistory
   /** Purge all rumor events from the backend */
   async purgeMessages(): Promise<void> {
     await this.backend.clear();
+
+    // Notify listeners that all rumors have been cleared
+    this.emit("cleared");
   }
 
   /** Request stored rumors by filters */
@@ -69,8 +73,9 @@ export class GroupRumorHistory
 
   /**
    * Async generator that yields the current timeline of {@link Rumor} events whenever a
-   * new rumor is saved that matches `filters`. The initial snapshot is emitted immediately
-   * on subscription, then again after every matching `rumor` event.
+   * new rumor is saved that matches `filters` or the history is cleared. The initial snapshot
+   * is emitted immediately on subscription, then again after every matching `rumor` event or
+   * `cleared` event.
    *
    * The generator runs until the caller breaks out of the loop or the consuming
    * iterator is garbage-collected (via the `finally` cleanup).
@@ -100,7 +105,17 @@ export class GroupRumorHistory
       }
     };
 
+    const notifyCleared = () => {
+      if (nextResolve) {
+        nextResolve();
+        nextResolve = null;
+      } else {
+        pending = true;
+      }
+    };
+
     this.on("rumor", notify);
+    this.on("cleared", notifyCleared);
 
     try {
       yield await this.backend.queryRumors(filtersArray);
@@ -116,6 +131,7 @@ export class GroupRumorHistory
       }
     } finally {
       this.off("rumor", notify);
+      this.off("cleared", notifyCleared);
     }
   }
 
@@ -142,7 +158,11 @@ export class GroupRumorHistory
     let cursor = filter?.until ?? undefined;
 
     while (true) {
-      const rumors = await this.backend.queryRumors({ ...filter, until: cursor, limit });
+      const rumors = await this.backend.queryRumors({
+        ...filter,
+        until: cursor,
+        limit,
+      });
 
       // If no rumors returned, we've reached the end
       if (rumors.length === 0) return;

@@ -1,13 +1,18 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
+import { matchFilters } from "applesauce-core/helpers/filter";
 import type { Filter } from "applesauce-core/helpers/filter";
 import { EventEmitter } from "eventemitter3";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import { BaseGroupHistory, GroupHistoryFactory } from "../index.js";
+import {
+  insertEventIntoDescendingList,
+  NostrEvent,
+} from "applesauce-core/helpers";
 
 /** A rumor storage interface for the {@link GroupRumorHistory} class */
 export interface GroupRumorHistoryBackend {
   /** Load rumor events from a specific time in history. Results are ordered by created_at descending (newest first). */
-  queryRumors(filter: Filter): Promise<Rumor[]>;
+  queryRumors(filters: Filter | Filter[]): Promise<Rumor[]>;
   /** Save a new group rumor event */
   addRumor(message: Rumor): Promise<void>;
   /** Clear all rumor events from the backend */
@@ -17,6 +22,7 @@ export interface GroupRumorHistoryBackend {
 /** A map of events that can be emitted by a {@link GroupRumorHistory} */
 type GroupRumorHistoryEvents = {
   rumor: (rumor: Rumor) => void;
+  cleared: () => void;
 };
 
 /** A group.history implementation that stores the parsed rumor events for a group and provies methods for querying */
@@ -57,11 +63,76 @@ export class GroupRumorHistory
   /** Purge all rumor events from the backend */
   async purgeMessages(): Promise<void> {
     await this.backend.clear();
+
+    // Notify listeners that all rumors have been cleared
+    this.emit("cleared");
   }
 
   /** Request stored rumors by filters */
-  async queryRumors(filter: Filter): Promise<Rumor[]> {
-    return this.backend.queryRumors(filter);
+  async queryRumors(filters: Filter | Filter[]): Promise<Rumor[]> {
+    return this.backend.queryRumors(
+      Array.isArray(filters) ? filters : [filters],
+    );
+  }
+
+  /**
+   * Async generator that yields the current timeline of {@link Rumor} events whenever a
+   * new rumor is saved that matches `filters` or the history is cleared. The initial snapshot
+   * is emitted immediately on subscription, then again after every matching `rumor` event or
+   * `cleared` event.
+   *
+   * The generator runs until the caller breaks out of the loop or the consuming
+   * iterator is garbage-collected (via the `finally` cleanup).
+   */
+  async *subscribe(filters?: Filter | Filter[]): AsyncGenerator<Rumor[]> {
+    const filtersArray: Filter[] = filters
+      ? Array.isArray(filters)
+        ? filters
+        : [filters]
+      : [{}];
+
+    let current: NostrEvent[] = [];
+    let next: ((timeline: NostrEvent[]) => void) | null = null;
+
+    const notify = (rumor: Rumor) => {
+      // Only wake up if the new rumor matches at least one of the caller's filters.
+      // matchFilters expects a signed NostrEvent; Rumor has all checked fields
+      // (id, kind, pubkey, tags, created_at) — cast is safe here.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (!matchFilters(filtersArray, rumor as any)) return;
+
+      if (next) {
+        // Add event to timeline
+        insertEventIntoDescendingList(current, rumor as NostrEvent);
+
+        // Resolve next promise
+        next([...current]);
+        next = null;
+      }
+    };
+
+    const notifyCleared = () => {
+      if (next) {
+        // Resolve next promise with empty timeline
+        next([]);
+        next = null;
+      }
+    };
+
+    this.on("rumor", notify);
+    this.on("cleared", notifyCleared);
+
+    try {
+      current = (await this.backend.queryRumors(filtersArray)) as NostrEvent[];
+      yield current;
+
+      while (true) {
+        yield await new Promise<NostrEvent[]>((r) => (next = r));
+      }
+    } finally {
+      this.off("rumor", notify);
+      this.off("cleared", notifyCleared);
+    }
   }
 
   /**

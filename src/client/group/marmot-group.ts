@@ -55,7 +55,11 @@ import {
   type MediaAttachment,
 } from "../../core/media.js";
 import { isPrivateMessage } from "../../core/message.js";
-import { MarmotGroupData } from "../../core/protocol.js";
+import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
+  KEY_PACKAGE_KIND,
+  MarmotGroupData,
+} from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
 import { GroupStateStore } from "../../store/group-state-store.js";
 import { logger } from "../../utils/debug.js";
@@ -935,17 +939,20 @@ export class MarmotGroup<
    * 4. Commits the proposal
    * 5. After commit ack, sends a Welcome message to the invitee via NIP-59 gift wrap
    *
-   * @param keyPackageEvent - The KeyPackage event (kind 443) for the user to invite
+   * @param keyPackageEvent - The KeyPackage event (kind 443 or kind 30443) for the user to invite
    * @returns Promise resolving to the publish response from the relays
-   * @throws Error if the event is not kind 443 or if the credential identity doesn't match
+   * @throws Error if the event is not a key package kind or if the credential identity doesn't match
    */
   async inviteByKeyPackageEvent(
     keyPackageEvent: NostrEvent,
   ): Promise<Record<string, PublishResponse>> {
-    // Validate the event is a KeyPackage event (kind 443)
-    if (keyPackageEvent.kind !== 443) {
+    // Validate the event is a KeyPackage event (kind 443 or kind 30443)
+    if (
+      keyPackageEvent.kind !== KEY_PACKAGE_KIND &&
+      keyPackageEvent.kind !== ADDRESSABLE_KEY_PACKAGE_KIND
+    ) {
       throw new Error(
-        `inviteByKeyPackageEvent: Expected KeyPackage event kind 443, got ${keyPackageEvent.kind}`,
+        `inviteByKeyPackageEvent: Expected KeyPackage event kind ${KEY_PACKAGE_KIND} or ${ADDRESSABLE_KEY_PACKAGE_KIND}, got ${keyPackageEvent.kind}`,
       );
     }
 

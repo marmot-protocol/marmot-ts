@@ -1,4 +1,4 @@
-import { bytesToHex } from "@noble/hashes/utils.js";
+import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { EventSigner } from "applesauce-core";
 import { NostrEvent } from "applesauce-core/helpers/event";
 import { EventEmitter } from "eventemitter3";
@@ -12,7 +12,10 @@ import {
   getKeyPackageRelays,
 } from "../core/key-package-event.js";
 import { generateKeyPackage } from "../core/key-package.js";
-import { KEY_PACKAGE_KIND } from "../core/protocol.js";
+import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
+  KEY_PACKAGE_KIND,
+} from "../core/protocol.js";
 import {
   KeyPackageStore,
   ListedKeyPackage,
@@ -29,6 +32,20 @@ export class MissingRelayError extends Error {
   constructor() {
     super("At least one relay URL is required to publish a key package");
     this.name = "MissingRelayError";
+  }
+}
+
+/**
+ * Thrown by {@link KeyPackageManager.create} when no slot identifier (`d` tag)
+ * can be determined — neither passed in options nor set as `clientId` on the
+ * manager. Set `clientId` on the manager or pass `d` in the options.
+ */
+export class MissingSlotIdentifierError extends Error {
+  constructor() {
+    super(
+      "Cannot create key package: no slot identifier available. Pass 'd' in options or set 'clientId' on the manager.",
+    );
+    this.name = "MissingSlotIdentifierError";
   }
 }
 
@@ -73,6 +90,12 @@ export type KeyPackageEntry = ListedKeyPackage & {
 export type CreateKeyPackageOptions = {
   /** Relay URLs where the key package event will be published (required) */
   relays: string[];
+  /**
+   * Addressable slot identifier (`d` tag value) for the kind 30443 event.
+   * If omitted, falls back to the manager's `clientId`. Throws
+   * {@link MissingSlotIdentifierError} if neither is available.
+   */
+  d?: string;
   /** Ciphersuite to use (default: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519) */
   ciphersuite?: CiphersuiteName;
   /** Whether to mark the key package with the MLS last_resort extension (default: true) */
@@ -90,6 +113,13 @@ export type RotateKeyPackageOptions = {
    * If omitted, the relays from the most recent publish of the old key package are reused.
    */
   relays?: string[];
+  /**
+   * Addressable slot identifier (`d` tag value) for the replacement event.
+   * If omitted, the `d` from the stored entry is reused (preferred). If the
+   * stored entry has no `d` (legacy kind 443 package), a fresh random value
+   * is generated.
+   */
+  d?: string;
   /** Ciphersuite to use for the new key package */
   ciphersuite?: CiphersuiteName;
   /** Whether to mark the new key package with the MLS last_resort extension (default: true) */
@@ -117,27 +147,43 @@ type KeyPackageManagerEvents = {
 
 /**
  * Manages the full lifecycle of MLS key packages — local private material and
- * the Nostr kind-443 events that advertise this client to potential inviters.
+ * the Nostr kind-30443 events that advertise this client to potential inviters.
+ *
+ * Legacy kind-443 events are supported for reading and deletion only; new
+ * events are always published as kind 30443.
  *
  * @example
  * ```typescript
- * // Create and publish a key package
- * const pkg = await client.keyPackages.create({ relays: ["wss://relay.example.com"] });
+ * // Create and publish a key package using the manager's clientId as the slot
+ * const manager = new KeyPackageManager({
+ *   keyPackageStore: store,
+ *   signer,
+ *   network,
+ *   clientId: "my-app-desktop",
+ * });
+ * const pkg = await manager.create({ relays: ["wss://relay.example.com"] });
  *
- * // Feed observed relay events — any kind 443 with an `i` tag is recorded
- * await client.keyPackages.track(nostrEvent);
+ * // Feed observed relay events — kind 443 and kind 30443 with an `i` tag are recorded
+ * await manager.track(nostrEvent);
  *
- * // Rotate: delete old from relays, publish new
- * const newPkg = await client.keyPackages.rotate(pkg.keyPackageRef);
+ * // Rotate: publish a new kind 30443 under the same `d` slot (relay replaces automatically)
+ * const newPkg = await manager.rotate(pkg.keyPackageRef);
  *
  * // List all key packages, filtering to those with published events
- * const published = (await client.keyPackages.list())
- *   .filter(p => p.published.length > 0);
+ * const published = (await manager.list()).filter(p => p.published.length > 0);
  * ```
  */
 export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   /** The underlying private key material store */
   readonly store: KeyPackageStore;
+
+  /**
+   * Default slot identifier (`d` tag value) used by {@link create} when no
+   * explicit `d` is passed in options. Set this to a stable string (e.g.
+   * `"my-app-desktop"`) so all key packages from this manager share a single
+   * addressable slot on relays.
+   */
+  readonly clientId: string | undefined;
 
   private readonly signer: EventSigner;
   private readonly network: NostrNetworkInterface;
@@ -148,11 +194,14 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     keyPackageStore: KeyPackageStore;
     signer: EventSigner;
     network: NostrNetworkInterface;
+    /** Default `d` tag value for {@link create}. Falls back to this when no explicit `d` is passed. */
+    clientId?: string;
   }) {
     super();
     this.store = options.keyPackageStore;
     this.signer = options.signer;
     this.network = options.network;
+    this.clientId = options.clientId;
 
     // Forward store events — only surface LocalKeyPackage additions
     this.store.on("keyPackageAdded", (pkg) => {
@@ -172,15 +221,27 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
 
   /**
    * Creates a new key package, stores the private material locally, signs and
-   * publishes a kind 443 event to the specified relays, and records the event.
+   * publishes a kind 30443 addressable event to the specified relays, and
+   * records the event.
+   *
+   * The `d` (slot identifier) is resolved in order:
+   * 1. `options.d` (explicit)
+   * 2. `this.clientId` (manager default)
+   * 3. Throws {@link MissingSlotIdentifierError}
    *
    * @param options - Creation options, including required relay URLs
    * @returns The stored key package (without private material)
    * @throws {MissingRelayError} if relays is empty
+   * @throws {MissingSlotIdentifierError} if no slot identifier can be determined
    */
   async create(options: CreateKeyPackageOptions): Promise<ListedKeyPackage> {
     if (!options.relays || options.relays.length === 0) {
       throw new MissingRelayError();
+    }
+
+    const d = options.d ?? this.clientId;
+    if (!d) {
+      throw new MissingSlotIdentifierError();
     }
 
     this.#log("creating key package on relays: %O", options.relays);
@@ -195,12 +256,13 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       isLastResort: options.isLastResort,
     });
 
-    // Store private material locally
-    await this.store.add(keyPackage);
+    // Store private material locally, including the slot identifier
+    await this.store.add({ ...keyPackage, d });
 
-    // Build, sign and publish the kind 443 event
+    // Build, sign and publish the kind 30443 event
     const eventTemplate = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
+      d,
       relays: options.relays,
       client: options.client,
       protected: options.protected,
@@ -215,11 +277,12 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     await this.store.addPublished(refHex, signed);
 
     this.emit("keyPackagePublished", refHex, signed.id, options.relays);
-    this.#log("created and published key package %s", refHex);
+    this.#log("created and published key package %s with slot %s", refHex, d);
 
     return {
       keyPackageRef: stored.keyPackageRef,
       publicPackage: stored.publicPackage,
+      d: stored.d,
     };
   }
 
@@ -228,13 +291,22 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   // ---------------------------------------------------------------------------
 
   /**
-   * Rotates a key package: publishes a kind 5 deletion for all known relay event
-   * IDs of the old key package, then creates and publishes a new one, and removes
-   * the old private key material and publish records.
+   * Rotates a key package: publishes a new kind 30443 event (reusing the same
+   * `d` slot so relays replace the old event automatically), then removes the
+   * old private key material.
    *
-   * If the old key package has no recorded published events, the deletion step is
-   * skipped. If no relays are passed in options, the relays from the most recent
-   * published event of the old key package are reused (via its `relays` tag).
+   * For legacy kind-443 published events on the entry, a NIP-09 deletion is
+   * sent before publishing the replacement. Kind-30443 published events do not
+   * need explicit deletion — the new event supersedes them on relays.
+   *
+   * The `d` tag for the new event is resolved as:
+   * 1. `existing.d` from the stored entry (preferred — reuses same slot)
+   * 2. `options.d` (explicit override)
+   * 3. A freshly generated random 32-byte hex string
+   *
+   * Relay URLs are resolved as:
+   * 1. `options.relays` (explicit)
+   * 2. Relays tag from the most recent published event of the old key package
    *
    * @param ref - The key package reference of the key package to rotate
    * @param options - Options for the new key package
@@ -266,20 +338,28 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       throw new KeyPackageRotatePreconditionError();
     }
 
-    // Publish kind 5 deletion for all known event IDs of the old key package
-    if (oldEvents.length > 0) {
-      const eventIds = oldEvents.map((e) => e.id);
+    // Resolve the slot identifier for the new event:
+    // prefer the stored entry's d (same slot = relay auto-replaces),
+    // then an explicit override, then generate a fresh random value.
+    const newD = existing.d ?? options?.d ?? bytesToHex(randomBytes(32));
+
+    // Publish NIP-09 deletion only for legacy kind-443 published events.
+    // Kind-30443 events are superseded automatically by the new event on relays.
+    const legacyEvents = oldEvents.filter((e) => e.kind === KEY_PACKAGE_KIND);
+    if (legacyEvents.length > 0) {
+      const eventIds = legacyEvents.map((e) => e.id);
       const deleteTemplate = createDeleteKeyPackageEvent({ events: eventIds });
       const signedDelete = await this.signer.signEvent(deleteTemplate);
       const allOldRelays = [
-        ...new Set(oldEvents.flatMap((e) => getKeyPackageRelays(e) ?? [])),
+        ...new Set(legacyEvents.flatMap((e) => getKeyPackageRelays(e) ?? [])),
       ];
       await this.network.publish(allOldRelays, signedDelete);
     }
 
-    // Create and publish the new key package
+    // Create and publish the new key package under the resolved slot
     const newPkg = await this.create({
       relays: relaysForNew,
+      d: newD,
       ciphersuite: options?.ciphersuite,
       isLastResort: options?.isLastResort,
       client: options?.client,
@@ -312,9 +392,13 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   }
 
   /**
-   * Completely purges one or more key packages: publishes a kind 5 (NIP-09)
-   * deletion for all known relay event IDs, removes local private key material,
-   * and clears the publish records.
+   * Completely purges one or more key packages: publishes a NIP-09 deletion
+   * for all known relay event IDs, removes local private key material, and
+   * clears the publish records.
+   *
+   * For kind-30443 published events, both `e` and `a` (addressable coordinate)
+   * deletion tags are included. For legacy kind-443 events, only `e` tags are
+   * used.
    *
    * Accepts a single ref or an array of refs so callers can bulk-purge in one
    * shot (e.g. "nuke everything and start fresh"). Refs with no recorded
@@ -329,32 +413,30 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     const refList = Array.isArray(refs) ? refs : [refs];
     this.#log("purging %d key package(s)", refList.length);
 
-    // Collect all event IDs and relays across the provided refs
-    const allEventIds: string[] = [];
+    // Collect all published events and relays across the provided refs
+    const allEvents: NostrEvent[] = [];
     const allRelays = new Set<string>();
 
     for (const ref of refList) {
       const stored = await this.store.getKeyPackage(ref);
       const events = stored?.published ?? [];
       for (const event of events) {
-        allEventIds.push(event.id);
+        allEvents.push(event);
         for (const relay of getKeyPackageRelays(event) ?? []) {
           allRelays.add(relay);
         }
       }
     }
 
-    // Publish a single kind 5 deletion covering all event IDs, if any
-    if (allEventIds.length > 0) {
-      const draft = createDeleteKeyPackageEvent({
-        events: allEventIds,
-      });
+    // Publish a single kind 5 deletion covering all events, if any
+    if (allEvents.length > 0) {
+      const draft = createDeleteKeyPackageEvent({ events: allEvents });
       const signed = await this.signer.signEvent(draft);
       await this.network.publish([...allRelays], signed);
       this.#log(
         "published %s delete event for %d key packages",
         signed.id,
-        allEventIds.length,
+        allEvents.length,
       );
     }
 
@@ -369,19 +451,24 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   // ---------------------------------------------------------------------------
 
   /**
-   * Observes a Nostr event and, if it is a kind 443 key package event with a
-   * valid `i` tag (MIP-00 keyPackageRef), records it in the store.
+   * Observes a Nostr event and, if it is a kind 443 or kind 30443 key package
+   * event with a valid `i` tag (MIP-00 keyPackageRef), records it in the store.
    *
    * This is the primary way for apps to populate publish records from relay
-   * subscriptions. Records all observed kind 443 events regardless of whether
+   * subscriptions. Records all observed key package events regardless of whether
    * private key material is held locally — enabling deletion of key packages
    * published by other devices.
    *
-   * @param event - Any Nostr event; non-443 events are silently ignored
+   * @param event - Any Nostr event; non-key-package events are silently ignored
    * @returns `true` if the event was recorded, `false` if ignored
    */
   async track(event: NostrEvent): Promise<boolean> {
-    if (event.kind !== KEY_PACKAGE_KIND) return false;
+    if (
+      event.kind !== KEY_PACKAGE_KIND &&
+      event.kind !== ADDRESSABLE_KEY_PACKAGE_KIND
+    ) {
+      return false;
+    }
 
     const refHex = getKeyPackageReference(event);
     if (!refHex) return false;

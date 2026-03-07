@@ -65,6 +65,13 @@ export type MarmotClientOptions<
   cryptoProvider?: CryptoProvider;
   /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
+  /**
+   * Default `d` tag value (slot identifier) for key package events.
+   * Used by {@link KeyPackageManager.create} when no explicit `d` is passed.
+   * Set this to a stable per-device string (e.g. `"my-app-desktop"`) so all
+   * key packages from this client share a single addressable slot on relays.
+   */
+  clientId?: string;
 } & (THistory extends undefined
   ? {}
   : {
@@ -138,6 +145,7 @@ export class MarmotClient<
       keyPackageStore: options.keyPackageStore,
       signer: options.signer,
       network: options.network,
+      clientId: options.clientId,
     });
 
     // Set the history factory if its set in the options

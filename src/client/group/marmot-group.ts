@@ -41,10 +41,12 @@ import { getCredentialPubkey } from "../../core/credential.js";
 import {
   createGroupEvent,
   decryptGroupMessages,
+  deserializeApplicationData,
   GroupMessagePair,
   serializeApplicationRumor,
   sortGroupCommits,
 } from "../../core/group-message.js";
+import { getPubkeyLeafNodeIndexes } from "../../core/group-members.js";
 import { getKeyPackage } from "../../core/key-package-event.js";
 import {
   canonicalizeMimeType,
@@ -62,6 +64,10 @@ import { logger } from "../../utils/debug.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
 import { unixNow } from "../../utils/nostr.js";
 import { NoGroupRelaysError, NoMarmotGroupDataError } from "../errors.js";
+import {
+  NotificationManager,
+  type NotificationStoreBackend,
+} from "../notification-manager.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 
@@ -199,6 +205,13 @@ export type MarmotGroupOptions<
    * not provided.
    */
   media?: TMedia | GroupMediaFactory<TMedia>;
+  /**
+   * Storage backend for MIP-05 push notification tokens.
+   * When provided, a {@link NotificationManager} is created and exposed as
+   * `group.notifications`. Incoming kind:447/448/449 application messages are
+   * automatically routed to it during ingest.
+   */
+  notificationBackend?: NotificationStoreBackend;
 };
 
 /** Information about a welcome recipient */
@@ -312,6 +325,12 @@ export class MarmotGroup<
   /** The storage interface for the groups media */
   readonly media: TMedia;
 
+  /**
+   * MIP-05 push notification manager for this group.
+   * Only present when a `notificationBackend` was provided in options.
+   */
+  readonly notifications?: NotificationManager;
+
   /** Whether group state has been modified */
   dirty = false;
 
@@ -405,6 +424,17 @@ export class MarmotGroup<
     this.idStr = bytesToHex(this.id);
 
     this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
+
+    // Initialize the MIP-05 notification manager if a backend was provided
+    if (options.notificationBackend) {
+      (this as { notifications?: NotificationManager }).notifications =
+        new NotificationManager({
+          signer: this.signer,
+          network: this.network,
+          backend: options.notificationBackend,
+          groupId: this.idStr,
+        });
+    }
   }
 
   /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
@@ -1225,6 +1255,28 @@ export class MarmotGroup<
               await this.history.saveMessage(result.message);
             } catch (err) {
               this.emit("historyError", err as Error);
+            }
+          }
+
+          // Route MIP-05 notification rumors (kind:447/448/449) to the manager
+          if (this.notifications) {
+            try {
+              const rumor = deserializeApplicationData(result.message);
+              if (
+                rumor.kind === 447 ||
+                rumor.kind === 448 ||
+                rumor.kind === 449
+              ) {
+                // Resolve the sender's leaf index from their Nostr pubkey
+                const senderLeafIndexes = getPubkeyLeafNodeIndexes(
+                  this.state,
+                  rumor.pubkey,
+                );
+                const senderLeafIndex = senderLeafIndexes[0] ?? 0;
+                await this.notifications.ingest(rumor, senderLeafIndex);
+              }
+            } catch {
+              // Non-critical — notification routing failures must not break ingest
             }
           }
 

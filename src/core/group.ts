@@ -75,7 +75,7 @@ export async function createSimpleGroup(
     nostrGroupId: randomBytes(32),
     name: groupName,
     description: options?.description || "",
-    adminPubkeys: options?.adminPubkeys || [],
+    adminPubkeys: [...new Set(options?.adminPubkeys || [])],
     relays: options?.relays || [],
     imageHash: new Uint8Array(0),
     imageKey: new Uint8Array(0),

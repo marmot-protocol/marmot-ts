@@ -4,14 +4,14 @@ import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import type { NostrEvent } from "applesauce-core/helpers";
 import { describe, expect, it, vi } from "vitest";
 
-import { MarmotGroup } from "../client/group/marmot-group.js";
-import { GroupMediaStore } from "../client/group/group-media-store.js";
-import { createCredential } from "../core/credential.js";
-import { generateKeyPackage } from "../core/key-package.js";
-import { createSimpleGroup } from "../core/group.js";
-import { InMemoryKeyValueStore } from "../extra/in-memory-key-value-store.js";
-import { GroupStateStore } from "../store/group-state-store.js";
-import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend.js";
+import { MarmotGroup } from "../../client/group/marmot-group.js";
+import { GroupMediaStore } from "../../client/group/group-media-store.js";
+import { createCredential } from "../credential.js";
+import { generateKeyPackage } from "../key-package.js";
+import { createSimpleGroup } from "../group.js";
+import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { GroupStateStore } from "../../store/group-state-store.js";
+import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
 import {
   canonicalizeMimeType,
   decryptMediaFile,
@@ -22,7 +22,7 @@ import {
   MIP04_VERSION,
   parseMediaImetaTag,
   type MediaAttachment,
-} from "../core/media.js";
+} from "../media.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

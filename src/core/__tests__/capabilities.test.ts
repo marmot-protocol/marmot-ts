@@ -6,7 +6,7 @@ import {
   ensureMarmotCapabilities,
   LAST_RESORT_EXTENSION_TYPE,
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
-} from "../core";
+} from "../index.js";
 
 describe("ensureMarmotCapabilities", () => {
   it("should add Marmot Group Data Extension if not present", () => {

@@ -9,18 +9,18 @@ import {
 } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { BaseGroupHistory } from "../client/group/marmot-group.js";
-import { MarmotClient } from "../client/marmot-client.js";
-import { getMarmotGroupData } from "../core/client-state.js";
-import { deserializeApplicationData } from "../core/group-message.js";
-import { GROUP_EVENT_KIND, KEY_PACKAGE_KIND } from "../core/protocol.js";
-import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend.js";
+import type { BaseGroupHistory } from "../../client/group/marmot-group.js";
+import { MarmotClient } from "../../client/marmot-client.js";
+import { getMarmotGroupData } from "../../core/client-state.js";
+import { deserializeApplicationData } from "../../core/group-message.js";
+import { GROUP_EVENT_KIND, KEY_PACKAGE_KIND } from "../../core/protocol.js";
+import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
 import {
   KeyPackageStore,
   type StoredKeyPackage,
-} from "../store/key-package-store.js";
-import { MockNetwork } from "./helpers/mock-network.js";
-import { MemoryBackend } from "./ingest-commit-race.test.js";
+} from "../../store/key-package-store.js";
+import { MockNetwork } from "../helpers/mock-network.js";
+import { MemoryBackend } from "../helpers/memory-backend.js";
 
 /** Minimal in-memory history for testing */
 class TestHistory implements BaseGroupHistory {

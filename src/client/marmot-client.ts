@@ -377,7 +377,10 @@ export class MarmotClient<
       ciphersuiteImpl,
       name,
       // Always include the creator as an admin
-      { ...options, adminPubkeys: [pubkey, ...(options?.adminPubkeys || [])] },
+      {
+        ...options,
+        adminPubkeys: [...new Set([pubkey, ...(options?.adminPubkeys || [])])],
+      },
     );
 
     // Save the group to the store

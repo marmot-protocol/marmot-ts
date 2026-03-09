@@ -1,22 +1,62 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { unlockGiftWrap } from "applesauce-common/helpers/gift-wrap";
+import type { NostrEvent } from "applesauce-core/helpers/event";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import type { CiphersuiteImpl } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { MarmotClient } from "../client/marmot-client";
-import { createCredential } from "../core/credential";
-import { generateKeyPackage } from "../core/key-package";
-import { createKeyPackageEvent } from "../core/key-package-event";
-import { KEY_PACKAGE_KIND, WELCOME_EVENT_KIND } from "../core/protocol";
+import { MarmotClient } from "../../client/marmot-client.js";
+import { createCredential } from "../credential.js";
+import { generateKeyPackage } from "../key-package.js";
+import { createKeyPackageEvent } from "../key-package-event.js";
+import { KEY_PACKAGE_KIND, WELCOME_EVENT_KIND } from "../protocol.js";
 import {
+  getWelcome,
   readWelcomeGroupInfo,
   readWelcomeMarmotGroupData,
-} from "../core/welcome";
-import { KeyPackageStore } from "../store/key-package-store";
-import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend";
-import { MockNetwork } from "./helpers/mock-network";
-import { MemoryBackend } from "./ingest-commit-race.test";
+} from "../welcome.js";
+import { KeyPackageStore } from "../../store/key-package-store.js";
+import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
+import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
+import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
+
+// ---------------------------------------------------------------------------
+// spec compliance (MIP-02)
+// ---------------------------------------------------------------------------
+
+describe("spec compliance (MIP-02)", () => {
+  it("should reject decoding kind 444 events that are missing an encoding=base64 tag", () => {
+    const event: NostrEvent = {
+      kind: WELCOME_EVENT_KIND,
+      pubkey: "0".repeat(64),
+      created_at: 1,
+      content: "00",
+      tags: [],
+      id: "0".repeat(64),
+      sig: "0".repeat(128),
+    };
+
+    expect(() => getWelcome(event)).toThrow(/encoding=base64 tag/i);
+  });
+
+  it("should reject decoding kind 444 events with encoding=hex", () => {
+    const event: NostrEvent = {
+      kind: WELCOME_EVENT_KIND,
+      pubkey: "0".repeat(64),
+      created_at: 1,
+      content: "00",
+      tags: [["encoding", "hex"]],
+      id: "0".repeat(64),
+      sig: "0".repeat(128),
+    };
+
+    expect(() => getWelcome(event)).toThrow(/encoding=base64 tag/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readWelcomeGroupInfo / readWelcomeMarmotGroupData
+// ---------------------------------------------------------------------------
 
 describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
   let adminAccount: PrivateKeyAccount<any>;
@@ -147,7 +187,6 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
     );
 
     // Pass the decoded Welcome directly instead of the Rumor
-    const { getWelcome } = await import("../core/welcome");
     const decodedWelcome = getWelcome(welcomeRumor);
 
     const groupData = await readWelcomeMarmotGroupData({

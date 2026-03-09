@@ -6,7 +6,7 @@ import {
   decryptGroupImage,
   deriveGroupImageBlossomAuthKeypair,
   encryptGroupImage,
-} from "../core/group-image.js";
+} from "../group-image.js";
 
 // ---------------------------------------------------------------------------
 // encryptGroupImage

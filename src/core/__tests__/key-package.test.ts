@@ -11,12 +11,12 @@ import { ciphersuites } from "ts-mls/crypto/ciphersuite.js";
 import { protocolVersions } from "ts-mls/protocolVersion.js";
 import { describe, expect, it } from "vitest";
 
-import { createCredential } from "../core/credential.js";
-import { generateKeyPackage } from "../core/key-package.js";
+import { createCredential } from "../credential.js";
+import { generateKeyPackage } from "../key-package.js";
 import {
   LAST_RESORT_EXTENSION_TYPE,
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
-} from "../core/protocol.js";
+} from "../protocol.js";
 
 describe("generateKeyPackage", () => {
   const validPubkey =

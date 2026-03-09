@@ -1,40 +1,16 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { KeyPackageManager } from "../client/key-package-manager.js";
-import { getKeyPackageRelays } from "../core/key-package-event.js";
-import { KEY_PACKAGE_KIND } from "../core/protocol.js";
+import { KeyPackageManager } from "../key-package-manager.js";
+import { getKeyPackageRelays } from "../../core/key-package-event.js";
+import { KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import {
   KeyPackageStore,
   StoredKeyPackage,
-} from "../store/key-package-store.js";
-import type { KeyValueStoreBackend } from "../utils/key-value.js";
-import { MockNetwork } from "./helpers/mock-network.js";
-
-// ---------------------------------------------------------------------------
-// Minimal in-memory backend
-// ---------------------------------------------------------------------------
-
-class MemoryBackend<T> implements KeyValueStoreBackend<T> {
-  private map = new Map<string, T>();
-
-  async getItem(key: string): Promise<T | null> {
-    return this.map.get(key) ?? null;
-  }
-  async setItem(key: string, value: T): Promise<T> {
-    this.map.set(key, value);
-    return value;
-  }
-  async removeItem(key: string): Promise<void> {
-    this.map.delete(key);
-  }
-  async clear(): Promise<void> {
-    this.map.clear();
-  }
-  async keys(): Promise<string[]> {
-    return Array.from(this.map.keys());
-  }
-}
+} from "../../store/key-package-store.js";
+import type { KeyValueStoreBackend } from "../../utils/key-value.js";
+import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
+import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -168,8 +144,8 @@ describe("KeyPackageManager", () => {
       const { manager, store } = makeManager(network, account);
 
       // Add a key package to the private store without any published events
-      const { generateKeyPackage } = await import("../core/key-package.js");
-      const { createCredential } = await import("../core/credential.js");
+      const { generateKeyPackage } = await import("../../core/key-package.js");
+      const { createCredential } = await import("../../core/credential.js");
       const { defaultCryptoProvider, getCiphersuiteImpl } =
         await import("ts-mls");
       const ciphersuite = await getCiphersuiteImpl(
@@ -260,8 +236,8 @@ describe("KeyPackageManager", () => {
       const { manager, store } = makeManager(network, account);
 
       // Add an unpublished key package directly to the private store
-      const { generateKeyPackage } = await import("../core/key-package.js");
-      const { createCredential } = await import("../core/credential.js");
+      const { generateKeyPackage } = await import("../../core/key-package.js");
+      const { createCredential } = await import("../../core/credential.js");
       const { defaultCryptoProvider, getCiphersuiteImpl } =
         await import("ts-mls");
       const ciphersuite = await getCiphersuiteImpl(
@@ -415,8 +391,8 @@ describe("KeyPackageManager", () => {
       const { manager, store } = makeManager(network, account);
 
       // Add an unpublished key package directly to the private store
-      const { generateKeyPackage } = await import("../core/key-package.js");
-      const { createCredential } = await import("../core/credential.js");
+      const { generateKeyPackage } = await import("../../core/key-package.js");
+      const { createCredential } = await import("../../core/credential.js");
       const { defaultCryptoProvider, getCiphersuiteImpl } =
         await import("ts-mls");
       const ciphersuite = await getCiphersuiteImpl(
@@ -677,8 +653,8 @@ describe("KeyPackageManager", () => {
       await manager.create({ relays: ["wss://relay.test"] });
 
       // One unpublished package (added directly to private store, no publish record)
-      const { generateKeyPackage } = await import("../core/key-package.js");
-      const { createCredential } = await import("../core/credential.js");
+      const { generateKeyPackage } = await import("../../core/key-package.js");
+      const { createCredential } = await import("../../core/credential.js");
       const { defaultCryptoProvider, getCiphersuiteImpl } =
         await import("ts-mls");
       const ciphersuite = await getCiphersuiteImpl(

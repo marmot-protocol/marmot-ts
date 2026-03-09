@@ -7,14 +7,14 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
-import { createCredential } from "../core/credential.js";
-import { generateKeyPackage } from "../core/key-package";
+import { createCredential } from "../credential.js";
+import { generateKeyPackage } from "../key-package.js";
 import {
   createDeleteKeyPackageEvent,
   createKeyPackageEvent,
   getKeyPackage,
-} from "../core/key-package-event.js";
-import { KEY_PACKAGE_KIND } from "../core/protocol.js";
+} from "../key-package-event.js";
+import { KEY_PACKAGE_KIND } from "../protocol.js";
 import { bytesToHex } from "@noble/ciphers/utils.js";
 
 const mockPubkey =

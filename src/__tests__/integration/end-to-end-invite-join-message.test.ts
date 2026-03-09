@@ -8,19 +8,19 @@ import {
   getCiphersuiteImpl,
 } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
-import { MarmotClient } from "../client/marmot-client";
-import { extractMarmotGroupData } from "../core/client-state";
-import { deserializeApplicationData } from "../core/group-message";
+import { MarmotClient } from "../../client/marmot-client.js";
+import { extractMarmotGroupData } from "../../core/client-state.js";
+import { deserializeApplicationData } from "../../core/group-message.js";
 import {
   GROUP_EVENT_KIND,
   KEY_PACKAGE_KIND,
   WELCOME_EVENT_KIND,
-} from "../core/protocol";
-import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend";
-import { KeyPackageStore } from "../store/key-package-store";
-import { unixNow } from "../utils/nostr";
-import { MockNetwork } from "./helpers/mock-network";
-import { MemoryBackend } from "./ingest-commit-race.test";
+} from "../../core/protocol.js";
+import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
+import { KeyPackageStore } from "../../store/key-package-store.js";
+import { unixNow } from "../../utils/nostr.js";
+import { MockNetwork } from "../helpers/mock-network.js";
+import { MemoryBackend } from "../helpers/memory-backend.js";
 
 // NOTE: we use the shared test helper MockNetwork, not an inline version.
 

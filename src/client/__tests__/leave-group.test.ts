@@ -2,12 +2,12 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MarmotClient } from "../client/marmot-client.js";
-import { GROUP_EVENT_KIND, KEY_PACKAGE_KIND } from "../core/protocol.js";
-import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend.js";
-import { KeyPackageStore } from "../store/key-package-store.js";
-import { MockNetwork } from "./helpers/mock-network.js";
-import { MemoryBackend } from "./ingest-commit-race.test.js";
+import { MarmotClient } from "../marmot-client.js";
+import { GROUP_EVENT_KIND, KEY_PACKAGE_KIND } from "../../core/protocol.js";
+import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
+import { KeyPackageStore } from "../../store/key-package-store.js";
+import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
+import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
 
 // ============================================================================
 // Shared setup helpers

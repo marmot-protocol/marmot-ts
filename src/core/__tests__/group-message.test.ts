@@ -11,11 +11,11 @@ import { mlsMessageEncoder } from "ts-mls/message.js";
 import {
   createEncryptedGroupEventContent,
   decryptGroupMessageEvent,
-} from "../core/group-message.js";
-import { createLegacyEncryptedGroupEventContent } from "../core/group-message-legacy.js";
-import { createCredential } from "../core/credential.js";
-import { createSimpleGroup } from "../core/group.js";
-import { generateKeyPackage } from "../core/key-package.js";
+} from "../group-message.js";
+import { createLegacyEncryptedGroupEventContent } from "../group-message-legacy.js";
+import { createCredential } from "../credential.js";
+import { createSimpleGroup } from "../group.js";
+import { generateKeyPackage } from "../key-package.js";
 
 async function createTestState(pubkey: string) {
   const ciphersuite = await getCiphersuiteImpl(

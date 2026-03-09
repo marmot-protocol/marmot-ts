@@ -16,41 +16,17 @@ import { clientStateDecoder, clientStateEncoder } from "ts-mls/clientState.js";
 import { decode, encode } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
-import { MarmotGroup } from "../client/group/marmot-group.js";
-import type { NostrNetworkInterface } from "../client/nostr-interface.js";
-import { SerializedClientState } from "../core/client-state.js";
-import { createCredential } from "../core/credential.js";
-import { createGroupEvent, sortGroupCommits } from "../core/group-message.js";
-import { createSimpleGroup } from "../core/group.js";
-import { generateKeyPackage } from "../core/key-package.js";
-import { GroupStateStore } from "../store/group-state-store.js";
-import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend.js";
-import type { KeyValueStoreBackend } from "../utils/key-value.js";
+import { MarmotGroup } from "../../client/group/marmot-group.js";
+import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
+import { SerializedClientState } from "../../core/client-state.js";
+import { createCredential } from "../../core/credential.js";
+import { createGroupEvent, sortGroupCommits } from "../../core/group-message.js";
+import { createSimpleGroup } from "../../core/group.js";
+import { generateKeyPackage } from "../../core/key-package.js";
+import { GroupStateStore } from "../../store/group-state-store.js";
+import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
+import { MemoryBackend } from "../helpers/memory-backend.js";
 
-export class MemoryBackend<T> implements KeyValueStoreBackend<T> {
-  private map = new Map<string, T>();
-
-  async getItem(key: string): Promise<T | null> {
-    return this.map.get(key) ?? null;
-  }
-
-  async setItem(key: string, value: T): Promise<T> {
-    this.map.set(key, value);
-    return value;
-  }
-
-  async removeItem(key: string): Promise<void> {
-    this.map.delete(key);
-  }
-
-  async clear(): Promise<void> {
-    this.map.clear();
-  }
-
-  async keys(): Promise<string[]> {
-    return Array.from(this.map.keys());
-  }
-}
 
 async function createTestGroupState(
   adminPubkey: string,

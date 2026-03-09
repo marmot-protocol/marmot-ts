@@ -600,9 +600,6 @@ export class MarmotGroup<
       wireAsPublicMessage: false,
     });
 
-    // Update the group state after successful publish
-    this.state = newState;
-
     // Wrap the message in a group event
     const proposalEvent = await createGroupEvent({
       message,
@@ -613,7 +610,19 @@ export class MarmotGroup<
     // Publish to the group's relays
     const relays = this.relays;
     if (!relays) throw new NoGroupRelaysError();
-    return await this.network.publish(relays, proposalEvent);
+
+    const response = await this.network.publish(relays, proposalEvent);
+    if (!hasAck(response)) {
+      throw new Error(
+        "Failed to publish proposal event: no relay acknowledged",
+      );
+    }
+
+    // Advance local state only after at least one relay acknowledges the event.
+    this.state = newState;
+    await this.save();
+
+    return response;
   }
 
   /**

@@ -20,13 +20,15 @@ import { MarmotGroup } from "../../client/group/marmot-group.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import { SerializedClientState } from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
-import { createGroupEvent, sortGroupCommits } from "../../core/group-message.js";
+import {
+  createGroupEvent,
+  sortGroupCommits,
+} from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { GroupStateStore } from "../../store/group-state-store.js";
 import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
 import { MemoryBackend } from "../helpers/memory-backend.js";
-
 
 async function createTestGroupState(
   adminPubkey: string,

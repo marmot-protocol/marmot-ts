@@ -11,6 +11,9 @@ import {
 import type { KeyValueStoreBackend } from "../../utils/key-value.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
+import { generateKeyPackage } from "../../core/key-package.js";
+import { createCredential } from "../../core/credential.js";
+import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -144,10 +147,6 @@ describe("KeyPackageManager", () => {
       const { manager, store } = makeManager(network, account);
 
       // Add a key package to the private store without any published events
-      const { generateKeyPackage } = await import("../../core/key-package.js");
-      const { createCredential } = await import("../../core/credential.js");
-      const { defaultCryptoProvider, getCiphersuiteImpl } =
-        await import("ts-mls");
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         defaultCryptoProvider,
@@ -236,10 +235,6 @@ describe("KeyPackageManager", () => {
       const { manager, store } = makeManager(network, account);
 
       // Add an unpublished key package directly to the private store
-      const { generateKeyPackage } = await import("../../core/key-package.js");
-      const { createCredential } = await import("../../core/credential.js");
-      const { defaultCryptoProvider, getCiphersuiteImpl } =
-        await import("ts-mls");
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         defaultCryptoProvider,
@@ -391,10 +386,6 @@ describe("KeyPackageManager", () => {
       const { manager, store } = makeManager(network, account);
 
       // Add an unpublished key package directly to the private store
-      const { generateKeyPackage } = await import("../../core/key-package.js");
-      const { createCredential } = await import("../../core/credential.js");
-      const { defaultCryptoProvider, getCiphersuiteImpl } =
-        await import("ts-mls");
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         defaultCryptoProvider,
@@ -653,10 +644,6 @@ describe("KeyPackageManager", () => {
       await manager.create({ relays: ["wss://relay.test"] });
 
       // One unpublished package (added directly to private store, no publish record)
-      const { generateKeyPackage } = await import("../../core/key-package.js");
-      const { createCredential } = await import("../../core/credential.js");
-      const { defaultCryptoProvider, getCiphersuiteImpl } =
-        await import("ts-mls");
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         defaultCryptoProvider,

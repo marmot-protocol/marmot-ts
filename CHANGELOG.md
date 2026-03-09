@@ -1,5 +1,11 @@
 # @internet-privacy/marmot-ts
 
+## 0.4.1
+
+### Patch Changes
+
+- bbe16b5: Fix leave proposal state handling to persist only after relay acknowledgement
+
 ## 0.4.0
 
 ### Minor Changes

@@ -5,6 +5,7 @@ describe("exports", () => {
   it("should export the expected members", () => {
     expect(Object.keys(exports).sort()).toMatchInlineSnapshot(`
       [
+        "ADDRESSABLE_KEY_PACKAGE_KIND",
         "GROUP_EVENT_KIND",
         "GroupMediaStore",
         "GroupRumorHistory",
@@ -31,6 +32,7 @@ describe("exports", () => {
         "MarmotClient",
         "MarmotGroup",
         "MissingRelayError",
+        "MissingSlotIdentifierError",
         "Proposals",
         "WELCOME_EVENT_KIND",
         "calculateKeyPackageRef",
@@ -84,6 +86,7 @@ describe("exports", () => {
         "getKeyPackage",
         "getKeyPackageCipherSuiteId",
         "getKeyPackageClient",
+        "getKeyPackageD",
         "getKeyPackageExtensions",
         "getKeyPackageMLSVersion",
         "getKeyPackageNostrPubkey",

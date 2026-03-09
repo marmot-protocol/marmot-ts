@@ -10,8 +10,11 @@ export const KEY_PACKAGE_RELAY_LIST_KIND = 10051;
 /** The name of the tag that contains relay URLs */
 export const KEY_PACKAGE_RELAY_LIST_RELAY_TAG = "relay";
 
-/** Event kind for key package events */
+/** Event kind for key package events (legacy, read/delete only — do not publish new events of this kind) */
 export const KEY_PACKAGE_KIND = 443;
+
+/** Event kind for addressable key package events */
+export const ADDRESSABLE_KEY_PACKAGE_KIND = 30443;
 
 /** The name of the tag that contains the MLS protocol version */
 export const KEY_PACKAGE_MLS_VERSION_TAG = "mls_protocol_version";

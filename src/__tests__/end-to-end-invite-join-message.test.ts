@@ -12,8 +12,8 @@ import { MarmotClient } from "../client/marmot-client";
 import { extractMarmotGroupData } from "../core/client-state";
 import { deserializeApplicationData } from "../core/group-message";
 import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
   GROUP_EVENT_KIND,
-  KEY_PACKAGE_KIND,
   WELCOME_EVENT_KIND,
 } from "../core/protocol";
 import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend";
@@ -68,6 +68,7 @@ describe("End-to-end: invite, join, first message", () => {
       keyPackageStore: new KeyPackageStore(new MemoryBackend()),
       signer: inviteeAccount.signer,
       network: mockNetwork,
+      clientId: "test-invitee-device",
     });
   });
 
@@ -82,7 +83,7 @@ describe("End-to-end: invite, join, first message", () => {
 
     // Retrieve the published event so we can verify the event ID later
     const signedKeyPackageEvent = mockNetwork.events.find(
-      (e) => e.kind === KEY_PACKAGE_KIND,
+      (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
     ) as NostrEvent;
 
     // Step 2: Admin creates group
@@ -96,7 +97,7 @@ describe("End-to-end: invite, join, first message", () => {
     const keyPackageEvents = await mockNetwork.request(
       ["wss://mock-relay.test"],
       {
-        kinds: [KEY_PACKAGE_KIND],
+        kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
         authors: [inviteePubkey],
       },
     );

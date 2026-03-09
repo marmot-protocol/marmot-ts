@@ -45,7 +45,7 @@ import {
   MarmotGroup,
 } from "./group/marmot-group.js";
 import { KeyPackageManager } from "./key-package-manager.js";
-import { NostrNetworkInterface, PublishResponse } from "./nostr-interface.js";
+import type { NostrNetworkInterface, PublishResponse } from "./nostr-interface.js";
 
 const log = logger.extend("client");
 

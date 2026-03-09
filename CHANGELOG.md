@@ -1,5 +1,20 @@
 # @internet-privacy/marmot-ts
 
+## 0.4.0
+
+### Minor Changes
+
+- 5bb2e75: Add `subscribe` method to `GroupRumorHistory` class for live subscriptions
+- 5bb2e75: Update `GroupRumorHistoryBackend` to accept multiple filters on `queryRumors`
+- b7ab86f: Add `MarmotClient.leaveGroup()` method and `groupLeft` event for group departure via `MarmotGroup.leave()`
+- b7ab86f: Add `MarmotGroup.leave()` method to publish a self-remove proposal and purge local group state
+- 87e4522: Remove unused `MarmotGroup.publish` method
+
+### Patch Changes
+
+- c00262f: Fix hex string validation and add deduplication for concurrent media decryption
+- 87e4522: Fix: save state after sending proposal
+
 ## 0.3.0
 
 ### Minor Changes

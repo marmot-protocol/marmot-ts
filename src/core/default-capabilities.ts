@@ -1,9 +1,9 @@
 import {
   Capabilities,
+  ciphersuites,
   defaultCapabilities as mlsDefaultCapabilities,
   defaultCredentialTypes,
 } from "ts-mls";
-import { ciphersuites } from "ts-mls/crypto/ciphersuite.js";
 import { ensureMarmotCapabilities } from "./capabilities.js";
 
 /**

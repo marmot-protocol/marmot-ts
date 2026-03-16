@@ -1,14 +1,14 @@
 import { unixNow } from "applesauce-core/helpers";
 import {
+  Capabilities,
+  ciphersuites,
   CustomExtension,
   defaultCredentialTypes,
   defaultCryptoProvider,
   getCiphersuiteImpl,
   makeCustomExtension,
+  protocolVersions,
 } from "ts-mls";
-import { Capabilities } from "ts-mls/capabilities.js";
-import { ciphersuites } from "ts-mls/crypto/ciphersuite.js";
-import { protocolVersions } from "ts-mls/protocolVersion.js";
 import { describe, expect, it } from "vitest";
 
 import { createCredential } from "../credential.js";

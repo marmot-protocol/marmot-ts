@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { createCredential, getCredentialPubkey } from "../credential.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
-import { CredentialBasic, CredentialX509 } from "ts-mls/credential.js";
-import { defaultCredentialTypes } from "ts-mls";
+import {
+  CredentialBasic,
+  CredentialX509,
+  defaultCredentialTypes,
+} from "ts-mls";
 import { marmotAuthService } from "../auth-service.js";
 
 const validPubkey =

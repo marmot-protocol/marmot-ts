@@ -1,5 +1,4 @@
-import { defaultProposalTypes } from "ts-mls";
-import { ProposalRemove } from "ts-mls/proposal.js";
+import { defaultProposalTypes, ProposalRemove } from "ts-mls";
 import { getPubkeyLeafNodeIndexes } from "../../../core/group-members.js";
 import { ProposalAction } from "../marmot-group.js";
 

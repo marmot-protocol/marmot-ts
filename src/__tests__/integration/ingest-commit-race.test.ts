@@ -2,18 +2,20 @@ import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { EventSigner } from "applesauce-core";
 import {
   CiphersuiteImpl,
+  clientStateDecoder,
+  clientStateEncoder,
   createApplicationMessage,
   createCommit,
   createProposal,
   defaultCryptoProvider,
+  decode,
+  encode,
   getCiphersuiteImpl,
   joinGroup,
   unsafeTestingAuthenticationService,
   defaultProposalTypes,
+  type ClientState,
 } from "ts-mls";
-import type { ClientState } from "ts-mls/clientState.js";
-import { clientStateDecoder, clientStateEncoder } from "ts-mls/clientState.js";
-import { decode, encode } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
 import { MarmotGroup } from "../../client/group/marmot-group.js";

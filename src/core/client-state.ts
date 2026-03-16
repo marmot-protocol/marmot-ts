@@ -1,7 +1,18 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { ClientState, decode, encode, GroupInfo, nodeTypes } from "ts-mls";
-import { defaultClientConfig } from "ts-mls/clientConfig.js";
-import { clientStateDecoder, clientStateEncoder } from "ts-mls/clientState.js";
+import {
+  ClientConfig,
+  ClientState,
+  clientStateDecoder,
+  clientStateEncoder,
+  decode,
+  defaultKeyPackageEqualityConfig,
+  defaultKeyRetentionConfig,
+  defaultLifetimeConfig,
+  defaultPaddingConfig,
+  GroupInfo,
+  nodeTypes,
+  encode,
+} from "ts-mls";
 import {
   decodeMarmotGroupData,
   isMarmotGroupDataExtension,
@@ -9,8 +20,11 @@ import {
 import { MarmotGroupData } from "./protocol.js";
 
 /** Default ClientConfig for Marmot. */
-export const defaultMarmotClientConfig = {
-  ...defaultClientConfig,
+export const defaultMarmotClientConfig: ClientConfig = {
+  keyRetentionConfig: defaultKeyRetentionConfig,
+  lifetimeConfig: defaultLifetimeConfig,
+  keyPackageEqualityConfig: defaultKeyPackageEqualityConfig,
+  paddingConfig: defaultPaddingConfig,
 };
 
 /** Reads the MarmotGroupData from a ClientState or GroupInfo objects */

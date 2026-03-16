@@ -1,4 +1,4 @@
-import { Capabilities } from "ts-mls/capabilities.js";
+import { Capabilities } from "ts-mls";
 import {
   LAST_RESORT_EXTENSION_TYPE,
   MARMOT_GROUP_DATA_EXTENSION_TYPE,

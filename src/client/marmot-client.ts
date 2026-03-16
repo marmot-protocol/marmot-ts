@@ -6,7 +6,9 @@ import { EventEmitter } from "eventemitter3";
 import {
   Capabilities,
   ClientState,
+  CiphersuiteName,
   CryptoProvider,
+  ciphersuites,
   defaultCryptoProvider,
   GroupInfo,
   joinGroup,
@@ -14,7 +16,6 @@ import {
   PrivateKeyPackage,
   Welcome,
 } from "ts-mls";
-import { CiphersuiteName, ciphersuites } from "ts-mls/crypto/ciphersuite.js";
 import { marmotAuthService } from "../core/auth-service.js";
 import {
   deserializeClientState,
@@ -45,7 +46,10 @@ import {
   MarmotGroup,
 } from "./group/marmot-group.js";
 import { KeyPackageManager } from "./key-package-manager.js";
-import type { NostrNetworkInterface, PublishResponse } from "./nostr-interface.js";
+import type {
+  NostrNetworkInterface,
+  PublishResponse,
+} from "./nostr-interface.js";
 
 const log = logger.extend("client");
 

@@ -2,8 +2,12 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventSigner } from "applesauce-core";
 import { NostrEvent } from "applesauce-core/helpers/event";
 import { EventEmitter } from "eventemitter3";
-import { CiphersuiteName, ciphersuites } from "ts-mls/crypto/ciphersuite.js";
-import { PrivateKeyPackage } from "ts-mls/keyPackage.js";
+import {
+  CiphersuiteName,
+  ciphersuites,
+  defaultCryptoProvider,
+  PrivateKeyPackage,
+} from "ts-mls";
 import { createCredential } from "../core/credential.js";
 import {
   createDeleteKeyPackageEvent,
@@ -20,7 +24,6 @@ import {
 } from "../store/key-package-store.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
 import { logger } from "../utils/debug.js";
-import { defaultCryptoProvider } from "ts-mls";
 
 /**
  * Thrown by {@link KeyPackageManager.create} when no relay URLs are provided.

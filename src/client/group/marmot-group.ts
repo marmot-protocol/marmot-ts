@@ -756,6 +756,7 @@ export class MarmotGroup<
             groupRelays: groupData.relays,
             keyPackageEventId: recipient.keyPackageEventId,
             keyPackageEvent: recipient.keyPackageEvent,
+            epochAuthenticator: this.state.keySchedule.epochAuthenticator,
           });
 
           // Gift wrap the welcome event to the newly added user

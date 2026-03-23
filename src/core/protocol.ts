@@ -85,3 +85,6 @@ export const GROUP_EVENT_KIND = 445;
 
 /** Event kind for welcome events */
 export const WELCOME_EVENT_KIND = 444;
+
+/** The name of the optional tag that contains the welcome epoch authenticator */
+export const WELCOME_EPOCH_AUTHENTICATOR_TAG = "ea";

@@ -1,5 +1,6 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { getTagValue, NostrEvent } from "applesauce-core/helpers/event";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { getEventHash } from "nostr-tools";
 import {
   decode,
@@ -36,7 +37,11 @@ import {
   isMarmotGroupDataExtension,
 } from "./marmot-group-data.js";
 import { isRumorLike } from "./nostr.js";
-import { type MarmotGroupData, WELCOME_EVENT_KIND } from "./protocol.js";
+import {
+  type MarmotGroupData,
+  WELCOME_EPOCH_AUTHENTICATOR_TAG,
+  WELCOME_EVENT_KIND,
+} from "./protocol.js";
 
 /**
  * Creates a welcome rumor (kind 444) for a welcome message.
@@ -52,12 +57,14 @@ export function createWelcomeRumor({
   author,
   groupRelays,
   keyPackageEventId,
+  epochAuthenticator,
 }: {
   welcome: Welcome;
   author: string;
   keyPackageEventId?: string;
   keyPackageEvent?: NostrEvent;
   groupRelays: string[];
+  epochAuthenticator?: Uint8Array;
 }): Rumor {
   // Serialize the welcome message as a full MLSMessage (RFC 9420)
   const mlsMessage: MlsWelcomeMessage = {
@@ -82,6 +89,12 @@ export function createWelcomeRumor({
   // Add the key package event ID if known
   if (keyPackageEventId) draft.tags.push(["e", keyPackageEventId]);
 
+  if (epochAuthenticator)
+    draft.tags.push([
+      WELCOME_EPOCH_AUTHENTICATOR_TAG,
+      bytesToHex(epochAuthenticator),
+    ]);
+
   // Calculate the event ID for the rumor
   const id = getEventHash(draft);
 
@@ -94,6 +107,22 @@ export function createWelcomeRumor({
 /** Returns the key package event ID from a welcome rumor */
 export function getWelcomeKeyPackageEventId(event: Rumor): string | undefined {
   return getTagValue(event, "e");
+}
+
+/** Returns the optional epoch authenticator from a welcome rumor */
+export function getWelcomeEpochAuthenticator(
+  event: Rumor,
+): Uint8Array | undefined {
+  const value = getTagValue(event, WELCOME_EPOCH_AUTHENTICATOR_TAG);
+  if (!value) return undefined;
+
+  try {
+    return hexToBytes(value);
+  } catch (error) {
+    throw new Error(
+      `Invalid ${WELCOME_EPOCH_AUTHENTICATOR_TAG} tag: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 /** Returns the group relays from a welcome rumor */

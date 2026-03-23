@@ -1,19 +1,18 @@
 import {
+  Capabilities,
+  Credential,
   CryptoProvider,
+  CiphersuiteId,
+  CiphersuiteImpl,
   defaultCredentialTypes,
   defaultCryptoProvider,
-} from "ts-mls";
-import { Capabilities } from "ts-mls/capabilities.js";
-import { Credential } from "ts-mls/credential.js";
-import { CiphersuiteId, CiphersuiteImpl } from "ts-mls/crypto/ciphersuite.js";
-import { CustomExtension } from "ts-mls";
-import {
+  CustomExtension,
   KeyPackage,
   generateKeyPackage as MLSGenerateKeyPackage,
-  PrivateKeyPackage,
+  Lifetime,
   makeKeyPackageRef,
-} from "ts-mls/keyPackage.js";
-import { Lifetime } from "ts-mls/lifetime.js";
+  PrivateKeyPackage,
+} from "ts-mls";
 
 import { createThreeMonthLifetime } from "../utils/timestamp.js";
 import { ensureMarmotCapabilities } from "./capabilities.js";
@@ -44,8 +43,6 @@ export async function calculateKeyPackageRef(
   keyPackage: KeyPackage,
   cryptoProvider?: CryptoProvider,
 ): Promise<Uint8Array> {
-  // In v2, keyPackage.cipherSuite is a numeric ciphersuite id.
-  // Prefer id-first handling to avoid reverse mapping name<->id for correctness.
   const provider = cryptoProvider ?? defaultCryptoProvider;
   const ciphersuiteImpl = await provider.getCiphersuiteImpl(
     keyPackage.cipherSuite as CiphersuiteId,

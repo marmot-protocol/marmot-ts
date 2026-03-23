@@ -8,6 +8,7 @@ import {
 import { Debugger } from "debug";
 import { EventEmitter } from "eventemitter3";
 import {
+  acceptAll,
   CiphersuiteImpl,
   ClientState,
   contentTypes,
@@ -18,18 +19,15 @@ import {
   CryptoProvider,
   defaultProposalTypes,
   defaultCryptoProvider,
+  type IncomingMessageCallback,
+  type LeafIndex,
+  getCredentialFromLeafIndex,
   MlsMessage,
   processMessage,
   type ProcessMessageResult,
   Proposal,
   wireformats,
 } from "ts-mls";
-import {
-  acceptAll,
-  type IncomingMessageCallback,
-} from "ts-mls/incomingMessageAction.js";
-import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
-import { type LeafIndex, toLeafIndex } from "ts-mls/treemath.js";
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { marmotAuthService } from "../../core/auth-service.js";
@@ -65,6 +63,10 @@ import { NoGroupRelaysError, NoMarmotGroupDataError } from "../errors.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 import { proposeLeaveGroup } from "./proposals/leave-group.js";
+
+function toLeafIndex(index: number): LeafIndex {
+  return index as LeafIndex;
+}
 
 /** An event whose MLS message was successfully processed */
 export type ProcessedIngestResult = {

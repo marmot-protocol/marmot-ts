@@ -1,7 +1,10 @@
 import { randomBytes } from "@noble/hashes/utils.js";
-import { CiphersuiteImpl, createGroup as MLSCreateGroup } from "ts-mls";
-import { ClientState } from "ts-mls/clientState.js";
-import { GroupContextExtension } from "ts-mls";
+import {
+  CiphersuiteImpl,
+  ClientState,
+  createGroup as MLSCreateGroup,
+  GroupContextExtension,
+} from "ts-mls";
 import { marmotAuthService } from "./auth-service.js";
 import { CompleteKeyPackage } from "./key-package.js";
 import { marmotGroupDataToExtension } from "./marmot-group-data.js";

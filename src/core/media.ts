@@ -23,9 +23,7 @@ import {
   hexToBytes,
   randomBytes,
 } from "@noble/hashes/utils.js";
-import { mlsExporter } from "ts-mls/keySchedule.js";
-import type { CiphersuiteImpl } from "ts-mls/crypto/ciphersuite.js";
-import type { ClientState } from "ts-mls/clientState.js";
+import { mlsExporter, type CiphersuiteImpl, type ClientState } from "ts-mls";
 import {
   getFileMetadata,
   getFileMetadataFromImetaTag,

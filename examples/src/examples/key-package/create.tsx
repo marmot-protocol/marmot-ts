@@ -1,7 +1,6 @@
 import { NostrEvent } from "applesauce-core/helpers";
 import { useEffect, useState } from "react";
-import type { CiphersuiteName } from "ts-mls";
-import { KeyPackage } from "ts-mls/keyPackage.js";
+import type { CiphersuiteName, KeyPackage } from "ts-mls";
 
 import { getKeyPackage } from "../../../../src";
 import KeyPackageDataView from "../../components/data-view/key-package";

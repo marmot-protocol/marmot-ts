@@ -2,21 +2,24 @@ import {
   ClientState,
   Credential,
   defaultCredentialTypes,
+  getGroupMembers as getMlsGroupMembers,
+  LeafNode,
   nodeTypes,
 } from "ts-mls";
-import { nodeToLeafIndex, toNodeIndex } from "ts-mls/treemath.js";
 import { getCredentialPubkey, isSameCredential } from "./credential.js";
-import { LeafNode } from "ts-mls/leafNode.js";
+
+function nodeToLeafIndex(nodeIndex: number): number {
+  // This matches ts-mls treemath: nodeToLeafIndex(nodeIndex) = nodeIndex / 2
+  // for leaf positions in the ratchet tree.
+  return Math.floor(nodeIndex / 2);
+}
 
 /** Gets all the nostr pubkey keys in a group */
 export function getGroupMembers(state: ClientState): string[] {
   const pubkeys = new Set<string>();
-  for (const node of state.ratchetTree) {
-    if (
-      node?.nodeType === nodeTypes.leaf &&
-      node.leaf.credential.credentialType === defaultCredentialTypes.basic
-    ) {
-      pubkeys.add(getCredentialPubkey(node.leaf.credential));
+  for (const leaf of getMlsGroupMembers(state)) {
+    if (leaf.credential.credentialType === defaultCredentialTypes.basic) {
+      pubkeys.add(getCredentialPubkey(leaf.credential));
     }
   }
   return Array.from(pubkeys);
@@ -58,7 +61,7 @@ export function getPubkeyLeafNodeIndexes(
       node.leaf.credential.credentialType === defaultCredentialTypes.basic
     ) {
       if (getCredentialPubkey(node.leaf.credential) === pubkey)
-        leafIndexes.push(Number(nodeToLeafIndex(toNodeIndex(nodeIndex))));
+        leafIndexes.push(Number(nodeToLeafIndex(nodeIndex)));
     }
   }
 
@@ -82,7 +85,7 @@ export function getCredentialLeafNodeIndexes(
     const node = state.ratchetTree[nodeIndex];
     if (node && node.nodeType === nodeTypes.leaf) {
       if (isSameCredential(node.leaf.credential, credential))
-        leafIndexes.push(Number(nodeToLeafIndex(toNodeIndex(nodeIndex))));
+        leafIndexes.push(Number(nodeToLeafIndex(nodeIndex)));
     }
   }
 

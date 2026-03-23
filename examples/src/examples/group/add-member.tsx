@@ -11,7 +11,7 @@ import {
   switchMap,
 } from "rxjs";
 import { map } from "rxjs/operators";
-import { ClientState } from "ts-mls/clientState.js";
+import type { ClientState } from "ts-mls";
 import { getKeyPackageCipherSuiteId } from "../../../../src";
 import { MarmotGroup } from "../../../../src/client/group/marmot-group";
 import { proposeInviteUser } from "../../../../src/client/group/proposals/invite-user.js";

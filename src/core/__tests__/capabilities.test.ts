@@ -1,6 +1,9 @@
-import { Capabilities, defaultCredentialTypes } from "ts-mls";
-import { ciphersuites } from "ts-mls/crypto/ciphersuite.js";
-import { protocolVersions } from "ts-mls/protocolVersion.js";
+import {
+  Capabilities,
+  ciphersuites,
+  defaultCredentialTypes,
+  protocolVersions,
+} from "ts-mls";
 import { describe, expect, it } from "vitest";
 import {
   ensureMarmotCapabilities,

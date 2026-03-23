@@ -5,12 +5,12 @@ import { useMemo, useState } from "react";
 import { of } from "rxjs";
 import { map } from "rxjs/operators";
 import {
+  type CredentialBasic,
   defaultCredentialTypes,
   encode,
   KeyPackage,
   keyPackageEncoder,
 } from "ts-mls";
-import { CredentialBasic } from "ts-mls/credential.js";
 
 import {
   addRelayHintsToPointer,

@@ -1,8 +1,12 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { NostrEvent } from "applesauce-core/helpers/event";
 import { EventEmitter } from "eventemitter3";
-import { CryptoProvider, defaultCryptoProvider } from "ts-mls";
-import { KeyPackage, PrivateKeyPackage } from "ts-mls/keyPackage.js";
+import {
+  CryptoProvider,
+  defaultCryptoProvider,
+  KeyPackage,
+  PrivateKeyPackage,
+} from "ts-mls";
 import { getKeyPackage } from "../core/key-package-event.js";
 import { calculateKeyPackageRef } from "../core/key-package.js";
 import { KeyValueStoreBackend } from "../utils/key-value.js";

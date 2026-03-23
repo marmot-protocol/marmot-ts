@@ -1,16 +1,17 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventTemplate, NostrEvent } from "applesauce-core/helpers/event";
 import {
+  CiphersuiteId,
   CustomExtension,
+  ciphersuites,
   decode,
   defaultCredentialTypes,
   encode,
   KeyPackage,
+  keyPackageDecoder,
+  keyPackageEncoder,
+  protocolVersions,
 } from "ts-mls";
-import { CiphersuiteId, ciphersuites } from "ts-mls/crypto/ciphersuite.js";
-import { greaseValues } from "ts-mls/grease.js";
-import { keyPackageDecoder, keyPackageEncoder } from "ts-mls/keyPackage.js";
-import { protocolVersions } from "ts-mls/protocolVersion.js";
 import {
   decodeContent,
   encodeContent,
@@ -19,6 +20,7 @@ import {
 import { getTagValue, unixNow } from "../utils/nostr.js";
 import { isValidRelayUrl, normalizeRelayUrl } from "../utils/relay-url.js";
 import { getCredentialPubkey } from "./credential.js";
+import { isGreaseValue } from "./grease.js";
 import { calculateKeyPackageRef } from "./key-package.js";
 import {
   KEY_PACKAGE_CIPHER_SUITE_TAG,
@@ -207,7 +209,7 @@ async function createKeyPackageEventInternal(
   const filteredExtensionTypes = extensionTypes.filter((hexValue) => {
     // Parse the hex value back to number to check if it's a GREASE value
     const extType = parseInt(hexValue);
-    return !greaseValues.includes(extType);
+    return !isGreaseValue(extType);
   });
 
   // Get the protocol version - keyPackage.version is a numeric ProtocolVersionValue

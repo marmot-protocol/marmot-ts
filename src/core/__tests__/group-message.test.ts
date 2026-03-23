@@ -4,9 +4,9 @@ import {
   defaultCryptoProvider,
   encode,
   getCiphersuiteImpl,
+  mlsMessageEncoder,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
-import { mlsMessageEncoder } from "ts-mls/message.js";
 
 import {
   createEncryptedGroupEventContent,

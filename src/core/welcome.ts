@@ -5,29 +5,21 @@ import {
   NostrEvent,
 } from "applesauce-core/helpers/event";
 import {
+  CiphersuiteImpl,
   decode,
   encode,
   type GroupInfo,
-  protocolVersions,
-  wireformats,
-} from "ts-mls";
-import { CiphersuiteImpl } from "ts-mls/crypto/ciphersuite.js";
-import {
+  joinGroup,
   KeyPackage,
-  makeKeyPackageRef,
   PrivateKeyPackage,
-} from "ts-mls/keyPackage.js";
-import {
   mlsMessageDecoder,
   mlsMessageEncoder,
   type MlsWelcomeMessage,
-} from "ts-mls/message.js";
-import { computePskSecret } from "ts-mls/presharedkey.js";
-import {
-  decryptGroupInfo,
-  decryptGroupSecrets,
+  protocolVersions,
   type Welcome,
-} from "ts-mls/welcome.js";
+  wireformats,
+} from "ts-mls";
+import { marmotAuthService } from "./auth-service.js";
 import {
   decodeContent,
   encodeContent,
@@ -184,45 +176,30 @@ export async function readWelcomeGroupInfo({
   // Unwrap welcome rumor if provided
   if (isRumorLike(welcome)) welcome = getWelcome(welcome);
 
-  const keyPackageRef = await makeKeyPackageRef(
-    keyPackage.publicPackage,
-    ciphersuiteImpl.hash,
-  );
-
-  const initPrivateKey = await ciphersuiteImpl.hpke.importPrivateKey(
-    keyPackage.privatePackage.initPrivateKey,
-  );
-
-  let groupSecrets;
   try {
-    groupSecrets = await decryptGroupSecrets(
-      initPrivateKey,
-      keyPackageRef,
+    const clientState = await joinGroup({
+      context: {
+        cipherSuite: ciphersuiteImpl,
+        authService: marmotAuthService,
+        externalPsks: {},
+      },
       welcome,
-      ciphersuiteImpl.hpke,
-    );
+      keyPackage: keyPackage.publicPackage,
+      privateKeys: keyPackage.privatePackage,
+    });
+
+    return {
+      groupContext: clientState.groupContext,
+      extensions: [],
+      confirmationTag: clientState.confirmationTag,
+      signer: clientState.privatePath.leafIndex,
+      signature: new Uint8Array(),
+    };
   } catch (err) {
     throw new Error(
       `Failed to decrypt group secrets: key package does not match this welcome (${err instanceof Error ? err.message : String(err)})`,
     );
   }
-  if (!groupSecrets)
-    throw new Error(
-      "Failed to decrypt group secrets: key package does not match this welcome",
-    );
-
-  // Marmot groups do not use external PSKs; compute the zero-valued PSK secret.
-  const pskSecret = await computePskSecret([], ciphersuiteImpl);
-
-  const groupInfo = await decryptGroupInfo(
-    welcome,
-    groupSecrets.joinerSecret,
-    pskSecret,
-    ciphersuiteImpl,
-  );
-  if (!groupInfo) throw new Error("Failed to decrypt group info from welcome");
-
-  return groupInfo;
 }
 
 /**

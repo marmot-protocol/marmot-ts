@@ -3,7 +3,7 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MarmotClient } from "../marmot-client.js";
-import { GROUP_EVENT_KIND, KEY_PACKAGE_KIND } from "../../core/protocol.js";
+import { ADDRESSABLE_KEY_PACKAGE_KIND, GROUP_EVENT_KIND } from "../../core/protocol.js";
 import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
 import { KeyPackageStore } from "../../store/key-package-store.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
@@ -21,6 +21,7 @@ async function makeClient(network: MockNetwork): Promise<MarmotClient> {
     keyPackageStore: new KeyPackageStore(new MemoryBackend()),
     signer: account.signer,
     network,
+    clientId: "test-client",
   });
 }
 
@@ -35,6 +36,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
     keyPackageStore: new KeyPackageStore(new MemoryBackend()),
     signer: adminAccount.signer,
     network: mockNetwork,
+    clientId: "test-admin",
   });
 
   const memberClient = new MarmotClient({
@@ -42,6 +44,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
     keyPackageStore: new KeyPackageStore(new MemoryBackend()),
     signer: memberAccount.signer,
     network: mockNetwork,
+    clientId: "test-member",
   });
 
   // Member publishes a key package
@@ -56,7 +59,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
   // Admin fetches the member's key package and invites them
   const keyPackageEvents = await mockNetwork.request(
     ["wss://mock-relay.test"],
-    { kinds: [KEY_PACKAGE_KIND], authors: [memberPubkey] },
+    { kinds: [ADDRESSABLE_KEY_PACKAGE_KIND], authors: [memberPubkey] },
   );
   await adminGroup.inviteByKeyPackageEvent(keyPackageEvents[0]);
 

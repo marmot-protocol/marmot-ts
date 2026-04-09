@@ -264,10 +264,7 @@ describe("KeyPackageManager", () => {
       const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
 
       // Inject a stored entry without a d to simulate a legacy 443 package
-      const { generateKeyPackage } = await import("../core/key-package.js");
-      const { createCredential } = await import("../core/credential.js");
-      const { defaultCryptoProvider, getCiphersuiteImpl } =
-        await import("ts-mls");
+      // Uses top-level imports for generateKeyPackage, createCredential, etc.
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         defaultCryptoProvider,
@@ -306,10 +303,7 @@ describe("KeyPackageManager", () => {
       const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
 
       // Inject a stored entry with a legacy kind 443 published event
-      const { generateKeyPackage } = await import("../core/key-package.js");
-      const { createCredential } = await import("../core/credential.js");
-      const { defaultCryptoProvider, getCiphersuiteImpl } =
-        await import("ts-mls");
+      // Uses top-level imports for generateKeyPackage, createCredential, etc.
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         defaultCryptoProvider,

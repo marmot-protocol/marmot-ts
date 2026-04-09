@@ -2,8 +2,12 @@ import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { EventSigner } from "applesauce-core";
 import { NostrEvent } from "applesauce-core/helpers/event";
 import { EventEmitter } from "eventemitter3";
-import { CiphersuiteName } from "ts-mls/crypto/ciphersuite.js";
-import { PrivateKeyPackage } from "ts-mls/keyPackage.js";
+import {
+  CiphersuiteName,
+  ciphersuites,
+  defaultCryptoProvider,
+  PrivateKeyPackage,
+} from "ts-mls";
 import { createCredential } from "../core/credential.js";
 import {
   createDeleteKeyPackageEvent,
@@ -623,8 +627,6 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   }
 
   async #getCiphersuiteImpl(name?: CiphersuiteName) {
-    const { defaultCryptoProvider } = await import("ts-mls");
-    const { ciphersuites } = await import("ts-mls/crypto/ciphersuite.js");
     const ciphersuiteName =
       name ?? "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
     const id = ciphersuites[ciphersuiteName];

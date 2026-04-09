@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isValidRelayUrl, normalizeRelayUrl } from "../utils/relay-url.js";
+import { isValidRelayUrl, normalizeRelayUrl } from "../relay-url.js";
 
 describe("isValidRelayUrl", () => {
   it("should validate valid WebSocket URLs", () => {

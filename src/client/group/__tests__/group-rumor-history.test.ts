@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   GroupRumorHistory,
   type GroupRumorHistoryBackend,
-} from "../client/group/group-rumor-history.js";
+} from "../group-rumor-history.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

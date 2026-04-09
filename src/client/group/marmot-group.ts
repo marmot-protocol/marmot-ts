@@ -8,6 +8,7 @@ import {
 import { Debugger } from "debug";
 import { EventEmitter } from "eventemitter3";
 import {
+  acceptAll,
   CiphersuiteImpl,
   ClientState,
   contentTypes,
@@ -18,18 +19,15 @@ import {
   CryptoProvider,
   defaultProposalTypes,
   defaultCryptoProvider,
+  type IncomingMessageCallback,
+  type LeafIndex,
+  getCredentialFromLeafIndex,
   MlsMessage,
   processMessage,
   type ProcessMessageResult,
   Proposal,
   wireformats,
 } from "ts-mls";
-import {
-  acceptAll,
-  type IncomingMessageCallback,
-} from "ts-mls/incomingMessageAction.js";
-import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
-import { type LeafIndex, toLeafIndex } from "ts-mls/treemath.js";
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { marmotAuthService } from "../../core/auth-service.js";
@@ -69,6 +67,10 @@ import { NoGroupRelaysError, NoMarmotGroupDataError } from "../errors.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 import { proposeLeaveGroup } from "./proposals/leave-group.js";
+
+function toLeafIndex(index: number): LeafIndex {
+  return index as LeafIndex;
+}
 
 /** An event whose MLS message was successfully processed */
 export type ProcessedIngestResult = {
@@ -396,6 +398,7 @@ export class MarmotGroup<
       this.history = undefined as THistory;
     }
 
+    // Create the media store
     if (options.media) {
       if (typeof options.media === "function") {
         this.media = options.media(this.id);
@@ -443,13 +446,6 @@ export class MarmotGroup<
     this.emit("stateSaved", this);
   }
 
-  /** Publish an event to the group relays */
-  async publish(event: NostrEvent): Promise<Record<string, PublishResponse>> {
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
-    return await this.network.publish(relays, event);
-  }
-
   /**
    * Performs a self-update commit (no proposals) to rotate this member's leaf key material.
    *
@@ -485,9 +481,8 @@ export class MarmotGroup<
     });
 
     const response = await this.network.publish(relays, commitEvent);
-    if (!hasAck(response)) {
+    if (!hasAck(response))
       throw new Error("Failed to publish commit event: no relay acknowledged");
-    }
 
     // Advance local state after publish.
     this.state = newState;
@@ -600,12 +595,7 @@ export class MarmotGroup<
   async sendProposal(
     proposal: Proposal,
   ): Promise<Record<string, PublishResponse>> {
-    // NOTE: We don't update state here because:
-    // 1. The proposal will be received back from relays and processed via ingest()
-    // 2. When processed via ingest(), it will be added to state.unappliedProposals
-    // 3. If you need to commit immediately with this proposal, pass it explicitly to commit()
-    // In v2, createProposal takes a single params object with context
-    const { message } = await createProposal({
+    const { message, newState } = await createProposal({
       context: {
         cipherSuite: this.ciphersuite,
         authService: marmotAuthService,
@@ -624,7 +614,21 @@ export class MarmotGroup<
     });
 
     // Publish to the group's relays
-    return await this.publish(proposalEvent);
+    const relays = this.relays;
+    if (!relays) throw new NoGroupRelaysError();
+
+    const response = await this.network.publish(relays, proposalEvent);
+    if (!hasAck(response)) {
+      throw new Error(
+        "Failed to publish proposal event: no relay acknowledged",
+      );
+    }
+
+    // Advance local state only after at least one relay acknowledges the event.
+    this.state = newState;
+    await this.save();
+
+    return response;
   }
 
   /**
@@ -656,13 +660,10 @@ export class MarmotGroup<
       message: applicationData,
     });
 
-    // The message returned is the MLS message (not privateMessage directly)
-    const mlsMessage = message;
-
     // Wrap the message in a group event
     // Use this.state (not newState) to get the exporter_secret for the current epoch
     const applicationEvent = await createGroupEvent({
-      message: mlsMessage,
+      message,
       state: this.state,
       ciphersuite: this.ciphersuite,
     });
@@ -1525,9 +1526,8 @@ export class MarmotGroup<
     encrypted: Uint8Array,
     attachment: MediaAttachment,
   ): Promise<StoredMedia> {
-    if (!attachment.sha256) {
+    if (!attachment.sha256)
       throw new Error("decryptMedia: attachment.sha256 is required");
-    }
 
     // Cache hit — return immediately without re-deriving the key
     const cached = await this.media?.getMedia(attachment.sha256);

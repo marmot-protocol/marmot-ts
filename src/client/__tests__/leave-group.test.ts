@@ -2,12 +2,13 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MarmotClient } from "../client/marmot-client.js";
-import { GROUP_EVENT_KIND, KEY_PACKAGE_KIND } from "../core/protocol.js";
-import { KeyValueGroupStateBackend } from "../store/adapters/key-value-group-state-backend.js";
-import { KeyPackageStore } from "../store/key-package-store.js";
-import { MockNetwork } from "./helpers/mock-network.js";
-import { MemoryBackend } from "./ingest-commit-race.test.js";
+import { MarmotClient } from "../marmot-client.js";
+import { GROUP_EVENT_KIND, KEY_PACKAGE_KIND } from "../../core/protocol.js";
+import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
+import { KeyPackageStore } from "../../store/key-package-store.js";
+import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
+import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
+import { unlockGiftWrap } from "applesauce-common/helpers";
 
 // ============================================================================
 // Shared setup helpers
@@ -60,8 +61,6 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
   await adminGroup.inviteByKeyPackageEvent(keyPackageEvents[0]);
 
   // Member joins from the welcome
-  const { unlockGiftWrap } =
-    await import("applesauce-common/helpers/gift-wrap");
   const giftWraps = await mockNetwork.request(["wss://mock-inbox.test"], {
     kinds: [1059],
     "#p": [memberPubkey],
@@ -92,21 +91,21 @@ describe("MarmotGroup.leave()", () => {
     mockNetwork = new MockNetwork();
   });
 
-  it("publishes a leave commit event to group relays", async () => {
+  it("publishes a leave proposal event to group relays", async () => {
     const { memberGroup } = await setupTwoMemberGroup(mockNetwork);
 
-    const commitCountBefore = mockNetwork.events.filter(
+    const proposalCountBefore = mockNetwork.events.filter(
       (e) => e.kind === GROUP_EVENT_KIND,
     ).length;
 
     await memberGroup.leave();
 
-    const commitCountAfter = mockNetwork.events.filter(
+    const proposalCountAfter = mockNetwork.events.filter(
       (e) => e.kind === GROUP_EVENT_KIND,
     ).length;
 
-    // One new group event published for the leave commit
-    expect(commitCountAfter).toBe(commitCountBefore + 1);
+    // One new group event published for the leave proposal
+    expect(proposalCountAfter).toBe(proposalCountBefore + 1);
   });
 
   it("destroys local group state (store is empty after leave)", async () => {
@@ -174,10 +173,7 @@ describe("MarmotGroup.leave()", () => {
     expect(groupsAfter.some((id) => bytesToHex(id) === groupIdHex)).toBe(true);
   });
 
-  it("throws NoMarmotGroupDataError when group data is missing", async () => {
-    // Create a minimal group with no group data by using the admin's group
-    // without the marmot extension — instead, just check the error fires for
-    // a group with no relays configured.
+  it("throws when relays are missing", async () => {
     const { memberGroup } = await setupTwoMemberGroup(mockNetwork);
 
     // Monkeypatch relays to simulate missing relay config
@@ -196,7 +192,7 @@ describe("MarmotClient.leaveGroup()", () => {
     mockNetwork = new MockNetwork();
   });
 
-  it("publishes a leave commit and evicts the group from the client cache", async () => {
+  it("publishes leave proposal events and evicts the group from the client cache", async () => {
     const { memberClient, memberGroup } =
       await setupTwoMemberGroup(mockNetwork);
 
@@ -248,21 +244,21 @@ describe("MarmotClient.leaveGroup()", () => {
     await expect(memberClient.leaveGroup(hexId)).resolves.toBeDefined();
   });
 
-  it("publishes a commit event to the group relays", async () => {
+  it("publishes a proposal event to the group relays", async () => {
     const { memberClient, memberGroup } =
       await setupTwoMemberGroup(mockNetwork);
 
     const groupIdHex = bytesToHex(memberGroup.id);
-    const commitsBefore = mockNetwork.events.filter(
+    const proposalsBefore = mockNetwork.events.filter(
       (e) => e.kind === GROUP_EVENT_KIND,
     ).length;
 
     await memberClient.leaveGroup(memberGroup.id);
 
-    const commitsAfter = mockNetwork.events.filter(
+    const proposalsAfter = mockNetwork.events.filter(
       (e) => e.kind === GROUP_EVENT_KIND,
     ).length;
 
-    expect(commitsAfter).toBe(commitsBefore + 1);
+    expect(proposalsAfter).toBe(proposalsBefore + 1);
   });
 });

@@ -11,8 +11,8 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
-import { createCredential } from "../core/credential.js";
-import { generateKeyPackage } from "../core/key-package.js";
+import { createCredential } from "../credential.js";
+import { generateKeyPackage } from "../key-package.js";
 import {
   createMarmotGroupData,
   decodeMarmotGroupData,
@@ -21,8 +21,8 @@ import {
   isMarmotGroupDataExtension,
   isAdmin,
   marmotGroupDataToExtension,
-} from "../core/marmot-group-data.js";
-import { MarmotGroupData } from "../core/protocol.js";
+} from "../marmot-group-data.js";
+import { MarmotGroupData } from "../protocol.js";
 
 describe("encodeMarmotGroupData and decodeMarmotGroupData", () => {
   it("should encode and decode group data correctly", () => {

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 
-import { createCredential } from "../core/credential.js";
-import { generateKeyPackage } from "../core/key-package.js";
-import { createGroup } from "../core/group.js";
-import { extractMarmotGroupData } from "../core/client-state.js";
+import { createCredential } from "../credential.js";
+import { generateKeyPackage } from "../key-package.js";
+import { createGroup } from "../group.js";
+import { extractMarmotGroupData } from "../client-state.js";
 
 describe("MIP-01: group construction", () => {
   it("createGroup always includes a decodable Marmot Group Data extension", async () => {

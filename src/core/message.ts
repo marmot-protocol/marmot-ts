@@ -1,11 +1,6 @@
-import { wireformats } from "ts-mls";
-import {
-  MlsMessage,
-  MlsMessageProtocol,
-  MlsPrivateMessage,
-} from "ts-mls/message.js";
+import { MlsMessage, MlsPrivateMessage, wireformats } from "ts-mls";
 
-export type PrivateMessage = MlsMessageProtocol & MlsPrivateMessage;
+export type PrivateMessage = MlsPrivateMessage;
 
 /** Check if a MLSMessage is a private message */
 export function isPrivateMessage(

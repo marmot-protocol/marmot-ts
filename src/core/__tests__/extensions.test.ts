@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CustomExtension, makeCustomExtension } from "ts-mls";
-import { ensureLastResortExtension } from "../core/extensions";
-import { LAST_RESORT_EXTENSION_TYPE } from "../core/protocol";
+import { ensureLastResortExtension } from "../extensions.js";
+import { LAST_RESORT_EXTENSION_TYPE } from "../protocol.js";
 
 describe("ensureLastResortExtension", () => {
   it("should add last resort extension when not present", () => {

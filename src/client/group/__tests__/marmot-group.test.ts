@@ -14,40 +14,15 @@ import { describe, expect, it } from "vitest";
 import {
   createAdminCommitPolicyCallback,
   MarmotGroup,
-} from "../client/group/marmot-group.js";
-import type { NostrNetworkInterface } from "../client/nostr-interface.js";
-import { SerializedClientState } from "../core/client-state.js";
-import { createCredential } from "../core/credential.js";
-import { createSimpleGroup } from "../core/group.js";
-import { generateKeyPackage } from "../core/key-package.js";
-import type { GroupStateStoreBackend } from "../store/group-state-store.js";
-import { GroupStateStore } from "../store/group-state-store.js";
-import type { KeyValueStoreBackend } from "../utils/key-value.js";
-
-class MemoryBackend<T> implements KeyValueStoreBackend<T> {
-  private map = new Map<string, T>();
-
-  async getItem(key: string): Promise<T | null> {
-    return this.map.get(key) ?? null;
-  }
-
-  async setItem(key: string, value: T): Promise<T> {
-    this.map.set(key, value);
-    return value;
-  }
-
-  async removeItem(key: string): Promise<void> {
-    this.map.delete(key);
-  }
-
-  async clear(): Promise<void> {
-    this.map.clear();
-  }
-
-  async keys(): Promise<string[]> {
-    return Array.from(this.map.keys());
-  }
-}
+} from "../marmot-group.js";
+import type { NostrNetworkInterface } from "../../nostr-interface.js";
+import { SerializedClientState } from "../../../core/client-state.js";
+import { createCredential } from "../../../core/credential.js";
+import { createSimpleGroup } from "../../../core/group.js";
+import { generateKeyPackage } from "../../../core/key-package.js";
+import type { GroupStateStoreBackend } from "../../../store/group-state-store.js";
+import { GroupStateStore } from "../../../store/group-state-store.js";
+import { MemoryBackend } from "../../../__tests__/helpers/memory-backend.js";
 
 class MemoryGroupStateBackend implements GroupStateStoreBackend {
   private map = new Map<string, SerializedClientState>();

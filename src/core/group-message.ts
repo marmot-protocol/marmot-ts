@@ -1,15 +1,18 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { finalizeEvent, NostrEvent } from "applesauce-core/helpers/event";
 import { generateSecretKey } from "applesauce-core/helpers/keys";
-import { contentTypes, decode, encode, wireformats } from "ts-mls";
-import { ClientState } from "ts-mls/clientState.js";
-import { CiphersuiteImpl } from "ts-mls/crypto/ciphersuite.js";
-import { mlsExporter } from "ts-mls/keySchedule.js";
 import {
-  type MlsMessage,
+  ClientState,
+  CiphersuiteImpl,
+  contentTypes,
+  decode,
+  encode,
+  mlsExporter,
   mlsMessageDecoder,
   mlsMessageEncoder,
-} from "ts-mls/message.js";
+  type MlsMessage,
+  wireformats,
+} from "ts-mls";
 import { decodeContent, encodeContent } from "../utils/encoding.js";
 import { unixNow } from "../utils/nostr.js";
 import { decryptLegacyGroupMessageEventContent } from "./group-message-legacy.js";
@@ -306,10 +309,8 @@ export function isApplicationMessage(
 ): pair is GroupMessagePair & {
   message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
 } {
-  return (
-    isPrivateMessage(pair.message) &&
-    pair.message.privateMessage.contentType === contentTypes.application
-  );
+  if (!isPrivateMessage(pair.message)) return false;
+  return pair.message.privateMessage.contentType === contentTypes.application;
 }
 
 /**
@@ -320,10 +321,8 @@ export function isCommitMessage(
 ): pair is GroupMessagePair & {
   message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
 } {
-  return (
-    isPrivateMessage(pair.message) &&
-    pair.message.privateMessage.contentType === contentTypes.commit
-  );
+  if (!isPrivateMessage(pair.message)) return false;
+  return pair.message.privateMessage.contentType === contentTypes.commit;
 }
 
 /**
@@ -334,10 +333,8 @@ export function isProposalMessage(
 ): pair is GroupMessagePair & {
   message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
 } {
-  return (
-    isPrivateMessage(pair.message) &&
-    pair.message.privateMessage.contentType === contentTypes.proposal
-  );
+  if (!isPrivateMessage(pair.message)) return false;
+  return pair.message.privateMessage.contentType === contentTypes.proposal;
 }
 
 function decodeBase64(value: string): Uint8Array {

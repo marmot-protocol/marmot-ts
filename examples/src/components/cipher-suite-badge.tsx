@@ -1,6 +1,6 @@
-import { greaseValues } from "ts-mls/grease.js";
+import { type CiphersuiteId } from "ts-mls";
 import { getCiphersuiteNameFromId } from "../lib/ciphersuite";
-import { CiphersuiteId } from "ts-mls";
+import { isGreaseValue } from "../../../src/core/grease";
 
 interface CipherSuiteBadgeProps {
   cipherSuite: CiphersuiteId | number;
@@ -14,7 +14,7 @@ export default function CipherSuiteBadge({
   cipherSuite,
   className = "",
 }: CipherSuiteBadgeProps) {
-  const isGrease = greaseValues.includes(cipherSuite);
+  const isGrease = isGreaseValue(cipherSuite);
 
   // Get the cipher suite name
   const cipherSuiteName = isGrease

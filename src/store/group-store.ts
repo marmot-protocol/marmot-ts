@@ -1,6 +1,6 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventEmitter } from "eventemitter3";
-import { ClientState } from "ts-mls/clientState.js";
+import { ClientState } from "ts-mls";
 import {
   deserializeClientState,
   serializeClientState,

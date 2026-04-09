@@ -1,25 +1,27 @@
 import { NostrEvent, unixNow } from "applesauce-core/helpers";
+import { bytesToHex } from "@noble/ciphers/utils.js";
 import {
   defaultCryptoProvider,
   encode,
+  greaseValues,
   getCiphersuiteImpl,
   keyPackageEncoder,
+  makeCustomExtension,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
-import { createCredential } from "../core/credential.js";
-import { generateKeyPackage } from "../core/key-package";
+import { createCredential } from "../credential.js";
+import { generateKeyPackage } from "../key-package.js";
 import {
   createDeleteKeyPackageEvent,
   createKeyPackageEvent,
   getKeyPackage,
   getKeyPackageD,
-} from "../core/key-package-event.js";
+} from "../key-package-event.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   KEY_PACKAGE_KIND,
-} from "../core/protocol.js";
-import { bytesToHex } from "@noble/ciphers/utils.js";
+} from "../protocol.js";
 
 const mockPubkey =
   "02a1633cafe37eeebe2b39b4ec5f3d74c35e61fa7e7e6b7b8c5f7c4f3b2a1b2c3d";
@@ -348,6 +350,35 @@ describe("createKeyPackageEvent", () => {
     });
 
     expect(event.tags.some((t) => t[0] === "-")).toBe(true);
+  });
+
+  it("should filter GREASE extensions from advertised extension tags", async () => {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+      extensions: [
+        makeCustomExtension({
+          extensionType: greaseValues[0],
+          extensionData: new Uint8Array([1]),
+        }),
+      ],
+    });
+
+    const event = await createKeyPackageEvent({
+      keyPackage: keyPackage.publicPackage,
+    });
+
+    const extensionsTag = event.tags.find((tag) => tag[0] === "mls_extensions");
+    expect(extensionsTag).toBeDefined();
+    expect(extensionsTag).not.toContain(
+      `0x${greaseValues[0].toString(16).padStart(4, "0")}`,
+    );
   });
 
   it("should be able to decode base64-encoded key package event", async () => {

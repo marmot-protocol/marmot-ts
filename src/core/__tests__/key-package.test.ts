@@ -1,22 +1,23 @@
 import { unixNow } from "applesauce-core/helpers";
 import {
+  Capabilities,
+  ciphersuites,
   CustomExtension,
   defaultCredentialTypes,
   defaultCryptoProvider,
   getCiphersuiteImpl,
+  makeKeyPackageRef,
   makeCustomExtension,
+  protocolVersions,
 } from "ts-mls";
-import { Capabilities } from "ts-mls/capabilities.js";
-import { ciphersuites } from "ts-mls/crypto/ciphersuite.js";
-import { protocolVersions } from "ts-mls/protocolVersion.js";
 import { describe, expect, it } from "vitest";
 
-import { createCredential } from "../core/credential.js";
-import { generateKeyPackage } from "../core/key-package.js";
+import { createCredential } from "../credential.js";
+import { calculateKeyPackageRef, generateKeyPackage } from "../key-package.js";
 import {
   LAST_RESORT_EXTENSION_TYPE,
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
-} from "../core/protocol.js";
+} from "../protocol.js";
 
 describe("generateKeyPackage", () => {
   const validPubkey =
@@ -245,5 +246,24 @@ describe("generateKeyPackage", () => {
         ciphersuiteImpl,
       }),
     ).rejects.toThrow("Marmot key packages must use a basic credential");
+  });
+
+  it("should calculate key package refs with the upstream helper", async () => {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+    });
+
+    await expect(
+      calculateKeyPackageRef(keyPackage.publicPackage, defaultCryptoProvider),
+    ).resolves.toEqual(
+      await makeKeyPackageRef(keyPackage.publicPackage, ciphersuiteImpl.hash),
+    );
   });
 });

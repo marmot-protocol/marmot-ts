@@ -5,7 +5,7 @@ import {
   detectEncoding,
   encodeContent,
   getEncodingTag,
-} from "../utils/encoding.js";
+} from "../encoding.js";
 
 describe("encoding utilities", () => {
   // Test data

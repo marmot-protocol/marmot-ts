@@ -6,7 +6,9 @@ import { EventEmitter } from "eventemitter3";
 import {
   Capabilities,
   ClientState,
+  CiphersuiteName,
   CryptoProvider,
+  ciphersuites,
   defaultCryptoProvider,
   GroupInfo,
   joinGroup,
@@ -14,7 +16,6 @@ import {
   PrivateKeyPackage,
   Welcome,
 } from "ts-mls";
-import { CiphersuiteName, ciphersuites } from "ts-mls/crypto/ciphersuite.js";
 import { marmotAuthService } from "../core/auth-service.js";
 import {
   deserializeClientState,
@@ -45,7 +46,10 @@ import {
   MarmotGroup,
 } from "./group/marmot-group.js";
 import { KeyPackageManager } from "./key-package-manager.js";
-import { NostrNetworkInterface } from "./nostr-interface.js";
+import type {
+  NostrNetworkInterface,
+  PublishResponse,
+} from "./nostr-interface.js";
 
 const log = logger.extend("client");
 
@@ -103,7 +107,7 @@ type MarmotClientEvents<
   groupUnloaded: (groupId: Uint8Array) => void;
   /** Emitted when a group is destroyed */
   groupDestroyed: (groupId: Uint8Array) => void;
-  /** Emitted when the client leaves a group via a self-remove commit */
+  /** Emitted when the client leaves a group via self-remove proposal events */
   groupLeft: (groupId: Uint8Array) => void;
 };
 
@@ -339,7 +343,7 @@ export class MarmotClient<
    */
   async leaveGroup(
     groupId: Uint8Array | string,
-  ): Promise<Record<string, import("./nostr-interface.js").PublishResponse>> {
+  ): Promise<Record<string, PublishResponse>> {
     const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
     log("leaving group %s", id);
 
@@ -349,7 +353,7 @@ export class MarmotClient<
     const groupIdBytes =
       typeof groupId === "string" ? hexToBytes(groupId) : groupId;
 
-    // Publish the self-remove commit and destroy local state.
+    // Publish the self-remove proposal events and destroy local state.
     const response = await group.leave();
 
     // Evict from the in-memory cache (destroy() already removed from store).
@@ -385,7 +389,10 @@ export class MarmotClient<
       ciphersuiteImpl,
       name,
       // Always include the creator as an admin
-      { ...options, adminPubkeys: [pubkey, ...(options?.adminPubkeys || [])] },
+      {
+        ...options,
+        adminPubkeys: [...new Set([pubkey, ...(options?.adminPubkeys || [])])],
+      },
     );
 
     // Save the group to the store

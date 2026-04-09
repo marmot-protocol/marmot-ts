@@ -2,14 +2,14 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { InviteReader } from "../client/invite-reader.js";
+import { InviteReader } from "../invite-reader.js";
 import type {
   InviteStore,
   ReceivedGiftWrap,
   UnreadInvite,
-} from "../store/invite-store.js";
-import type { KeyValueStoreBackend } from "../utils/key-value.js";
-import { WELCOME_EVENT_KIND } from "../core/protocol.js";
+} from "../../store/invite-store.js";
+import type { KeyValueStoreBackend } from "../../utils/key-value.js";
+import { WELCOME_EVENT_KIND } from "../../core/protocol.js";
 
 /**
  * Simple in-memory backend for testing

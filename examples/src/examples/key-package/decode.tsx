@@ -1,13 +1,13 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { useMemo, useState } from "react";
 import {
+  type CredentialBasic,
   KeyPackage,
   keyPackageDecoder,
   decode,
   protocolVersions,
   defaultCredentialTypes,
 } from "ts-mls";
-import { CredentialBasic } from "ts-mls/credential.js";
 
 import CipherSuiteBadge from "../../components/cipher-suite-badge";
 import CredentialTypeBadge from "../../components/credential-type-badge";

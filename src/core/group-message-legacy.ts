@@ -1,8 +1,11 @@
-import { decode } from "ts-mls";
-import { ClientState } from "ts-mls/clientState.js";
-import { CiphersuiteImpl } from "ts-mls/crypto/ciphersuite.js";
-import { mlsExporter } from "ts-mls/keySchedule.js";
-import { mlsMessageDecoder, type MlsMessage } from "ts-mls/message.js";
+import {
+  ClientState,
+  CiphersuiteImpl,
+  decode,
+  mlsExporter,
+  mlsMessageDecoder,
+  type MlsMessage,
+} from "ts-mls";
 import {
   decryptBytes,
   encryptBytes,

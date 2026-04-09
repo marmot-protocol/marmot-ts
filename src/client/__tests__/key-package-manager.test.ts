@@ -5,46 +5,25 @@ import {
   KeyPackageManager,
   MissingRelayError,
   MissingSlotIdentifierError,
-} from "../client/key-package-manager.js";
+} from "../key-package-manager.js";
 import {
   getKeyPackageD,
   getKeyPackageRelays,
-} from "../core/key-package-event.js";
+} from "../../core/key-package-event.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   KEY_PACKAGE_KIND,
-} from "../core/protocol.js";
+} from "../../core/protocol.js";
 import {
   KeyPackageStore,
   StoredKeyPackage,
-} from "../store/key-package-store.js";
-import type { KeyValueStoreBackend } from "../utils/key-value.js";
-import { MockNetwork } from "./helpers/mock-network.js";
-
-// ---------------------------------------------------------------------------
-// Minimal in-memory backend
-// ---------------------------------------------------------------------------
-
-class MemoryBackend<T> implements KeyValueStoreBackend<T> {
-  private map = new Map<string, T>();
-
-  async getItem(key: string): Promise<T | null> {
-    return this.map.get(key) ?? null;
-  }
-  async setItem(key: string, value: T): Promise<T> {
-    this.map.set(key, value);
-    return value;
-  }
-  async removeItem(key: string): Promise<void> {
-    this.map.delete(key);
-  }
-  async clear(): Promise<void> {
-    this.map.clear();
-  }
-  async keys(): Promise<string[]> {
-    return Array.from(this.map.keys());
-  }
-}
+} from "../../store/key-package-store.js";
+import type { KeyValueStoreBackend } from "../../utils/key-value.js";
+import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
+import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
+import { generateKeyPackage } from "../../core/key-package.js";
+import { createCredential } from "../../core/credential.js";
+import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -249,10 +228,6 @@ describe("KeyPackageManager", () => {
       const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
 
       // Add a key package to the private store without any published events
-      const { generateKeyPackage } = await import("../core/key-package.js");
-      const { createCredential } = await import("../core/credential.js");
-      const { defaultCryptoProvider, getCiphersuiteImpl } =
-        await import("ts-mls");
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         defaultCryptoProvider,
@@ -423,10 +398,7 @@ describe("KeyPackageManager", () => {
     it("skips relay deletion if the old key package was never published", async () => {
       const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
 
-      const { generateKeyPackage } = await import("../core/key-package.js");
-      const { createCredential } = await import("../core/credential.js");
-      const { defaultCryptoProvider, getCiphersuiteImpl } =
-        await import("ts-mls");
+      // Add an unpublished key package directly to the private store
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         defaultCryptoProvider,
@@ -597,10 +569,7 @@ describe("KeyPackageManager", () => {
     it("silently skips relay deletion for refs with no published events but still removes private key", async () => {
       const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
 
-      const { generateKeyPackage } = await import("../core/key-package.js");
-      const { createCredential } = await import("../core/credential.js");
-      const { defaultCryptoProvider, getCiphersuiteImpl } =
-        await import("ts-mls");
+      // Add an unpublished key package directly to the private store
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         defaultCryptoProvider,
@@ -922,11 +891,7 @@ describe("KeyPackageManager", () => {
 
       await manager.create({ relays: ["wss://relay.test"] });
 
-      // Add an unpublished key package directly to the private store
-      const { generateKeyPackage } = await import("../core/key-package.js");
-      const { createCredential } = await import("../core/credential.js");
-      const { defaultCryptoProvider, getCiphersuiteImpl } =
-        await import("ts-mls");
+      // One unpublished package (added directly to private store, no publish record)
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         defaultCryptoProvider,

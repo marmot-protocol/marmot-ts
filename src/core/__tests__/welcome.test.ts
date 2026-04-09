@@ -9,7 +9,10 @@ import { MarmotClient } from "../../client/marmot-client.js";
 import { createCredential } from "../credential.js";
 import { generateKeyPackage } from "../key-package.js";
 import { createKeyPackageEvent } from "../key-package-event.js";
-import { KEY_PACKAGE_KIND, WELCOME_EVENT_KIND } from "../protocol.js";
+import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
+  WELCOME_EVENT_KIND,
+} from "../protocol.js";
 import {
   getWelcome,
   readWelcomeGroupInfo,
@@ -98,6 +101,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
     const keyPackageEvent = await inviteeAccount.signer.signEvent(
       await createKeyPackageEvent({
         keyPackage: inviteeKeyPackage.publicPackage,
+        d: inviteePubkey,
         relays: groupRelays,
       }),
     );
@@ -111,7 +115,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
 
     // Admin invites invitee
     const [keyPackageNostrEvent] = await mockNetwork.request(groupRelays, {
-      kinds: [KEY_PACKAGE_KIND],
+      kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
       authors: [inviteePubkey],
     });
     await adminGroup.inviteByKeyPackageEvent(keyPackageNostrEvent);

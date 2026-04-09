@@ -7,7 +7,7 @@ import {
   KeyPackage,
   PrivateKeyPackage,
 } from "ts-mls";
-import { getKeyPackage } from "../core/key-package-event.js";
+import { getKeyPackage, getKeyPackageD } from "../core/key-package-event.js";
 import { calculateKeyPackageRef } from "../core/key-package.js";
 import { KeyValueStoreBackend } from "../utils/key-value.js";
 import { logger } from "../utils/debug.js";
@@ -26,7 +26,9 @@ export type LocalKeyPackage = {
   publicPackage: KeyPackage;
   /** The private key package — its presence is the discriminant for a local entry */
   privatePackage: PrivateKeyPackage;
-  /** Nostr kind-443 events this key package has been published under */
+  /** Nostr kind-30443 addressable slot identifier (`d` tag value) */
+  d?: string;
+  /** Nostr kind-443 or kind-30443 events this key package has been published under */
   published?: NostrEvent[];
   /** Whether this key package has been consumed (e.g. used to join a group). Undefined means unused. */
   used?: boolean;
@@ -35,21 +37,23 @@ export type LocalKeyPackage = {
 /**
  * A key package observed on relays for which no private material is held locally.
  *
- * Created by {@link KeyPackageStore.addPublished} when tracking a kind-443 event
- * from another device. Enables cross-device deletion without requiring the
- * private keys to be present. The public key package is always present — events
- * that cannot be decoded are rejected as invalid.
+ * Created by {@link KeyPackageStore.addPublished} when tracking a kind-443 or
+ * kind-30443 event from another device. Enables cross-device deletion without
+ * requiring the private keys to be present. The public key package is always
+ * present — events that cannot be decoded are rejected as invalid.
  *
  * Narrow from {@link StoredKeyPackage} by checking `privatePackage === undefined`.
  */
 export type TrackedKeyPackage = {
   /** The calculated key package reference */
   keyPackageRef: Uint8Array;
-  /** The public key package, decoded from the kind-443 event body */
+  /** The public key package, decoded from the kind-443 or kind-30443 event body */
   publicPackage: KeyPackage;
   /** Always undefined — the discriminant that identifies this as a tracked entry */
   privatePackage?: undefined;
-  /** Nostr kind-443 events this key package has been published under */
+  /** Nostr kind-30443 addressable slot identifier (`d` tag value) */
+  d?: string;
+  /** Nostr kind-443 or kind-30443 events this key package has been published under */
   published?: NostrEvent[];
   /** Whether this key package has been consumed (e.g. used to join a group). Undefined means unused. */
   used?: boolean;
@@ -157,12 +161,13 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    * available. For foreign-device publish tracking use {@link addPublished}.
    *
    * @param keyPackage - Must include `publicPackage` and `privatePackage`.
-   *   `keyPackageRef` is computed automatically.
+   *   `keyPackageRef` is computed automatically. Optionally include `d` to
+   *   persist the addressable slot identifier for kind 30443 events.
    * @returns The storage key (hex ref string)
    */
   async add(
     keyPackage: Pick<LocalKeyPackage, "publicPackage" | "privatePackage"> &
-      Partial<Pick<LocalKeyPackage, "published">>,
+      Partial<Pick<LocalKeyPackage, "published" | "d">>,
   ): Promise<string> {
     const key = await this.resolveStorageKey(keyPackage.publicPackage);
 
@@ -175,6 +180,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       keyPackageRef,
       publicPackage: keyPackage.publicPackage,
       privatePackage: keyPackage.privatePackage,
+      ...(keyPackage.d !== undefined ? { d: keyPackage.d } : {}),
       ...(keyPackage.published !== undefined
         ? { published: keyPackage.published }
         : {}),
@@ -210,12 +216,17 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
     const key = typeof ref === "string" ? ref : bytesToHex(ref);
     const existing = await this.backend.getItem(key);
 
+    // Extract the addressable slot identifier if this is a kind 30443 event
+    const d = getKeyPackageD(event);
+
     if (existing) {
       // Skip if event is already in array
       if (existing.published?.some((e) => e.id === event.id)) return;
 
       const updated: StoredKeyPackage = {
         ...existing,
+        // Persist d if discovered for the first time on this entry
+        ...(d !== undefined && existing.d === undefined ? { d } : {}),
         published: [...(existing.published ?? []), event],
       };
 
@@ -235,6 +246,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       const entry: TrackedKeyPackage = {
         keyPackageRef,
         publicPackage,
+        ...(d !== undefined ? { d } : {}),
         published: [event],
       };
 
@@ -325,9 +337,10 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         (pkg): pkg is LocalKeyPackage =>
           pkg !== null && pkg.privatePackage !== undefined,
       )
-      .map(({ keyPackageRef, publicPackage, published, used }) => ({
+      .map(({ keyPackageRef, publicPackage, d, published, used }) => ({
         keyPackageRef,
         publicPackage,
+        ...(d !== undefined ? { d } : {}),
         ...(published !== undefined ? { published } : {}),
         ...(used !== undefined ? { used } : {}),
       }));

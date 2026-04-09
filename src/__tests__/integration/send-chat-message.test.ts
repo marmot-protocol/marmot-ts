@@ -13,7 +13,10 @@ import type { BaseGroupHistory } from "../../client/group/marmot-group.js";
 import { MarmotClient } from "../../client/marmot-client.js";
 import { getMarmotGroupData } from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
-import { GROUP_EVENT_KIND, KEY_PACKAGE_KIND } from "../../core/protocol.js";
+import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
+  GROUP_EVENT_KIND,
+} from "../../core/protocol.js";
 import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
 import {
   KeyPackageStore,
@@ -57,7 +60,7 @@ async function setupTwoMemberGroup(
   const keyPackageEvents = await mockNetwork.request(
     ["wss://mock-relay.test"],
     {
-      kinds: [KEY_PACKAGE_KIND],
+      kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
       authors: [inviteePubkey],
     },
   );
@@ -133,6 +136,7 @@ describe("MarmotGroup.sendChatMessage", () => {
       keyPackageStore: new KeyPackageStore(new MemoryBackend()),
       signer: inviteeAccount.signer,
       network: mockNetwork,
+      clientId: "test-invitee-device",
     });
   });
 
@@ -326,6 +330,7 @@ describe("MarmotGroup.sendChatMessage", () => {
       keyPackageStore: new KeyPackageStore(new MemoryBackend()),
       signer: inviteeAccount.signer,
       network: mockNetwork,
+      clientId: "test-invitee-device",
       historyFactory: () => history,
     });
 
@@ -380,6 +385,7 @@ describe("MarmotGroup.sendChatMessage", () => {
       keyPackageStore: new KeyPackageStore(inviteeKeyPackageBackend),
       signer: inviteeAccount.signer,
       network: mockNetwork,
+      clientId: "test-invitee-device",
     });
 
     const { inviteeGroup } = await setupTwoMemberGroup(

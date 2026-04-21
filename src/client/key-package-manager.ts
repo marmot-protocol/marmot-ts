@@ -304,8 +304,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * need explicit deletion — the new event supersedes them on relays.
    *
    * The `d` tag for the new event is resolved as:
-   * 1. `existing.d` from the stored entry (preferred — reuses same slot)
-   * 2. `options.d` (explicit override)
+   * 1. `options.d` (explicit override)
+   * 2. `existing.d` from the stored entry (reuses same slot)
    * 3. A freshly generated random 32-byte hex string
    *
    * Relay URLs are resolved as:
@@ -343,9 +343,9 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     }
 
     // Resolve the slot identifier for the new event:
-    // prefer the stored entry's d (same slot = relay auto-replaces),
-    // then an explicit override, then generate a fresh random value.
-    const newD = existing.d ?? options?.d ?? bytesToHex(randomBytes(32));
+    // prefer an explicit override, then the stored entry's d (same slot = relay auto-replaces),
+    // then generate a fresh random value.
+    const newD = options?.d ?? existing.d ?? bytesToHex(randomBytes(32));
 
     // Publish NIP-09 deletion only for legacy kind-443 published events.
     // Kind-30443 events are superseded automatically by the new event on relays.

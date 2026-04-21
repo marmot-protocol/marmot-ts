@@ -1,5 +1,20 @@
 # @internet-privacy/marmot-ts
 
+## 0.5.0
+
+### Minor Changes
+
+- c9dd6c1: Update `KeyPackageManager` to handle both legacy kind 443 and new kind 30443 events
+- b9781eb: Remove `KeyPackageStore` class and update `KeyPackageManger` to accept key value store directly
+- 1ec7962: Remove group state storage classes and update `MarmotGroup` to accept a `GenericKeyValueStore<SerializedClientState>` directly.
+- da44f58: Add `InviteManager` to `MarmotClient` class as `MarmotClient.invites`
+- 92d7c41: Move group management out into `GroupManager` class on `MarmotClient.groups`
+
+### Patch Changes
+
+- 689c7f1: refactor: bump ts-mls to 2.0.0-rc.10 version and adapt code
+- bbe16b5: Fix leave proposal state handling to persist only after relay acknowledgement
+
 ## 0.4.0
 
 ### Minor Changes

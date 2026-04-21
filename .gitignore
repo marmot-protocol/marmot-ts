@@ -9,6 +9,3 @@ models
 docs
 mcp.json
 plans
-
-# Ignore agent references
-references/

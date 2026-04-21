@@ -7,7 +7,10 @@ import {
   KeyPackage,
   PrivateKeyPackage,
 } from "ts-mls";
-import { getKeyPackage, getKeyPackageD } from "../core/key-package-event.js";
+import {
+  getKeyPackage,
+  getKeyPackageIdentifier,
+} from "../core/key-package-event.js";
 import { calculateKeyPackageRef } from "../core/key-package.js";
 import { KeyValueStoreBackend } from "../utils/key-value.js";
 import { logger } from "../utils/debug.js";
@@ -217,7 +220,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
     const existing = await this.backend.getItem(key);
 
     // Extract the addressable slot identifier if this is a kind 30443 event
-    const d = getKeyPackageD(event);
+    const d = getKeyPackageIdentifier(event);
 
     if (existing) {
       // Skip if event is already in array

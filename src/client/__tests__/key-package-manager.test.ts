@@ -7,7 +7,7 @@ import {
   MissingSlotIdentifierError,
 } from "../key-package-manager.js";
 import {
-  getKeyPackageD,
+  getKeyPackageIdentifier,
   getKeyPackageRelays,
 } from "../../core/key-package-event.js";
 import {
@@ -145,7 +145,7 @@ describe("KeyPackageManager", () => {
       const event = network.events.find(
         (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
       )!;
-      expect(getKeyPackageD(event)).toBe(TEST_CLIENT_ID);
+      expect(getKeyPackageIdentifier(event)).toBe(TEST_CLIENT_ID);
     });
 
     it("two create() calls with clientId produce events with the same d tag", async () => {
@@ -157,8 +157,8 @@ describe("KeyPackageManager", () => {
         (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
       );
       expect(events).toHaveLength(2);
-      expect(getKeyPackageD(events[0])).toBe(TEST_CLIENT_ID);
-      expect(getKeyPackageD(events[1])).toBe(TEST_CLIENT_ID);
+      expect(getKeyPackageIdentifier(events[0])).toBe(TEST_CLIENT_ID);
+      expect(getKeyPackageIdentifier(events[1])).toBe(TEST_CLIENT_ID);
     });
 
     it("records the published event on the stored entry", async () => {
@@ -257,7 +257,7 @@ describe("KeyPackageManager", () => {
         (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
       );
       const newEvent = addrEvents[addrEvents.length - 1]!;
-      expect(getKeyPackageD(newEvent)).toBe(TEST_CLIENT_ID);
+      expect(getKeyPackageIdentifier(newEvent)).toBe(TEST_CLIENT_ID);
     });
 
     it("generates a random d when old entry has no d (legacy 443 upgrade)", async () => {

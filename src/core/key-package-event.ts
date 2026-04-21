@@ -2,8 +2,8 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventTemplate, NostrEvent } from "applesauce-core/helpers/event";
 import {
   CiphersuiteId,
-  CustomExtension,
   ciphersuites,
+  CustomExtension,
   decode,
   defaultCredentialTypes,
   encode,
@@ -79,7 +79,7 @@ export function createDeleteKeyPackageEvent(
       eTags.push(["e", e.id]);
 
       if (e.kind === ADDRESSABLE_KEY_PACKAGE_KIND) {
-        const d = getKeyPackageD(e);
+        const d = getKeyPackageIdentifier(e);
         if (d !== undefined) {
           aTags.push(["a", `${ADDRESSABLE_KEY_PACKAGE_KIND}:${e.pubkey}:${d}`]);
         }
@@ -185,7 +185,7 @@ export function getKeyPackageClient(
  * Gets the addressable slot identifier (`d` tag) from a kind 30443 event.
  * Returns `undefined` for kind 443 events (which have no `d` tag).
  */
-export function getKeyPackageD(event: NostrEvent): string | undefined {
+export function getKeyPackageIdentifier(event: NostrEvent): string | undefined {
   if (event.kind !== ADDRESSABLE_KEY_PACKAGE_KIND) return undefined;
   return getTagValue(event, "d");
 }

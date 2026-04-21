@@ -3,8 +3,8 @@ import { bytesToHex } from "@noble/ciphers/utils.js";
 import {
   defaultCryptoProvider,
   encode,
-  greaseValues,
   getCiphersuiteImpl,
+  greaseValues,
   keyPackageEncoder,
   makeCustomExtension,
 } from "ts-mls";
@@ -16,7 +16,7 @@ import {
   createDeleteKeyPackageEvent,
   createKeyPackageEvent,
   getKeyPackage,
-  getKeyPackageD,
+  getKeyPackageIdentifier,
 } from "../key-package-event.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND, KEY_PACKAGE_KIND } from "../protocol.js";
 
@@ -475,7 +475,7 @@ describe("createKeyPackageEvent", () => {
   });
 });
 
-describe("getKeyPackageD", () => {
+describe("getKeyPackageIdentifier", () => {
   it("should return the d tag value for a kind 30443 event", () => {
     const event: NostrEvent = {
       kind: ADDRESSABLE_KEY_PACKAGE_KIND,
@@ -486,7 +486,7 @@ describe("getKeyPackageD", () => {
       tags: [["d", mockD]],
       sig: mockSig,
     };
-    expect(getKeyPackageD(event)).toBe(mockD);
+    expect(getKeyPackageIdentifier(event)).toBe(mockD);
   });
 
   it("should return undefined for a kind 443 event (no d tag)", () => {
@@ -499,7 +499,7 @@ describe("getKeyPackageD", () => {
       tags: [],
       sig: mockSig,
     };
-    expect(getKeyPackageD(event)).toBeUndefined();
+    expect(getKeyPackageIdentifier(event)).toBeUndefined();
   });
 
   it("should return undefined when event has no d tag at all", () => {
@@ -512,7 +512,7 @@ describe("getKeyPackageD", () => {
       tags: [["i", "somehex"]],
       sig: mockSig,
     };
-    expect(getKeyPackageD(event)).toBeUndefined();
+    expect(getKeyPackageIdentifier(event)).toBeUndefined();
   });
 });
 

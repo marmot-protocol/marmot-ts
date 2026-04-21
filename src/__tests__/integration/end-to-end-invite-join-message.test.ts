@@ -16,7 +16,6 @@ import {
   GROUP_EVENT_KIND,
   WELCOME_EVENT_KIND,
 } from "../../core/protocol.js";
-import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
 import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
@@ -50,19 +49,15 @@ describe("End-to-end: invite, join, first message", () => {
     // Create mock network
     mockNetwork = new MockNetwork();
 
-    // Create clients using the new bytes-first API
-    const groupStateBackend = new KeyValueGroupStateBackend(
-      new MemoryBackend(),
-    );
     adminClient = new MarmotClient({
-      groupStateBackend,
+      groupStateStore: new MemoryBackend(),
       keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
+      groupStateStore: new MemoryBackend(),
       keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,

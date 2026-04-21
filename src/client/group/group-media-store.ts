@@ -31,8 +31,10 @@ type GroupMediaStoreEvents = {
  * If no backend is provided a simple in-memory store is used, giving an
  * ephemeral in-process cache with no disk persistence.
  */
-export class GroupMediaStore extends EventEmitter<GroupMediaStoreEvents>
-  implements BaseGroupMedia {
+export class GroupMediaStore
+  extends EventEmitter<GroupMediaStoreEvents>
+  implements BaseGroupMedia
+{
   private readonly backend: GroupMediaBackend;
 
   constructor(backend?: GroupMediaBackend) {
@@ -97,7 +99,7 @@ export class GroupMediaStore extends EventEmitter<GroupMediaStoreEvents>
     const keys = await this.backend.keys();
     const items = await Promise.all(
       keys.map((key) =>
-        this.backend.getItem(key).then((v) => v?.attachment ?? null)
+        this.backend.getItem(key).then((v) => v?.attachment ?? null),
       ),
     );
 

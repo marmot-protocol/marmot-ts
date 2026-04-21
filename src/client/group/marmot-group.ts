@@ -17,11 +17,11 @@ import {
   CreateCommitOptions,
   createProposal,
   CryptoProvider,
-  defaultProposalTypes,
   defaultCryptoProvider,
+  defaultProposalTypes,
+  getCredentialFromLeafIndex,
   type IncomingMessageCallback,
   type LeafIndex,
-  getCredentialFromLeafIndex,
   MlsMessage,
   processMessage,
   type ProcessMessageResult,
@@ -49,8 +49,8 @@ import {
   decryptMediaFile,
   deriveMediaEncryptionKey,
   encryptMediaFile,
-  MIP04_VERSION,
   type MediaAttachment,
+  MIP04_VERSION,
 } from "../../core/media.js";
 import { isPrivateMessage } from "../../core/message.js";
 import {
@@ -59,8 +59,9 @@ import {
   MarmotGroupData,
 } from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
-import { GroupStateStore } from "../../store/group-state-store.js";
 import { logger } from "../../utils/debug.js";
+import type { GenericKeyValueStore } from "../../utils/key-value.js";
+import type { SerializedClientState } from "../../core/client-state.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
 import { unixNow } from "../../utils/nostr.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
@@ -203,8 +204,8 @@ export type MarmotGroupOptions<
   THistory extends BaseGroupHistory | undefined = undefined,
   TMedia extends BaseGroupMedia | undefined = undefined,
 > = {
-  /** The state store to store and load group state from */
-  stateStore: GroupStateStore;
+  /** The key-value backend where serialized group state bytes are persisted */
+  store: GenericKeyValueStore<SerializedClientState>;
   /** The signer used for the clients identity */
   signer: EventSigner;
   /** The ciphersuite implementation to use for the group */
@@ -314,8 +315,8 @@ export class MarmotGroup<
   THistory extends BaseGroupHistory | undefined = undefined,
   TMedia extends BaseGroupMedia | undefined = undefined,
 > extends EventEmitter<MarmotGroupEvents<THistory, TMedia>> {
-  /** The state store to store and load group state from */
-  readonly stateStore: GroupStateStore;
+  /** The key-value backend where serialized group state bytes are persisted */
+  readonly store: GenericKeyValueStore<SerializedClientState>;
 
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
@@ -395,7 +396,7 @@ export class MarmotGroup<
   ) {
     super();
     this.#state = state;
-    this.stateStore = options.stateStore;
+    this.store = options.store;
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
     this.network = options.network;
@@ -448,13 +449,19 @@ export class MarmotGroup<
     return new MarmotGroup(state, { ...options, ciphersuite: cipherSuite });
   }
 
-  /** Persists any pending changes to the group state in the store */
-  async save() {
-    if (!this.dirty) return;
+  /**
+   * Persists any pending changes to the group state in the store.
+   *
+   * @param force - When `true`, writes the current state even if `dirty` is
+   *   `false`. Useful for persisting the initial state of a freshly constructed
+   *   group (e.g. after `createGroup` / `joinGroupFromWelcome` / import) without
+   *   having to mutate `dirty` externally.
+   */
+  async save(force = false) {
+    if (!force && !this.dirty) return;
 
-    // Import serializeClientState dynamically to avoid circular dependencies
     const stateBytes = serializeClientState(this.state);
-    await this.stateStore.set(this.id, stateBytes);
+    await this.store.setItem(bytesToHex(this.id), stateBytes);
     this.dirty = false;
     this.emit("stateSaved", this);
   }
@@ -494,8 +501,9 @@ export class MarmotGroup<
     });
 
     const response = await this.network.publish(relays, commitEvent);
-    if (!hasAck(response))
+    if (!hasAck(response)) {
       throw new Error("Failed to publish commit event: no relay acknowledged");
+    }
 
     // Advance local state after publish.
     this.state = newState;
@@ -1539,8 +1547,9 @@ export class MarmotGroup<
     encrypted: Uint8Array,
     attachment: MediaAttachment,
   ): Promise<StoredMedia> {
-    if (!attachment.sha256)
+    if (!attachment.sha256) {
       throw new Error("decryptMedia: attachment.sha256 is required");
+    }
 
     // Cache hit — return immediately without re-deriving the key
     const cached = await this.media?.getMedia(attachment.sha256);
@@ -1585,7 +1594,7 @@ export class MarmotGroup<
     if (this.media) await this.media.clearMedia();
 
     this.log("removing group from store");
-    await this.stateStore.remove(this.id);
+    await this.store.removeItem(bytesToHex(this.id));
 
     // Emit the destroyed event
     this.emit("destroyed", this);

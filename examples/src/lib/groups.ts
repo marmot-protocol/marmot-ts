@@ -42,9 +42,7 @@ export const groupStoreChanges$ = marmotClient$.pipe(
       // initial tick
       of(0),
       groupStoreManualRefresh$,
-      fromEvent(client.groupStateStore, "groupStateAdded"),
-      fromEvent(client.groupStateStore, "groupStateUpdated"),
-      fromEvent(client.groupStateStore, "groupStateRemoved"),
+      fromEvent(client, "groupsUpdated"),
     ).pipe(map(() => client)),
   ),
   shareReplay(1),
@@ -53,7 +51,7 @@ export const groupStoreChanges$ = marmotClient$.pipe(
 /** List of locally stored group ids (hex). */
 export const groupIds$ = groupStoreChanges$.pipe(
   switchMap(async (client) => {
-    const ids = await client.groupStateStore.list();
+    const ids = await client.listGroupIds();
     return ids.map((id) => bytesToHex(id));
   }),
   // Avoid noisy rerenders when ordering is stable and ids are unchanged

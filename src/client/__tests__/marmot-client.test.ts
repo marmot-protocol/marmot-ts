@@ -7,7 +7,6 @@ import { extractMarmotGroupData } from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
 import { StoredKeyPackage } from "../key-package-manager.js";
 import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
@@ -93,7 +92,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
+      groupStateStore: new MemoryBackend(),
       keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: account.signer,
       network: mockNetwork,
@@ -120,7 +119,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
+      groupStateStore: new MemoryBackend(),
       keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: account.signer,
       network: mockNetwork,
@@ -147,7 +146,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
+      groupStateStore: new MemoryBackend(),
       keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: account.signer,
       network: mockNetwork,

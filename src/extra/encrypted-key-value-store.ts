@@ -62,8 +62,7 @@ function unpad(bytes: Uint8Array): Uint8Array {
  * Wrapper around a {@link GenericKeyValueStore} that encrypts and decrypts data using a password.
  * WARNING: THIS IS NOT SECURE AND SHOULD NOT BE USED IN PRODUCTION. IT IS ONLY FOR DEMONSTRATION PURPOSES.
  */
-export class EncryptedKeyValueStore
-  implements GenericKeyValueStore<Uint8Array> {
+export class EncryptedKeyValueStore implements GenericKeyValueStore<Uint8Array> {
   private key: Uint8Array | null = null;
   get unlocked() {
     return this.key !== null;

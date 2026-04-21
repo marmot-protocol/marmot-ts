@@ -211,11 +211,7 @@ type KeyPackageManagerEvents = {
   /** Emitted when a key package is updated */
   updated: (keyPackage: StoredKeyPackage) => void;
   /** Emitted when a key package publish is recorded (own publish or observed relay event) */
-  published: (
-    refHex: string,
-    eventId: string,
-    relays: string[],
-  ) => void;
+  published: (refHex: string, eventId: string, relays: string[]) => void;
 };
 
 /** Options for creating a new KeyPackageManager */
@@ -302,9 +298,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * @returns The storage key (hex ref string)
    */
   async add(
-    keyPackage:
-      & Pick<LocalKeyPackage, "publicPackage" | "privatePackage">
-      & Partial<Pick<LocalKeyPackage, "published" | "identifier">>,
+    keyPackage: Pick<LocalKeyPackage, "publicPackage" | "privatePackage"> &
+      Partial<Pick<LocalKeyPackage, "published" | "identifier">>,
   ): Promise<string> {
     const keyPackageRef = await calculateKeyPackageRef(
       keyPackage.publicPackage,
@@ -432,15 +427,15 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
         (pkg): pkg is LocalKeyPackage =>
           pkg !== null && pkg.privatePackage !== undefined,
       )
-      .map((
-        { keyPackageRef, publicPackage, identifier: d, published, used },
-      ) => ({
-        keyPackageRef,
-        publicPackage,
-        ...(d !== undefined ? { d } : {}),
-        ...(published !== undefined ? { published } : {}),
-        ...(used !== undefined ? { used } : {}),
-      }));
+      .map(
+        ({ keyPackageRef, publicPackage, identifier: d, published, used }) => ({
+          keyPackageRef,
+          publicPackage,
+          ...(d !== undefined ? { d } : {}),
+          ...(published !== undefined ? { published } : {}),
+          ...(used !== undefined ? { used } : {}),
+        }),
+      );
   }
 
   // ---------------------------------------------------------------------------
@@ -547,7 +542,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
 
     // Determine relays for the new key package
     const oldEvents = existing.published ?? [];
-    const relaysForNew = options?.relays ??
+    const relaysForNew =
+      options?.relays ??
       (oldEvents.length > 0
         ? getKeyPackageRelays(oldEvents[oldEvents.length - 1])
         : undefined);
@@ -559,8 +555,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     // Resolve the slot identifier for the new event:
     // prefer an explicit override, then the stored entry's d (same slot = relay auto-replaces),
     // then generate a fresh random value.
-    const newD = options?.d ?? existing.identifier ??
-      bytesToHex(randomBytes(32));
+    const newD =
+      options?.d ?? existing.identifier ?? bytesToHex(randomBytes(32));
 
     // Publish NIP-09 deletion only for legacy kind-443 published events.
     // Kind-30443 events are superseded automatically by the new event on relays.
@@ -828,8 +824,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   }
 
   async #getCiphersuiteImpl(name?: CiphersuiteName) {
-    const ciphersuiteName = name ??
-      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
+    const ciphersuiteName =
+      name ?? "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
     const id = ciphersuites[ciphersuiteName];
     return defaultCryptoProvider.getCiphersuiteImpl(id);
   }

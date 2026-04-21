@@ -3,7 +3,10 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MarmotClient } from "../marmot-client.js";
-import { ADDRESSABLE_KEY_PACKAGE_KIND, GROUP_EVENT_KIND } from "../../core/protocol.js";
+import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
+  GROUP_EVENT_KIND,
+} from "../../core/protocol.js";
 import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
 import { KeyPackageStore } from "../../store/key-package-store.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";

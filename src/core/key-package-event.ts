@@ -186,6 +186,7 @@ export function getKeyPackageClient(
  * Returns `undefined` for kind 443 events (which have no `d` tag).
  */
 export function getKeyPackageD(event: NostrEvent): string | undefined {
+  if (event.kind !== ADDRESSABLE_KEY_PACKAGE_KIND) return undefined;
   return getTagValue(event, "d");
 }
 

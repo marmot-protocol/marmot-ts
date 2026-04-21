@@ -18,10 +18,7 @@ import {
   getKeyPackage,
   getKeyPackageD,
 } from "../key-package-event.js";
-import {
-  ADDRESSABLE_KEY_PACKAGE_KIND,
-  KEY_PACKAGE_KIND,
-} from "../protocol.js";
+import { ADDRESSABLE_KEY_PACKAGE_KIND, KEY_PACKAGE_KIND } from "../protocol.js";
 
 const mockPubkey =
   "02a1633cafe37eeebe2b39b4ec5f3d74c35e61fa7e7e6b7b8c5f7c4f3b2a1b2c3d";

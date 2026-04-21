@@ -5,6 +5,7 @@ import {
   KeyPackageManager,
   MissingRelayError,
   MissingSlotIdentifierError,
+  StoredKeyPackage,
 } from "../key-package-manager.js";
 import {
   getKeyPackageIdentifier,
@@ -14,11 +15,6 @@ import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   KEY_PACKAGE_KIND,
 } from "../../core/protocol.js";
-import {
-  KeyPackageStore,
-  StoredKeyPackage,
-} from "../../store/key-package-store.js";
-import type { KeyValueStoreBackend } from "../../utils/key-value.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
 import { generateKeyPackage } from "../../core/key-package.js";
@@ -36,14 +32,13 @@ function makeManager(
   account: PrivateKeyAccount<any>,
   clientId?: string,
 ) {
-  const store = new KeyPackageStore(new MemoryBackend());
   const manager = new KeyPackageManager({
-    keyPackageStore: store,
+    store: new MemoryBackend<StoredKeyPackage>(),
     signer: account.signer,
     network,
     clientId,
   });
-  return { manager, store };
+  return { manager };
 }
 
 /** Returns the published NostrEvent[] for a ref, or [] if none */
@@ -90,7 +85,7 @@ describe("KeyPackageManager", () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
-      expect(pkg.d).toBe(TEST_CLIENT_ID);
+      expect(pkg.identifier).toBe(TEST_CLIENT_ID);
     });
 
     it("uses explicit d option, overriding clientId", async () => {
@@ -101,7 +96,7 @@ describe("KeyPackageManager", () => {
         d: explicitD,
       });
 
-      expect(pkg.d).toBe(explicitD);
+      expect(pkg.identifier).toBe(explicitD);
     });
 
     it("stores d on the local entry", async () => {
@@ -109,7 +104,7 @@ describe("KeyPackageManager", () => {
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
       const stored = await manager.get(pkg.keyPackageRef);
-      expect(stored?.d).toBe(TEST_CLIENT_ID);
+      expect(stored?.identifier).toBe(TEST_CLIENT_ID);
     });
 
     it("stores private key material locally", async () => {
@@ -182,13 +177,13 @@ describe("KeyPackageManager", () => {
       expect(getKeyPackageRelays(events[0])).toEqual(["wss://relay.test/"]);
     });
 
-    it("emits keyPackageAdded and keyPackagePublished events", async () => {
+    it("emits added and published events", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
 
       const added = vi.fn();
       const published = vi.fn();
-      manager.on("keyPackageAdded", added);
-      manager.on("keyPackagePublished", published);
+      manager.on("added", added);
+      manager.on("published", published);
 
       await manager.create({ relays: ["wss://relay.test"] });
 
@@ -225,7 +220,7 @@ describe("KeyPackageManager", () => {
     });
 
     it("throws if no relays can be determined for the new key package", async () => {
-      const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
 
       // Add a key package to the private store without any published events
       const ciphersuite = await getCiphersuiteImpl(
@@ -237,7 +232,7 @@ describe("KeyPackageManager", () => {
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
       });
-      await store.add(kp);
+      await manager.add(kp);
 
       const listed = await manager.list();
       await expect(
@@ -252,7 +247,7 @@ describe("KeyPackageManager", () => {
       const newPkg = await manager.rotate(pkg.keyPackageRef);
 
       // New package should still use the same slot identifier
-      expect(newPkg.d).toBe(TEST_CLIENT_ID);
+      expect(newPkg.identifier).toBe(TEST_CLIENT_ID);
       const addrEvents = network.events.filter(
         (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
       );
@@ -261,7 +256,7 @@ describe("KeyPackageManager", () => {
     });
 
     it("generates a random d when old entry has no d (legacy 443 upgrade)", async () => {
-      const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
 
       // Inject a stored entry without a d to simulate a legacy 443 package
       // Uses top-level imports for generateKeyPackage, createCredential, etc.
@@ -275,7 +270,7 @@ describe("KeyPackageManager", () => {
         ciphersuiteImpl: ciphersuite,
       });
       // add without d — simulates legacy entry
-      await store.add(kp);
+      await manager.add(kp);
 
       const listed = await manager.list();
       const newPkg = await manager.rotate(listed[0].keyPackageRef, {
@@ -283,9 +278,9 @@ describe("KeyPackageManager", () => {
       });
 
       // Should have some d, just not a specific one
-      expect(newPkg.d).toBeDefined();
-      expect(typeof newPkg.d).toBe("string");
-      expect(newPkg.d!.length).toBeGreaterThan(0);
+      expect(newPkg.identifier).toBeDefined();
+      expect(typeof newPkg.identifier).toBe("string");
+      expect(newPkg.identifier!.length).toBeGreaterThan(0);
     });
 
     it("does NOT send a NIP-09 deletion for kind 30443 published events", async () => {
@@ -300,7 +295,7 @@ describe("KeyPackageManager", () => {
     });
 
     it("sends NIP-09 deletion only for kind 443 published events on the entry", async () => {
-      const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
 
       // Inject a stored entry with a legacy kind 443 published event
       // Uses top-level imports for generateKeyPackage, createCredential, etc.
@@ -327,7 +322,7 @@ describe("KeyPackageManager", () => {
         ],
         sig: "sig",
       };
-      await store.add({ ...kp, published: [fakeLegacyEvent] });
+      await manager.add({ ...kp, published: [fakeLegacyEvent] });
 
       const listed = await manager.list();
       await manager.rotate(listed[0].keyPackageRef, {
@@ -390,7 +385,7 @@ describe("KeyPackageManager", () => {
     });
 
     it("skips relay deletion if the old key package was never published", async () => {
-      const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
 
       // Add an unpublished key package directly to the private store
       const ciphersuite = await getCiphersuiteImpl(
@@ -402,7 +397,7 @@ describe("KeyPackageManager", () => {
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
       });
-      await store.add(kp);
+      await manager.add(kp);
 
       const listed = await manager.list();
       await manager.rotate(listed[0].keyPackageRef, {
@@ -452,12 +447,12 @@ describe("KeyPackageManager", () => {
       expect(network.events.length).toBe(countBefore);
     });
 
-    it("emits keyPackageRemoved", async () => {
+    it("emits removed", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
       const removed = vi.fn();
-      manager.on("keyPackageRemoved", removed);
+      manager.on("removed", removed);
       await manager.remove(pkg.keyPackageRef);
 
       expect(removed).toHaveBeenCalledOnce();
@@ -561,7 +556,7 @@ describe("KeyPackageManager", () => {
     });
 
     it("silently skips relay deletion for refs with no published events but still removes private key", async () => {
-      const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
 
       // Add an unpublished key package directly to the private store
       const ciphersuite = await getCiphersuiteImpl(
@@ -573,7 +568,7 @@ describe("KeyPackageManager", () => {
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
       });
-      await store.add(kp);
+      await manager.add(kp);
       const listed = await manager.list();
       const unpublishedRef = listed[0].keyPackageRef;
 
@@ -691,7 +686,7 @@ describe("KeyPackageManager", () => {
       // d tag from the event should be on the stored entry
       const iTag = realEvent.tags.find((t) => t[0] === "i")!;
       const stored = await manager.get(iTag[1]);
-      expect(stored?.d).toBe(TEST_CLIENT_ID);
+      expect(stored?.identifier).toBe(TEST_CLIENT_ID);
     });
 
     it("accepts a legacy kind 443 event and records it", async () => {
@@ -771,7 +766,7 @@ describe("KeyPackageManager", () => {
       expect(stored?.published).toHaveLength(1);
     });
 
-    it("emits keyPackagePublished when a valid event is tracked", async () => {
+    it("emits published when a valid event is tracked", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
       const realEvent = network.events.find(
@@ -779,7 +774,7 @@ describe("KeyPackageManager", () => {
       )!;
 
       const publishedHandler = vi.fn();
-      manager.on("keyPackagePublished", publishedHandler);
+      manager.on("published", publishedHandler);
 
       const newId = "b".repeat(64);
       await manager.track({ ...realEvent, id: newId });
@@ -835,12 +830,12 @@ describe("KeyPackageManager", () => {
       expect(all.filter((p) => !p.used)).toHaveLength(1);
     });
 
-    it("emits keyPackageUpdated", async () => {
+    it("emits updated", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
       const updated: StoredKeyPackage[] = [];
-      manager.on("keyPackageUpdated", (kp) => updated.push(kp));
+      manager.on("updated", (kp) => updated.push(kp));
 
       await manager.markUsed(pkg.keyPackageRef);
 
@@ -881,7 +876,7 @@ describe("KeyPackageManager", () => {
     });
 
     it("each entry includes published — filter for packages with published events", async () => {
-      const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
 
       await manager.create({ relays: ["wss://relay.test"] });
 
@@ -895,7 +890,7 @@ describe("KeyPackageManager", () => {
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
       });
-      await store.add(kp);
+      await manager.add(kp);
 
       const all = await manager.list();
       expect(all).toHaveLength(2);

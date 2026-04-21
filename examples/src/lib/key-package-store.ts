@@ -28,8 +28,8 @@ export const keyPackageStore$ = accounts.active$.pipe(
     return merge(
       of(store),
       // Listen for key package events
-      fromEvent(store, "keyPackageAdded"),
-      fromEvent(store, "keyPackageRemoved"),
+      fromEvent(store, "added"),
+      fromEvent(store, "removed"),
     ).pipe(map(() => store));
   }),
   shareReplay(1),

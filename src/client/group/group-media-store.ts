@@ -1,11 +1,11 @@
 import { EventEmitter } from "eventemitter3";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
-import type { KeyValueStoreBackend } from "../../utils/key-value.js";
+import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import type { MediaAttachment } from "../../core/media.js";
 import type { BaseGroupMedia, StoredMedia } from "./marmot-group.js";
 
 /** A generic interface for a group media backend */
-export interface GroupMediaBackend extends KeyValueStoreBackend<StoredMedia> {}
+export interface GroupMediaBackend extends GenericKeyValueStore<StoredMedia> {}
 
 /** A map of events that can be emitted by a {@link GroupMediaStore} */
 type GroupMediaStoreEvents = {
@@ -31,10 +31,8 @@ type GroupMediaStoreEvents = {
  * If no backend is provided a simple in-memory store is used, giving an
  * ephemeral in-process cache with no disk persistence.
  */
-export class GroupMediaStore
-  extends EventEmitter<GroupMediaStoreEvents>
-  implements BaseGroupMedia
-{
+export class GroupMediaStore extends EventEmitter<GroupMediaStoreEvents>
+  implements BaseGroupMedia {
   private readonly backend: GroupMediaBackend;
 
   constructor(backend?: GroupMediaBackend) {
@@ -99,7 +97,7 @@ export class GroupMediaStore
     const keys = await this.backend.keys();
     const items = await Promise.all(
       keys.map((key) =>
-        this.backend.getItem(key).then((v) => v?.attachment ?? null),
+        this.backend.getItem(key).then((v) => v?.attachment ?? null)
       ),
     );
 

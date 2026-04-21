@@ -63,10 +63,23 @@ import { GroupStateStore } from "../../store/group-state-store.js";
 import { logger } from "../../utils/debug.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
 import { unixNow } from "../../utils/nostr.js";
-import { NoGroupRelaysError, NoMarmotGroupDataError } from "../errors.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 import { proposeLeaveGroup } from "./proposals/leave-group.js";
+
+/** An error that is thrown when a group has no relays available to send messages. */
+export class NoGroupRelaysError extends Error {
+  constructor() {
+    super("Group has no relays available to send messages.");
+  }
+}
+
+/** An error that is thrown the client is unable to find the MarmotGroupData in the ClientState of a group. */
+export class NoMarmotGroupDataError extends Error {
+  constructor() {
+    super("MarmotGroupData not found in ClientState.");
+  }
+}
 
 function toLeafIndex(index: number): LeafIndex {
   return index as LeafIndex;

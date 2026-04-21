@@ -23,7 +23,6 @@ describe("exports", () => {
         "KeyPackageManager",
         "KeyPackageNotFoundError",
         "KeyPackageRotatePreconditionError",
-        "KeyPackageStore",
         "KeyValueGroupStateBackend",
         "LAST_RESORT_EXTENSION_TYPE",
         "MARMOT_GROUP_DATA_EXTENSION_TYPE",

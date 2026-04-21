@@ -5,10 +5,10 @@ import { hexToBytes } from "applesauce-core/helpers";
 import { EventEmitter } from "eventemitter3";
 import {
   Capabilities,
-  ClientState,
   CiphersuiteName,
-  CryptoProvider,
   ciphersuites,
+  ClientState,
+  CryptoProvider,
   defaultCryptoProvider,
   GroupInfo,
   joinGroup,
@@ -36,7 +36,8 @@ import {
   GroupStateStore,
   GroupStateStoreBackend,
 } from "../store/group-state-store.js";
-import { KeyPackageStore } from "../store/key-package-store.js";
+import type { GenericKeyValueStore } from "../utils/key-value.js";
+import type { StoredKeyPackage } from "./key-package-manager.js";
 import { logger } from "../utils/debug.js";
 import {
   BaseGroupHistory,
@@ -56,38 +57,38 @@ const log = logger.extend("client");
 export type MarmotClientOptions<
   THistory extends BaseGroupHistory | undefined = undefined,
   TMedia extends BaseGroupMedia | undefined = undefined,
-> = {
-  /** The signer used for the clients identity */
-  signer: EventSigner;
-  /** The capabilities to use for the client */
-  capabilities?: Capabilities;
-  /** The backend to store and load the groups from */
-  groupStateBackend: GroupStateStoreBackend;
-  /** The store for key package private material and publish tracking */
-  keyPackageStore: KeyPackageStore;
-  /** The crypto provider to use for cryptographic operations */
-  cryptoProvider?: CryptoProvider;
-  /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
-  network: NostrNetworkInterface;
-  /**
-   * Default `d` tag value (slot identifier) for key package events.
-   * Used by {@link KeyPackageManager.create} when no explicit `d` is passed.
-   * Set this to a stable per-device string (e.g. `"my-app-desktop"`) so all
-   * key packages from this client share a single addressable slot on relays.
-   */
-  clientId?: string;
-} & (THistory extends undefined
-  ? {}
-  : {
+> =
+  & {
+    /** The signer used for the clients identity */
+    signer: EventSigner;
+    /** The capabilities to use for the client */
+    capabilities?: Capabilities;
+    /** The backend to store and load the groups from */
+    groupStateBackend: GroupStateStoreBackend;
+    /** The backend for key package private material and publish tracking */
+    keyPackageBackend: GenericKeyValueStore<StoredKeyPackage>;
+    /** The crypto provider to use for cryptographic operations */
+    cryptoProvider?: CryptoProvider;
+    /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
+    network: NostrNetworkInterface;
+    /**
+     * Default `d` tag value (slot identifier) for key package events.
+     * Used by {@link KeyPackageManager.create} when no explicit `d` is passed.
+     * Set this to a stable per-device string (e.g. `"my-app-desktop"`) so all
+     * key packages from this client share a single addressable slot on relays.
+     */
+    clientId?: string;
+  }
+  & (THistory extends undefined ? {}
+    : {
       /** The group history interface to be passed to group instance */
       historyFactory: GroupHistoryFactory<THistory>;
-    }) &
-  (TMedia extends undefined
-    ? {}
+    })
+  & (TMedia extends undefined ? {}
     : {
-        /** The group media interface to be passed to group instance */
-        mediaFactory: GroupMediaFactory<TMedia>;
-      });
+      /** The group media interface to be passed to group instance */
+      mediaFactory: GroupMediaFactory<TMedia>;
+    });
 
 type MarmotClientEvents<
   THistory extends BaseGroupHistory | undefined = any,
@@ -148,7 +149,7 @@ export class MarmotClient<
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.keyPackages = new KeyPackageManager({
-      keyPackageStore: options.keyPackageStore,
+      store: options.keyPackageBackend,
       signer: options.signer,
       network: options.network,
       clientId: options.clientId,
@@ -169,8 +170,8 @@ export class MarmotClient<
   private async getCiphersuiteImpl(name?: CiphersuiteName) {
     // In v2, CryptoProvider.getCiphersuiteImpl takes a numeric ciphersuite id.
     // We accept a name and map it via the exported `ciphersuites` table.
-    const ciphersuiteName =
-      name ?? "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
+    const ciphersuiteName = name ??
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
     const id = ciphersuites[ciphersuiteName];
     return await this.cryptoProvider.getCiphersuiteImpl(id);
   }
@@ -350,8 +351,9 @@ export class MarmotClient<
     // Get the existing instance or load a new one.
     const group = this.#groups.get(id) || (await this.loadGroup(groupId));
 
-    const groupIdBytes =
-      typeof groupId === "string" ? hexToBytes(groupId) : groupId;
+    const groupIdBytes = typeof groupId === "string"
+      ? hexToBytes(groupId)
+      : groupId;
 
     // Publish the self-remove proposal events and destroy local state.
     const response = await group.leave();
@@ -521,9 +523,9 @@ export class MarmotClient<
       const hasMatchingSecret = welcome.secrets.some((secret) =>
         secret.newMember.length === keyPackage.keyPackageRef.length
           ? secret.newMember.every(
-              (val, idx) => val === keyPackage.keyPackageRef[idx],
-            )
-          : false,
+            (val, idx) => val === keyPackage.keyPackageRef[idx],
+          )
+          : false
       );
 
       candidatePackages.push({

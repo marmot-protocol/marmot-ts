@@ -18,7 +18,7 @@ import {
   readWelcomeGroupInfo,
   readWelcomeMarmotGroupData,
 } from "../welcome.js";
-import { KeyPackageStore } from "../../store/key-package-store.js";
+import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
@@ -81,7 +81,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
 
     adminClient = new MarmotClient({
       groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-      keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });

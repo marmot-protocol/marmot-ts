@@ -6,10 +6,11 @@ import {
   serializeClientState,
   SerializedClientState,
 } from "../core/client-state.js";
-import { KeyValueStoreBackend } from "../utils/key-value.js";
+import { GenericKeyValueStore } from "../utils/key-value.js";
 
 /** A generic interface for a client state store backend */
-export interface GroupStoreBackend extends KeyValueStoreBackend<SerializedClientState> {}
+export interface GroupStoreBackend
+  extends GenericKeyValueStore<SerializedClientState> {}
 
 /** Options for creating a {@link GroupStore} instance */
 export type GroupStoreOptions = {
@@ -155,7 +156,7 @@ export class GroupStore extends EventEmitter<GroupStoreEvents> {
       // Only clear keys with this prefix
       const allKeys = await this.backend.keys();
       const keysToRemove = allKeys.filter((key) =>
-        key.startsWith(this.prefix!),
+        key.startsWith(this.prefix!)
       );
       await Promise.all(
         keysToRemove.map((key) => this.backend.removeItem(key)),

@@ -17,7 +17,7 @@ import {
   WELCOME_EVENT_KIND,
 } from "../../core/protocol.js";
 import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
-import { KeyPackageStore } from "../../store/key-package-store.js";
+import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
 import { MemoryBackend } from "../helpers/memory-backend.js";
@@ -54,18 +54,16 @@ describe("End-to-end: invite, join, first message", () => {
     const groupStateBackend = new KeyValueGroupStateBackend(
       new MemoryBackend(),
     );
-    const keyPackageStore = new KeyPackageStore(new MemoryBackend());
-
     adminClient = new MarmotClient({
       groupStateBackend,
-      keyPackageStore,
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
       groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-      keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",

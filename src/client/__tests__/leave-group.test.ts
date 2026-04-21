@@ -8,7 +8,7 @@ import {
   GROUP_EVENT_KIND,
 } from "../../core/protocol.js";
 import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
-import { KeyPackageStore } from "../../store/key-package-store.js";
+import { StoredKeyPackage } from "../key-package-manager.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
 import { unlockGiftWrap } from "applesauce-common/helpers";
@@ -21,7 +21,7 @@ async function makeClient(network: MockNetwork): Promise<MarmotClient> {
   const account = PrivateKeyAccount.generateNew();
   return new MarmotClient({
     groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-    keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+    keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
     signer: account.signer,
     network,
     clientId: "test-client",
@@ -36,7 +36,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
 
   const adminClient = new MarmotClient({
     groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-    keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+    keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
     signer: adminAccount.signer,
     network: mockNetwork,
     clientId: "test-admin",
@@ -44,7 +44,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
 
   const memberClient = new MarmotClient({
     groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-    keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+    keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
     signer: memberAccount.signer,
     network: mockNetwork,
     clientId: "test-member",

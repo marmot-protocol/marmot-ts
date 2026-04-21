@@ -1,9 +1,9 @@
-import type { KeyValueStoreBackend } from "../../utils/key-value.js";
+import type { GenericKeyValueStore } from "../../utils/key-value.js";
 
 /**
  * Simple in-memory key-value store backend for testing.
  */
-export class MemoryBackend<T> implements KeyValueStoreBackend<T> {
+export class MemoryBackend<T> implements GenericKeyValueStore<T> {
   private map = new Map<string, T>();
 
   async getItem(key: string): Promise<T | null> {

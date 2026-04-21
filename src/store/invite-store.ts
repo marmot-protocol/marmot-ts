@@ -1,6 +1,6 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { kinds, KnownEvent } from "applesauce-core/helpers/event";
-import type { KeyValueStoreBackend } from "../utils/key-value.js";
+import type { GenericKeyValueStore } from "../utils/key-value.js";
 
 /**
  * A received gift wrap event (kind 1059) that hasn't been decrypted yet.
@@ -28,11 +28,11 @@ export interface UnreadInvite extends Rumor {}
  */
 export interface InviteStore {
   /** Storage for received (undecrypted) gift wraps - keyed by gift wrap event ID */
-  received: KeyValueStoreBackend<ReceivedGiftWrap>;
+  received: GenericKeyValueStore<ReceivedGiftWrap>;
 
   /** Storage for decrypted/unread welcome rumors - keyed by rumor ID */
-  unread: KeyValueStoreBackend<UnreadInvite>;
+  unread: GenericKeyValueStore<UnreadInvite>;
 
   /** Storage for seen gift wrap event IDs (deduplication) - value is always true */
-  seen: KeyValueStoreBackend<boolean>;
+  seen: GenericKeyValueStore<boolean>;
 }

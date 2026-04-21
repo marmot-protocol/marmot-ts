@@ -18,10 +18,7 @@ import {
   GROUP_EVENT_KIND,
 } from "../../core/protocol.js";
 import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
-import {
-  KeyPackageStore,
-  type StoredKeyPackage,
-} from "../../store/key-package-store.js";
+import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { MockNetwork } from "../helpers/mock-network.js";
 import { MemoryBackend } from "../helpers/memory-backend.js";
 
@@ -126,14 +123,14 @@ describe("MarmotGroup.sendChatMessage", () => {
 
     adminClient = new MarmotClient({
       groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-      keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
       groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-      keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",
@@ -327,7 +324,7 @@ describe("MarmotGroup.sendChatMessage", () => {
     // Create a fresh invitee client that uses our test history factory
     const inviteeClientWithHistory = new MarmotClient<TestHistory>({
       groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-      keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",
@@ -382,7 +379,7 @@ describe("MarmotGroup.sendChatMessage", () => {
 
     const inviteeClientBeforeRestart = new MarmotClient({
       groupStateBackend: inviteeGroupBackend,
-      keyPackageStore: new KeyPackageStore(inviteeKeyPackageBackend),
+      keyPackageBackend: inviteeKeyPackageBackend,
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",
@@ -403,7 +400,7 @@ describe("MarmotGroup.sendChatMessage", () => {
     // Simulate a restart: new client instance, same persisted group backend
     const inviteeClientAfterRestart = new MarmotClient({
       groupStateBackend: inviteeGroupBackend,
-      keyPackageStore: new KeyPackageStore(inviteeKeyPackageBackend),
+      keyPackageBackend: inviteeKeyPackageBackend,
       signer: inviteeAccount.signer,
       network: mockNetwork,
     });

@@ -1,14 +1,14 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { SerializedClientState } from "../../core/client-state.js";
-import { KeyValueStoreBackend } from "../../utils/key-value.js";
+import { GenericKeyValueStore } from "../../utils/key-value.js";
 import { GroupStateStoreBackend } from "../group-state-store.js";
 
 /**
- * Adapter to convert a KeyValueStoreBackend<string, SerializedClientState> to GroupStateStoreBackend.
+ * Adapter to convert a GenericKeyValueStore<string, SerializedClientState> to GroupStateStoreBackend.
  * This is useful for migrating existing backends that use string keys.
  */
 export class KeyValueGroupStateBackend implements GroupStateStoreBackend {
-  constructor(private backend: KeyValueStoreBackend<SerializedClientState>) {}
+  constructor(private backend: GenericKeyValueStore<SerializedClientState>) {}
 
   async get(groupId: Uint8Array): Promise<SerializedClientState | null> {
     const key = bytesToHex(groupId);

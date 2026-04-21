@@ -3,8 +3,8 @@ import { bytesToHex } from "@noble/ciphers/utils.js";
 import {
   defaultCryptoProvider,
   encode,
-  greaseValues,
   getCiphersuiteImpl,
+  greaseValues,
   keyPackageEncoder,
   makeCustomExtension,
 } from "ts-mls";
@@ -16,15 +16,18 @@ import {
   createDeleteKeyPackageEvent,
   createKeyPackageEvent,
   getKeyPackage,
+  getKeyPackageIdentifier,
 } from "../key-package-event.js";
-import { KEY_PACKAGE_KIND } from "../protocol.js";
+import { ADDRESSABLE_KEY_PACKAGE_KIND, KEY_PACKAGE_KIND } from "../protocol.js";
 
 const mockPubkey =
   "02a1633cafe37eeebe2b39b4ec5f3d74c35e61fa7e7e6b7b8c5f7c4f3b2a1b2c3d";
 const mockSig = "304502210...";
+const mockD =
+  "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
 
 describe("createDeleteKeyPackageEvent", () => {
-  it("should create a valid kind 5 delete event with event IDs", () => {
+  it("should create a valid kind 5 delete event with string event IDs", () => {
     const eventIds = ["abc123def456", "789ghi012jkl", "345mno678pqr"];
 
     const deleteEvent = createDeleteKeyPackageEvent({
@@ -35,9 +38,10 @@ describe("createDeleteKeyPackageEvent", () => {
     expect(deleteEvent.content).toBe("");
     expect(deleteEvent.created_at).toBeGreaterThan(0);
 
-    // Check for k tag
-    const kTag = deleteEvent.tags.find((t) => t[0] === "k");
-    expect(kTag).toEqual(["k", "443"]);
+    // Both k tags included when only string ids are provided (no kind info)
+    const kTags = deleteEvent.tags.filter((t) => t[0] === "k");
+    expect(kTags).toContainEqual(["k", "443"]);
+    expect(kTags).toContainEqual(["k", "30443"]);
 
     // Check for e tags
     const eTags = deleteEvent.tags.filter((t) => t[0] === "e");
@@ -49,7 +53,7 @@ describe("createDeleteKeyPackageEvent", () => {
     ]);
   });
 
-  it("should create a valid kind 5 delete event with full NostrEvent objects", () => {
+  it("should create a valid kind 5 delete event with full kind 443 NostrEvent objects", () => {
     const keyPackageEvents: NostrEvent[] = [
       {
         kind: KEY_PACKAGE_KIND,
@@ -77,17 +81,96 @@ describe("createDeleteKeyPackageEvent", () => {
 
     expect(deleteEvent.kind).toBe(5);
 
-    // Check for k tag
-    const kTag = deleteEvent.tags.find((t) => t[0] === "k");
-    expect(kTag).toEqual(["k", "443"]);
+    // Only kind 443 k tag (no 30443 events in input)
+    const kTags = deleteEvent.tags.filter((t) => t[0] === "k");
+    expect(kTags).toEqual([["k", "443"]]);
 
-    // Check for e tags
+    // Check for e tags only (no a tags for kind 443)
     const eTags = deleteEvent.tags.filter((t) => t[0] === "e");
     expect(eTags).toHaveLength(2);
     expect(eTags).toEqual([
       ["e", "event1id"],
       ["e", "event2id"],
     ]);
+
+    // No a tags for kind 443
+    expect(deleteEvent.tags.filter((t) => t[0] === "a")).toHaveLength(0);
+  });
+
+  it("should create a valid kind 5 delete event with kind 30443 events, including a tags", () => {
+    const addressableEvent: NostrEvent = {
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      id: "addrEvent1",
+      pubkey: mockPubkey,
+      created_at: 1693876543,
+      tags: [["d", mockD]],
+      content: "aabbccdd",
+      sig: mockSig,
+    };
+
+    const deleteEvent = createDeleteKeyPackageEvent({
+      events: [addressableEvent],
+    });
+
+    expect(deleteEvent.kind).toBe(5);
+
+    // Only kind 30443 k tag
+    const kTags = deleteEvent.tags.filter((t) => t[0] === "k");
+    expect(kTags).toEqual([["k", "30443"]]);
+
+    // e tag present
+    const eTags = deleteEvent.tags.filter((t) => t[0] === "e");
+    expect(eTags).toEqual([["e", "addrEvent1"]]);
+
+    // a tag present with correct coordinate
+    const aTags = deleteEvent.tags.filter((t) => t[0] === "a");
+    expect(aTags).toHaveLength(1);
+    expect(aTags[0]).toEqual([
+      "a",
+      `${ADDRESSABLE_KEY_PACKAGE_KIND}:${mockPubkey}:${mockD}`,
+    ]);
+  });
+
+  it("should handle mixed kind 443 and kind 30443 events", () => {
+    const legacyEvent: NostrEvent = {
+      kind: KEY_PACKAGE_KIND,
+      id: "legacyId",
+      pubkey: mockPubkey,
+      created_at: 1693876543,
+      tags: [],
+      content: "aabbccdd",
+      sig: mockSig,
+    };
+    const addressableEvent: NostrEvent = {
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      id: "addrId",
+      pubkey: mockPubkey,
+      created_at: 1693876544,
+      tags: [["d", mockD]],
+      content: "eeffgghh",
+      sig: mockSig,
+    };
+
+    const deleteEvent = createDeleteKeyPackageEvent({
+      events: [legacyEvent, addressableEvent],
+    });
+
+    // Both k tags present
+    const kTags = deleteEvent.tags.filter((t) => t[0] === "k");
+    expect(kTags).toContainEqual(["k", "443"]);
+    expect(kTags).toContainEqual(["k", "30443"]);
+
+    // Both e tags present
+    const eTags = deleteEvent.tags.filter((t) => t[0] === "e");
+    expect(eTags).toContainEqual(["e", "legacyId"]);
+    expect(eTags).toContainEqual(["e", "addrId"]);
+
+    // a tag only for the addressable event
+    const aTags = deleteEvent.tags.filter((t) => t[0] === "a");
+    expect(aTags).toHaveLength(1);
+    expect(aTags[0][1]).toBe(
+      `${ADDRESSABLE_KEY_PACKAGE_KIND}:${mockPubkey}:${mockD}`,
+    );
   });
 
   it("should throw an error when no events are provided", () => {
@@ -98,9 +181,9 @@ describe("createDeleteKeyPackageEvent", () => {
     }).toThrow("At least one event must be provided for deletion");
   });
 
-  it("should throw an error when a full event is not kind 443", () => {
+  it("should throw an error when a full event is not kind 443 or 30443", () => {
     const wrongKindEvent: NostrEvent = {
-      kind: 1, // Wrong kind (text note instead of key package)
+      kind: 1,
       id: "wrongeventid",
       pubkey: mockPubkey,
       created_at: 1693876543,
@@ -114,7 +197,7 @@ describe("createDeleteKeyPackageEvent", () => {
         events: [wrongKindEvent],
       });
     }).toThrow(
-      `Event wrongeventid is not a key package event (kind 1 instead of ${KEY_PACKAGE_KIND})`,
+      `Event wrongeventid is not a key package event (kind 1 instead of ${KEY_PACKAGE_KIND} or ${ADDRESSABLE_KEY_PACKAGE_KIND})`,
     );
   });
 
@@ -143,11 +226,74 @@ describe("createDeleteKeyPackageEvent", () => {
       ["e", "stringeventid2"],
     ]);
   });
+
+  it("should omit a tag for kind 30443 event with no d tag", () => {
+    const addrEventNoD: NostrEvent = {
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      id: "noDEvent",
+      pubkey: mockPubkey,
+      created_at: 1693876543,
+      tags: [], // no d tag
+      content: "aabbccdd",
+      sig: mockSig,
+    };
+
+    const deleteEvent = createDeleteKeyPackageEvent({
+      events: [addrEventNoD],
+    });
+
+    // e tag present
+    expect(deleteEvent.tags.filter((t) => t[0] === "e")).toHaveLength(1);
+    // No a tag since d is missing
+    expect(deleteEvent.tags.filter((t) => t[0] === "a")).toHaveLength(0);
+  });
 });
 
-describe("createKeyPackageEvent encoding", () => {
+describe("createKeyPackageEvent", () => {
   const validPubkey =
     "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+  const testD =
+    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+  it("should create a kind 30443 event (addressable)", async () => {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+    });
+
+    const event = await createKeyPackageEvent({
+      keyPackage: keyPackage.publicPackage,
+      d: testD,
+      relays: ["wss://relay.example.com"],
+    });
+
+    expect(event.kind).toBe(ADDRESSABLE_KEY_PACKAGE_KIND);
+  });
+
+  it("should include d tag with the provided slot identifier", async () => {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+    });
+
+    const event = await createKeyPackageEvent({
+      keyPackage: keyPackage.publicPackage,
+      d: testD,
+    });
+
+    const dTag = event.tags.find((t) => t[0] === "d");
+    expect(dTag).toEqual(["d", testD]);
+  });
 
   it("should create event with base64 encoding and encoding tag", async () => {
     const credential = createCredential(validPubkey);
@@ -163,6 +309,7 @@ describe("createKeyPackageEvent encoding", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
+      d: testD,
       relays: ["wss://relay.example.com"],
     });
 
@@ -173,8 +320,7 @@ describe("createKeyPackageEvent encoding", () => {
     const encodingTag = event.tags.find((t) => t[0] === "encoding");
     expect(encodingTag).toEqual(["encoding", "base64"]);
 
-    // Content should be base64 (contains characters like +, /, =)
-    // or at least not be pure hex (which would only have 0-9a-f)
+    // Content should be base64
     const hasBase64Chars =
       /[+/=]/.test(event.content) ||
       event.content.length % 2 !== 0 ||
@@ -196,6 +342,7 @@ describe("createKeyPackageEvent encoding", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
+      d: testD,
       protected: true,
     });
 
@@ -245,6 +392,7 @@ describe("createKeyPackageEvent encoding", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: originalKeyPackage.publicPackage,
+      d: testD,
       relays: ["wss://relay.example.com"],
     });
 
@@ -262,7 +410,7 @@ describe("createKeyPackageEvent encoding", () => {
     expect(decodedKeyPackage.leafNode.credential).toEqual(credential);
   });
 
-  it("should still decode legacy hex-encoded events without encoding tag", async () => {
+  it("should still reject legacy hex-encoded events without encoding tag", async () => {
     const credential = createCredential(validPubkey);
     const ciphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -280,13 +428,12 @@ describe("createKeyPackageEvent encoding", () => {
       kind: KEY_PACKAGE_KIND,
       pubkey: validPubkey,
       created_at: unixNow(),
-      content: bytesToHex(encodedBytes), // Hex encoding
+      content: bytesToHex(encodedBytes),
       tags: [
         ["mls_protocol_version", "1.0"],
         ["mls_ciphersuite", "0x0001"],
         ["mls_extensions", "0x000a"],
         ["relays", "wss://relay.example.com"],
-        // No encoding tag
       ],
       id: "legacy-event-id",
       sig: "legacy-signature",
@@ -295,7 +442,7 @@ describe("createKeyPackageEvent encoding", () => {
     expect(() => getKeyPackage(legacyEvent)).toThrow(/encoding=base64 tag/i);
   });
 
-  it("should decode hex-encoded events with explicit hex encoding tag", async () => {
+  it("should reject hex-encoded events with explicit hex encoding tag", async () => {
     const credential = createCredential(validPubkey);
     const ciphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -318,7 +465,7 @@ describe("createKeyPackageEvent encoding", () => {
         ["mls_ciphersuite", "0x0001"],
         ["mls_extensions", "0x000a"],
         ["relays", "wss://relay.example.com"],
-        ["encoding", "hex"], // Explicit hex tag
+        ["encoding", "hex"],
       ],
       id: "hex-event-id",
       sig: "hex-signature",
@@ -328,11 +475,54 @@ describe("createKeyPackageEvent encoding", () => {
   });
 });
 
-describe("spec compliance (MIP-00) — pending", () => {
-  it("should include an `i` tag with hex KeyPackageRef when publishing kind 443", async () => {
-    const validPubkey =
-      "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+describe("getKeyPackageIdentifier", () => {
+  it("should return the d tag value for a kind 30443 event", () => {
+    const event: NostrEvent = {
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      id: "testid",
+      pubkey: mockPubkey,
+      created_at: 0,
+      content: "",
+      tags: [["d", mockD]],
+      sig: mockSig,
+    };
+    expect(getKeyPackageIdentifier(event)).toBe(mockD);
+  });
 
+  it("should return undefined for a kind 443 event (no d tag)", () => {
+    const event: NostrEvent = {
+      kind: KEY_PACKAGE_KIND,
+      id: "testid",
+      pubkey: mockPubkey,
+      created_at: 0,
+      content: "",
+      tags: [],
+      sig: mockSig,
+    };
+    expect(getKeyPackageIdentifier(event)).toBeUndefined();
+  });
+
+  it("should return undefined when event has no d tag at all", () => {
+    const event: NostrEvent = {
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      id: "testid",
+      pubkey: mockPubkey,
+      created_at: 0,
+      content: "",
+      tags: [["i", "somehex"]],
+      sig: mockSig,
+    };
+    expect(getKeyPackageIdentifier(event)).toBeUndefined();
+  });
+});
+
+describe("spec compliance (MIP-00)", () => {
+  const validPubkey =
+    "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+  const testD =
+    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+  it("should include an `i` tag with hex KeyPackageRef when publishing kind 30443", async () => {
     const credential = createCredential(validPubkey);
     const ciphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -346,6 +536,7 @@ describe("spec compliance (MIP-00) — pending", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
+      d: testD,
     });
 
     const iTag = event.tags.find((t) => t[0] === "i");
@@ -354,9 +545,6 @@ describe("spec compliance (MIP-00) — pending", () => {
   });
 
   it("should reject decoding kind 443 events that are missing an encoding=base64 tag", async () => {
-    const validPubkey =
-      "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
-
     const credential = createCredential(validPubkey);
     const ciphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -389,9 +577,6 @@ describe("spec compliance (MIP-00) — pending", () => {
   });
 
   it("should reject decoding kind 443 events with encoding=hex", async () => {
-    const validPubkey =
-      "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
-
     const credential = createCredential(validPubkey);
     const ciphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",

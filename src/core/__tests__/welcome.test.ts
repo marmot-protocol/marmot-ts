@@ -9,14 +9,16 @@ import { MarmotClient } from "../../client/marmot-client.js";
 import { createCredential } from "../credential.js";
 import { generateKeyPackage } from "../key-package.js";
 import { createKeyPackageEvent } from "../key-package-event.js";
-import { KEY_PACKAGE_KIND, WELCOME_EVENT_KIND } from "../protocol.js";
+import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
+  WELCOME_EVENT_KIND,
+} from "../protocol.js";
 import {
   getWelcome,
   readWelcomeGroupInfo,
   readWelcomeMarmotGroupData,
 } from "../welcome.js";
-import { KeyPackageStore } from "../../store/key-package-store.js";
-import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
+import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
 
@@ -77,8 +79,8 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-      keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+      groupStateStore: new MemoryBackend(),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
@@ -98,6 +100,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
     const keyPackageEvent = await inviteeAccount.signer.signEvent(
       await createKeyPackageEvent({
         keyPackage: inviteeKeyPackage.publicPackage,
+        d: inviteePubkey,
         relays: groupRelays,
       }),
     );
@@ -111,7 +114,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
 
     // Admin invites invitee
     const [keyPackageNostrEvent] = await mockNetwork.request(groupRelays, {
-      kinds: [KEY_PACKAGE_KIND],
+      kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
       authors: [inviteePubkey],
     });
     await adminGroup.inviteByKeyPackageEvent(keyPackageNostrEvent);

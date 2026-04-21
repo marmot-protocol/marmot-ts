@@ -12,12 +12,11 @@ import { MarmotClient } from "../../client/marmot-client.js";
 import { extractMarmotGroupData } from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
   GROUP_EVENT_KIND,
-  KEY_PACKAGE_KIND,
   WELCOME_EVENT_KIND,
 } from "../../core/protocol.js";
-import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
-import { KeyPackageStore } from "../../store/key-package-store.js";
+import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
 import { MemoryBackend } from "../helpers/memory-backend.js";
@@ -50,24 +49,19 @@ describe("End-to-end: invite, join, first message", () => {
     // Create mock network
     mockNetwork = new MockNetwork();
 
-    // Create clients using the new bytes-first API
-    const groupStateBackend = new KeyValueGroupStateBackend(
-      new MemoryBackend(),
-    );
-    const keyPackageStore = new KeyPackageStore(new MemoryBackend());
-
     adminClient = new MarmotClient({
-      groupStateBackend,
-      keyPackageStore,
+      groupStateStore: new MemoryBackend(),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-      keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+      groupStateStore: new MemoryBackend(),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
+      clientId: "test-invitee-device",
     });
   });
 
@@ -82,7 +76,7 @@ describe("End-to-end: invite, join, first message", () => {
 
     // Retrieve the published event so we can verify the event ID later
     const signedKeyPackageEvent = mockNetwork.events.find(
-      (e) => e.kind === KEY_PACKAGE_KIND,
+      (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
     ) as NostrEvent;
 
     // Step 2: Admin creates group
@@ -96,7 +90,7 @@ describe("End-to-end: invite, join, first message", () => {
     const keyPackageEvents = await mockNetwork.request(
       ["wss://mock-relay.test"],
       {
-        kinds: [KEY_PACKAGE_KIND],
+        kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
         authors: [inviteePubkey],
       },
     );

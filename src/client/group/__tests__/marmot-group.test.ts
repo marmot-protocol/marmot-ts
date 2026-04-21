@@ -3,10 +3,10 @@ import {
   CiphersuiteImpl,
   createCommit,
   defaultCryptoProvider,
+  defaultProposalTypes,
   getCiphersuiteImpl,
   joinGroup,
   processMessage,
-  defaultProposalTypes,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
@@ -20,32 +20,8 @@ import { SerializedClientState } from "../../../core/client-state.js";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import type { GroupStateStoreBackend } from "../../../store/group-state-store.js";
-import { GroupStateStore } from "../../../store/group-state-store.js";
 import { MemoryBackend } from "../../../__tests__/helpers/memory-backend.js";
-
-class MemoryGroupStateBackend implements GroupStateStoreBackend {
-  private map = new Map<string, SerializedClientState>();
-
-  async get(groupId: Uint8Array): Promise<SerializedClientState | null> {
-    return this.map.get(Buffer.from(groupId).toString("hex")) ?? null;
-  }
-
-  async set(
-    groupId: Uint8Array,
-    stateBytes: SerializedClientState,
-  ): Promise<void> {
-    this.map.set(Buffer.from(groupId).toString("hex"), stateBytes);
-  }
-
-  async remove(groupId: Uint8Array): Promise<void> {
-    this.map.delete(Buffer.from(groupId).toString("hex"));
-  }
-
-  async list(): Promise<Uint8Array[]> {
-    return [...this.map.keys()].map((hex) => Buffer.from(hex, "hex"));
-  }
-}
+import { bytesToHex } from "@noble/hashes/utils.js";
 
 async function createTestGroupState(
   adminPubkey: string,
@@ -140,9 +116,9 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     });
 
     // Set up MarmotGroup with admin state
-    const store = new GroupStateStore(new MemoryGroupStateBackend());
-    await store.set(
-      adminStateEpoch1.groupContext.groupId,
+    const store = new MemoryBackend<SerializedClientState>();
+    await store.setItem(
+      bytesToHex(adminStateEpoch1.groupContext.groupId),
       adminStateEpoch1 as any,
     );
 
@@ -166,7 +142,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     } as EventSigner;
 
     const group = new MarmotGroup(adminStateEpoch1, {
-      stateStore: store,
+      store,
       signer,
       ciphersuite: impl,
       network,
@@ -262,9 +238,9 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     });
 
     // Set up MarmotGroup with admin state and verify the admin will ACCEPT this commit
-    const store = new GroupStateStore(new MemoryGroupStateBackend());
-    await store.set(
-      adminStateEpoch1.groupContext.groupId,
+    const store = new MemoryBackend<SerializedClientState>();
+    await store.setItem(
+      bytesToHex(adminStateEpoch1.groupContext.groupId),
       adminStateEpoch1 as any,
     );
 
@@ -288,7 +264,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     } as EventSigner;
 
     const group = new MarmotGroup(adminStateEpoch1, {
-      stateStore: store,
+      store,
       signer,
       ciphersuite: impl,
       network,
@@ -384,9 +360,9 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     });
 
     // Set up MarmotGroup with the receiver state
-    const store = new GroupStateStore(new MemoryGroupStateBackend());
-    await store.set(
-      memberStateEpoch1.groupContext.groupId,
+    const store = new MemoryBackend<SerializedClientState>();
+    await store.setItem(
+      bytesToHex(memberStateEpoch1.groupContext.groupId),
       memberStateEpoch1 as any,
     );
 
@@ -410,7 +386,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     } as EventSigner;
 
     const group = new MarmotGroup(memberStateEpoch1, {
-      stateStore: store,
+      store,
       signer,
       ciphersuite: impl,
       network,

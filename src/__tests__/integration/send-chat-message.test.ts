@@ -13,12 +13,11 @@ import type { BaseGroupHistory } from "../../client/group/marmot-group.js";
 import { MarmotClient } from "../../client/marmot-client.js";
 import { getMarmotGroupData } from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
-import { GROUP_EVENT_KIND, KEY_PACKAGE_KIND } from "../../core/protocol.js";
-import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
 import {
-  KeyPackageStore,
-  type StoredKeyPackage,
-} from "../../store/key-package-store.js";
+  ADDRESSABLE_KEY_PACKAGE_KIND,
+  GROUP_EVENT_KIND,
+} from "../../core/protocol.js";
+import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { MockNetwork } from "../helpers/mock-network.js";
 import { MemoryBackend } from "../helpers/memory-backend.js";
 
@@ -57,7 +56,7 @@ async function setupTwoMemberGroup(
   const keyPackageEvents = await mockNetwork.request(
     ["wss://mock-relay.test"],
     {
-      kinds: [KEY_PACKAGE_KIND],
+      kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
       authors: [inviteePubkey],
     },
   );
@@ -122,17 +121,18 @@ describe("MarmotGroup.sendChatMessage", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-      keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+      groupStateStore: new MemoryBackend(),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-      keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+      groupStateStore: new MemoryBackend(),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
+      clientId: "test-invitee-device",
     });
   });
 
@@ -322,10 +322,11 @@ describe("MarmotGroup.sendChatMessage", () => {
 
     // Create a fresh invitee client that uses our test history factory
     const inviteeClientWithHistory = new MarmotClient<TestHistory>({
-      groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-      keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+      groupStateStore: new MemoryBackend(),
+      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
+      clientId: "test-invitee-device",
       historyFactory: () => history,
     });
 
@@ -370,16 +371,15 @@ describe("MarmotGroup.sendChatMessage", () => {
   });
 
   it("restart path: ingesting own relay echo does not break flow", async () => {
-    const inviteeGroupBackend = new KeyValueGroupStateBackend(
-      new MemoryBackend(),
-    );
+    const inviteeGroupBackend = new MemoryBackend();
     const inviteeKeyPackageBackend = new MemoryBackend<StoredKeyPackage>();
 
     const inviteeClientBeforeRestart = new MarmotClient({
-      groupStateBackend: inviteeGroupBackend,
-      keyPackageStore: new KeyPackageStore(inviteeKeyPackageBackend),
+      groupStateStore: inviteeGroupBackend,
+      keyPackageBackend: inviteeKeyPackageBackend,
       signer: inviteeAccount.signer,
       network: mockNetwork,
+      clientId: "test-invitee-device",
     });
 
     const { inviteeGroup } = await setupTwoMemberGroup(
@@ -396,8 +396,8 @@ describe("MarmotGroup.sendChatMessage", () => {
 
     // Simulate a restart: new client instance, same persisted group backend
     const inviteeClientAfterRestart = new MarmotClient({
-      groupStateBackend: inviteeGroupBackend,
-      keyPackageStore: new KeyPackageStore(inviteeKeyPackageBackend),
+      groupStateStore: inviteeGroupBackend,
+      keyPackageBackend: inviteeKeyPackageBackend,
       signer: inviteeAccount.signer,
       network: mockNetwork,
     });

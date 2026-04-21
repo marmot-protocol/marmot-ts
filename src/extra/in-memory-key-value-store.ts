@@ -1,7 +1,7 @@
-import type { KeyValueStoreBackend } from "../utils/key-value.js";
+import type { GenericKeyValueStore } from "../utils/key-value.js";
 
 /**
- * A simple in-memory implementation of {@link KeyValueStoreBackend}.
+ * A simple in-memory implementation of {@link GenericKeyValueStore}.
  *
  * Data lives only for the lifetime of the process / page — nothing is written
  * to disk. Useful as a default ephemeral backend when persistence is not
@@ -18,7 +18,7 @@ import type { KeyValueStoreBackend } from "../utils/key-value.js";
  * const value = await store.getItem("key"); // { foo: "bar" }
  * ```
  */
-export class InMemoryKeyValueStore<T> implements KeyValueStoreBackend<T> {
+export class InMemoryKeyValueStore<T> implements GenericKeyValueStore<T> {
   private readonly store = new Map<string, T>();
 
   async getItem(key: string): Promise<T | null> {

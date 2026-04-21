@@ -1,20 +1,20 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-import { describe, expect, it, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InviteReader } from "../invite-reader.js";
 import type {
   InviteStore,
   ReceivedGiftWrap,
   UnreadInvite,
 } from "../../store/invite-store.js";
-import type { KeyValueStoreBackend } from "../../utils/key-value.js";
+import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { WELCOME_EVENT_KIND } from "../../core/protocol.js";
 
 /**
  * Simple in-memory backend for testing
  */
-class MemoryBackend<T> implements KeyValueStoreBackend<T> {
+class MemoryBackend<T> implements GenericKeyValueStore<T> {
   private map = new Map<string, T>();
 
   async getItem(key: string): Promise<T | null> {

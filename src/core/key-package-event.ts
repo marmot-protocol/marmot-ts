@@ -2,8 +2,8 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventTemplate, NostrEvent } from "applesauce-core/helpers/event";
 import {
   CiphersuiteId,
-  CustomExtension,
   ciphersuites,
+  CustomExtension,
   decode,
   defaultCredentialTypes,
   encode,
@@ -23,6 +23,7 @@ import { getCredentialPubkey } from "./credential.js";
 import { isGreaseValue } from "./grease.js";
 import { calculateKeyPackageRef } from "./key-package.js";
 import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
   KEY_PACKAGE_CIPHER_SUITE_TAG,
   KEY_PACKAGE_CLIENT_TAG,
   KEY_PACKAGE_EXTENSIONS_TAG,
@@ -41,7 +42,13 @@ export type CreateDeleteKeyPackageEventOptions = {
 };
 
 /**
- * Creates a NIP-09 delete event (kind 5) to delete one or more key package events (kind 443).
+ * Creates a NIP-09 delete event (kind 5) to delete one or more key package
+ * events (kind 443 or kind 30443).
+ *
+ * For kind 30443 events, both an `e` tag (event id) and an `a` tag
+ * (addressable coordinate) are included so relays can match either way.
+ * For kind 443 events, only an `e` tag is included (as before).
+ * String-only inputs produce only `e` tags since no pubkey/d is available.
  */
 export function createDeleteKeyPackageEvent(
   options: CreateDeleteKeyPackageEventOptions,
@@ -51,25 +58,54 @@ export function createDeleteKeyPackageEvent(
     throw new Error("At least one event must be provided for deletion");
   }
 
-  const ids = events.map((e) => {
-    if (typeof e === "string") return e;
-    if (e.kind !== KEY_PACKAGE_KIND) {
-      throw new Error(
-        `Event ${e.id} is not a key package event (kind ${e.kind} instead of ${KEY_PACKAGE_KIND})`,
-      );
+  const eTags: string[][] = [];
+  const aTags: string[][] = [];
+  const kValues = new Set<string>();
+
+  for (const e of events) {
+    if (typeof e === "string") {
+      // String id only — no kind info available, emit e tag without k inference
+      eTags.push(["e", e]);
+    } else {
+      if (
+        e.kind !== KEY_PACKAGE_KIND &&
+        e.kind !== ADDRESSABLE_KEY_PACKAGE_KIND
+      ) {
+        throw new Error(
+          `Event ${e.id} is not a key package event (kind ${e.kind} instead of ${KEY_PACKAGE_KIND} or ${ADDRESSABLE_KEY_PACKAGE_KIND})`,
+        );
+      }
+      kValues.add(String(e.kind));
+      eTags.push(["e", e.id]);
+
+      if (e.kind === ADDRESSABLE_KEY_PACKAGE_KIND) {
+        const d = getKeyPackageIdentifier(e);
+        if (d !== undefined) {
+          aTags.push(["a", `${ADDRESSABLE_KEY_PACKAGE_KIND}:${e.pubkey}:${d}`]);
+        }
+      }
     }
-    return e.id;
-  });
+  }
+
+  // Build k tags from the set of observed kinds (for full NostrEvent inputs)
+  // If only string ids were provided, fall back to tagging both known kinds
+  const kTags: string[][] =
+    kValues.size > 0
+      ? [...kValues].map((k) => ["k", k])
+      : [
+          ["k", String(KEY_PACKAGE_KIND)],
+          ["k", String(ADDRESSABLE_KEY_PACKAGE_KIND)],
+        ];
 
   return {
     kind: 5,
     created_at: unixNow(),
     content: "",
-    tags: [["k", String(KEY_PACKAGE_KIND)], ...ids.map((id) => ["e", id])],
+    tags: [...kTags, ...eTags, ...aTags],
   };
 }
 
-/** Get the KeyPackage from a kind 443 event */
+/** Get the KeyPackage from a kind 443 or kind 30443 event */
 export function getKeyPackage(event: NostrEvent): KeyPackage {
   const encodingFormat = getEncodingTag(event);
   if (encodingFormat !== "base64") {
@@ -84,7 +120,7 @@ export function getKeyPackage(event: NostrEvent): KeyPackage {
   return decoded;
 }
 
-/** Gets the MLS protocol version from a kind 443 event */
+/** Gets the MLS protocol version from a kind 443 or kind 30443 event */
 export function getKeyPackageMLSVersion(
   event: NostrEvent,
 ): MLS_VERSIONS | undefined {
@@ -92,7 +128,7 @@ export function getKeyPackageMLSVersion(
   return version as MLS_VERSIONS | undefined;
 }
 
-/** Gets the MLS cipher suite from a kind 443 event */
+/** Gets the MLS cipher suite from a kind 443 or kind 30443 event */
 export function getKeyPackageCipherSuiteId(
   event: NostrEvent,
 ): CiphersuiteId | undefined {
@@ -109,7 +145,7 @@ export function getKeyPackageCipherSuiteId(
   return id;
 }
 
-/** Gets the MLS extensions for a kind 443 event */
+/** Gets the MLS extensions for a kind 443 or kind 30443 event */
 export function getKeyPackageExtensions(
   event: NostrEvent,
 ): number[] | undefined {
@@ -125,14 +161,14 @@ export function getKeyPackageExtensions(
   return ids;
 }
 
-/** Gets the relays for a kind 443 event */
+/** Gets the relays for a kind 443 or kind 30443 event */
 export function getKeyPackageRelays(event: NostrEvent): string[] | undefined {
   const tag = event.tags.find((t) => t[0] === KEY_PACKAGE_RELAYS_TAG);
   if (!tag) return;
   return tag.slice(1).filter(isValidRelayUrl).map(normalizeRelayUrl);
 }
 
-/** Gets the client for a kind 443 event */
+/** Gets the client for a kind 443 or kind 30443 event */
 export function getKeyPackageClient(
   event: NostrEvent,
 ): KeyPackageClient | undefined {
@@ -145,9 +181,24 @@ export function getKeyPackageClient(
   };
 }
 
+/**
+ * Gets the addressable slot identifier (`d` tag) from a kind 30443 event.
+ * Returns `undefined` for kind 443 events (which have no `d` tag).
+ */
+export function getKeyPackageIdentifier(event: NostrEvent): string | undefined {
+  if (event.kind !== ADDRESSABLE_KEY_PACKAGE_KIND) return undefined;
+  return getTagValue(event, "d");
+}
+
 export type CreateKeyPackageEventOptions = {
   keyPackage: KeyPackage;
-  /** Pubkey of the author (optional for drafts; required for Nostr kind 443 events) */
+  /**
+   * The addressable slot identifier (`d` tag value). Required — callers must
+   * supply this; {@link KeyPackageManager} handles defaulting to `clientId` or
+   * throwing {@link MissingSlotIdentifierError} when none is available.
+   */
+  d: string;
+  /** Relay URLs to advertise in the event */
   relays?: string[];
   client?: string;
   /**
@@ -160,10 +211,10 @@ export type CreateKeyPackageEventOptions = {
 };
 
 /**
- * Creates a key package event (kind 443) from a key package.
+ * Creates an addressable key package event (kind 30443) from a key package.
  *
  * @param options - The options for creating the key package event
- * @returns The unsigned key package event
+ * @returns The unsigned key package event template
  */
 export function createKeyPackageEvent(
   options: CreateKeyPackageEventOptions,
@@ -226,6 +277,9 @@ async function createKeyPackageEventInternal(
   // NOTE: Optional/opt-in because many popular relays reject protected events.
   if (options.protected) tags.push(["-"]);
 
+  // Addressable identifier (required for kind 30443)
+  tags.push(["d", options.d]);
+
   tags.push(
     [KEY_PACKAGE_MLS_VERSION_TAG, version],
     [KEY_PACKAGE_CIPHER_SUITE_TAG, ciphersuiteHex],
@@ -249,7 +303,7 @@ async function createKeyPackageEventInternal(
   }
 
   return {
-    kind: KEY_PACKAGE_KIND,
+    kind: ADDRESSABLE_KEY_PACKAGE_KIND,
     created_at: unixNow(),
     content,
     tags,
@@ -259,7 +313,7 @@ async function createKeyPackageEventInternal(
 /**
  * Gets the nostr public key from a key package event.
  *
- * @param event - The key package event
+ * @param event - The key package event (kind 443 or kind 30443)
  * @returns The nostr public key (hex string)
  * @throws Error if the credential is not a basic credential
  */
@@ -279,7 +333,8 @@ export function getKeyPackageNostrPubkey(event: NostrEvent): string {
 }
 
 /**
- * Returns the KeyPackageRef (MIP-00 `i` tag value) from a kind 443 KeyPackage event.
+ * Returns the KeyPackageRef (MIP-00 `i` tag value) from a kind 443 or kind
+ * 30443 KeyPackage event.
  *
  * Per MIP-00, new events MUST include this tag. Older events may not.
  */

@@ -1,11 +1,11 @@
 import { EventEmitter } from "eventemitter3";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
-import type { KeyValueStoreBackend } from "../../utils/key-value.js";
+import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import type { MediaAttachment } from "../../core/media.js";
 import type { BaseGroupMedia, StoredMedia } from "./marmot-group.js";
 
 /** A generic interface for a group media backend */
-export interface GroupMediaBackend extends KeyValueStoreBackend<StoredMedia> {}
+export interface GroupMediaBackend extends GenericKeyValueStore<StoredMedia> {}
 
 /** A map of events that can be emitted by a {@link GroupMediaStore} */
 type GroupMediaStoreEvents = {

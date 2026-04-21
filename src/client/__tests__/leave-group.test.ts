@@ -3,9 +3,11 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MarmotClient } from "../marmot-client.js";
-import { GROUP_EVENT_KIND, KEY_PACKAGE_KIND } from "../../core/protocol.js";
-import { KeyValueGroupStateBackend } from "../../store/adapters/key-value-group-state-backend.js";
-import { KeyPackageStore } from "../../store/key-package-store.js";
+import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
+  GROUP_EVENT_KIND,
+} from "../../core/protocol.js";
+import { StoredKeyPackage } from "../key-package-manager.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
 import { unlockGiftWrap } from "applesauce-common/helpers";
@@ -17,10 +19,11 @@ import { unlockGiftWrap } from "applesauce-common/helpers";
 async function makeClient(network: MockNetwork): Promise<MarmotClient> {
   const account = PrivateKeyAccount.generateNew();
   return new MarmotClient({
-    groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-    keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+    groupStateStore: new MemoryBackend(),
+    keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
     signer: account.signer,
     network,
+    clientId: "test-client",
   });
 }
 
@@ -31,17 +34,19 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
   const memberPubkey = await memberAccount.signer.getPublicKey();
 
   const adminClient = new MarmotClient({
-    groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-    keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+    groupStateStore: new MemoryBackend(),
+    keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
     signer: adminAccount.signer,
     network: mockNetwork,
+    clientId: "test-admin",
   });
 
   const memberClient = new MarmotClient({
-    groupStateBackend: new KeyValueGroupStateBackend(new MemoryBackend()),
-    keyPackageStore: new KeyPackageStore(new MemoryBackend()),
+    groupStateStore: new MemoryBackend(),
+    keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
     signer: memberAccount.signer,
     network: mockNetwork,
+    clientId: "test-member",
   });
 
   // Member publishes a key package
@@ -56,7 +61,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
   // Admin fetches the member's key package and invites them
   const keyPackageEvents = await mockNetwork.request(
     ["wss://mock-relay.test"],
-    { kinds: [KEY_PACKAGE_KIND], authors: [memberPubkey] },
+    { kinds: [ADDRESSABLE_KEY_PACKAGE_KIND], authors: [memberPubkey] },
   );
   await adminGroup.inviteByKeyPackageEvent(keyPackageEvents[0]);
 
@@ -114,13 +119,13 @@ describe("MarmotGroup.leave()", () => {
 
     // Group should be accessible before leaving
     const groupIdHex = bytesToHex(memberGroup.id);
-    const groupsBefore = await memberClient.groupStateStore.list();
+    const groupsBefore = await memberClient.listGroupIds();
     expect(groupsBefore.some((id) => bytesToHex(id) === groupIdHex)).toBe(true);
 
     await memberGroup.leave();
 
     // Group should be removed from store after leaving
-    const groupsAfter = await memberClient.groupStateStore.list();
+    const groupsAfter = await memberClient.listGroupIds();
     expect(groupsAfter.some((id) => bytesToHex(id) === groupIdHex)).toBe(false);
   });
 
@@ -169,7 +174,7 @@ describe("MarmotGroup.leave()", () => {
     await expect(memberGroup.leave()).rejects.toThrow("no relay acknowledged");
 
     // Local state must still exist after the failed leave attempt
-    const groupsAfter = await memberClient.groupStateStore.list();
+    const groupsAfter = await memberClient.listGroupIds();
     expect(groupsAfter.some((id) => bytesToHex(id) === groupIdHex)).toBe(true);
   });
 

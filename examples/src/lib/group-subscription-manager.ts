@@ -82,7 +82,7 @@ export class GroupSubscriptionManager {
 
     try {
       // Get all groups from the store
-      const groups = await this.client.groupStateStore.list();
+      const groups = await this.client.listGroupIds();
       const groupIds = new Set<string>();
 
       // Ensure we have subscriptions for all groups

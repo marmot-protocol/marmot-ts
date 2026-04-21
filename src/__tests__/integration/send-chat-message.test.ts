@@ -9,9 +9,15 @@ import {
 } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { BaseGroupHistory } from "../../client/group/marmot-group.js";
+import type {
+  BaseGroupHistory,
+  MarmotGroup,
+} from "../../client/group/marmot-group.js";
 import { MarmotClient } from "../../client/marmot-client.js";
-import { getMarmotGroupData } from "../../core/client-state.js";
+import {
+  getMarmotGroupData,
+  SerializedClientState,
+} from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
@@ -48,7 +54,7 @@ async function setupTwoMemberGroup(
 
   await inviteeClient.keyPackages.create({ relays: ["wss://mock-relay.test"] });
 
-  const adminGroup = await adminClient.createGroup(groupName, {
+  const adminGroup = await adminClient.groups.create(groupName, {
     adminPubkeys: [adminPubkey],
     relays: ["wss://mock-relay.test"],
   });
@@ -80,7 +86,7 @@ async function setupTwoMemberGroup(
 
 /** Helper: collect application rumor messages from admin ingesting all group events */
 async function collectApplicationRumors(
-  adminGroup: Awaited<ReturnType<MarmotClient["createGroup"]>>,
+  adminGroup: MarmotGroup<any, any>,
   mockNetwork: MockNetwork,
   nostrGroupIdHex: string,
 ): Promise<Rumor[]> {
@@ -122,14 +128,14 @@ describe("MarmotGroup.sendChatMessage", () => {
 
     adminClient = new MarmotClient({
       groupStateStore: new MemoryBackend(),
-      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+      keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
       groupStateStore: new MemoryBackend(),
-      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+      keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",
@@ -323,7 +329,7 @@ describe("MarmotGroup.sendChatMessage", () => {
     // Create a fresh invitee client that uses our test history factory
     const inviteeClientWithHistory = new MarmotClient<TestHistory>({
       groupStateStore: new MemoryBackend(),
-      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+      keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",
@@ -371,12 +377,12 @@ describe("MarmotGroup.sendChatMessage", () => {
   });
 
   it("restart path: ingesting own relay echo does not break flow", async () => {
-    const inviteeGroupBackend = new MemoryBackend();
+    const inviteeGroupBackend = new MemoryBackend<SerializedClientState>();
     const inviteeKeyPackageBackend = new MemoryBackend<StoredKeyPackage>();
 
     const inviteeClientBeforeRestart = new MarmotClient({
       groupStateStore: inviteeGroupBackend,
-      keyPackageBackend: inviteeKeyPackageBackend,
+      keyPackageStore: inviteeKeyPackageBackend,
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",
@@ -397,12 +403,13 @@ describe("MarmotGroup.sendChatMessage", () => {
     // Simulate a restart: new client instance, same persisted group backend
     const inviteeClientAfterRestart = new MarmotClient({
       groupStateStore: inviteeGroupBackend,
-      keyPackageBackend: inviteeKeyPackageBackend,
+      keyPackageStore: inviteeKeyPackageBackend,
       signer: inviteeAccount.signer,
       network: mockNetwork,
     });
 
-    const reloadedGroup = await inviteeClientAfterRestart.getGroup(groupIdHex);
+    const reloadedGroup =
+      await inviteeClientAfterRestart.groups.get(groupIdHex);
     const marmotGroupData = getMarmotGroupData(reloadedGroup.state);
     if (!marmotGroupData) throw new Error("MarmotGroupData missing");
     const nostrGroupIdHex = bytesToHex(marmotGroupData.nostrGroupId);

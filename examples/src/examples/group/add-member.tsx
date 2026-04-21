@@ -55,7 +55,7 @@ const group$ = combineLatest([
     if (!groupId) {
       return of<MarmotGroup | null>(null);
     }
-    return from(client.getGroup(groupId));
+    return from(client.groups.get(groupId));
   }),
   startWith<MarmotGroup | null>(null),
   shareReplay(1),

@@ -96,7 +96,7 @@ marmotClient$.subscribe(async (client) => {
 
     // Detach any previous client listeners
     if (currentClient && groupsUpdatedHandler) {
-      currentClient.off("groupsUpdated", groupsUpdatedHandler);
+      currentClient.groups.off("updated", groupsUpdatedHandler);
     }
     currentClient = null;
     groupsUpdatedHandler = null;
@@ -118,7 +118,7 @@ marmotClient$.subscribe(async (client) => {
       // Without this, newly created/joined/imported groups won't get background
       // subscriptions until a full page refresh.
       if (currentClient && groupsUpdatedHandler) {
-        currentClient.off("groupsUpdated", groupsUpdatedHandler);
+        currentClient.groups.off("updated", groupsUpdatedHandler);
       }
       currentClient = client;
       groupsUpdatedHandler = () => {
@@ -126,7 +126,7 @@ marmotClient$.subscribe(async (client) => {
           console.error("Failed to reconcile subscriptions:", err);
         });
       };
-      client.on("groupsUpdated", groupsUpdatedHandler);
+      client.groups.on("updated", groupsUpdatedHandler);
     } catch (err) {
       console.error("Failed to start subscription manager:", err);
       subscriptionManager = null;

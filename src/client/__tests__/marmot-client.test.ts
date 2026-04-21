@@ -98,7 +98,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
       network: mockNetwork,
     });
 
-    const group = await client.createGroup("Dedup Test", {
+    const group = await client.groups.create("Dedup Test", {
       // Creator is always prepended internally; passing it again should not duplicate it.
       adminPubkeys: [creatorPubkey],
       relays: ["wss://relay.example.com"],
@@ -125,7 +125,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
       network: mockNetwork,
     });
 
-    const group = await client.createGroup("Dedup Test 2", {
+    const group = await client.groups.create("Dedup Test 2", {
       adminPubkeys: [creatorPubkey, otherAdmin, otherAdmin],
       relays: ["wss://relay.example.com"],
     });
@@ -152,7 +152,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
       network: mockNetwork,
     });
 
-    const group = await client.createGroup("No Extra Admins", {
+    const group = await client.groups.create("No Extra Admins", {
       relays: ["wss://relay.example.com"],
     });
 

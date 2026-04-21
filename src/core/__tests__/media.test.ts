@@ -384,7 +384,7 @@ describe("encryptMediaFile / decryptMediaFile", () => {
       decryptMediaFile(encrypted, fileKey, {
         ...filled,
         filename: "tampered.jpg",
-      })
+      }),
     ).toThrow();
   });
 
@@ -404,7 +404,7 @@ describe("encryptMediaFile / decryptMediaFile", () => {
       attachment,
     );
     expect(() =>
-      decryptMediaFile(encrypted, fileKey, { ...filled, type: "image/png" })
+      decryptMediaFile(encrypted, fileKey, { ...filled, type: "image/png" }),
     ).toThrow();
   });
 
@@ -423,8 +423,9 @@ describe("encryptMediaFile / decryptMediaFile", () => {
       fileKey,
       attachment,
     );
-    expect(() => decryptMediaFile(encrypted, randomBytes(32), filled))
-      .toThrow();
+    expect(() =>
+      decryptMediaFile(encrypted, randomBytes(32), filled),
+    ).toThrow();
   });
 
   it("throws when nonce is missing from attachment", () => {
@@ -432,8 +433,9 @@ describe("encryptMediaFile / decryptMediaFile", () => {
       ...makeAttachment(randomBytes(32)),
       nonce: "",
     };
-    expect(() => decryptMediaFile(randomBytes(48), randomBytes(32), attachment))
-      .toThrow("nonce");
+    expect(() =>
+      decryptMediaFile(randomBytes(48), randomBytes(32), attachment),
+    ).toThrow("nonce");
   });
 
   it("throws when fileHash in attachment is wrong (AAD mismatch)", async () => {
@@ -455,7 +457,7 @@ describe("encryptMediaFile / decryptMediaFile", () => {
       decryptMediaFile(encrypted, fileKey, {
         ...filled,
         sha256: bytesToHex(sha256(randomBytes(64))),
-      })
+      }),
     ).toThrow();
   });
 });
@@ -841,7 +843,7 @@ describe("getMediaAttachmentFromFileEvent", () => {
     });
     // Replace n with an 11-byte (22 char) nonce
     event.tags = event.tags.map((t) =>
-      t[0] === "n" ? ["n", bytesToHex(randomBytes(11))] : t
+      t[0] === "n" ? ["n", bytesToHex(randomBytes(11))] : t,
     );
     expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
   });
@@ -856,7 +858,7 @@ describe("getMediaAttachmentFromFileEvent", () => {
     });
     // Replace n with a 13-byte (26 char) nonce
     event.tags = event.tags.map((t) =>
-      t[0] === "n" ? ["n", bytesToHex(randomBytes(13))] : t
+      t[0] === "n" ? ["n", bytesToHex(randomBytes(13))] : t,
     );
     expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
   });
@@ -870,7 +872,7 @@ describe("getMediaAttachmentFromFileEvent", () => {
       version: MIP04_VERSION,
     });
     event.tags = event.tags.map((t) =>
-      t[0] === "n" ? ["n", "zzzzzzzzzzzzzzzzzzzzzzzz"] : t
+      t[0] === "n" ? ["n", "zzzzzzzzzzzzzzzzzzzzzzzz"] : t,
     );
     expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
   });
@@ -898,7 +900,7 @@ describe("getMediaAttachmentFromFileEvent", () => {
     });
     // Replace x with a 31-byte (62 char) hash
     event.tags = event.tags.map((t) =>
-      t[0] === "x" ? ["x", bytesToHex(randomBytes(31))] : t
+      t[0] === "x" ? ["x", bytesToHex(randomBytes(31))] : t,
     );
     expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
   });
@@ -912,7 +914,7 @@ describe("getMediaAttachmentFromFileEvent", () => {
       version: MIP04_VERSION,
     });
     event.tags = event.tags.map((t) =>
-      t[0] === "x" ? ["x", "g".repeat(64)] : t
+      t[0] === "x" ? ["x", "g".repeat(64)] : t,
     );
     expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
   });
@@ -939,7 +941,7 @@ describe("getMediaAttachmentFromFileEvent", () => {
       version: MIP04_VERSION,
     });
     event.tags = event.tags.map((t) =>
-      t[0] === "m" ? ["m", "notamimetype"] : t
+      t[0] === "m" ? ["m", "notamimetype"] : t,
     );
     expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
   });

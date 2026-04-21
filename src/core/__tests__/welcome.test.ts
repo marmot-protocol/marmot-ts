@@ -107,7 +107,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
     await mockNetwork.publish(groupRelays, keyPackageEvent);
 
     // Admin creates group
-    const adminGroup = await adminClient.createGroup(groupName, {
+    const adminGroup = await adminClient.groups.create(groupName, {
       adminPubkeys: [adminPubkey],
       relays: groupRelays,
     });

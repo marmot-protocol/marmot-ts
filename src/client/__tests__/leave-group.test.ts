@@ -20,7 +20,7 @@ async function makeClient(network: MockNetwork): Promise<MarmotClient> {
   const account = PrivateKeyAccount.generateNew();
   return new MarmotClient({
     groupStateStore: new MemoryBackend(),
-    keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+    keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
     signer: account.signer,
     network,
     clientId: "test-client",
@@ -35,7 +35,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
 
   const adminClient = new MarmotClient({
     groupStateStore: new MemoryBackend(),
-    keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+    keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
     signer: adminAccount.signer,
     network: mockNetwork,
     clientId: "test-admin",
@@ -43,7 +43,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
 
   const memberClient = new MarmotClient({
     groupStateStore: new MemoryBackend(),
-    keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+    keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
     signer: memberAccount.signer,
     network: mockNetwork,
     clientId: "test-member",
@@ -53,7 +53,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
   await memberClient.keyPackages.create({ relays: ["wss://mock-relay.test"] });
 
   // Admin creates the group
-  const adminGroup = await adminClient.createGroup("Test Group", {
+  const adminGroup = await adminClient.groups.create("Test Group", {
     adminPubkeys: [adminPubkey],
     relays: ["wss://mock-relay.test"],
   });
@@ -119,13 +119,13 @@ describe("MarmotGroup.leave()", () => {
 
     // Group should be accessible before leaving
     const groupIdHex = bytesToHex(memberGroup.id);
-    const groupsBefore = await memberClient.listGroupIds();
+    const groupsBefore = await memberClient.groups.listIds();
     expect(groupsBefore.some((id) => bytesToHex(id) === groupIdHex)).toBe(true);
 
     await memberGroup.leave();
 
     // Group should be removed from store after leaving
-    const groupsAfter = await memberClient.listGroupIds();
+    const groupsAfter = await memberClient.groups.listIds();
     expect(groupsAfter.some((id) => bytesToHex(id) === groupIdHex)).toBe(false);
   });
 
@@ -174,7 +174,7 @@ describe("MarmotGroup.leave()", () => {
     await expect(memberGroup.leave()).rejects.toThrow("no relay acknowledged");
 
     // Local state must still exist after the failed leave attempt
-    const groupsAfter = await memberClient.listGroupIds();
+    const groupsAfter = await memberClient.groups.listIds();
     expect(groupsAfter.some((id) => bytesToHex(id) === groupIdHex)).toBe(true);
   });
 
@@ -190,7 +190,7 @@ describe("MarmotGroup.leave()", () => {
   });
 });
 
-describe("MarmotClient.leaveGroup()", () => {
+describe("MarmotClient.groups.leave()", () => {
   let mockNetwork: MockNetwork;
 
   beforeEach(() => {
@@ -203,42 +203,46 @@ describe("MarmotClient.leaveGroup()", () => {
 
     const groupId = memberGroup.id;
     expect(
-      memberClient.groups.some((g) => bytesToHex(g.id) === bytesToHex(groupId)),
+      memberClient.groups.loaded.some(
+        (g) => bytesToHex(g.id) === bytesToHex(groupId),
+      ),
     ).toBe(true);
 
-    await memberClient.leaveGroup(groupId);
+    await memberClient.groups.leave(groupId);
 
     // Group should be evicted from in-memory cache
     expect(
-      memberClient.groups.some((g) => bytesToHex(g.id) === bytesToHex(groupId)),
+      memberClient.groups.loaded.some(
+        (g) => bytesToHex(g.id) === bytesToHex(groupId),
+      ),
     ).toBe(false);
   });
 
-  it("emits groupLeft with the group id", async () => {
+  it("emits left with the group id", async () => {
     const { memberClient, memberGroup } =
       await setupTwoMemberGroup(mockNetwork);
 
-    const groupLeftHandler = vi.fn();
-    memberClient.on("groupLeft", groupLeftHandler);
+    const leftHandler = vi.fn();
+    memberClient.groups.on("left", leftHandler);
 
-    await memberClient.leaveGroup(memberGroup.id);
+    await memberClient.groups.leave(memberGroup.id);
 
-    expect(groupLeftHandler).toHaveBeenCalledOnce();
-    expect(bytesToHex(groupLeftHandler.mock.calls[0][0])).toBe(
+    expect(leftHandler).toHaveBeenCalledOnce();
+    expect(bytesToHex(leftHandler.mock.calls[0][0])).toBe(
       bytesToHex(memberGroup.id),
     );
   });
 
-  it("emits groupsUpdated after leaving", async () => {
+  it("emits updated after leaving", async () => {
     const { memberClient, memberGroup } =
       await setupTwoMemberGroup(mockNetwork);
 
-    const groupsUpdatedHandler = vi.fn();
-    memberClient.on("groupsUpdated", groupsUpdatedHandler);
+    const updatedHandler = vi.fn();
+    memberClient.groups.on("updated", updatedHandler);
 
-    await memberClient.leaveGroup(memberGroup.id);
+    await memberClient.groups.leave(memberGroup.id);
 
-    expect(groupsUpdatedHandler).toHaveBeenCalled();
+    expect(updatedHandler).toHaveBeenCalled();
   });
 
   it("accepts a hex string group id", async () => {
@@ -246,7 +250,7 @@ describe("MarmotClient.leaveGroup()", () => {
       await setupTwoMemberGroup(mockNetwork);
 
     const hexId = bytesToHex(memberGroup.id);
-    await expect(memberClient.leaveGroup(hexId)).resolves.toBeDefined();
+    await expect(memberClient.groups.leave(hexId)).resolves.toBeDefined();
   });
 
   it("publishes a proposal event to the group relays", async () => {
@@ -258,7 +262,7 @@ describe("MarmotClient.leaveGroup()", () => {
       (e) => e.kind === GROUP_EVENT_KIND,
     ).length;
 
-    await memberClient.leaveGroup(memberGroup.id);
+    await memberClient.groups.leave(memberGroup.id);
 
     const proposalsAfter = mockNetwork.events.filter(
       (e) => e.kind === GROUP_EVENT_KIND,

@@ -1,12 +1,7 @@
-import { bytesToHex } from "@noble/hashes/utils.js";
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { EventSigner } from "applesauce-core";
-import { hexToBytes } from "applesauce-core/helpers";
-import { EventEmitter } from "eventemitter3";
 import {
   Capabilities,
-  CiphersuiteName,
-  ciphersuites,
   ClientState,
   CryptoProvider,
   defaultCryptoProvider,
@@ -17,14 +12,8 @@ import {
   Welcome,
 } from "ts-mls";
 import { marmotAuthService } from "../core/auth-service.js";
-import {
-  deserializeClientState,
-  SerializedClientState,
-} from "../core/client-state.js";
-import { createCredential } from "../core/credential.js";
+import { SerializedClientState } from "../core/client-state.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
-import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
-import { generateKeyPackage } from "../core/key-package.js";
 import { isRumorLike } from "../core/nostr.js";
 import {
   getWelcome,
@@ -40,12 +29,10 @@ import {
   GroupMediaFactory,
   MarmotGroup,
 } from "./group/marmot-group.js";
+import { GroupsManager } from "./groups-manager.js";
 import type { StoredKeyPackage } from "./key-package-manager.js";
 import { KeyPackageManager } from "./key-package-manager.js";
-import type {
-  NostrNetworkInterface,
-  PublishResponse,
-} from "./nostr-interface.js";
+import type { NostrNetworkInterface } from "./nostr-interface.js";
 
 const log = logger.extend("client");
 
@@ -60,7 +47,7 @@ export type MarmotClientOptions<
   /** The backend to store and load the groups from */
   groupStateStore: GenericKeyValueStore<SerializedClientState>;
   /** The backend for key package private material and publish tracking */
-  keyPackageBackend: GenericKeyValueStore<StoredKeyPackage>;
+  keyPackageStore: GenericKeyValueStore<StoredKeyPackage>;
   /** The crypto provider to use for cryptographic operations */
   cryptoProvider?: CryptoProvider;
   /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
@@ -85,32 +72,10 @@ export type MarmotClientOptions<
         mediaFactory: GroupMediaFactory<TMedia>;
       });
 
-type MarmotClientEvents<
-  THistory extends BaseGroupHistory | undefined = any,
-  TMedia extends BaseGroupMedia | undefined = any,
-> = {
-  /** Emitted when the groups array is updated */
-  groupsUpdated: (groups: MarmotGroup<THistory, TMedia>[]) => void;
-  /** Emitted when a group is loaded from the store */
-  groupLoaded: (group: MarmotGroup<THistory, TMedia>) => void;
-  /** Emitted when a new group is created */
-  groupCreated: (group: MarmotGroup<THistory, TMedia>) => void;
-  /** Emitted when a group is imported from a ClientState object */
-  groupImported: (group: MarmotGroup<THistory, TMedia>) => void;
-  /** Emitted when a group is joined */
-  groupJoined: (group: MarmotGroup<THistory, TMedia>) => void;
-  /** Emitted when a group is unloaded */
-  groupUnloaded: (groupId: Uint8Array) => void;
-  /** Emitted when a group is destroyed */
-  groupDestroyed: (groupId: Uint8Array) => void;
-  /** Emitted when the client leaves a group via self-remove proposal events */
-  groupLeft: (groupId: Uint8Array) => void;
-};
-
 export class MarmotClient<
   THistory extends BaseGroupHistory | undefined = any,
   TMedia extends BaseGroupMedia | undefined = any,
-> extends EventEmitter<MarmotClientEvents<THistory, TMedia>> {
+> {
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
   /** The capabilities to use for the client */
@@ -121,334 +86,48 @@ export class MarmotClient<
   readonly network: NostrNetworkInterface;
   /** Manages key package lifecycle: local storage, publishing, and rotation */
   readonly keyPackages: KeyPackageManager;
+  /** Manages group lifecycle: persistence, caching, creation, loading, leaving */
+  readonly groups: GroupsManager<THistory, TMedia>;
 
   /** Crypto provider for cryptographic operations */
   public cryptoProvider: CryptoProvider;
 
-  /** An array of all loaded groups */
-  get groups() {
-    return Array.from(this.#groups.values());
-  }
-
-  /** Group history interface to be passed to group instaces */
-  private historyFactory: GroupHistoryFactory<THistory>;
-
-  /** Group media interface to be passed to group instance */
-  private mediaFactory: GroupMediaFactory<TMedia>;
-
   constructor(options: MarmotClientOptions<THistory, TMedia>) {
-    super();
     this.signer = options.signer;
     this.capabilities = options.capabilities ?? defaultCapabilities();
     this.groupStateStore = options.groupStateStore;
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.keyPackages = new KeyPackageManager({
-      store: options.keyPackageBackend,
+      store: options.keyPackageStore,
       signer: options.signer,
       network: options.network,
       clientId: options.clientId,
     });
 
-    // Set the history factory if its set in the options
-    this.historyFactory = (
+    const historyFactory = (
       "historyFactory" in options ? options.historyFactory : undefined
     ) as GroupHistoryFactory<THistory>;
-
-    // Set the media factory if its set in the options
-    this.mediaFactory = (
+    const mediaFactory = (
       "mediaFactory" in options ? options.mediaFactory : undefined
     ) as GroupMediaFactory<TMedia>;
-  }
 
-  /** Get a ciphersuite implementation from a name */
-  private async getCiphersuiteImpl(name?: CiphersuiteName) {
-    // In v2, CryptoProvider.getCiphersuiteImpl takes a numeric ciphersuite id.
-    // We accept a name and map it via the exported `ciphersuites` table.
-    const ciphersuiteName =
-      name ?? "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
-    const id = ciphersuites[ciphersuiteName];
-    return await this.cryptoProvider.getCiphersuiteImpl(id);
-  }
-
-  /** Hydrates a SerializedClientState into a ClientState using this client's config */
-  private hydrateState(serialized: SerializedClientState): ClientState {
-    return deserializeClientState(serialized);
-  }
-
-  /** Reads the serialized state bytes for a group directly from the backend */
-  async #getSerializedState(
-    groupId: Uint8Array,
-  ): Promise<SerializedClientState | null> {
-    return this.groupStateStore.getItem(bytesToHex(groupId));
-  }
-
-  /** Lists all persisted group IDs, decoded from their hex storage keys. */
-  async listGroupIds(): Promise<Uint8Array[]> {
-    const keys = await this.groupStateStore.keys();
-    return keys.map((key) => hexToBytes(key));
-  }
-
-  /** Checks if a group exists in the backend */
-  async hasGroup(groupId: Uint8Array | string): Promise<boolean> {
-    const key = typeof groupId === "string" ? groupId : bytesToHex(groupId);
-    const item = await this.groupStateStore.getItem(key);
-    return item !== null;
-  }
-
-  /** Internal store for loaded group classes */
-  #groups = new Map<string, MarmotGroup<THistory, TMedia>>();
-
-  /** Per-group listener handles, so we can detach them when a group is unloaded. */
-  #groupListeners = new Map<
-    string,
-    {
-      stateSaved: () => void;
-      destroyed: () => void;
-    }
-  >();
-
-  /** Tracks in-flight group loads to prevent duplicate instances under concurrency */
-  #groupLoadPromises = new Map<
-    string,
-    Promise<MarmotGroup<THistory, TMedia>>
-  >();
-
-  /** Sets a group instance in the cache and subscribes to its state events */
-  private setGroupInstance(group: MarmotGroup<THistory, TMedia>) {
-    const id = bytesToHex(group.id);
-    this.#groups.set(id, group);
-
-    const stateSaved = () => this.emit("groupsUpdated", this.groups);
-    const destroyed = () => this.emit("groupsUpdated", this.groups);
-    group.on("stateSaved", stateSaved);
-    group.on("destroyed", destroyed);
-    this.#groupListeners.set(id, { stateSaved, destroyed });
-
-    this.emit("groupsUpdated", this.groups);
-  }
-  private clearGroupInstance(groupId: Uint8Array | string) {
-    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
-
-    const existing = this.#groups.get(id);
-    if (!existing) return;
-
-    const listeners = this.#groupListeners.get(id);
-    if (listeners) {
-      existing.off("stateSaved", listeners.stateSaved);
-      existing.off("destroyed", listeners.destroyed);
-      this.#groupListeners.delete(id);
-    }
-
-    this.#groups.delete(id);
-    this.emit("groupsUpdated", this.groups);
-  }
-
-  /** Loads a new group from the store */
-  private async loadGroup(
-    groupId: Uint8Array | string,
-  ): Promise<MarmotGroup<THistory, TMedia>> {
-    const id = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
-    log("loading group %s from store", bytesToHex(id));
-    const stateBytes = await this.#getSerializedState(id);
-
-    if (!stateBytes) {
-      throw new Error(`Group ${bytesToHex(id)} not found`);
-    }
-
-    const state = this.hydrateState(stateBytes);
-
-    return await MarmotGroup.fromClientState<THistory, TMedia>(state, {
+    this.groups = new GroupsManager<THistory, TMedia>({
       store: this.groupStateStore,
       signer: this.signer,
+      network: this.network,
       cryptoProvider: this.cryptoProvider,
-      network: this.network,
-      history: this.historyFactory,
-      media: this.mediaFactory,
+      historyFactory,
+      mediaFactory,
     });
   }
 
-  /** Gets a group from cache or loads it from store */
-  async getGroup(
-    groupId: Uint8Array | string,
-  ): Promise<MarmotGroup<THistory, TMedia>> {
-    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
-    let group = this.#groups.get(id);
-
-    if (!group) {
-      const existingLoad = this.#groupLoadPromises.get(id);
-      if (existingLoad) {
-        group = await existingLoad;
-      } else {
-        const loadPromise = this.loadGroup(groupId)
-          .then((loaded) => {
-            // Save group to cache
-            this.setGroupInstance(loaded);
-            this.emit("groupLoaded", loaded);
-            return loaded;
-          })
-          .finally(() => {
-            this.#groupLoadPromises.delete(id);
-          });
-
-        this.#groupLoadPromises.set(id, loadPromise);
-        group = await loadPromise;
-      }
-    }
-
-    return group;
-  }
-
-  /** Loads all groups from the store and returns them */
-  async loadAllGroups(): Promise<MarmotGroup<THistory, TMedia>[]> {
-    const groupIds = await this.listGroupIds();
-
-    return await Promise.all(groupIds.map((groupId) => this.getGroup(groupId)));
-  }
-
-  /** Imports a new group from a ClientState object */
-  async importGroupFromClientState(
-    state: ClientState,
-  ): Promise<MarmotGroup<THistory, TMedia>> {
-    const id = bytesToHex(state.groupContext.groupId);
-    log("importing group %s from ClientState", id);
-    if (await this.hasGroup(state.groupContext.groupId)) {
-      throw new Error(`Group ${id} already exists`);
-    }
-
-    // Create a new MarmotGroup instance from the ClientState and persist it.
-    // MarmotGroup.save() is the single writer into the group state store.
-    const group = await MarmotGroup.fromClientState(state, {
-      store: this.groupStateStore,
-      signer: this.signer,
-      cryptoProvider: this.cryptoProvider,
-      network: this.network,
-      history: this.historyFactory,
-      media: this.mediaFactory,
-    });
-
-    // Persist initial state via the group's own save() path.
-    await group.save(true);
-
-    // Add group to cache
-    this.setGroupInstance(group);
-    this.emit("groupImported", group);
-
-    return group;
-  }
-
-  /** Unloads a group from the client but does not remove it from the store */
-  async unloadGroup(groupId: Uint8Array | string): Promise<void> {
-    const hex = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
-    this.clearGroupInstance(hex);
-    this.emit("groupUnloaded", hex);
-  }
-
-  /** Destroys a group and purges the group history */
-  async destroyGroup(groupId: Uint8Array | string): Promise<void> {
-    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
-    log("destroying group %s", id);
-
-    // Get the existing instance or load a new one
-    const group = this.#groups.get(id) || (await this.loadGroup(groupId));
-
-    // Use the instance to destroy the group.
-    // NOTE: MarmotGroup.destroy() is the single owner of removing group state from storage.
-    await group.destroy();
-
-    const hexId = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
-
-    // Remove the group from the cache
-    this.#groups.delete(id);
-
-    // Emit events
-    this.emit("groupDestroyed", hexId);
-    this.emit("groupsUpdated", this.groups);
-  }
-
-  /**
-   * Leaves a group by publishing a self-remove proposal and purging all
-   * local group data from storage.
-   *
-   * At least one relay must acknowledge the proposals before local state is
-   * destroyed. If no relay acks, an error is thrown and local state is
-   * preserved so the caller can retry.
-   *
-   * @param groupId - The group ID as a hex string or Uint8Array.
-   * @returns The relay publish responses for the leave proposal event(s).
-   */
-  async leaveGroup(
-    groupId: Uint8Array | string,
-  ): Promise<Record<string, PublishResponse>> {
-    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
-    log("leaving group %s", id);
-
-    // Get the existing instance or load a new one.
-    const group = this.#groups.get(id) || (await this.loadGroup(groupId));
-
-    const groupIdBytes =
-      typeof groupId === "string" ? hexToBytes(groupId) : groupId;
-
-    // Publish the self-remove proposal events and destroy local state.
-    const response = await group.leave();
-
-    // Evict from the in-memory cache (destroy() already removed from store).
-    this.#groups.delete(id);
-
-    // Emit events.
-    this.emit("groupLeft", groupIdBytes);
-    this.emit("groupsUpdated", this.groups);
-
-    return response;
-  }
-
-  /** Creates a new simple group */
-  async createGroup(
-    name: string,
-    options?: SimpleGroupOptions & {
-      ciphersuite?: CiphersuiteName;
-    },
-  ): Promise<MarmotGroup<THistory, TMedia>> {
-    log("creating group %o", name);
-    const ciphersuiteImpl = await this.getCiphersuiteImpl(options?.ciphersuite);
-
-    // generate a new key package
-    const pubkey = await this.signer.getPublicKey();
-    const credential = await createCredential(pubkey);
-    const keyPackage = await generateKeyPackage({
-      credential,
-      ciphersuiteImpl,
-    });
-
-    const { clientState } = await createSimpleGroup(
-      keyPackage,
-      ciphersuiteImpl,
-      name,
-      // Always include the creator as an admin
-      {
-        ...options,
-        adminPubkeys: [...new Set([pubkey, ...(options?.adminPubkeys || [])])],
-      },
-    );
-
-    // Create the MarmotGroup instance and persist initial state via its own save().
-    const group = new MarmotGroup(clientState, {
-      ciphersuite: ciphersuiteImpl,
-      store: this.groupStateStore,
-      signer: this.signer,
-      network: this.network,
-      history: this.historyFactory,
-      media: this.mediaFactory,
-    });
-    await group.save(true);
-
-    // Save the group to the cache
-    this.setGroupInstance(group);
-    this.emit("groupCreated", group);
-    log("created group %s", group.idStr);
-
-    return group;
-  }
+  // ---------------------------------------------------------------------------
+  // Welcome / invite flows
+  //
+  // These are higher-level methods that combine key package lookup with
+  // MLS join logic. They delegate group persistence/caching to `this.groups`.
+  // ---------------------------------------------------------------------------
 
   /**
    * Reads the {@link GroupInfo} from a Welcome rumor without joining the group.
@@ -496,8 +175,8 @@ export class MarmotClient<
    * 1. Decodes the Welcome message from the kind 444 event
    * 2. Finds the matching local KeyPackage private material from the store
    * 3. Calls ts-mls joinGroup() to create a new ClientState
-   * 4. Persists the resulting ClientState
-   * 5. Marks the consumed key package as used via `client.keyPackages.markUsed()`
+   * 4. Persists the resulting ClientState via `this.groups.adoptClientState()`
+   * 5. Marks the consumed key package as used via `this.keyPackages.markUsed()`
    * 6. Returns a MarmotGroup instance
    *
    * After joining, callers can list used key packages with
@@ -515,16 +194,13 @@ export class MarmotClient<
     const { welcomeRumor } = options;
     log("joining group from welcome rumor %s", welcomeRumor.id);
 
-    // Decode the Welcome message from the kind 444 event
     const welcome = getWelcome(welcomeRumor);
 
-    // Get the ciphersuite implementation for the Welcome
     // ts-mls v2: welcome.cipherSuite is a numeric CiphersuiteId
     const ciphersuiteImpl = await this.cryptoProvider.getCiphersuiteImpl(
       welcome.cipherSuite,
     );
 
-    // Find all local KeyPackage candidates with matching cipherSuite
     const allKeyPackages = await this.keyPackages.list();
     const candidatePackages: Array<{
       publicPackage: KeyPackage;
@@ -536,7 +212,6 @@ export class MarmotClient<
     // Collect all key packages with matching cipher suite and compute their KeyPackageRef
     // KeyPackageRef is used to identify which encrypted secret in the welcome is ours (RFC 9420)
     for (const keyPackage of allKeyPackages) {
-      // KeyPackage uses numeric ciphersuite ids; compare directly
       if (keyPackage.publicPackage.cipherSuite !== welcome.cipherSuite) {
         continue;
       }
@@ -577,14 +252,12 @@ export class MarmotClient<
       ...candidatePackages.filter((p) => !p.hasMatchingSecret),
     ];
 
-    // Try each key package in priority order until one successfully decrypts the Welcome message
     let clientState: ClientState | null = null;
     let lastError: Error | null = null;
     let consumedKeyPackageRef: Uint8Array | null = null;
 
     for (const keyPackage of prioritizedKeyPackages) {
       try {
-        // Attempt to join the group with this key package
         // In v2, joinGroup takes a single params object with context
         clientState = await joinGroup({
           context: {
@@ -597,17 +270,13 @@ export class MarmotClient<
           privateKeys: keyPackage.privatePackage,
         });
         consumedKeyPackageRef = keyPackage.keyPackageRef;
-        // If successful, break out of the loop
         break;
       } catch (error) {
-        // Store the error and continue to the next candidate
         lastError = error instanceof Error ? error : new Error(String(error));
-        // Continue trying with the next key package
       }
     }
 
     if (!clientState) {
-      // All key packages failed, throw the last error encountered
       const errorMessage = lastError
         ? `Failed to join group with any matching key package. Last error: ${lastError.message}`
         : "Failed to join group with any matching key package";
@@ -621,20 +290,11 @@ export class MarmotClient<
       await this.keyPackages.markUsed(consumedKeyPackageRef);
     }
 
-    // Create the MarmotGroup instance and persist initial state via its own save().
-    const group = new MarmotGroup(clientState, {
-      ciphersuite: ciphersuiteImpl,
-      store: this.groupStateStore,
-      signer: this.signer,
-      network: this.network,
-      history: this.historyFactory,
-      media: this.mediaFactory,
+    // Persist and register the joined group via the groups manager. The
+    // manager emits `joined` on itself; listen on `client.groups` to observe it.
+    const group = await this.groups.adoptClientState(clientState, {
+      emit: "joined",
     });
-    await group.save(true);
-
-    // Add the group to the cache
-    this.setGroupInstance(group);
-    this.emit("groupJoined", group);
     log("joined group %s", group.idStr);
 
     // MIP-02 SHOULD: callers are responsible for calling group.selfUpdate() after
@@ -643,52 +303,5 @@ export class MarmotClient<
     // could ingest the commit.
 
     return { group };
-  }
-
-  /**
-   * Watches for changes to the groups in the store.
-   * Returns an async generator that yields the current list of groups
-   * whenever the store changes.
-   *
-   * @example
-   * ```ts
-   * for await (const groups of client.watchGroups()) {
-   *   console.log(`Groups updated: ${groups.length} groups`);
-   * }
-   * ```
-   */
-  async *watchGroups(): AsyncGenerator<MarmotGroup<THistory, TMedia>[]> {
-    // Set up event listeners
-    let resolveNext: (() => void) | null = null;
-
-    const handleChange = () => {
-      if (resolveNext) {
-        resolveNext();
-        resolveNext = null;
-      }
-    };
-
-    // `groupsUpdated` already fires for every relevant transition:
-    // - setGroupInstance / clearGroupInstance (create, import, join, load, unload, destroy, leave)
-    // - per-group `stateSaved` and `destroyed` events we subscribe to in setGroupInstance
-    this.on("groupsUpdated", handleChange);
-
-    try {
-      // Yield initial state after listeners are installed to avoid missing updates
-      // that occur between snapshot and subscription.
-      yield await this.loadAllGroups();
-
-      while (true) {
-        // Wait for next change
-        await new Promise<void>((resolve) => {
-          resolveNext = resolve;
-        });
-
-        // Yield updated groups
-        yield await this.loadAllGroups();
-      }
-    } finally {
-      this.off("groupsUpdated", handleChange);
-    }
   }
 }

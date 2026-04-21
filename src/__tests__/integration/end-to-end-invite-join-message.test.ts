@@ -9,7 +9,10 @@ import {
 } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
 import { MarmotClient } from "../../client/marmot-client.js";
-import { extractMarmotGroupData } from "../../core/client-state.js";
+import {
+  extractMarmotGroupData,
+  SerializedClientState,
+} from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
@@ -50,15 +53,15 @@ describe("End-to-end: invite, join, first message", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      groupStateStore: new MemoryBackend(),
-      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+      groupStateStore: new MemoryBackend<SerializedClientState>(),
+      keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      groupStateStore: new MemoryBackend(),
-      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+      groupStateStore: new MemoryBackend<SerializedClientState>(),
+      keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",
@@ -80,7 +83,7 @@ describe("End-to-end: invite, join, first message", () => {
     ) as NostrEvent;
 
     // Step 2: Admin creates group
-    const adminGroup = await adminClient.createGroup("Test Group", {
+    const adminGroup = await adminClient.groups.create("Test Group", {
       adminPubkeys: [adminPubkey],
       relays: ["wss://mock-relay.test"],
     });

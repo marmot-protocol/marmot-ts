@@ -341,7 +341,7 @@ export default withSignIn(function GroupCreation() {
       const adminPubkeysList = [...data.adminPubkeys];
       const allRelays = [...data.relays];
 
-      const group = await client.createGroup(data.groupName, {
+      const group = await client.groups.create(data.groupName, {
         description: data.groupDescription,
         adminPubkeys: adminPubkeysList,
         relays: allRelays,

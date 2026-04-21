@@ -9,6 +9,7 @@ describe("exports", () => {
         "GROUP_EVENT_KIND",
         "GroupMediaStore",
         "GroupRumorHistory",
+        "GroupsManager",
         "InviteReader",
         "KEY_PACKAGE_CIPHER_SUITE_TAG",
         "KEY_PACKAGE_CLIENT_TAG",

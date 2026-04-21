@@ -82,7 +82,7 @@ export class GroupSubscriptionManager {
 
     try {
       // Get all groups from the store
-      const groups = await this.client.listGroupIds();
+      const groups = await this.client.groups.listIds();
       const groupIds = new Set<string>();
 
       // Ensure we have subscriptions for all groups
@@ -112,7 +112,7 @@ export class GroupSubscriptionManager {
   private async subscribeToGroup(groupIdHex: string): Promise<void> {
     try {
       // Load the group to get its relays and data
-      const group = await this.client.getGroup(groupIdHex);
+      const group = await this.client.groups.get(groupIdHex);
       const relays = group.relays;
 
       // MIP-01 v2: Nostr relay-visible group events are keyed by the *nostr_group_id* ("#h" tag),

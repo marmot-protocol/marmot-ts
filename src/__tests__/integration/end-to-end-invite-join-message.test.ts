@@ -22,7 +22,7 @@ import {
 import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { MemoryBackend } from "../helpers/memory-backend.js";
+import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
 
 // NOTE: we use the shared test helper MockNetwork, not an inline version.
 
@@ -53,15 +53,15 @@ describe("End-to-end: invite, join, first message", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      groupStateStore: new MemoryBackend<SerializedClientState>(),
-      keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
+      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
+      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      groupStateStore: new MemoryBackend<SerializedClientState>(),
-      keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
+      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
+      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",

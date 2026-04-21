@@ -8,7 +8,7 @@ import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { StoredKeyPackage } from "../key-package-manager.js";
-import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
+import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 
 const CIPHERSUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
@@ -92,8 +92,8 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      groupStateStore: new MemoryBackend(),
-      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+      groupStateStore: new InMemoryKeyValueStore(),
+      keyPackageStore: new InMemoryKeyValueStore(),
       signer: account.signer,
       network: mockNetwork,
     });
@@ -119,8 +119,8 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      groupStateStore: new MemoryBackend(),
-      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+      groupStateStore: new InMemoryKeyValueStore(),
+      keyPackageStore: new InMemoryKeyValueStore(),
       signer: account.signer,
       network: mockNetwork,
     });
@@ -146,8 +146,8 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      groupStateStore: new MemoryBackend(),
-      keyPackageBackend: new MemoryBackend<StoredKeyPackage>(),
+      groupStateStore: new InMemoryKeyValueStore(),
+      keyPackageStore: new InMemoryKeyValueStore(),
       signer: account.signer,
       network: mockNetwork,
     });

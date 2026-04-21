@@ -11,17 +11,17 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
-import {
-  createAdminCommitPolicyCallback,
-  MarmotGroup,
-} from "../marmot-group.js";
-import type { NostrNetworkInterface } from "../../nostr-interface.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { SerializedClientState } from "../../../core/client-state.js";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { MemoryBackend } from "../../../__tests__/helpers/memory-backend.js";
-import { bytesToHex } from "@noble/hashes/utils.js";
+import { InMemoryKeyValueStore } from "../../../extra";
+import type { NostrNetworkInterface } from "../../nostr-interface.js";
+import {
+  createAdminCommitPolicyCallback,
+  MarmotGroup,
+} from "../marmot-group.js";
 
 async function createTestGroupState(
   adminPubkey: string,
@@ -116,7 +116,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     });
 
     // Set up MarmotGroup with admin state
-    const store = new MemoryBackend<SerializedClientState>();
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
     await store.setItem(
       bytesToHex(adminStateEpoch1.groupContext.groupId),
       adminStateEpoch1 as any,
@@ -238,7 +238,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     });
 
     // Set up MarmotGroup with admin state and verify the admin will ACCEPT this commit
-    const store = new MemoryBackend<SerializedClientState>();
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
     await store.setItem(
       bytesToHex(adminStateEpoch1.groupContext.groupId),
       adminStateEpoch1 as any,
@@ -360,7 +360,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     });
 
     // Set up MarmotGroup with the receiver state
-    const store = new MemoryBackend<SerializedClientState>();
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
     await store.setItem(
       bytesToHex(memberStateEpoch1.groupContext.groupId),
       memberStateEpoch1 as any,

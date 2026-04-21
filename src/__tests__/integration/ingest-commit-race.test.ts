@@ -28,7 +28,7 @@ import {
 } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { MemoryBackend } from "../helpers/memory-backend.js";
+import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 async function createTestGroupState(
@@ -235,7 +235,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     eventB.id = "b".repeat(64);
 
     // Create the new bytes-first storage
-    const store = new MemoryBackend<SerializedClientState>();
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
 
     // IMPORTANT: The receiver for this race test must NOT be the sender.
     // These are two competing commits from the admin leaf for the same epoch.
@@ -340,7 +340,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     expect(welcome).toBeTruthy();
 
     // Create backend and store
-    const store = new MemoryBackend<SerializedClientState>();
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
     await store.setItem(
       bytesToHex(adminStateEpoch1.groupContext.groupId),
       encode(clientStateEncoder, adminStateEpoch1),
@@ -469,7 +469,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     expect(welcome1).toBeTruthy();
 
     // Create backend and store
-    const store = new MemoryBackend<SerializedClientState>();
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
     await store.setItem(
       bytesToHex(adminStateEpoch1.groupContext.groupId),
       encode(clientStateEncoder, adminStateEpoch1),

@@ -16,7 +16,7 @@ import {
   KEY_PACKAGE_KIND,
 } from "../../core/protocol.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
+import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { createCredential } from "../../core/credential.js";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
@@ -33,7 +33,7 @@ function makeManager(
   clientId?: string,
 ) {
   const manager = new KeyPackageManager({
-    store: new MemoryBackend<StoredKeyPackage>(),
+    store: new InMemoryKeyValueStore(),
     signer: account.signer,
     network,
     clientId,

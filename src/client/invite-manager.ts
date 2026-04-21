@@ -1,5 +1,6 @@
 import { unlockGiftWrap } from "applesauce-common/helpers/gift-wrap";
-import type { EventSigner } from "applesauce-core";
+import type { Rumor } from "applesauce-common/helpers/gift-wrap";
+import type { EventSigner } from "applesauce-core/event-factory";
 import {
   kinds,
   KnownEvent,
@@ -8,47 +9,64 @@ import {
 import { EventEmitter } from "eventemitter3";
 import { WELCOME_EVENT_KIND } from "../core/protocol.js";
 import { getWelcome } from "../core/welcome.js";
-import type {
-  InviteStore,
-  ReceivedGiftWrap,
-  UnreadInvite,
-} from "../store/invite-store.js";
+import type { GenericKeyValueStore } from "../utils/key-value.js";
 import { logger } from "../utils/debug.js";
+
+/** A received gift wrap event (kind 1059) that hasn't been decrypted yet */
+export interface ReceivedGiftWrap extends KnownEvent<kinds.GiftWrap> {}
+
+/**
+ * A successfully decrypted Welcome rumor (kind 444).
+ * All metadata can be derived from the rumor itself.
+ */
+export interface UnreadInvite extends Rumor {}
+
+/**
+ * Discriminated union for entries stored in the invite store.
+ */
+export type StoredInviteEntry =
+  | { type: "seen"; ids: string[] }
+  | { type: "received"; giftwrap: ReceivedGiftWrap }
+  | { type: "unread"; rumor: UnreadInvite };
+
+const SEEN_KEY = "__seen";
+const RECEIVED_PREFIX = "received:";
+const UNREAD_PREFIX = "unread:";
 
 function isGiftWrap(event: NostrEvent): event is KnownEvent<kinds.GiftWrap> {
   return event.kind === kinds.GiftWrap;
 }
 
 /**
- * Events emitted by InviteReader
+ * Events emitted by InviteManager
  */
-type InviteReaderEvents = {
-  /** Emitted when a gift wrap is received and added to received store */
-  ReceivedGiftWrap: (invite: ReceivedGiftWrap) => void;
+type InviteManagerEvents = {
+  /** Emitted when a gift wrap is ingested and stored */
+  received: (invite: ReceivedGiftWrap) => void;
 
-  /** Emitted when a new invite is successfully decrypted and added to unread */
-  newInvite: (invite: UnreadInvite) => void;
+  /** Emitted when an invite is successfully decrypted */
+  decrypted: (invite: UnreadInvite) => void;
 
-  /** Emitted when an invite is marked as read and removed from unread */
-  inviteRead: (inviteId: string) => void;
+  /** Emitted when an invite is marked as read and removed */
+  read: (inviteId: string) => void;
 
-  /** Emitted when a received invite is removed (decrypted or failed) */
-  receivedProcessed: (inviteId: string) => void;
+  /** Emitted when a received gift wrap is processed (decrypted or failed) */
+  processed: (inviteId: string) => void;
 
   /** Emitted when an event fails to decrypt or parse */
   error: (error: Error, eventId: string) => void;
 };
 
-export interface InviteReaderOptions {
+export interface InviteManagerOptions {
   /** Signer for decrypting gift wraps */
   signer: EventSigner;
 
-  /** Storage backend for invite states */
-  store: InviteStore;
+  /** Storage backend for invite entries */
+  store: GenericKeyValueStore<StoredInviteEntry>;
 }
 
 /**
- * InviteReader orchestrates the lifecycle of reading Welcome invites.
+ * InviteManager orchestrates the lifecycle of reading Welcome invites.
  *
  * It takes gift-wrapped events from the app, handles decryption/parsing,
  * persists invites to storage, and provides interfaces for consumption.
@@ -66,11 +84,16 @@ export interface InviteReaderOptions {
  * 3. SEEN: Event ID tracked to prevent re-processing
  * 4. (DELETED): Read invites are removed from storage
  *
+ * Store layout:
+ * - `__seen` key holds a serialized set of all seen event IDs
+ * - `received:<eventId>` keys hold undecrypted gift wraps
+ * - `unread:<rumorId>` keys hold decrypted welcome rumors
+ *
  * @example
  * ```typescript
- * const inviteReader = new InviteReader({
+ * const inviteReader = new InviteManager({
  *   signer: mySigner,
- *   store: myInviteStore,
+ *   store: myStore,
  * });
  *
  * // 1. Ingest gift wraps from relay sync
@@ -87,22 +110,41 @@ export interface InviteReaderOptions {
  * }
  * ```
  */
-export class InviteReader extends EventEmitter<InviteReaderEvents> {
+export class InviteManager extends EventEmitter<InviteManagerEvents> {
   private signer: EventSigner;
-  private store: InviteStore;
+  private store: GenericKeyValueStore<StoredInviteEntry>;
+  private seenCache: Set<string> | null = null;
 
-  #log = logger.extend("InviteReader");
+  #log = logger.extend("InviteManager");
 
-  constructor(options: InviteReaderOptions) {
+  constructor(options: InviteManagerOptions) {
     super();
     this.signer = options.signer;
     this.store = options.store;
   }
 
+  /** Lazily load the seen set from store into memory */
+  private async getSeenSet(): Promise<Set<string>> {
+    if (this.seenCache) return this.seenCache;
+    const entry = await this.store.getItem(SEEN_KEY);
+    if (entry && entry.type === "seen") {
+      this.seenCache = new Set(entry.ids);
+    } else {
+      this.seenCache = new Set();
+    }
+    return this.seenCache;
+  }
+
+  /** Persist the in-memory seen set to the store */
+  private async persistSeen(): Promise<void> {
+    const seen = await this.getSeenSet();
+    await this.store.setItem(SEEN_KEY, { type: "seen", ids: [...seen] });
+  }
+
   /**
    * Ingest a gift wrap event (kind 1059).
    *
-   * The event is checked against the 'seen' store for deduplication.
+   * The event is checked against the seen index for deduplication.
    * If new, it's stored in the 'received' state awaiting decryption.
    *
    * @param event - Gift wrap event (kind 1059)
@@ -110,23 +152,26 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
    * @throws Error if event is not kind 1059
    */
   async ingestEvent(event: NostrEvent): Promise<boolean> {
-    // Validate event kind
-    if (!isGiftWrap(event))
+    if (!isGiftWrap(event)) {
       throw new Error(`Expected kind 1059 gift wrap, got kind ${event.kind}`);
+    }
 
-    // Check if already seen
-    const isSeen = await this.store.seen.getItem(event.id);
-    if (isSeen) return false; // Skip duplicate
+    const seen = await this.getSeenSet();
+    if (seen.has(event.id)) return false;
 
     this.#log("ingesting gift wrap %s", event.id);
 
-    // Mark as seen
-    await this.store.seen.setItem(event.id, true);
+    // Write data first (crash-safe ordering)
+    await this.store.setItem(`${RECEIVED_PREFIX}${event.id}`, {
+      type: "received",
+      giftwrap: event,
+    });
 
-    // Store in received state
-    await this.store.received.setItem(event.id, event);
-    this.emit("ReceivedGiftWrap", event);
+    // Then update seen index
+    seen.add(event.id);
+    await this.persistSeen();
 
+    this.emit("received", event);
     return true;
   }
 
@@ -143,7 +188,6 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
         const isNew = await this.ingestEvent(event);
         if (isNew) newCount++;
       } catch (error) {
-        // Emit error for invalid events but continue processing
         const err = error instanceof Error ? error : new Error(String(error));
         this.emit("error", err, event.id);
       }
@@ -159,29 +203,30 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
    * - On failure: emits 'error' event (event remains in 'seen' to prevent retry)
    *
    * This method prompts the user via signer for decryption.
-   * It can be used to decrypt individual invites in parallel with processReceived().
    *
-   * @param eventId - The gift wrap event ID to decrypt
-   * @returns The decrypted welcome rumor, or null if event not found or failed to decrypt
+   * @param eventId - The gift wrap event ID to decrypt, or the gift wrap event itself
+   * @returns The decrypted welcome rumor, or null if failed to decrypt
    * @throws Error if the event is not found in received store
    */
   async decryptGiftWrap(
     eventId: string | ReceivedGiftWrap,
   ): Promise<UnreadInvite | null> {
-    const giftwrap =
-      typeof eventId === "string"
-        ? await this.store.received.getItem(eventId)
-        : eventId;
+    let giftwrap: ReceivedGiftWrap | null;
+    if (typeof eventId === "string") {
+      const entry = await this.store.getItem(`${RECEIVED_PREFIX}${eventId}`);
+      giftwrap = entry?.type === "received" ? entry.giftwrap : null;
+    } else {
+      giftwrap = eventId;
+    }
 
-    if (!giftwrap)
+    if (!giftwrap) {
       throw new Error(`Event ${eventId} not found in received store`);
+    }
 
     this.#log("decrypting gift wrap %s", giftwrap.id);
     try {
-      // Decrypt gift wrap (prompts user)
       const rumor = await unlockGiftWrap(giftwrap, this.signer);
 
-      // Validate it's a Welcome event (kind 444)
       if (rumor.kind !== WELCOME_EVENT_KIND) {
         throw new Error(
           `Expected kind ${WELCOME_EVENT_KIND} Welcome, got kind ${rumor.kind}`,
@@ -189,26 +234,27 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
       }
 
       // Parse and validate the Welcome message
-      // This will throw if the Welcome is malformed
       getWelcome(rumor);
 
       this.#log("decrypted gift wrap %s → rumor %s", giftwrap.id, rumor.id);
 
-      // Move to unread state (store rumor directly using rumor ID as key)
-      await this.store.unread.setItem(rumor.id, rumor);
-      await this.store.received.removeItem(giftwrap.id);
-      this.emit("receivedProcessed", giftwrap.id);
+      // Move to unread state
+      await this.store.setItem(`${UNREAD_PREFIX}${rumor.id}`, {
+        type: "unread",
+        rumor,
+      });
+      await this.store.removeItem(`${RECEIVED_PREFIX}${giftwrap.id}`);
+      this.emit("processed", giftwrap.id);
 
-      this.emit("newInvite", rumor);
+      this.emit("decrypted", rumor);
       return rumor;
     } catch (error) {
-      // Emit error but don't retry (event stays in 'seen')
       const err = error instanceof Error ? error : new Error(String(error));
       this.emit("error", err, giftwrap.id);
 
       // Remove from received (failed to process)
-      await this.store.received.removeItem(giftwrap.id);
-      this.emit("receivedProcessed", giftwrap.id);
+      await this.store.removeItem(`${RECEIVED_PREFIX}${giftwrap.id}`);
+      this.emit("processed", giftwrap.id);
 
       return null;
     }
@@ -227,16 +273,18 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
    * @returns Array of successfully decrypted welcome rumors
    */
   async decryptGiftWraps(): Promise<UnreadInvite[]> {
-    const receivedKeys = await this.store.received.keys();
-    const newInvites: UnreadInvite[] = [];
+    const allKeys = await this.store.keys();
+    const receivedIds = allKeys
+      .filter((k) => k.startsWith(RECEIVED_PREFIX))
+      .map((k) => k.slice(RECEIVED_PREFIX.length));
 
-    for (const key of receivedKeys) {
+    const newInvites: UnreadInvite[] = [];
+    for (const id of receivedIds) {
       try {
-        const rumor = await this.decryptGiftWrap(key);
+        const rumor = await this.decryptGiftWrap(id);
         if (rumor) newInvites.push(rumor);
       } catch (error) {
         // Event not found in received store (already processed by another call)
-        // This is expected when processing in parallel, just skip
         continue;
       }
     }
@@ -250,12 +298,13 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
    * @returns Array of unread welcome rumors
    */
   async getUnread(): Promise<UnreadInvite[]> {
-    const keys = await this.store.unread.keys();
+    const allKeys = await this.store.keys();
     const invites: UnreadInvite[] = [];
 
-    for (const key of keys) {
-      const invite = await this.store.unread.getItem(key);
-      if (invite) invites.push(invite);
+    for (const key of allKeys) {
+      if (!key.startsWith(UNREAD_PREFIX)) continue;
+      const entry = await this.store.getItem(key);
+      if (entry?.type === "unread") invites.push(entry.rumor);
     }
 
     return invites;
@@ -267,12 +316,13 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
    * @returns Array of received invites awaiting decryption
    */
   async getReceived(): Promise<ReceivedGiftWrap[]> {
-    const keys = await this.store.received.keys();
+    const allKeys = await this.store.keys();
     const invites: ReceivedGiftWrap[] = [];
 
-    for (const key of keys) {
-      const invite = await this.store.received.getItem(key);
-      if (invite) invites.push(invite);
+    for (const key of allKeys) {
+      if (!key.startsWith(RECEIVED_PREFIX)) continue;
+      const entry = await this.store.getItem(key);
+      if (entry?.type === "received") invites.push(entry.giftwrap);
     }
 
     return invites;
@@ -287,8 +337,8 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
    */
   async markAsRead(inviteId: string): Promise<void> {
     this.#log("marking invite %s as read", inviteId);
-    await this.store.unread.removeItem(inviteId);
-    this.emit("inviteRead", inviteId);
+    await this.store.removeItem(`${UNREAD_PREFIX}${inviteId}`);
+    this.emit("read", inviteId);
   }
 
   /**
@@ -311,69 +361,65 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
    * ```
    */
   async *watchUnread(): AsyncGenerator<UnreadInvite[]> {
-    // Yield initial state
     yield await this.getUnread();
 
-    // Yield whenever unread list changes (new invite or invite read)
     while (true) {
       await new Promise<void>((resolve) => {
         const handler = () => {
           resolve();
-          this.off("newInvite", handler);
-          this.off("inviteRead", handler);
+          this.off("decrypted", handler);
+          this.off("read", handler);
         };
-        this.once("newInvite", handler);
-        this.once("inviteRead", handler);
+        this.once("decrypted", handler);
+        this.once("read", handler);
       });
       yield await this.getUnread();
     }
   }
 
   /**
-   * Watch for received (undecrypted) invites.
+   * Watch for received (encrypted) invites.
    *
    * Yields the current list of received gift wraps, then yields again
    * whenever the received list changes (via 'ReceivedGiftWrap' or 'receivedProcessed' events).
-   *
-   * Useful for showing a list of pending invites that need to be decrypted.
    *
    * @example
    * ```typescript
    * for await (const received of inviteReader.watchReceived()) {
    *   console.log(`${received.length} gift wraps waiting to decrypt`);
-   *   // Show "Decrypt Invites" button if received.length > 0
    * }
    * ```
    */
   async *watchReceived(): AsyncGenerator<ReceivedGiftWrap[]> {
-    // Yield initial state
     yield await this.getReceived();
 
-    // Yield whenever received list changes (new gift wrap or processed)
     while (true) {
       await new Promise<void>((resolve) => {
         const handler = () => {
           resolve();
-          this.off("ReceivedGiftWrap", handler);
-          this.off("receivedProcessed", handler);
+          this.off("received", handler);
+          this.off("processed", handler);
         };
-        this.once("ReceivedGiftWrap", handler);
-        this.once("receivedProcessed", handler);
+        this.once("received", handler);
+        this.once("processed", handler);
       });
       yield await this.getReceived();
     }
   }
 
   /**
-   * Clear all stored invites.
-   * Useful for testing or complete reset.
+   * Clear all stored invites (received and unread).
    *
-   * Note: This does NOT clear the 'seen' store to maintain deduplication history.
+   * Note: This does NOT clear the seen index to maintain deduplication history.
    * If you need to clear seen events, use clearSeen() or create a fresh store.
    */
   async clear(): Promise<void> {
-    await this.store.received.clear();
-    await this.store.unread.clear();
+    const allKeys = await this.store.keys();
+    for (const key of allKeys) {
+      if (key.startsWith(RECEIVED_PREFIX) || key.startsWith(UNREAD_PREFIX)) {
+        await this.store.removeItem(key);
+      }
+    }
   }
 
   /**
@@ -381,6 +427,7 @@ export class InviteReader extends EventEmitter<InviteReaderEvents> {
    * Warning: This will allow previously processed events to be re-ingested.
    */
   async clearSeen(): Promise<void> {
-    await this.store.seen.clear();
+    await this.store.removeItem(SEEN_KEY);
+    this.seenCache = null;
   }
 }

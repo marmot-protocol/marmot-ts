@@ -25,7 +25,7 @@ import {
 } from "../../core/protocol.js";
 import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { MemoryBackend } from "../helpers/memory-backend.js";
+import { InMemoryKeyValueStore } from "../../extra/index.js";
 
 /** Minimal in-memory history for testing */
 class TestHistory implements BaseGroupHistory {
@@ -127,15 +127,15 @@ describe("MarmotGroup.sendChatMessage", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      groupStateStore: new MemoryBackend(),
-      keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
+      groupStateStore: new InMemoryKeyValueStore(),
+      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      groupStateStore: new MemoryBackend(),
-      keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
+      groupStateStore: new InMemoryKeyValueStore(),
+      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",
@@ -328,8 +328,8 @@ describe("MarmotGroup.sendChatMessage", () => {
 
     // Create a fresh invitee client that uses our test history factory
     const inviteeClientWithHistory = new MarmotClient<TestHistory>({
-      groupStateStore: new MemoryBackend(),
-      keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
+      groupStateStore: new InMemoryKeyValueStore(),
+      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "test-invitee-device",
@@ -377,8 +377,10 @@ describe("MarmotGroup.sendChatMessage", () => {
   });
 
   it("restart path: ingesting own relay echo does not break flow", async () => {
-    const inviteeGroupBackend = new MemoryBackend<SerializedClientState>();
-    const inviteeKeyPackageBackend = new MemoryBackend<StoredKeyPackage>();
+    const inviteeGroupBackend =
+      new InMemoryKeyValueStore<SerializedClientState>();
+    const inviteeKeyPackageBackend =
+      new InMemoryKeyValueStore<StoredKeyPackage>();
 
     const inviteeClientBeforeRestart = new MarmotClient({
       groupStateStore: inviteeGroupBackend,

@@ -2,12 +2,12 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { InviteReader } from "../invite-reader.js";
+import { InviteManager } from "../invite-manager.js";
 import type {
-  InviteStore,
   ReceivedGiftWrap,
+  StoredInviteEntry,
   UnreadInvite,
-} from "../../store/invite-store.js";
+} from "../invite-manager.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { WELCOME_EVENT_KIND } from "../../core/protocol.js";
 
@@ -37,17 +37,6 @@ class MemoryBackend<T> implements GenericKeyValueStore<T> {
   async keys(): Promise<string[]> {
     return Array.from(this.map.keys());
   }
-}
-
-/**
- * Create a mock InviteStore with in-memory backends
- */
-function createMockInviteStore(): InviteStore {
-  return {
-    received: new MemoryBackend<ReceivedGiftWrap>(),
-    unread: new MemoryBackend<UnreadInvite>(),
-    seen: new MemoryBackend<boolean>(),
-  };
 }
 
 /**
@@ -87,20 +76,27 @@ function createMockWelcomeRumor(
   };
 }
 
-describe("InviteReader", () => {
-  let inviteStore: InviteStore;
+/** Helper to read the seen IDs from the store */
+async function getSeenIds(
+  store: GenericKeyValueStore<StoredInviteEntry>,
+): Promise<string[]> {
+  const entry = await store.getItem("__seen");
+  if (entry && entry.type === "seen") return entry.ids;
+  return [];
+}
+
+describe("InviteManager", () => {
+  let store: GenericKeyValueStore<StoredInviteEntry>;
   let account: PrivateKeyAccount<any>;
-  let inviteReader: InviteReader;
+  let inviteManager: InviteManager;
 
   beforeEach(async () => {
-    inviteStore = createMockInviteStore();
+    store = new MemoryBackend<StoredInviteEntry>();
     account = PrivateKeyAccount.generateNew();
-    const pubkey = await account.signer.getPublicKey();
 
-    // Mock the unlockGiftWrap to return a test rumor
-    inviteReader = new InviteReader({
+    inviteManager = new InviteManager({
       signer: account.signer,
-      store: inviteStore,
+      store,
     });
   });
 
@@ -109,19 +105,19 @@ describe("InviteReader", () => {
       const pubkey = await account.signer.getPublicKey();
       const giftWrap = createMockGiftWrap("test-id-1", pubkey);
 
-      const isNew = await inviteReader.ingestEvent(giftWrap);
+      const isNew = await inviteManager.ingestEvent(giftWrap);
 
       expect(isNew).toBe(true);
 
       // Check it's in received state
-      const received = await inviteReader.getReceived();
+      const received = await inviteManager.getReceived();
       expect(received).toHaveLength(1);
       expect(received[0].id).toBe(giftWrap.id);
       expect(received[0]).toEqual(giftWrap);
 
       // Check it's marked as seen
-      const isSeen = await inviteStore.seen.getItem(giftWrap.id);
-      expect(isSeen).toBe(true);
+      const seenIds = await getSeenIds(store);
+      expect(seenIds).toContain(giftWrap.id);
     });
 
     it("should skip duplicate events", async () => {
@@ -129,15 +125,15 @@ describe("InviteReader", () => {
       const giftWrap = createMockGiftWrap("test-id-1", pubkey);
 
       // Ingest first time
-      const isNew1 = await inviteReader.ingestEvent(giftWrap);
+      const isNew1 = await inviteManager.ingestEvent(giftWrap);
       expect(isNew1).toBe(true);
 
       // Ingest second time (duplicate)
-      const isNew2 = await inviteReader.ingestEvent(giftWrap);
+      const isNew2 = await inviteManager.ingestEvent(giftWrap);
       expect(isNew2).toBe(false);
 
       // Should only have one received event
-      const received = await inviteReader.getReceived();
+      const received = await inviteManager.getReceived();
       expect(received).toHaveLength(1);
     });
 
@@ -152,7 +148,7 @@ describe("InviteReader", () => {
         sig: "test",
       } as NostrEvent;
 
-      await expect(inviteReader.ingestEvent(invalidEvent)).rejects.toThrow(
+      await expect(inviteManager.ingestEvent(invalidEvent)).rejects.toThrow(
         "Expected kind 1059 gift wrap",
       );
     });
@@ -164,11 +160,11 @@ describe("InviteReader", () => {
       const giftWrap1 = createMockGiftWrap("test-id-1", pubkey);
       const giftWrap2 = createMockGiftWrap("test-id-2", pubkey);
 
-      const newCount = await inviteReader.ingestEvents([giftWrap1, giftWrap2]);
+      const newCount = await inviteManager.ingestEvents([giftWrap1, giftWrap2]);
 
       expect(newCount).toBe(2);
 
-      const received = await inviteReader.getReceived();
+      const received = await inviteManager.getReceived();
       expect(received).toHaveLength(2);
     });
 
@@ -187,12 +183,12 @@ describe("InviteReader", () => {
       } as NostrEvent;
 
       let errorEmitted = false;
-      inviteReader.on("error", (err, eventId) => {
+      inviteManager.on("error", (err, eventId) => {
         errorEmitted = true;
         expect(eventId).toBe("invalid");
       });
 
-      const newCount = await inviteReader.ingestEvents([
+      const newCount = await inviteManager.ingestEvents([
         validGiftWrap,
         invalidEvent,
       ]);
@@ -207,29 +203,29 @@ describe("InviteReader", () => {
       const pubkey = await account.signer.getPublicKey();
       const giftWrap = createMockGiftWrap("test-id-1", pubkey);
 
-      await inviteReader.ingestEvent(giftWrap);
+      await inviteManager.ingestEvent(giftWrap);
 
       let errorEmitted = false;
-      inviteReader.on("error", (err, eventId) => {
+      inviteManager.on("error", (err, eventId) => {
         errorEmitted = true;
         expect(eventId).toBe("test-id-1");
       });
 
-      const unread = await inviteReader.decryptGiftWraps();
+      const unread = await inviteManager.decryptGiftWraps();
 
       // Since we can't properly decrypt without full infrastructure, this will fail
       expect(unread).toHaveLength(0);
       expect(errorEmitted).toBe(true);
 
       // Should be removed from received even on failure
-      const received = await inviteReader.getReceived();
+      const received = await inviteManager.getReceived();
       expect(received).toHaveLength(0);
     });
   });
 
   describe("getUnread", () => {
     it("should return empty array when no unread invites", async () => {
-      const unread = await inviteReader.getUnread();
+      const unread = await inviteManager.getUnread();
       expect(unread).toHaveLength(0);
     });
   });
@@ -240,9 +236,9 @@ describe("InviteReader", () => {
       const giftWrap1 = createMockGiftWrap("test-id-1", pubkey);
       const giftWrap2 = createMockGiftWrap("test-id-2", pubkey);
 
-      await inviteReader.ingestEvents([giftWrap1, giftWrap2]);
+      await inviteManager.ingestEvents([giftWrap1, giftWrap2]);
 
-      const received = await inviteReader.getReceived();
+      const received = await inviteManager.getReceived();
       expect(received).toHaveLength(2);
     });
   });
@@ -253,30 +249,33 @@ describe("InviteReader", () => {
       const unread: UnreadInvite = createMockWelcomeRumor("rumor-1", "sender");
       const id = "test-id-1";
 
-      await inviteStore.unread.setItem(id, unread);
+      await store.setItem(`unread:${id}`, { type: "unread", rumor: unread });
 
-      const unreadBefore = await inviteReader.getUnread();
+      const unreadBefore = await inviteManager.getUnread();
       expect(unreadBefore).toHaveLength(1);
 
-      await inviteReader.markAsRead(id);
+      await inviteManager.markAsRead(id);
 
-      const unreadAfter = await inviteReader.getUnread();
+      const unreadAfter = await inviteManager.getUnread();
       expect(unreadAfter).toHaveLength(0);
     });
 
-    it("should emit inviteRead event", async () => {
+    it("should emit read event", async () => {
       const unread: UnreadInvite = createMockWelcomeRumor("rumor-1", "sender");
 
-      await inviteStore.unread.setItem(unread.id, unread);
+      await store.setItem(`unread:${unread.id}`, {
+        type: "unread",
+        rumor: unread,
+      });
 
       let eventEmitted = false;
       let emittedId = "";
-      inviteReader.on("inviteRead", (inviteId) => {
+      inviteManager.on("read", (inviteId) => {
         eventEmitted = true;
         emittedId = inviteId;
       });
 
-      await inviteReader.markAsRead(unread.id);
+      await inviteManager.markAsRead(unread.id);
 
       expect(eventEmitted).toBe(true);
       expect(emittedId).toBe("rumor-1");
@@ -288,22 +287,28 @@ describe("InviteReader", () => {
       // Manually add an unread invite
       const unread: UnreadInvite = createMockWelcomeRumor("rumor-1", "sender");
 
-      await inviteStore.unread.setItem(unread.id, unread);
+      await store.setItem(`unread:${unread.id}`, {
+        type: "unread",
+        rumor: unread,
+      });
 
-      const generator = inviteReader.watchUnread();
+      const generator = inviteManager.watchUnread();
       const { value } = await generator.next();
 
       expect(value).toHaveLength(1);
-      expect(value![0]).toBe(unread);
+      expect(value![0]).toEqual(unread);
     });
 
     it("should yield when invite is marked as read", async () => {
       // Add an unread invite
       const unread: UnreadInvite = createMockWelcomeRumor("rumor-1", "sender");
 
-      await inviteStore.unread.setItem(unread.id, unread);
+      await store.setItem(`unread:${unread.id}`, {
+        type: "unread",
+        rumor: unread,
+      });
 
-      const generator = inviteReader.watchUnread();
+      const generator = inviteManager.watchUnread();
 
       // Get initial state (1 invite)
       const initial = await generator.next();
@@ -311,7 +316,7 @@ describe("InviteReader", () => {
 
       // Mark as read in background
       setTimeout(async () => {
-        await inviteReader.markAsRead(unread.id);
+        await inviteManager.markAsRead(unread.id);
       }, 10);
 
       // Should yield when invite is marked as read
@@ -325,9 +330,9 @@ describe("InviteReader", () => {
       const pubkey = await account.signer.getPublicKey();
       const giftWrap = createMockGiftWrap("test-id-1", pubkey);
 
-      await inviteReader.ingestEvent(giftWrap);
+      await inviteManager.ingestEvent(giftWrap);
 
-      const generator = inviteReader.watchReceived();
+      const generator = inviteManager.watchReceived();
       const { value } = await generator.next();
 
       expect(value).toHaveLength(1);
@@ -336,7 +341,7 @@ describe("InviteReader", () => {
 
     it("should yield when new gift wrap is received", async () => {
       const pubkey = await account.signer.getPublicKey();
-      const generator = inviteReader.watchReceived();
+      const generator = inviteManager.watchReceived();
 
       // Get initial (empty) state
       const initial = await generator.next();
@@ -345,7 +350,7 @@ describe("InviteReader", () => {
       // Add gift wrap in background
       setTimeout(async () => {
         const giftWrap = createMockGiftWrap("test-id-1", pubkey);
-        await inviteReader.ingestEvent(giftWrap);
+        await inviteManager.ingestEvent(giftWrap);
       }, 10);
 
       // Should yield when new gift wrap is received
@@ -357,9 +362,9 @@ describe("InviteReader", () => {
       const pubkey = await account.signer.getPublicKey();
       const giftWrap = createMockGiftWrap("test-id-1", pubkey);
 
-      await inviteReader.ingestEvent(giftWrap);
+      await inviteManager.ingestEvent(giftWrap);
 
-      const generator = inviteReader.watchReceived();
+      const generator = inviteManager.watchReceived();
 
       // Get initial state (1 gift wrap)
       const initial = await generator.next();
@@ -367,7 +372,7 @@ describe("InviteReader", () => {
 
       // Process received in background (will fail to decrypt but still remove)
       setTimeout(async () => {
-        await inviteReader.decryptGiftWraps();
+        await inviteManager.decryptGiftWraps();
       }, 10);
 
       // Should yield when gift wrap is processed (removed)
@@ -377,40 +382,40 @@ describe("InviteReader", () => {
   });
 
   describe("events", () => {
-    it("should emit ReceivedGiftWrap when gift wrap is ingested", async () => {
+    it("should emit received when gift wrap is ingested", async () => {
       const pubkey = await account.signer.getPublicKey();
       const giftWrap = createMockGiftWrap("test-id-1", pubkey);
 
       let eventEmitted = false;
       let emittedInvite: any = null;
 
-      inviteReader.on("ReceivedGiftWrap", (invite) => {
+      inviteManager.on("received", (invite) => {
         eventEmitted = true;
         emittedInvite = invite;
       });
 
-      await inviteReader.ingestEvent(giftWrap);
+      await inviteManager.ingestEvent(giftWrap);
 
       expect(eventEmitted).toBe(true);
       expect(emittedInvite.id).toBe(giftWrap.id);
     });
 
-    it("should emit receivedProcessed when gift wrap is decrypted", async () => {
+    it("should emit processed when gift wrap is decrypted", async () => {
       const pubkey = await account.signer.getPublicKey();
       const giftWrap = createMockGiftWrap("test-id-1", pubkey);
 
-      await inviteReader.ingestEvent(giftWrap);
+      await inviteManager.ingestEvent(giftWrap);
 
       let eventEmitted = false;
       let emittedId = "";
 
-      inviteReader.on("receivedProcessed", (inviteId) => {
+      inviteManager.on("processed", (inviteId) => {
         eventEmitted = true;
         emittedId = inviteId;
       });
 
-      // This will fail to decrypt but should still emit receivedProcessed
-      await inviteReader.decryptGiftWraps();
+      // This will fail to decrypt but should still emit processed
+      await inviteManager.decryptGiftWraps();
 
       expect(eventEmitted).toBe(true);
       expect(emittedId).toBe(giftWrap.id);
@@ -418,43 +423,43 @@ describe("InviteReader", () => {
   });
 
   describe("clear", () => {
-    it("should clear received and unread stores", async () => {
+    it("should clear received and unread but not seen", async () => {
       const pubkey = await account.signer.getPublicKey();
       const giftWrap = createMockGiftWrap("test-id-1", pubkey);
 
-      await inviteReader.ingestEvent(giftWrap);
+      await inviteManager.ingestEvent(giftWrap);
 
-      const receivedBefore = await inviteReader.getReceived();
+      const receivedBefore = await inviteManager.getReceived();
       expect(receivedBefore).toHaveLength(1);
 
-      await inviteReader.clear();
+      await inviteManager.clear();
 
-      const receivedAfter = await inviteReader.getReceived();
-      const unreadAfter = await inviteReader.getUnread();
+      const receivedAfter = await inviteManager.getReceived();
+      const unreadAfter = await inviteManager.getUnread();
 
       expect(receivedAfter).toHaveLength(0);
       expect(unreadAfter).toHaveLength(0);
 
-      // Seen store should NOT be cleared
-      const isSeen = await inviteStore.seen.getItem(giftWrap.id);
-      expect(isSeen).toBe(true);
+      // Seen index should NOT be cleared
+      const seenIds = await getSeenIds(store);
+      expect(seenIds).toContain(giftWrap.id);
     });
   });
 
   describe("clearSeen", () => {
-    it("should clear the seen store", async () => {
+    it("should clear the seen index", async () => {
       const pubkey = await account.signer.getPublicKey();
       const giftWrap = createMockGiftWrap("test-id-1", pubkey);
 
-      await inviteReader.ingestEvent(giftWrap);
+      await inviteManager.ingestEvent(giftWrap);
 
-      const isSeenBefore = await inviteStore.seen.getItem(giftWrap.id);
-      expect(isSeenBefore).toBe(true);
+      const seenBefore = await getSeenIds(store);
+      expect(seenBefore).toContain(giftWrap.id);
 
-      await inviteReader.clearSeen();
+      await inviteManager.clearSeen();
 
-      const isSeenAfter = await inviteStore.seen.getItem(giftWrap.id);
-      expect(isSeenAfter).toBeNull();
+      const seenAfter = await getSeenIds(store);
+      expect(seenAfter).toHaveLength(0);
     });
   });
 });

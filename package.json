@@ -60,11 +60,6 @@
       "import": "./dist/client/index.js",
       "default": "./dist/client/index.js"
     },
-    "./store": {
-      "types": "./dist/store/index.d.ts",
-      "import": "./dist/store/index.js",
-      "default": "./dist/store/index.js"
-    },
     "./package.json": "./package.json"
   },
   "dependencies": {

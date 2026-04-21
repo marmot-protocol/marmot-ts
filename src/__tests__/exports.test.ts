@@ -10,7 +10,7 @@ describe("exports", () => {
         "GroupMediaStore",
         "GroupRumorHistory",
         "GroupsManager",
-        "InviteReader",
+        "InviteManager",
         "KEY_PACKAGE_CIPHER_SUITE_TAG",
         "KEY_PACKAGE_CLIENT_TAG",
         "KEY_PACKAGE_EXTENSIONS_TAG",

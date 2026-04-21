@@ -1,16 +1,15 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
-import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
+import { unlockGiftWrap } from "applesauce-common/helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MarmotClient } from "../marmot-client.js";
+import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   GROUP_EVENT_KIND,
 } from "../../core/protocol.js";
 import { StoredKeyPackage } from "../key-package-manager.js";
-import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { MemoryBackend } from "../../__tests__/helpers/memory-backend.js";
-import { unlockGiftWrap } from "applesauce-common/helpers";
+import { MarmotClient } from "../marmot-client.js";
+import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
 
 // ============================================================================
 // Shared setup helpers
@@ -19,8 +18,8 @@ import { unlockGiftWrap } from "applesauce-common/helpers";
 async function makeClient(network: MockNetwork): Promise<MarmotClient> {
   const account = PrivateKeyAccount.generateNew();
   return new MarmotClient({
-    groupStateStore: new MemoryBackend(),
-    keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
+    groupStateStore: new InMemoryKeyValueStore(),
+    keyPackageStore: new InMemoryKeyValueStore(),
     signer: account.signer,
     network,
     clientId: "test-client",
@@ -34,16 +33,16 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
   const memberPubkey = await memberAccount.signer.getPublicKey();
 
   const adminClient = new MarmotClient({
-    groupStateStore: new MemoryBackend(),
-    keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
+    groupStateStore: new InMemoryKeyValueStore(),
+    keyPackageStore: new InMemoryKeyValueStore(),
     signer: adminAccount.signer,
     network: mockNetwork,
     clientId: "test-admin",
   });
 
   const memberClient = new MarmotClient({
-    groupStateStore: new MemoryBackend(),
-    keyPackageStore: new MemoryBackend<StoredKeyPackage>(),
+    groupStateStore: new InMemoryKeyValueStore(),
+    keyPackageStore: new InMemoryKeyValueStore(),
     signer: memberAccount.signer,
     network: mockNetwork,
     clientId: "test-member",

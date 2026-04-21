@@ -30,9 +30,11 @@ import {
   MarmotGroup,
 } from "./group/marmot-group.js";
 import { GroupsManager } from "./groups-manager.js";
+import { InviteManager, StoredInviteEntry } from "./invite-manager.js";
 import type { StoredKeyPackage } from "./key-package-manager.js";
 import { KeyPackageManager } from "./key-package-manager.js";
 import type { NostrNetworkInterface } from "./nostr-interface.js";
+import { InMemoryKeyValueStore } from "../extra/in-memory-key-value-store.js";
 
 const log = logger.extend("client");
 
@@ -48,6 +50,8 @@ export type MarmotClientOptions<
   groupStateStore: GenericKeyValueStore<SerializedClientState>;
   /** The backend for key package private material and publish tracking */
   keyPackageStore: GenericKeyValueStore<StoredKeyPackage>;
+  /** Key value store for the {@link InviteManager} class, if non is provided an {@link InMemoryKeyValueStore} is used */
+  inviteStore?: GenericKeyValueStore<StoredInviteEntry>;
   /** The crypto provider to use for cryptographic operations */
   cryptoProvider?: CryptoProvider;
   /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
@@ -80,14 +84,14 @@ export class MarmotClient<
   readonly signer: EventSigner;
   /** The capabilities to use for the client */
   readonly capabilities: Capabilities;
-  /** The backend storing serialized group state bytes */
-  readonly groupStateStore: GenericKeyValueStore<SerializedClientState>;
   /** The nostr relay pool to use for the client */
   readonly network: NostrNetworkInterface;
   /** Manages key package lifecycle: local storage, publishing, and rotation */
   readonly keyPackages: KeyPackageManager;
   /** Manages group lifecycle: persistence, caching, creation, loading, leaving */
   readonly groups: GroupsManager<THistory, TMedia>;
+  /** Manages invite lifecycle: ingestion, decryption, and storage */
+  readonly invites: InviteManager;
 
   /** Crypto provider for cryptographic operations */
   public cryptoProvider: CryptoProvider;
@@ -95,7 +99,6 @@ export class MarmotClient<
   constructor(options: MarmotClientOptions<THistory, TMedia>) {
     this.signer = options.signer;
     this.capabilities = options.capabilities ?? defaultCapabilities();
-    this.groupStateStore = options.groupStateStore;
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.keyPackages = new KeyPackageManager({
@@ -113,12 +116,17 @@ export class MarmotClient<
     ) as GroupMediaFactory<TMedia>;
 
     this.groups = new GroupsManager<THistory, TMedia>({
-      store: this.groupStateStore,
+      store: options.groupStateStore,
       signer: this.signer,
       network: this.network,
       cryptoProvider: this.cryptoProvider,
       historyFactory,
       mediaFactory,
+    });
+
+    this.invites = new InviteManager({
+      signer: this.signer,
+      store: options.inviteStore || new InMemoryKeyValueStore(),
     });
   }
 

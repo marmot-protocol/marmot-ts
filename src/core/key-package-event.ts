@@ -79,9 +79,12 @@ export function createDeleteKeyPackageEvent(
       eTags.push(["e", e.id]);
 
       if (e.kind === ADDRESSABLE_KEY_PACKAGE_KIND) {
-        const d = getKeyPackageIdentifier(e);
-        if (d !== undefined) {
-          aTags.push(["a", `${ADDRESSABLE_KEY_PACKAGE_KIND}:${e.pubkey}:${d}`]);
+        const identifier = getKeyPackageIdentifier(e);
+        if (identifier !== undefined) {
+          aTags.push([
+            "a",
+            `${ADDRESSABLE_KEY_PACKAGE_KIND}:${e.pubkey}:${identifier}`,
+          ]);
         }
       }
     }
@@ -197,7 +200,7 @@ export type CreateKeyPackageEventOptions = {
    * supply this; {@link KeyPackageManager} handles defaulting to `clientId` or
    * throwing {@link MissingSlotIdentifierError} when none is available.
    */
-  d: string;
+  identifier: string;
   /** Relay URLs to advertise in the event */
   relays?: string[];
   client?: string;
@@ -278,7 +281,7 @@ async function createKeyPackageEventInternal(
   if (options.protected) tags.push(["-"]);
 
   // Addressable identifier (required for kind 30443)
-  tags.push(["d", options.d]);
+  tags.push(["d", options.identifier]);
 
   tags.push(
     [KEY_PACKAGE_MLS_VERSION_TAG, version],

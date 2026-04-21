@@ -1,6 +1,6 @@
 # The `MarmotClient`
 
-The `MarmotClient` acts as the root factory and supervisor for all MLS operations over Nostr. It manages local identity keys, network transport interfaces, and a registry of active groups.
+The `MarmotClient` acts as the root factory and supervisor for all MLS operations over Nostr. It holds the local identity, network transport, and storage backends, and exposes three sub-managers (`groups`, `keyPackages`, `invites`) for day-to-day work.
 
 ## Initialization
 
@@ -11,35 +11,65 @@ import { MarmotClient } from "@internet-privacy/marmot-ts";
 
 const client = new MarmotClient({
   signer: myApplesauceSigner,
-  groupStateBackend: myGroupDb,
-  keyPackageStore: myKeyDb,
+  groupStateStore: myGroupStateStore,
+  keyPackageStore: myKeyPackageStore,
   network: myNostrNetwork,
   // Optional:
+  inviteStore: myInviteStore,
   capabilities: myMlsCapabilities,
   cryptoProvider: myCryptoProvider,
-  historyFactory: myHistoryAdapter,
+  clientId: "my-app-desktop",
+  historyFactory: myHistoryFactory,
+  mediaFactory: myMediaFactory,
 });
 ```
 
 ### Options Breakdown
 
 - **`signer`:** A compliant `EventSigner` (e.g. from `applesauce-core`). This is the root Nostr identity (npub).
-- **`groupStateBackend`:** Must conform to the `GroupStateStoreBackend` [interface](bytes-first-storage.md) handling raw byte storage for groups.
-- **`keyPackageStore`:** An instance storing locally generated private keys required to decrypt Welcome messages.
-- **`network`:** Must conform to `NostrNetworkInterface` (`request`, `publish`, etc.) linking the client to the Nostr relay network.
-- **`capabilities`:** Controls TLS ciphersuites used by MLS (defaults typically handle `x25519`).
-- **`cryptoProvider`:** Used for specific implementations of the MLS Crypto Layer.
-- **`historyFactory`:** Optional abstraction allowing groups to persist decrypted `applicationMessage` data off-chain.
+- **`groupStateStore`:** A `GenericKeyValueStore<SerializedClientState>` where the serialized MLS `ClientState` bytes for every group are written. See [Bytes-First Storage](bytes-first-storage.md).
+- **`keyPackageStore`:** A `GenericKeyValueStore<StoredKeyPackage>` that holds locally-generated key packages (including their private material) and publish records for any observed relay events.
+- **`network`:** A `NostrNetworkInterface` (`request`, `subscription`, `publish`, `getUserInboxRelays`) linking the client to the Nostr relay network.
+- **`inviteStore`:** Optional `GenericKeyValueStore<StoredInviteEntry>` used by `client.invites`. Defaults to an `InMemoryKeyValueStore` when omitted.
+- **`capabilities`:** Optional MLS `Capabilities` override. Defaults to `defaultCapabilities()` which enables the MLS 1.0 protocol version, the x25519/AES128GCM/SHA256/Ed25519 ciphersuite family, and the Marmot Group Data + last_resort extensions.
+- **`cryptoProvider`:** Optional MLS `CryptoProvider`. Defaults to `defaultCryptoProvider` from `ts-mls`.
+- **`clientId`:** Optional default value for the addressable (kind 30443) `d` tag used by `client.keyPackages.create()` when no explicit `d` is supplied. Set this to a stable per-device string (e.g. `"my-app-desktop"`) so all key packages from this client share a single addressable slot on relays.
+- **`historyFactory`:** Optional `(groupId) => BaseGroupHistory` factory. When provided, each loaded `MarmotGroup` is given its own history store so decrypted application messages can be persisted (see `GroupRumorHistory` in the examples folder for a reference implementation).
+- **`mediaFactory`:** Optional `(groupId) => BaseGroupMedia` factory for caching decrypted media attachments (MIP-04). Defaults to in-memory.
 
 ## Managing Key Packages
 
-Before someone can invite you to a group, they must fetch your "Key Package" (Kind `443`). Key Packages are MLS structures that bind your Nostr identity to a temporary, single-use, or long-lived cryptographic identity for a specific group joining action.
+Before someone can invite you to a group, they must fetch one of your "Key Package" events (kind 443 or kind 30443). Key Packages are MLS structures that bind your Nostr identity to single-use or last-resort (reusable) cryptographic material that an inviter can use to seed a new group for you.
 
-### Creating Key Packages
+### High-level: `client.keyPackages.create()`
 
-While the `MarmotClient` provides a high-level `rotateKeyPackage` method, applications usually need precise control over the key package creation lifecycle (e.g., waiting for Nostr extension approvals, managing relay lists, or handling UI loading states).
+The recommended way to publish a key package is through the manager — it generates the key material, persists the private half, signs the kind 30443 event, publishes it, and records the publish metadata in one call.
 
-The canonical way to generate Key Packages is using the library's core cryptographic exports: `generateKeyPackage` and `createKeyPackageEvent`.
+```typescript
+const stored = await client.keyPackages.create({
+  relays: ["wss://relay.example.com"],
+  // Uses MarmotClient.clientId as the default `d` slot if set; otherwise
+  // you must pass `d` explicitly here, or a MissingSlotIdentifierError is thrown.
+  identifier: "my-app-desktop",
+  // Optional extras:
+  ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+  isLastResort: true, // default
+  client: "my-chat-app",
+  protected: false, // NIP-70 opt-in (many relays reject protected events)
+});
+
+console.log("Published key package ref:", stored.keyPackageRef);
+```
+
+Because kind 30443 is addressable, re-publishing under the same `d` slot automatically supersedes the previous event on relays. `KeyPackageManager.rotate(ref)` wraps this flow and also scrubs any legacy kind 443 events via NIP-09.
+
+```typescript
+const rotated = await client.keyPackages.rotate(stored.keyPackageRef);
+```
+
+### Low-level: manual generation
+
+If you need precise control over the lifecycle (waiting for extension approvals, staged relay publishing, custom lifetimes, etc.), you can still use the core helpers directly:
 
 ```typescript
 import {
@@ -47,102 +77,151 @@ import {
   generateKeyPackage,
   createKeyPackageEvent,
 } from "@internet-privacy/marmot-ts";
-import { defaultCryptoProvider } from "ts-mls";
+import { defaultCryptoProvider, ciphersuites } from "ts-mls";
 
-// 1. Get the requested ciphersuite implementation
 const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
-  "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+  ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
 );
 
-// 2. Create the base Nostr identity credential
 const credential = createCredential(myPubkey);
 
-// 3. Generate the MLS key material (both Public and Private halves)
 const completeKeyPackage = await generateKeyPackage({
   credential,
   ciphersuiteImpl,
-  // Optional: control whether this KeyPackage is marked reusable.
-  // - true (default): include MLS `last_resort` extension
+  // - true (default): include MLS `last_resort` extension (reusable)
   // - false: omit it (single-use)
   isLastResort: true,
 });
 
-// 4. Create the unsigned NIP-01 EventTemplate (Kind 443)
 const unsignedEvent = await createKeyPackageEvent({
   keyPackage: completeKeyPackage.publicPackage,
+  identifier: "my-app-desktop",
   relays: ["wss://relay.example.com"],
   client: "my-chat-app",
 });
 
-// 5. Explicitly sign the event using your Nostr client/signer
-const signedEvent = await myNostrSigner.signEvent(unsignedEvent);
+const signedEvent = await client.signer.signEvent(unsignedEvent);
 
-// 6. Broadcast to the network
 await client.network.publish(["wss://relay.example.com"], signedEvent);
 
-// 7. ONLY after successful broadcast, save the private material locally
-// so the client can decrypt future Welcome messages
-await client.keyPackageStore.add(completeKeyPackage);
+// Store the private half locally AND record the published event so future
+// deletions/rotations can target it.
+await client.keyPackages.add({
+  publicPackage: completeKeyPackage.publicPackage,
+  privatePackage: completeKeyPackage.privatePackage,
+  identifier: "my-app-desktop",
+});
+await client.keyPackages.track(signedEvent);
 ```
 
-### Subscribing to Key Packages
+### Watching local key packages
 
-If you are writing a robust client, you'll want to ensure you always have valid Key Packages available locally. The client can poll its local `KeyPackageStore` to watch for this state.
+`KeyPackageManager` emits `added`, `removed`, `updated`, and `published` events, and exposes a convenience async generator:
 
 ```typescript
-// Poll local key package state (this observes the KeyPackageStore db)
-const iterator = client.watchKeyPackages();
-
-for await (const localPackages of iterator) {
-  if (localPackages.length === 0) {
+for await (const localPackages of client.keyPackages.watchKeyPackages()) {
+  const unused = localPackages.filter((p) => !p.used);
+  if (unused.length === 0) {
     console.warn(
-      "Out of local key packages. Please create a new one to receive invites.",
+      "Out of fresh key packages. Consider calling client.keyPackages.create().",
     );
-    // Prompt your UI to generate a new key package using the method above
   }
 }
 ```
 
+After a successful `joinGroupFromWelcome`, the key package that consumed the Welcome is marked `used: true` automatically. List `(await client.keyPackages.list()).filter(p => p.used)` to decide when to rotate.
+
 ## Managing Groups
 
-The client acts as the central router for accessing encrypted `MarmotGroup` instances. Groups are loaded into a memory registry (`client.groups`).
+Group lifecycle lives on `client.groups`. It keeps an in-memory cache of hydrated `MarmotGroup` instances and emits lifecycle events (`created`, `loaded`, `imported`, `joined`, `left`, `unloaded`, `destroyed`, `updated`).
 
 ### Creating & Loading
 
 ```typescript
-// 1. Create a brand new group
-const group = await client.createGroup("Engineering Team", {
+// 1. Create a brand new group. The creator is automatically added to the admin list.
+const group = await client.groups.create("Engineering Team", {
   description: "Dev ops.",
   relays: ["wss://relay.a", "wss://relay.b"],
-  // Optional: add additional admins (the creator is always included automatically)
   adminPubkeys: ["<other-admin-pubkey-hex>"],
-  // Optional: override MLS ciphersuite
   ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
 });
 
-// 2. Load a previously saved group from the bytes-first backend
-const loadedGroup = await client.getGroup(groupIdHash);
+// 2. Load a previously saved group from the store (returns the cached instance
+//    on subsequent calls).
+const loadedGroup = await client.groups.get(group.id); // accepts Uint8Array or hex string
 
-// 3. Unload a group from memory (saves RAM, keeps DB intact)
-await client.unloadGroup(group.id);
+// 3. Load *all* persisted groups at once.
+const allGroups = await client.groups.loadAll();
 
-// 4. Destroy a group (removes from memory AND local DB)
-await client.destroyGroup(group.id);
+// 4. Unload a group from memory (keeps the DB record intact).
+await client.groups.unload(group.id);
+
+// 5. Destroy a group entirely (removes from memory AND local storage).
+await client.groups.destroy(group.id);
+
+// 6. Leave a group: publishes a self-remove proposal and, once at least one
+//    relay acknowledges it, purges local state.
+await client.groups.leave(group.id);
+```
+
+You can react to store-level changes with the `watch()` async generator:
+
+```typescript
+for await (const groups of client.groups.watch()) {
+  console.log(`Groups updated: ${groups.length} loaded`);
+}
 ```
 
 ### Joining a Group (From a Welcome Message)
 
-When an admin invites you, they wrap a `Welcome` message inside a NIP-59 Gift Wrap. Assuming you've unwrapped the Gift Wrap and retrieved the inner Kind `444` rumor, you use the client to process it.
+When an admin invites you, they wrap a `Welcome` message inside a NIP-59 Gift Wrap. Once you have unwrapped the Gift Wrap and retrieved the inner kind `444` rumor (see `client.invites` below), pass it to the client.
 
-The client searches its `KeyPackageStore` for the private key corresponding to the Welcome message. If a match is found, it instantiates the group.
+The client iterates every local key package with a matching ciphersuite, prioritises the ones whose `keyPackageRef` matches a `welcome.secrets[*].newMember` entry (per RFC 9420), and tries `joinGroup` with each until one succeeds.
 
 ```typescript
-// Join the group using the unwrapped rumor
-const newGroup = await client.joinGroupFromWelcome({
-  welcomeRumor: myGiftWrapRumor,
-  // The Key Package Event ID is usually mapped in the gift wrap tags
-  keyPackageEventId: eventId,
+const { group } = await client.joinGroupFromWelcome({
+  welcomeRumor: myKind444Rumor,
 });
+```
+
+On success, the consumed key package is marked `used: true` so you can rotate it later. Callers **should** call `group.selfUpdate()` shortly after joining to rotate their own leaf key material for forward secrecy (MIP-02 SHOULD).
+
+### Inspecting an invite before joining
+
+If you want to show the user group metadata (name, description, relays, admins) before committing to a join, use:
+
+```typescript
+const groupInfo = await client.readInviteGroupInfo(myKind444Rumor);
+if (groupInfo) {
+  // groupInfo.groupContext.extensions contains the Marmot Group Data extension —
+  // decode with getMarmotGroupData(groupInfo) for readable fields.
+}
+```
+
+## Managing Invites
+
+`client.invites` (an `InviteManager`) turns raw gift wrap events into unread kind 444 rumors ready for `joinGroupFromWelcome`. A typical flow:
+
+```typescript
+// 1. Feed kind 1059 events from your relay sync into the manager.
+await client.invites.ingestEvents(giftWrapEvents);
+
+// 2. Decrypt all received gift wraps. This prompts the signer for each,
+//    so trigger it from a deliberate user action.
+const newlyDecrypted = await client.invites.decryptGiftWraps();
+
+// 3. Consume unread invites.
+for (const invite of await client.invites.getUnread()) {
+  const preview = await client.readInviteGroupInfo(invite);
+  // ...present to the user, let them accept...
+  const { group } = await client.joinGroupFromWelcome({ welcomeRumor: invite });
+  await client.invites.markAsRead(invite.id);
+}
+
+// Or subscribe reactively:
+for await (const invites of client.invites.watchUnread()) {
+  console.log(`${invites.length} unread invite(s)`);
+}
 ```
 
 ---

@@ -205,8 +205,12 @@ function KeyPackageCard({
 
     const checkPrivateKey = async () => {
       try {
-        const keyPackage = getKeyPackage(event);
-        const exists = await client.keyPackages.store.has(keyPackage);
+        const ref = getKeyPackageReference(event);
+        if (!ref) {
+          setHasPrivateKey(false);
+          return;
+        }
+        const exists = await client.keyPackages.has(ref);
         setHasPrivateKey(exists);
       } catch (error) {
         console.error("Error checking private key:", error);

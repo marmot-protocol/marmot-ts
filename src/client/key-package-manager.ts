@@ -168,7 +168,7 @@ export type CreateKeyPackageOptions = {
    * If omitted, falls back to the manager's `clientId`. Throws
    * {@link MissingSlotIdentifierError} if neither is available.
    */
-  d?: string;
+  identifier?: string;
   /** Ciphersuite to use (default: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519) */
   ciphersuite?: CiphersuiteName;
   /** Whether to mark the key package with the MLS last_resort extension (default: true) */
@@ -462,8 +462,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       throw new MissingRelayError();
     }
 
-    const d = options.d ?? this.clientId;
-    if (!d) {
+    const identifier = options.identifier ?? this.clientId;
+    if (!identifier) {
       throw new MissingSlotIdentifierError();
     }
 
@@ -480,12 +480,12 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     });
 
     // Store private material locally, including the slot identifier
-    const refHex = await this.add({ ...keyPackage, identifier: d });
+    const refHex = await this.add({ ...keyPackage, identifier: identifier });
 
     // Build, sign and publish the kind 30443 event
     const eventTemplate = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
-      d,
+      identifier: identifier,
       relays: options.relays,
       client: options.client,
       protected: options.protected,
@@ -500,7 +500,11 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     if (!stored) throw new Error("Key package not found after store operation");
 
     this.emit("published", refHex, signed.id, options.relays);
-    this.#log("created and published key package %s with slot %s", refHex, d);
+    this.#log(
+      "created and published key package %s with slot %s",
+      refHex,
+      identifier,
+    );
 
     return {
       keyPackageRef: stored.keyPackageRef,
@@ -574,7 +578,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     // Create and publish the new key package under the resolved slot
     const newPkg = await this.create({
       relays: relaysForNew,
-      d: newD,
+      identifier: newD,
       ciphersuite: options?.ciphersuite,
       isLastResort: options?.isLastResort,
       client: options?.client,

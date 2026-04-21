@@ -70,7 +70,7 @@ describe("KeyPackageManager", () => {
     it("throws MissingRelayError if no relays are provided", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       await expect(
-        manager.create({ relays: [], d: TEST_CLIENT_ID }),
+        manager.create({ relays: [], identifier: TEST_CLIENT_ID }),
       ).rejects.toThrow(MissingRelayError);
     });
 
@@ -93,7 +93,7 @@ describe("KeyPackageManager", () => {
       const explicitD = "explicit-slot-id";
       const pkg = await manager.create({
         relays: ["wss://relay.test"],
-        d: explicitD,
+        identifier: explicitD,
       });
 
       expect(pkg.identifier).toBe(explicitD);
@@ -530,7 +530,7 @@ describe("KeyPackageManager", () => {
       const pkg1 = await manager.create({ relays: ["wss://relay.test"] });
       const pkg2 = await manager.create({
         relays: ["wss://relay2.test"],
-        d: "second-slot",
+        identifier: "second-slot",
       });
 
       await manager.purge([pkg1.keyPackageRef, pkg2.keyPackageRef]);
@@ -546,7 +546,7 @@ describe("KeyPackageManager", () => {
       const pkg1 = await manager.create({ relays: ["wss://relay.test"] });
       const pkg2 = await manager.create({
         relays: ["wss://relay2.test"],
-        d: "second-slot",
+        identifier: "second-slot",
       });
 
       await manager.purge([pkg1.keyPackageRef, pkg2.keyPackageRef]);
@@ -821,7 +821,10 @@ describe("KeyPackageManager", () => {
     it("used flag is visible in list()", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
-      await manager.create({ relays: ["wss://relay.test"], d: "second-slot" });
+      await manager.create({
+        relays: ["wss://relay.test"],
+        identifier: "second-slot",
+      });
 
       await manager.markUsed(pkg.keyPackageRef);
 
@@ -869,7 +872,7 @@ describe("KeyPackageManager", () => {
       await manager.create({ relays: ["wss://relay.test"] });
       await manager.create({
         relays: ["wss://relay.test"],
-        d: "second-slot",
+        identifier: "second-slot",
       });
 
       expect(await manager.list()).toHaveLength(2);

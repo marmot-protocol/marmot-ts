@@ -1,22 +1,25 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useRef, useState } from "react";
+import { defined } from "applesauce-core";
 import { switchMap } from "rxjs";
 import { KeyPackage, PrivateKeyPackage } from "ts-mls";
 
 import { useObservable, useObservableMemo } from "../hooks/use-observable";
-import { keyPackageStore$ } from "../lib/key-package-store";
+import { marmotClient$ } from "../lib/marmot-client";
 import KeyPackageDataView from "./data-view/key-package";
 
 interface StoredPackageDetailsProps {
   publicPackage: KeyPackage;
+  keyPackageRef: Uint8Array;
   index: number;
 }
 
 function StoredPackageDetails({
   publicPackage,
+  keyPackageRef,
   index,
 }: StoredPackageDetailsProps) {
-  const keyPackageStore = useObservable(keyPackageStore$);
+  const client = useObservable(marmotClient$);
   const [privatePackage, setPrivatePackage] =
     useState<PrivateKeyPackage | null>(null);
   const [loading, setLoading] = useState(false);
@@ -29,10 +32,10 @@ function StoredPackageDetails({
     const willBeOpen = event.currentTarget.open;
 
     // Load private package when opening for the first time
-    if (willBeOpen && !privatePackage && keyPackageStore) {
+    if (willBeOpen && !privatePackage && client) {
       setLoading(true);
       try {
-        const pkg = await keyPackageStore.getPrivateKey(publicPackage.initKey);
+        const pkg = await client.keyPackages.getPrivateKey(keyPackageRef);
         setPrivatePackage(pkg);
       } catch (error) {
         console.error("Failed to load private key package:", error);
@@ -120,16 +123,20 @@ function StoredPackageDetails({
 
 export default function KeyPackageStoreModal() {
   const ref = useRef<HTMLDialogElement>(null);
-  const keyPackageStore = useObservable(keyPackageStore$);
+  const client = useObservable(marmotClient$);
 
   const packages = useObservableMemo(
-    () => keyPackageStore$.pipe(switchMap((store) => store.list())),
+    () =>
+      marmotClient$.pipe(
+        defined(),
+        switchMap((c) => c.keyPackages.list()),
+      ),
     [],
   );
   const [clearing, setClearing] = useState(false);
 
   const handleClearAll = async () => {
-    if (!keyPackageStore) return;
+    if (!client) return;
 
     const confirmed = window.confirm(
       `Are you sure you want to clear all ${packages?.length ?? 0} key package${packages?.length !== 1 ? "s" : ""}? This action cannot be undone.`,
@@ -139,7 +146,7 @@ export default function KeyPackageStoreModal() {
 
     setClearing(true);
     try {
-      await keyPackageStore.clear();
+      await client.keyPackages.clear();
     } catch (error) {
       console.error("Failed to clear key packages:", error);
       alert("Failed to clear key packages. Check console for details.");
@@ -216,6 +223,7 @@ export default function KeyPackageStoreModal() {
               {packages.map((pkg, index) => (
                 <StoredPackageDetails
                   key={bytesToHex(pkg.keyPackageRef)}
+                  keyPackageRef={pkg.keyPackageRef}
                   publicPackage={pkg.publicPackage}
                   index={index}
                 />

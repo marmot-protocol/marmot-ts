@@ -268,7 +268,7 @@ describe("createKeyPackageEvent", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
-      d: testD,
+      identifier: testD,
       relays: ["wss://relay.example.com"],
     });
 
@@ -288,7 +288,7 @@ describe("createKeyPackageEvent", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
-      d: testD,
+      identifier: testD,
     });
 
     const dTag = event.tags.find((t) => t[0] === "d");
@@ -309,7 +309,7 @@ describe("createKeyPackageEvent", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
-      d: testD,
+      identifier: testD,
       relays: ["wss://relay.example.com"],
     });
 
@@ -342,7 +342,7 @@ describe("createKeyPackageEvent", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
-      d: testD,
+      identifier: testD,
       protected: true,
     });
 
@@ -369,6 +369,7 @@ describe("createKeyPackageEvent", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
+      identifier: testD,
     });
 
     const extensionsTag = event.tags.find((tag) => tag[0] === "mls_extensions");
@@ -392,7 +393,7 @@ describe("createKeyPackageEvent", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: originalKeyPackage.publicPackage,
-      d: testD,
+      identifier: testD,
       relays: ["wss://relay.example.com"],
     });
 
@@ -536,7 +537,7 @@ describe("spec compliance (MIP-00)", () => {
 
     const event = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
-      d: testD,
+      identifier: testD,
     });
 
     const iTag = event.tags.find((t) => t[0] === "i");

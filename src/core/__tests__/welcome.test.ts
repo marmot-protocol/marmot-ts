@@ -100,7 +100,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
     const keyPackageEvent = await inviteeAccount.signer.signEvent(
       await createKeyPackageEvent({
         keyPackage: inviteeKeyPackage.publicPackage,
-        d: inviteePubkey,
+        identifier: inviteePubkey,
         relays: groupRelays,
       }),
     );

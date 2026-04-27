@@ -1,5 +1,11 @@
 # @internet-privacy/marmot-ts
 
+## 0.5.1
+
+### Patch Changes
+
+- 9f41ce8: Fix key package event tracking by storing slot identifiers under `identifier`, deduplicating replaceable published events, and yielding fresh watcher arrays.
+
 ## 0.5.0
 
 ### Minor Changes

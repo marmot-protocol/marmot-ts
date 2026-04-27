@@ -99,12 +99,15 @@ describe("KeyPackageManager", () => {
       expect(pkg.identifier).toBe(explicitD);
     });
 
-    it("stores d on the local entry", async () => {
+    it("stores the slot identifier under identifier, not d", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
       const stored = await manager.get(pkg.keyPackageRef);
+      const storedRecord = stored as Record<string, unknown> | null;
+
       expect(stored?.identifier).toBe(TEST_CLIENT_ID);
+      expect(storedRecord?.d).toBeUndefined();
     });
 
     it("stores private key material locally", async () => {
@@ -191,7 +194,7 @@ describe("KeyPackageManager", () => {
       expect(published).toHaveBeenCalledOnce();
     });
 
-    it("accumulates multiple published events for the same ref via track()", async () => {
+    it("deduplicates repeated addressable published events for the same ref via track()", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
@@ -202,7 +205,7 @@ describe("KeyPackageManager", () => {
       await manager.track({ ...originalEvent, id: "b".repeat(64) });
 
       const events = await getPublished(manager, pkg.keyPackageRef);
-      expect(events).toHaveLength(2);
+      expect(events).toHaveLength(1);
     });
   });
 
@@ -499,7 +502,7 @@ describe("KeyPackageManager", () => {
       expect(aTags[0][1]).toMatch(/^30443:/);
     });
 
-    it("the deletion event references all known event IDs for the ref", async () => {
+    it("the deletion event references deduplicated event IDs for the ref", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
@@ -513,7 +516,7 @@ describe("KeyPackageManager", () => {
 
       const deleteEvent = network.events.find((e) => e.kind === 5)!;
       const eTags = deleteEvent.tags.filter((t) => t[0] === "e");
-      expect(eTags).toHaveLength(2);
+      expect(eTags).toHaveLength(1);
     });
 
     it("removes local private key material", async () => {
@@ -669,7 +672,26 @@ describe("KeyPackageManager", () => {
 
       expect(result).toBe(true);
       const events = await getPublished(manager, pkg.keyPackageRef);
-      expect(events).toHaveLength(2);
+      expect(events).toHaveLength(1);
+    });
+
+    it("replaces an older addressable published event with a newer one", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const pkg = await manager.create({ relays: ["wss://relay.test"] });
+      const realEvent = network.events.find(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      )!;
+
+      const newerEvent = {
+        ...realEvent,
+        id: "e".repeat(64),
+        created_at: realEvent.created_at + 1,
+      };
+      await manager.track(newerEvent);
+
+      const events = await getPublished(manager, pkg.keyPackageRef);
+      expect(events).toHaveLength(1);
+      expect(events[0].id).toBe(newerEvent.id);
     });
 
     it("stores the d tag when tracking a kind 30443 event", async () => {
@@ -731,7 +753,7 @@ describe("KeyPackageManager", () => {
       await manager.track({ ...realEvent, id: "e".repeat(64) });
 
       const events = await getPublished(manager, pkg.keyPackageRef);
-      expect(getKeyPackageRelays(events[1])).toEqual([
+      expect(getKeyPackageRelays(events[0])).toEqual([
         "wss://relay1.test/",
         "wss://relay2.test/",
       ]);
@@ -787,7 +809,7 @@ describe("KeyPackageManager", () => {
       );
     });
 
-    it("accumulates multiple events for the same ref", async () => {
+    it("deduplicates multiple addressable events for the same ref", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
       const realEvent = network.events.find(
@@ -798,8 +820,37 @@ describe("KeyPackageManager", () => {
       await manager.track({ ...realEvent, id: "e".repeat(64) });
 
       const events = await getPublished(manager, pkg.keyPackageRef);
-      // 1 from create() + 2 from track()
-      expect(events).toHaveLength(3);
+      expect(events).toHaveLength(1);
+    });
+
+    it("keeps distinct legacy kind 443 published events", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+
+      const otherNetwork = new MockNetwork(["wss://relay.test"]);
+      const otherAccount = PrivateKeyAccount.generateNew();
+      const { manager: otherManager } = makeManager(
+        otherNetwork,
+        otherAccount,
+        "other-device",
+      );
+      await otherManager.create({ relays: ["wss://relay.test"] });
+
+      const foreignEvent = otherNetwork.events.find(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      )!;
+      const legacyEvent = {
+        ...foreignEvent,
+        kind: KEY_PACKAGE_KIND,
+        id: "f".repeat(64),
+        tags: foreignEvent.tags.filter((t) => t[0] !== "d"),
+      };
+
+      await manager.track(legacyEvent);
+      await manager.track({ ...legacyEvent, id: "e".repeat(64) });
+
+      const refHex = foreignEvent.tags.find((t) => t[0] === "i")![1];
+      const events = await getPublished(manager, refHex);
+      expect(events).toHaveLength(2);
     });
   });
 
@@ -876,6 +927,17 @@ describe("KeyPackageManager", () => {
       });
 
       expect(await manager.list()).toHaveLength(2);
+    });
+
+    it("returns the slot identifier under identifier, not d", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const pkg = await manager.create({ relays: ["wss://relay.test"] });
+
+      const [listed] = await manager.list();
+      const listedRecord = listed as Record<string, unknown>;
+
+      expect(listed.identifier).toBe(pkg.identifier);
+      expect(listedRecord.d).toBeUndefined();
     });
 
     it("each entry includes published — filter for packages with published events", async () => {
@@ -971,7 +1033,21 @@ describe("KeyPackageManager", () => {
       expect(second.value).toHaveLength(1);
     });
 
-    it("yields updated snapshot after a publish is recorded via track()", async () => {
+    it("yields a new array instance for each snapshot", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const pkg = await manager.create({ relays: ["wss://relay.test"] });
+      const gen = manager.watchKeyPackages();
+
+      const first = await gen.next();
+      const update = manager.markUsed(pkg.keyPackageRef);
+      const second = await gen.next();
+      await update;
+      await gen.return(undefined);
+
+      expect(second.value).not.toBe(first.value);
+    });
+
+    it("yields a deduplicated snapshot after a publish is tracked", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       await manager.create({ relays: ["wss://relay.test"] });
       const realEvent = network.events.find(
@@ -986,7 +1062,7 @@ describe("KeyPackageManager", () => {
       await tracking;
       await gen.return(undefined);
 
-      expect(value[0].published).toHaveLength(2);
+      expect(value[0].published).toHaveLength(1);
     });
 
     it("yields updated snapshot after a key package is removed", async () => {

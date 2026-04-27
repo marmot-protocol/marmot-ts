@@ -101,6 +101,44 @@ export type StoredKeyPackage = LocalKeyPackage | TrackedKeyPackage;
 /** A {@link LocalKeyPackage} without the private material, safe to expose in listings */
 export type ListedKeyPackage = Omit<StoredKeyPackage, "privatePackage">;
 
+function getReplaceableEventKey(event: NostrEvent): string | undefined {
+  const identifier = getKeyPackageIdentifier(event);
+  if (identifier === undefined) return undefined;
+
+  return `${event.kind}:${event.pubkey}:${identifier}`;
+}
+
+function deduplicatePublishedEvents(events: NostrEvent[]): NostrEvent[] {
+  const seenIds = new Set<string>();
+  const replaceableIndexes = new Map<string, number>();
+  const deduplicated: NostrEvent[] = [];
+
+  for (const event of events) {
+    if (seenIds.has(event.id)) continue;
+    seenIds.add(event.id);
+
+    const replaceableKey = getReplaceableEventKey(event);
+    if (replaceableKey === undefined) {
+      deduplicated.push(event);
+      continue;
+    }
+
+    const existingIndex = replaceableIndexes.get(replaceableKey);
+    if (existingIndex === undefined) {
+      replaceableIndexes.set(replaceableKey, deduplicated.length);
+      deduplicated.push(event);
+      continue;
+    }
+
+    const existing = deduplicated[existingIndex];
+    if (event.created_at > existing.created_at) {
+      deduplicated[existingIndex] = event;
+    }
+  }
+
+  return deduplicated;
+}
+
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
@@ -294,7 +332,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * Adds a {@link LocalKeyPackage} to the store.
    *
    * @param keyPackage - Must include `publicPackage` and `privatePackage`.
-   *   Optionally include `d` to persist the addressable slot identifier.
+   *   Optionally include `identifier` to persist the addressable slot identifier.
    * @returns The storage key (hex ref string)
    */
   async add(
@@ -315,7 +353,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
         ? { identifier: keyPackage.identifier }
         : {}),
       ...(keyPackage.published !== undefined
-        ? { published: keyPackage.published }
+        ? { published: deduplicatePublishedEvents(keyPackage.published) }
         : {}),
     };
 
@@ -345,19 +383,29 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     const existing = await this.store.getItem(key);
 
     // Extract the addressable slot identifier if this is a kind 30443 event
-    const d = getKeyPackageIdentifier(event);
+    const identifier = getKeyPackageIdentifier(event);
 
     if (existing) {
-      // Skip if event is already in array
-      if (existing.published?.some((e) => e.id === event.id)) return;
+      const published = deduplicatePublishedEvents([
+        ...(existing.published ?? []),
+        event,
+      ]);
+      const shouldPersistIdentifier =
+        identifier !== undefined && existing.identifier === undefined;
+      const publishedChanged =
+        existing.published === undefined ||
+        published.length !== existing.published.length ||
+        !published.every((e, index) => e.id === existing.published?.[index]?.id);
+
+      if (!publishedChanged && !shouldPersistIdentifier) {
+        return;
+      }
 
       const updated: StoredKeyPackage = {
         ...existing,
-        // Persist d if discovered for the first time on this entry
-        ...(d !== undefined && existing.identifier === undefined
-          ? { identifier: d }
-          : {}),
-        published: [...(existing.published ?? []), event],
+        // Persist identifier if discovered for the first time on this entry
+        ...(shouldPersistIdentifier ? { identifier } : {}),
+        published,
       };
 
       await this.store.setItem(key, updated);
@@ -376,7 +424,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       const entry: TrackedKeyPackage = {
         keyPackageRef,
         publicPackage,
-        ...(d !== undefined ? { identifier: d } : {}),
+        ...(identifier !== undefined ? { identifier } : {}),
         published: [event],
       };
 
@@ -428,10 +476,10 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
           pkg !== null && pkg.privatePackage !== undefined,
       )
       .map(
-        ({ keyPackageRef, publicPackage, identifier: d, published, used }) => ({
+        ({ keyPackageRef, publicPackage, identifier, published, used }) => ({
           keyPackageRef,
           publicPackage,
-          ...(d !== undefined ? { d } : {}),
+          ...(identifier !== undefined ? { identifier } : {}),
           ...(published !== undefined ? { published } : {}),
           ...(used !== undefined ? { used } : {}),
         }),
@@ -794,7 +842,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     this.on("published", signal);
 
     try {
-      yield await this.#buildSnapshot();
+      yield [...(await this.#buildSnapshot())];
 
       while (true) {
         await new Promise<void>((resolve) => {
@@ -805,7 +853,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
             resolveNext = resolve;
           }
         });
-        yield await this.#buildSnapshot();
+        yield [...(await this.#buildSnapshot())];
       }
     } finally {
       this.off("added", signal);

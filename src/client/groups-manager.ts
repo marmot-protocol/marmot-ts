@@ -432,14 +432,14 @@ export class GroupsManager<
     try {
       // Yield initial state after listeners are installed to avoid missing updates
       // that occur between snapshot and subscription.
-      yield await this.loadAll();
+      yield [...(await this.loadAll())];
 
       while (true) {
         await new Promise<void>((resolve) => {
           resolveNext = resolve;
         });
 
-        yield await this.loadAll();
+        yield [...(await this.loadAll())];
       }
     } finally {
       this.off("updated", handleChange);

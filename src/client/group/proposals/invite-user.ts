@@ -1,4 +1,6 @@
+/** @module @category Client - Proposals */
 import { isEvent, NostrEvent } from "applesauce-core/helpers/event";
+
 import { defaultProposalTypes, ProposalAdd, type KeyPackage } from "ts-mls";
 import { getKeyPackage } from "../../../core/key-package-event.js";
 import { ProposalAction } from "../marmot-group.js";

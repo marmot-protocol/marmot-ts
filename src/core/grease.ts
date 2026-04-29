@@ -1,3 +1,4 @@
+/** @module @category Core - Grease */
 import { greaseValues } from "ts-mls";
 
 export const GREASE_VALUE_SET: ReadonlySet<number> = new Set<number>(

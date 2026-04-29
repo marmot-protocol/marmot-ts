@@ -1,3 +1,4 @@
+/** @module @category Core - Group Messages */
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { finalizeEvent, NostrEvent } from "applesauce-core/helpers/event";
 import { generateSecretKey } from "applesauce-core/helpers/keys";
@@ -17,7 +18,6 @@ import { decodeContent, encodeContent } from "../utils/encoding.js";
 import { unixNow } from "../utils/nostr.js";
 import { decryptLegacyGroupMessageEventContent } from "./group-message-legacy.js";
 import { getNostrGroupIdHex } from "./client-state.js";
-import { isPrivateMessage } from "./message.js";
 import { GROUP_EVENT_KIND } from "./protocol.js";
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { concatBytes, randomBytes } from "@noble/ciphers/utils.js";
@@ -93,9 +93,6 @@ export async function decryptGroupMessageEvent(
 /**
  * Encrypts the content of a group event using MIP-03.
  *
- * @param state - The ClientState for the group (to get exporter_secret)
- * @param ciphersuite - The ciphersuite implementation
- * @param message - The MLS message to encrypt
  * @returns The encrypted content
  */
 export async function createEncryptedGroupEventContent({
@@ -103,8 +100,11 @@ export async function createEncryptedGroupEventContent({
   ciphersuite,
   message,
 }: {
+  /** The ClientState for the group (to get exporter_secret) */
   state: ClientState;
+  /** The ciphersuite implementation */
   ciphersuite: CiphersuiteImpl;
+  /** The MLS message to encrypt */
   message: MlsMessage;
 }): Promise<string> {
   const serializedMessage = encode(mlsMessageEncoder, message);
@@ -309,7 +309,7 @@ export function isApplicationMessage(
 ): pair is GroupMessagePair & {
   message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
 } {
-  if (!isPrivateMessage(pair.message)) return false;
+  if (pair.message.wireformat !== wireformats.mls_private_message) return false;
   return pair.message.privateMessage.contentType === contentTypes.application;
 }
 
@@ -321,7 +321,7 @@ export function isCommitMessage(
 ): pair is GroupMessagePair & {
   message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
 } {
-  if (!isPrivateMessage(pair.message)) return false;
+  if (pair.message.wireformat !== wireformats.mls_private_message) return false;
   return pair.message.privateMessage.contentType === contentTypes.commit;
 }
 
@@ -333,7 +333,7 @@ export function isProposalMessage(
 ): pair is GroupMessagePair & {
   message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
 } {
-  if (!isPrivateMessage(pair.message)) return false;
+  if (pair.message.wireformat !== wireformats.mls_private_message) return false;
   return pair.message.privateMessage.contentType === contentTypes.proposal;
 }
 

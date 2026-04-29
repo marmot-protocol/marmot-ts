@@ -37,14 +37,12 @@ Currently, `marmot-ts` supports the following [Marmot Improvement Proposals (MIP
 
 ## Documentation
 
-Comprehensive documentation is available in the `documentation/` directory:
+Comprehensive documentation is available in the `docs/` directory and served via VitePress. Run `pnpm docs:dev` to browse the docs locally.
 
-- [Getting Started](documentation/getting-started.md) - A fast track to initializing the library.
-- [Architecture](documentation/architecture.md) - High-level component overview and Nostr/MLS integration mapping.
-- [MarmotClient](documentation/marmot-client.md) - Deep dive into the main entry point class, its sub-managers, and identity management.
-- [Bytes-First Storage](documentation/bytes-first-storage.md) - Explaining the storage-agnostic philosophy and group state hydration.
-- [Ingest Methods](documentation/ingest-methods.md) - Handling incoming messages and network input robustly.
-- [Examples](documentation/examples.md) - Concise snippets for group creation, invitations, sending messages, and more.
+- **Getting Started** (`docs/getting-started.md`) - A fast track to initializing the library.
+- **Architecture Guide** (`docs/guide/architecture.md`) - High-level component overview and Nostr/MLS integration mapping.
+- **Client Module** (`docs/client/`) - Covers `MarmotClient`, `MarmotGroup`, proposals, history, network, storage, best practices, and UI framework integration.
+- **Core Module** (`docs/core/`) - Covers protocol, credentials, key packages, groups, messages, members, welcome, and state.
 
 ## Quick Start Overview
 
@@ -77,13 +75,15 @@ const group = await client.groups.create("My Secret Group", {
 });
 ```
 
-See [Getting Started](documentation/getting-started.md) and [Examples](documentation/examples.md) for full usage instructions.
+See [Getting Started](docs/getting-started.md) for full usage instructions.
 
 ## Development
 
 ```bash
-pnpm install   # Install dependencies
-pnpm build     # Compile TypeScript
-pnpm test      # Run tests (watch mode)
-pnpm format    # Format code with Prettier
+pnpm install    # Install dependencies
+pnpm build      # Compile TypeScript
+pnpm test       # Run tests (watch mode)
+pnpm format     # Format code with Prettier
+pnpm docs:dev   # Serve documentation locally
+pnpm docs:build # Build documentation
 ```

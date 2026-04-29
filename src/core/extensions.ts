@@ -1,3 +1,4 @@
+/** @module @category Core - Extensions */
 import { type CustomExtension, makeCustomExtension } from "ts-mls";
 import {
   LAST_RESORT_EXTENSION_TYPE,
@@ -31,7 +32,7 @@ export function isLastResortExtension(
 }
 
 /**
- * Modifies an {@link Extension} array to ensure it includes the last_resort extension.
+ * Modifies an {@link CustomExtension} array to ensure it includes the last_resort extension.
  * This is useful for ensuring that key packages are compliant with MIP-00.
  *
  * @param extensions - The extensions to modify

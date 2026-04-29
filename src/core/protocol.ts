@@ -1,4 +1,4 @@
-// Constants for the Marmot protocol
+/** @module @category Core - Constants */
 import { defaultExtensionTypes } from "ts-mls";
 
 /** The extension id for the last_resort extension for key packages */

@@ -1,3 +1,4 @@
+/** @module @category Client - Group Media */
 import { EventEmitter } from "eventemitter3";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
@@ -8,7 +9,7 @@ import type { BaseGroupMedia, StoredMedia } from "./marmot-group.js";
 export interface GroupMediaBackend extends GenericKeyValueStore<StoredMedia> {}
 
 /** A map of events that can be emitted by a {@link GroupMediaStore} */
-type GroupMediaStoreEvents = {
+export type GroupMediaStoreEvents = {
   /** Emitted when a blob is added to the cache for the first time */
   mediaAdded: (sha256Hex: string, entry: StoredMedia) => void;
   /** Emitted when a blob is removed from the cache */

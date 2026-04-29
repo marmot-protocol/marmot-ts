@@ -1,3 +1,4 @@
+/** @module @category Core - Capabilities */
 import {
   Capabilities,
   ciphersuites,

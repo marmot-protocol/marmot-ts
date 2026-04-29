@@ -1,3 +1,4 @@
+/** @module @category Client - Group */
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { EventSigner } from "applesauce-core/event-factory";
 import {
@@ -28,8 +29,8 @@ import {
   Proposal,
   wireformats,
 } from "ts-mls";
-
 import { sha256 } from "@noble/hashes/sha2.js";
+
 import { marmotAuthService } from "../../core/auth-service.js";
 import {
   getMarmotGroupData,
@@ -52,7 +53,6 @@ import {
   type MediaAttachment,
   MIP04_VERSION,
 } from "../../core/media.js";
-import { isPrivateMessage } from "../../core/message.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   KEY_PACKAGE_KIND,
@@ -291,7 +291,7 @@ export function createAdminCommitPolicyCallback(args: {
 }
 
 /** Map of events that can be emitted by a MarmotGroup */
-type MarmotGroupEvents<
+export type MarmotGroupEvents<
   THistory extends BaseGroupHistory | undefined = any,
   TMedia extends BaseGroupMedia | undefined = any,
 > = {
@@ -737,12 +737,6 @@ export class MarmotGroup<
    * @param content - The text content of the chat message
    * @param tags - Optional Nostr tags to include on the rumor
    * @returns Promise resolving to the publish response from the relays
-   *
-   * @example
-   * ```ts
-   * await group.sendChatMessage("Hello, group!");
-   * await group.sendChatMessage("Reply", [["e", replyToId]]);
-   * ```
    */
   async sendChatMessage(
     content: string,
@@ -764,26 +758,40 @@ export class MarmotGroup<
   /**
    * Creates a commit from proposals and sends it to the group.
    *
-   * You can provide proposals in two ways:
-   * 1. Pass extraProposals to include new proposals inline
-   * 2. Pass proposalRefs to select specific proposals from unappliedProposals
-   * 3. Pass both to combine new proposals with selected ones
+   * Proposal sources (can be combined):
+   * - **`extraProposals`** — inline {@link Proposal} values and/or {@link ProposalAction}
+   *   factories (each factory receives {@link ProposalContext}).
+   * - **`proposalRefs`** — keys into `state.unappliedProposals` for proposals already
+   *   held in state.
    *
-   * If no extraProposals or proposalRefs are provided, createCommit will use ALL proposals
-   * from state.unappliedProposals automatically.
+   * If **`extraProposals`** or **`proposalRefs`** is present on `options` (including as
+   * an empty array), the commit uses exactly the merged, resolved list in array order
+   * (`extraProposals` first, then each ref in `proposalRefs`). Two empty arrays means a
+   * no-proposal commit. If neither property is set, the MLS layer commits every proposal
+   * currently in `state.unappliedProposals`.
    *
-   * @param options - Options for creating the commit
-   * @param options.extraProposals - New proposals to include in the commit (inline)
-   * @param options.proposalRefs - Proposal references (hex strings) to select from unappliedProposals
-   * @param options.welcomeRecipients - Explicit list of users to send Welcome messages to (for Add operations)
+   * Requires a group admin. Publishes the commit to group relays and updates local state
+   * after an ACK. When MLS returns a welcome and **`welcomeRecipients`** is non-empty,
+   * sends gift-wrapped Welcome rumors (only after the commit ACK, per MIP-02).
+   *
+   * @returns Per-relay publish responses for the commit group event
    */
   async commit(options?: {
+    /**
+     * Flattened in order; function entries are async factories;
+     * resolved proposals are ordered before any from `proposalRefs`.
+     */
     extraProposals?: (
       | Proposal
       | ProposalAction<Proposal>
       | (Proposal | ProposalAction<Proposal>)[]
     )[];
+    /** Lookup keys on `state.unappliedProposals`; an unknown key throws. */
     proposalRefs?: string[];
+    /**
+     * Per-recipient key-package metadata for MLS Welcome delivery after
+     * adds; see {@link WelcomeRecipient}.
+     */
     welcomeRecipients?: WelcomeRecipient[];
   }): Promise<Record<string, PublishResponse>> {
     this.log(
@@ -1095,15 +1103,14 @@ export class MarmotGroup<
    * Events that can never be processed are yielded as {@link UnreadableIngestResult}.
    *
    * @param events - Array of Nostr events containing encrypted MLS messages
-   * @param options - Options for controlling retry behavior
-   * @param options.retryCount - Current retry attempt count (internal use)
-   * @param options.maxRetries - Maximum number of retry attempts (default: 5)
    * @yields IngestResult - The result of processing the event
    */
   async *ingest(
     events: NostrEvent[],
     options?: {
+      /** Current retry attempt count (internal use) */
       retryCount?: number;
+      /** Maximum number of retry attempts (default: 5) */
       maxRetries?: number;
       /**
        * @internal Flat list of `{ eventId, error }` entries accumulated across
@@ -1223,7 +1230,7 @@ export class MarmotGroup<
 
     for (const pair of read) {
       if (
-        isPrivateMessage(pair.message) &&
+        pair.message.wireformat === wireformats.mls_private_message &&
         pair.message.privateMessage.contentType === contentTypes.commit
       ) {
         commits.push(pair);
@@ -1342,7 +1349,7 @@ export class MarmotGroup<
     const adminCallback = this.createAdminVerificationCallback();
 
     for (const { event, message } of commits) {
-      if (!isPrivateMessage(message)) {
+      if (message.wireformat !== wireformats.mls_private_message) {
         log(
           "skip commit event:%s reason:wrong-wireformat",
           event.id.slice(0, 8),

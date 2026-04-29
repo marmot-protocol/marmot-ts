@@ -1,3 +1,4 @@
+/** @module @category Core - Key Package Event */
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventTemplate, NostrEvent } from "applesauce-core/helpers/event";
 import {

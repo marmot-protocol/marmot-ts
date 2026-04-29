@@ -1,3 +1,4 @@
+/** @module @category Core - Credentials */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { Credential, CredentialBasic, defaultCredentialTypes } from "ts-mls";
 

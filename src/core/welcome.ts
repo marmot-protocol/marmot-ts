@@ -1,4 +1,5 @@
-import { Rumor } from "applesauce-common/helpers/gift-wrap";
+/** @module @category Core - Welcome */
+import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
 import {
   getEventHash,
   getTagValue,
@@ -30,16 +31,11 @@ import {
   decodeMarmotGroupData,
   isMarmotGroupDataExtension,
 } from "./marmot-group-data.js";
-import { isRumorLike } from "./nostr.js";
 import { type MarmotGroupData, WELCOME_EVENT_KIND } from "./protocol.js";
 
 /**
  * Creates a welcome rumor (kind 444) for a welcome message.
  *
- * @param welcomeMessage - The MLS welcome message
- * @param keyPackageEventId - The ID of the key package event used for the add operation
- * @param author - The author's public key (hex string)
- * @param groupRelays - Array of relay URLs for the group
  * @returns Welcome rumor with precomputed ID
  */
 export function createWelcomeRumor({
@@ -48,10 +44,14 @@ export function createWelcomeRumor({
   groupRelays,
   keyPackageEventId,
 }: {
+  /** The MLS welcome message */
   welcome: Welcome;
+  /** The author's public key (hex string) */
   author: string;
+  /** The ID of the key package event used for the add operation */
   keyPackageEventId?: string;
   keyPackageEvent?: NostrEvent;
+  /** Array of relay URLs for the group */
   groupRelays: string[];
 }): Rumor {
   // Serialize the welcome message as a full MLSMessage (RFC 9420)
@@ -114,7 +114,7 @@ export function getWelcomeKeyPackageRefs(
   welcome: Welcome | Rumor,
 ): Uint8Array[] {
   // Unwrap welcome rumor if provided
-  if (isRumorLike(welcome)) welcome = getWelcome(welcome);
+  if (isRumor(welcome)) welcome = getWelcome(welcome);
 
   return welcome.secrets.map((s) => s.newMember);
 }
@@ -155,9 +155,6 @@ export function getWelcome(event: Rumor): Welcome {
  * and group info, giving access to `groupContext` (group ID, epoch, extensions) and
  * `GroupInfo`-level extensions (ratchet tree, external pub).
  *
- * @param welcome - The MLS Welcome message (or a kind 444 Rumor)
- * @param keyPackage - The full key package (public + private) used to receive the invite
- * @param ciphersuiteImpl - The ciphersuite implementation
  * @returns The decrypted GroupInfo
  * @throws Error if the key package does not match any secret in the welcome
  */
@@ -166,15 +163,18 @@ export async function readWelcomeGroupInfo({
   keyPackage,
   ciphersuiteImpl,
 }: {
+  /** The MLS Welcome message (or a kind 444 Rumor) */
   welcome: Welcome | Rumor;
+  /** The full key package (public + private) used to receive the invite */
   keyPackage: {
     publicPackage: KeyPackage;
     privatePackage: PrivateKeyPackage;
   };
+  /** The ciphersuite implementation */
   ciphersuiteImpl: CiphersuiteImpl;
 }): Promise<GroupInfo> {
   // Unwrap welcome rumor if provided
-  if (isRumorLike(welcome)) welcome = getWelcome(welcome);
+  if (isRumor(welcome)) welcome = getWelcome(welcome);
 
   try {
     const clientState = await joinGroup({
@@ -209,9 +209,6 @@ export async function readWelcomeGroupInfo({
  * Convenience wrapper around {@link readWelcomeGroupInfo} that extracts and decodes
  * the Marmot Group Data extension from `groupInfo.groupContext.extensions`.
  *
- * @param welcome - The MLS Welcome message (or a kind 444 Rumor)
- * @param keyPackage - The full key package (public + private) used to receive the invite
- * @param ciphersuiteImpl - The ciphersuite implementation
  * @returns The decoded MarmotGroupData, or null if the extension is not present
  */
 export async function readWelcomeMarmotGroupData({
@@ -219,11 +216,14 @@ export async function readWelcomeMarmotGroupData({
   keyPackage,
   ciphersuiteImpl,
 }: {
+  /** The MLS Welcome message (or a kind 444 Rumor) */
   welcome: Welcome | Rumor;
+  /** The full key package (public + private) used to receive the invite */
   keyPackage: {
     publicPackage: KeyPackage;
     privatePackage: PrivateKeyPackage;
   };
+  /** The ciphersuite implementation */
   ciphersuiteImpl: CiphersuiteImpl;
 }): Promise<MarmotGroupData | null> {
   const groupInfo = await readWelcomeGroupInfo({

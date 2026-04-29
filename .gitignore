@@ -8,3 +8,4 @@ lancedb
 models
 mcp.json
 plans
+.vitepress/cache

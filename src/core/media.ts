@@ -1,18 +1,4 @@
-/**
- * MIP-04 chat media encryption helpers.
- *
- * Provides per-file key derivation from the MLS epoch's exporter secret and
- * ChaCha20-Poly1305 AEAD encryption/decryption for media files shared in
- * Marmot group messages via `imeta` tags.
- *
- * No HTTP client is included. Callers are responsible for uploading encrypted
- * blobs to Blossom (or any content-addressed store) and building/parsing
- * `imeta` tags using applesauce helpers such as `createImetaTagForAttachment`
- * and `getFileMetadataFromImetaTag`.
- *
- * For group avatar image encryption see {@link ./group-image.js}.
- */
-
+/** @module @category Core - Encrypted Media */
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { equalBytes } from "@noble/ciphers/utils.js";
 import { expand as hkdf_expand } from "@noble/hashes/hkdf.js";

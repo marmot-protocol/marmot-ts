@@ -1,3 +1,4 @@
+/** @module @category Utilities */
 import { GiftWrapBlueprint } from "applesauce-common/blueprints/gift-wrap";
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { GiftWrapOptions } from "applesauce-common/operations/gift-wrap";

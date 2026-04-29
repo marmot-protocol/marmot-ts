@@ -1,3 +1,4 @@
+/** @module @category Core - Group Messages */
 import {
   ClientState,
   CiphersuiteImpl,

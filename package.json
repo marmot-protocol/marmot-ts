@@ -18,7 +18,9 @@
     "docs": "vitepress dev",
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
-    "docs:preview": "vitepress preview"
+    "docs:preview": "vitepress preview",
+    "typedoc:build": "typedoc",
+    "typedoc:serve": "pnpx serve .vitepress/dist/reference"
   },
   "repository": {
     "type": "git",
@@ -66,6 +68,21 @@
       "import": "./dist/client/index.js",
       "default": "./dist/client/index.js"
     },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js",
+      "default": "./dist/core/index.js"
+    },
+    "./extra": {
+      "types": "./dist/extra/index.d.ts",
+      "import": "./dist/extra/index.js",
+      "default": "./dist/extra/index.js"
+    },
+    "./utils": {
+      "types": "./dist/utils/index.d.ts",
+      "import": "./dist/utils/index.js",
+      "default": "./dist/utils/index.js"
+    },
     "./package.json": "./package.json"
   },
   "dependencies": {
@@ -88,8 +105,9 @@
     "husky": "^9.1.7",
     "prettier": "^3.8.1",
     "rimraf": "~6.0.1",
-    "typescript": "~5.9.3",
-    "vitepress": "2.0.0-alpha.16",
+    "typedoc": "^0.28.19",
+    "typescript": "~6.0.3",
+    "vitepress": "2.0.0-alpha.17",
     "vitest": "^3.2.4"
   }
 }

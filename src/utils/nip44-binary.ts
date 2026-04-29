@@ -1,13 +1,4 @@
-/**
- * NIP-44 v2 encryption with binary (Uint8Array) plaintext support.
- *
- * Functionally identical to NIP-44 v2 but the pad/unpad layer operates on raw
- * bytes instead of UTF-8 strings, removing the need to hex/base64-encode
- * binary payloads (e.g. TLS-serialized MLSMessages) before encryption.
- *
- * The wire format and conversation-key derivation are 100% compatible with
- * standard NIP-44 v2 – only the plaintext interpretation differs.
- */
+/** @module @category Utilities */
 
 import { chacha20 } from "@noble/ciphers/chacha.js";
 import { equalBytes } from "@noble/ciphers/utils.js";

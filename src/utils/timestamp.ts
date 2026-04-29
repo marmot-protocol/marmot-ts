@@ -1,3 +1,4 @@
+/** @module @category Utilities */
 import { defaultLifetime, Lifetime } from "ts-mls";
 
 /**
@@ -5,18 +6,6 @@ import { defaultLifetime, Lifetime } from "ts-mls";
  *
  * @param timestamp - The timestamp as a bigint (typically from MLS lifetime fields)
  * @returns A formatted date string or descriptive text for special values
- *
- * @example
- * ```typescript
- * // For normal timestamps
- * formatMlsTimestamp(1700000000n); // Returns: "11/14/2023, 1:13:20 PM"
- *
- * // For "no expiration" value
- * formatMlsTimestamp(9223372036854775807n); // Returns: "No expiration"
- *
- * // For epoch value
- * formatMlsTimestamp(0n); // Returns: "Epoch (1970-01-01)"
- * ```
  */
 export function formatMlsTimestamp(timestamp: bigint): string {
   const lifetime = defaultLifetime();
@@ -44,12 +33,6 @@ export function formatMlsTimestamp(timestamp: bigint): string {
  *
  * @param lifetime - The lifetime object with notBefore and notAfter fields
  * @returns True if the lifetime is currently valid, false otherwise
- *
- * @example
- * ```typescript
- * const isValid = isLifetimeValid(lifetime);
- * // Returns: true if current time is within the lifetime range
- * ```
  */
 export function isLifetimeValid(lifetime: Lifetime): boolean {
   const currentTime = BigInt(Math.floor(Date.now() / 1000));
@@ -66,12 +49,6 @@ export function isLifetimeValid(lifetime: Lifetime): boolean {
  * Creates a lifetime with a 3-month expiration from the current time.
  *
  * @returns A lifetime object with notBefore set to current time and notAfter set to 3 months from now
- *
- * @example
- * ```typescript
- * const lifetime = createThreeMonthLifetime();
- * // Returns: { notBefore: currentTime, notAfter: currentTime + 3 months }
- * ```
  */
 export function createThreeMonthLifetime(): Lifetime {
   const currentTime = BigInt(Math.floor(Date.now() / 1000));

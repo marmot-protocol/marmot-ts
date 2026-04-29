@@ -1,3 +1,4 @@
+/** @module @category Core - Group Members */
 import {
   ClientState,
   Credential,

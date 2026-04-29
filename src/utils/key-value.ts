@@ -1,4 +1,8 @@
-/** A generic interface for a key-value store */
+/** @module @category Utilities */
+
+/**
+ * A generic interface for a key-value store
+ */
 export interface GenericKeyValueStore<T> {
   /** Get an item from the store */
   getItem(key: string): Promise<T | null>;

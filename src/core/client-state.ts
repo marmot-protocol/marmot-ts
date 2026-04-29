@@ -1,3 +1,4 @@
+/** @module @category Core - Client State */
 import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   ClientConfig,

@@ -114,7 +114,6 @@ describe("exports", () => {
         "isLifetimeValid",
         "isMarmotGroupDataExtension",
         "isProposalMessage",
-        "isRumorLike",
         "isSameCredential",
         "isValidKeyPackageRelayListEvent",
         "isValidRelayUrl",

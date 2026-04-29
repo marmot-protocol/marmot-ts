@@ -1,13 +1,14 @@
+/** @module @category Client - Group History */
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-import { matchFilters } from "applesauce-core/helpers/filter";
-import type { Filter } from "applesauce-core/helpers/filter";
-import { EventEmitter } from "eventemitter3";
-import { deserializeApplicationData } from "../../core/group-message.js";
-import { BaseGroupHistory, GroupHistoryFactory } from "../index.js";
 import {
   insertEventIntoDescendingList,
   NostrEvent,
 } from "applesauce-core/helpers";
+import type { Filter } from "applesauce-core/helpers/filter";
+import { matchFilters } from "applesauce-core/helpers/filter";
+import { EventEmitter } from "eventemitter3";
+import { deserializeApplicationData } from "../../core/group-message.js";
+import { BaseGroupHistory, GroupHistoryFactory } from "../index.js";
 
 /** A rumor storage interface for the {@link GroupRumorHistory} class */
 export interface GroupRumorHistoryBackend {
@@ -20,7 +21,7 @@ export interface GroupRumorHistoryBackend {
 }
 
 /** A map of events that can be emitted by a {@link GroupRumorHistory} */
-type GroupRumorHistoryEvents = {
+export type GroupRumorHistoryEvents = {
   rumor: (rumor: Rumor) => void;
   cleared: () => void;
 };
@@ -143,15 +144,6 @@ export class GroupRumorHistory
    *
    * @param filter - Optional filter to apply to the query
    * @yields Batches of Rumor events, with each batch containing up to `filter.limit` messages
-   *
-   * @example
-   * ```ts
-   * const generator = group.history.createPaginatedLoader(groupId, 50);
-   * for await (const page of generator) {
-   *   // Process page of messages
-   *   console.log(`Loaded ${page.length} messages`);
-   * }
-   * ```
    */
   async *createPaginatedLoader(filter?: Filter): AsyncGenerator<Rumor[], void> {
     const limit = filter?.limit ?? 50;

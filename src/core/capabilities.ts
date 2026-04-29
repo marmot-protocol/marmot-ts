@@ -1,3 +1,4 @@
+/** @module @category Core - Capabilities */
 import { Capabilities } from "ts-mls";
 import {
   LAST_RESORT_EXTENSION_TYPE,

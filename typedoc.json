@@ -1,0 +1,71 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "Marmot-TS",
+  "sourceLinkTemplate": "https://github.com/marmot-protocol/marmot-ts/blob/{gitRevision}/{path}#L{line}",
+  "entryPoints": ["src/index.ts"],
+  "out": ".vitepress/dist/reference",
+  "basePath": "/reference",
+  "navigation": {
+    "includeCategories": true,
+    "includeGroups": true,
+    "includeFolders": true,
+    "excludeReferences": true
+  },
+  "categorizeByGroup": false,
+  "plugin": ["./typedocs/cascade-category.mjs"],
+  "blockTags": [
+    "@alpha",
+    "@author",
+    "@beta",
+    "@category",
+    "@categoryDescription",
+    "@default",
+    "@defaultValue",
+    "@deprecated",
+    "@example",
+    "@experimental",
+    "@group",
+    "@groupDescription",
+    "@inheritDoc",
+    "@internal",
+    "@license",
+    "@module",
+    "@param",
+    "@privateRemarks",
+    "@public",
+    "@remarks",
+    "@returns",
+    "@satisfies",
+    "@see",
+    "@since",
+    "@template",
+    "@throws",
+    "@typeParam",
+    "@warning",
+    "@yields"
+  ],
+  "externalSymbolLinkMappings": {
+    "ts-mls": {
+      "Capabilities": "https://github.com/LukaJCB/ts-mls/tree/main/docs",
+      "ClientState": "https://github.com/LukaJCB/ts-mls/tree/main/docs",
+      "CustomExtension": "https://github.com/LukaJCB/ts-mls/tree/main/docs",
+      "Extension": "https://github.com/LukaJCB/ts-mls/tree/main/docs",
+      "GroupInfo": "https://github.com/LukaJCB/ts-mls/tree/main/docs",
+      "MlsMessage": "https://github.com/LukaJCB/ts-mls/tree/main/docs",
+      "Proposal": "https://github.com/LukaJCB/ts-mls/tree/main/docs",
+      "ProposalRemove": "https://github.com/LukaJCB/ts-mls/tree/main/docs"
+    },
+    "nostr-tools": {
+      "NostrEvent": "https://github.com/nbd-wtf/nostr-tools"
+    },
+    "applesauce-common": {
+      "Rumor": "https://applesauce.build/typedoc/types/applesauce-common.Helpers.Rumor.html",
+      "FileMetadata": "https://applesauce.build/typedoc/",
+      "getFileMetadata": "https://applesauce.build/typedoc/",
+      "getFileMetadataFromImetaTag": "https://applesauce.build/typedoc/"
+    },
+    "@internet-privacy/marmot-ts": {
+      "InMemoryKeyValueStore": "#"
+    }
+  }
+}

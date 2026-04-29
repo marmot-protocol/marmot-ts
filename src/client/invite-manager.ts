@@ -1,3 +1,4 @@
+/** @module @category Client - Invite Manager */
 import { unlockGiftWrap } from "applesauce-common/helpers/gift-wrap";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { EventSigner } from "applesauce-core/event-factory";
@@ -40,7 +41,7 @@ function isGiftWrap(event: NostrEvent): event is KnownEvent<kinds.GiftWrap> {
 /**
  * Events emitted by InviteManager
  */
-type InviteManagerEvents = {
+export type InviteManagerEvents = {
   /** Emitted when a gift wrap is ingested and stored */
   received: (invite: ReceivedGiftWrap) => void;
 
@@ -88,27 +89,6 @@ export interface InviteManagerOptions {
  * - `__seen` key holds a serialized set of all seen event IDs
  * - `received:<eventId>` keys hold undecrypted gift wraps
  * - `unread:<rumorId>` keys hold decrypted welcome rumors
- *
- * @example
- * ```typescript
- * const inviteReader = new InviteManager({
- *   signer: mySigner,
- *   store: myStore,
- * });
- *
- * // 1. Ingest gift wraps from relay sync
- * await inviteReader.ingestEvents(giftWraps);
- *
- * // 2. Process received invites (prompts user for decryption)
- * await inviteReader.decryptGiftWraps();
- *
- * // 3. Consume unread invites
- * const unread = await inviteReader.getUnread();
- * for (const invite of unread) {
- *   await client.joinGroupFromWelcome({ welcomeRumor: invite });
- *   await inviteReader.markAsRead(invite.id);
- * }
- * ```
  */
 export class InviteManager extends EventEmitter<InviteManagerEvents> {
   private signer: EventSigner;
@@ -349,16 +329,6 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    *
    * This does NOT automatically mark invites as read - the app must
    * call markAsRead() after processing each invite.
-   *
-   * @example
-   * ```typescript
-   * for await (const invites of inviteReader.watchUnread()) {
-   *   for (const invite of invites) {
-   *     await client.joinGroupFromWelcome({ welcomeRumor: invite });
-   *     await inviteReader.markAsRead(invite.id);
-   *   }
-   * }
-   * ```
    */
   async *watchUnread(): AsyncGenerator<UnreadInvite[]> {
     yield await this.getUnread();
@@ -382,13 +352,6 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    *
    * Yields the current list of received gift wraps, then yields again
    * whenever the received list changes (via 'ReceivedGiftWrap' or 'receivedProcessed' events).
-   *
-   * @example
-   * ```typescript
-   * for await (const received of inviteReader.watchReceived()) {
-   *   console.log(`${received.length} gift wraps waiting to decrypt`);
-   * }
-   * ```
    */
   async *watchReceived(): AsyncGenerator<ReceivedGiftWrap[]> {
     yield await this.getReceived();

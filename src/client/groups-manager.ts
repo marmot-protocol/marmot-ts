@@ -1,3 +1,4 @@
+/** @module @category Client - Group Manager */
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventSigner } from "applesauce-core";
 import { hexToBytes } from "applesauce-core/helpers";
@@ -260,13 +261,15 @@ export class GroupsManager<
    * a welcome message) that construct ClientStates themselves.
    *
    * @param state - The ClientState to adopt
-   * @param options.emit - Which lifecycle event to emit. Defaults to `"imported"`.
    * @returns The persisted and cached MarmotGroup
    * @throws Error if a group with the same id already exists
    */
   async adoptClientState(
     state: ClientState,
-    options?: { emit?: "imported" | "joined" },
+    options?: {
+      /** Which lifecycle event to emit. Defaults to `"imported"`. */
+      emit?: "imported" | "joined";
+    },
   ): Promise<MarmotGroup<THistory, TMedia>> {
     const eventName = options?.emit ?? "imported";
     const id = bytesToHex(state.groupContext.groupId);
@@ -407,13 +410,6 @@ export class GroupsManager<
    * Watches for changes to the groups in the store.
    * Returns an async generator that yields the current list of groups
    * whenever the store changes.
-   *
-   * @example
-   * ```ts
-   * for await (const groups of client.groups.watch()) {
-   *   console.log(`Groups updated: ${groups.length} groups`);
-   * }
-   * ```
    */
   async *watch(): AsyncGenerator<MarmotGroup<THistory, TMedia>[]> {
     let resolveNext: (() => void) | null = null;

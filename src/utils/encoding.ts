@@ -1,3 +1,4 @@
+/** @module @category Utilities */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { base64 } from "@scure/base";
 import { Rumor } from "applesauce-common/helpers/gift-wrap";

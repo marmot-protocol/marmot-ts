@@ -1,3 +1,4 @@
+/** @module @category Core - Key Package Relay List */
 import { NostrEvent, UnsignedEvent } from "applesauce-core/helpers/event";
 
 import { isValidRelayUrl, normalizeRelayUrl } from "../utils/relay-url.js";
@@ -13,20 +14,6 @@ import { unixNow } from "../utils/nostr.js";
  *
  * @param event - The kind 10051 event containing relay information
  * @returns Array of relay URLs, or empty array if none found
- *
- * @example
- * ```typescript
- * const event = {
- *   kind: 10051,
- *   tags: [
- *     ["relay", "wss://inbox.nostr.wine"],
- *     ["relay", "wss://myrelay.nostr1.com"]
- *   ],
- *   // ... other fields
- * };
- * const relays = getKeyPackageRelayList(event);
- * // Returns: ["wss://inbox.nostr.wine", "wss://myrelay.nostr1.com"]
- * ```
  */
 export function getKeyPackageRelayList(event: NostrEvent): string[] {
   return event.tags
@@ -41,14 +28,6 @@ export function getKeyPackageRelayList(event: NostrEvent): string[] {
  *
  * @param event - The event to validate
  * @returns True if the event is a valid kind 10051 relay list event
- *
- * @example
- * ```typescript
- * const isValid = isValidKeyPackageRelayListEvent(event);
- * if (isValid) {
- *   const relays = getKeyPackageRelayList(event);
- * }
- * ```
  */
 export function isValidKeyPackageRelayListEvent(event: NostrEvent): boolean {
   return (

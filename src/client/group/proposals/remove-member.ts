@@ -1,4 +1,6 @@
+/** @module @category Client - Proposals */
 import { defaultProposalTypes, ProposalRemove } from "ts-mls";
+
 import { getPubkeyLeafNodeIndexes } from "../../../core/group-members.js";
 import { ProposalAction } from "../marmot-group.js";
 

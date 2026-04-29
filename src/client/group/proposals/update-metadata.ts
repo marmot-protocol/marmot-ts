@@ -1,8 +1,10 @@
+/** @module @category Client - Proposals */
 import {
   defaultProposalTypes,
   type GroupContextExtension,
   type ProposalGroupContextExtensions,
 } from "ts-mls";
+
 import { replaceExtension } from "../../../core/extensions.js";
 import { marmotGroupDataToExtension } from "../../../core/marmot-group-data.js";
 import { MarmotGroupData } from "../../../core/protocol.js";

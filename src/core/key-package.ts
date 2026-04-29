@@ -1,3 +1,4 @@
+/** @module @category Core - Key Package */
 import {
   Capabilities,
   Credential,

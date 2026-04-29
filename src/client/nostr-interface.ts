@@ -1,3 +1,4 @@
+/** @module @category Client - Nostr */
 import { NostrEvent } from "applesauce-core/helpers/event";
 import { Filter } from "applesauce-core/helpers/filter";
 

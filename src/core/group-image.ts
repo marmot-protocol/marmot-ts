@@ -1,14 +1,4 @@
-/**
- * MIP-01 group image encryption and Blossom upload identity helpers.
- *
- * Provides ChaCha20-Poly1305 encryption/decryption for the group avatar image
- * stored on Blossom, and HKDF-based derivation of the Nostr keypair used to
- * authenticate uploads and deletions.
- *
- * No HTTP client is included. Callers are responsible for uploading encrypted
- * blobs to Blossom (or any content-addressed store).
- */
-
+/** @module @category Core - Group Image */
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { expand as hkdf_expand } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";

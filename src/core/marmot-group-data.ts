@@ -1,3 +1,4 @@
+/** @module @category Core - Marmot Group Data */
 import {
   type CustomExtension,
   type GroupContextExtension,

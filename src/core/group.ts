@@ -1,3 +1,4 @@
+/** @module @category Core - Group */
 import { randomBytes } from "@noble/hashes/utils.js";
 import {
   CiphersuiteImpl,

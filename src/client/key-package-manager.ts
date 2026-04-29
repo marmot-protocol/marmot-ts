@@ -1,3 +1,4 @@
+/** @module @category Client - Key Package Manager */
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { EventSigner } from "applesauce-core";
 import { NostrEvent } from "applesauce-core/helpers/event";
@@ -241,7 +242,7 @@ export type RotateKeyPackageOptions = {
   protected?: boolean;
 };
 
-type KeyPackageManagerEvents = {
+export type KeyPackageManagerEvents = {
   /** Emitted when a key package is stored locally */
   added: (keyPackage: StoredKeyPackage) => void;
   /** Emitted when a key package is removed from local storage */
@@ -256,7 +257,7 @@ type KeyPackageManagerEvents = {
 export type KeyPackageManagerOptions = {
   /** The backend to store and load the key packages from */
   store: GenericKeyValueStore<StoredKeyPackage>;
-  /** Default `d` tag value for {@link create} and {@link rotate}. Falls back to this when no explicit `d` is passed. */
+  /** Default `d` tag value for {@link KeyPackageManager.create} and {@link KeyPackageManager.rotate}. Falls back to this when no explicit `d` is passed. */
   clientId?: string;
   /** The signer used for the clients identity */
   signer: EventSigner;
@@ -272,26 +273,6 @@ export type KeyPackageManagerOptions = {
  *
  * Legacy kind-443 events are supported for reading and deletion only; new
  * events are always published as kind 30443.
- *
- * @example
- * ```typescript
- * const manager = new KeyPackageManager({
- *   backend: myKeyValueBackend,
- *   signer,
- *   network,
- *   clientId: "my-app-desktop",
- * });
- * const pkg = await manager.create({ relays: ["wss://relay.example.com"] });
- *
- * // Feed observed relay events — kind 443 and kind 30443 with an `i` tag are recorded
- * await manager.track(nostrEvent);
- *
- * // Rotate: publish a new kind 30443 under the same `d` slot (relay replaces automatically)
- * const newPkg = await manager.rotate(pkg.keyPackageRef);
- *
- * // List all key packages, filtering to those with published events
- * const published = (await manager.list()).filter(p => p.published.length > 0);
- * ```
  */
 export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   /**
@@ -395,7 +376,9 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       const publishedChanged =
         existing.published === undefined ||
         published.length !== existing.published.length ||
-        !published.every((e, index) => e.id === existing.published?.[index]?.id);
+        !published.every(
+          (e, index) => e.id === existing.published?.[index]?.id,
+        );
 
       if (!publishedChanged && !shouldPersistIdentifier) {
         return;
@@ -475,15 +458,13 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
         (pkg): pkg is LocalKeyPackage =>
           pkg !== null && pkg.privatePackage !== undefined,
       )
-      .map(
-        ({ keyPackageRef, publicPackage, identifier, published, used }) => ({
-          keyPackageRef,
-          publicPackage,
-          ...(identifier !== undefined ? { identifier } : {}),
-          ...(published !== undefined ? { published } : {}),
-          ...(used !== undefined ? { used } : {}),
-        }),
-      );
+      .map(({ keyPackageRef, publicPackage, identifier, published, used }) => ({
+        keyPackageRef,
+        publicPackage,
+        ...(identifier !== undefined ? { identifier } : {}),
+        ...(published !== undefined ? { published } : {}),
+        ...(used !== undefined ? { used } : {}),
+      }));
   }
 
   // ---------------------------------------------------------------------------

@@ -205,6 +205,49 @@ export class MarmotClient extends EventEmitter<MarmotClientEvents> {
 
 **Binary Data:** Use `Uint8Array` for binary data handling
 
+## Documentation Guidelines
+
+When writing or updating documentation in the `docs/` directory:
+
+- **Minimal Code Snippets:** Use short, focused code examples that demonstrate a single concept. Avoid complete working examples that clutter the page with boilerplate.
+- **Conceptual Focus:** Explain what developers need to know and why, not just API surfaces. Focus on usage patterns and integration guidance.
+- **Cross-Linking:** Link to related documentation pages to provide context and help developers navigate between topics.
+- **Progressive Disclosure:** Start with high-level concepts, then introduce details. Use tip/warning blocks for additional guidance without cluttering main content.
+- **⚠️ UPDATE VITEPRESS CONFIG:** When adding new documentation pages, **always update `.vitepress/config.ts`** to add the page to the sidebar navigation. This is easy to forget!
+
+**Good Example:**
+
+```typescript
+// Convert async generator to reactive state
+for await (const groups of client.watchGroups()) {
+  updateUI(groups);
+}
+```
+
+**Bad Example:** (Too much boilerplate)
+
+```typescript
+import { MarmotClient } from "@internet-privacy/marmots";
+import { useState, useEffect } from "react";
+
+function MyComponent() {
+  const [groups, setGroups] = useState([]);
+
+  useEffect(() => {
+    const abortController = new AbortController();
+    (async () => {
+      for await (const groups of client.watchGroups()) {
+        if (abortController.signal.aborted) break;
+        setGroups(groups);
+      }
+    })();
+    return () => abortController.abort();
+  }, []);
+
+  return <div>{groups.map(g => ...)}</div>;
+}
+```
+
 ## Testing Guidelines
 
 - Place test files in `src/__tests__/`

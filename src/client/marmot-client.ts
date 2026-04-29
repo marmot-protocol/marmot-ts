@@ -1,4 +1,5 @@
-import { Rumor } from "applesauce-common/helpers/gift-wrap";
+/** @module @category Client - Marmot Client */
+import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
 import { EventSigner } from "applesauce-core";
 import {
   Capabilities,
@@ -14,7 +15,6 @@ import {
 import { marmotAuthService } from "../core/auth-service.js";
 import { SerializedClientState } from "../core/client-state.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
-import { isRumorLike } from "../core/nostr.js";
 import {
   getWelcome,
   getWelcomeKeyPackageRefs,
@@ -150,7 +150,7 @@ export class MarmotClient<
   async readInviteGroupInfo(
     welcomeRumor: Rumor | Welcome,
   ): Promise<GroupInfo | null> {
-    const welcome = isRumorLike(welcomeRumor)
+    const welcome = isRumor(welcomeRumor)
       ? getWelcome(welcomeRumor)
       : welcomeRumor;
     const refs = getWelcomeKeyPackageRefs(welcome);
@@ -191,12 +191,13 @@ export class MarmotClient<
    * `(await client.keyPackages.list()).filter(p => p.used)` and rotate them
    * via `client.keyPackages.rotate(ref)` to publish fresh ones to relays.
    *
-   * @param options - Options for joining from a Welcome message
-   * @param options.welcomeRumor - The unwrapped kind 444 rumor event containing the Welcome message
    * @returns Promise resolving to the joined group
    * @throws Error if no matching KeyPackage is found or if joining fails
    */
-  async joinGroupFromWelcome(options: { welcomeRumor: Rumor }): Promise<{
+  async joinGroupFromWelcome(options: {
+    /** The unwrapped kind 444 rumor event containing the Welcome message */
+    welcomeRumor: Rumor;
+  }): Promise<{
     group: MarmotGroup<THistory, TMedia>;
   }> {
     const { welcomeRumor } = options;

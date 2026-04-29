@@ -1,12 +1,16 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useEffect, useState } from "react";
+import { defined } from "applesauce-core";
 import { map, switchMap } from "rxjs";
 import type { CiphersuiteName, KeyPackage } from "ts-mls";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { CompleteKeyPackage } from "../../../../src";
 import { getMemberCount } from "../../../../src/core/client-state";
 import { createCredential } from "../../../../src/core/credential";
-import { generateKeyPackage } from "../../../../src/core/key-package";
+import {
+  calculateKeyPackageRef,
+  generateKeyPackage,
+} from "../../../../src/core/key-package";
 import { PubkeyListCreator } from "../../components/form/pubkey-list-creator";
 import { RelayListCreator } from "../../components/form/relay-list-creator";
 import JsonBlock from "../../components/json-block";
@@ -14,7 +18,6 @@ import { withSignIn } from "../../components/with-signIn";
 import { useObservable, useObservableMemo } from "../../hooks/use-observable";
 import accounts from "../../lib/accounts";
 import { mailboxes$ } from "../../lib/accounts";
-import { keyPackageStore$ } from "../../lib/key-package-store";
 import { marmotClient$ } from "../../lib/marmot-client";
 
 // ============================================================================
@@ -46,7 +49,7 @@ interface ConfigurationFormData {
 
 interface ConfigurationFormProps {
   keyPackages: KeyPackage[];
-  keyPackageStore: any;
+  client: any;
   isCreating: boolean;
   defaultRelays: string[];
   onSubmit: (data: ConfigurationFormData) => void;
@@ -54,7 +57,7 @@ interface ConfigurationFormProps {
 
 function ConfigurationForm({
   keyPackages,
-  keyPackageStore,
+  client,
   isCreating,
   defaultRelays,
   onSubmit,
@@ -78,7 +81,7 @@ function ConfigurationForm({
   }, [defaultRelays.join("|")]);
 
   const handleKeyPackageSelect = async (keyPackageId: string) => {
-    if (!keyPackageStore || !keyPackageId) {
+    if (!client || !keyPackageId) {
       setSelectedKeyPackageId("");
       setSelectedKeyPackage(null);
       return;
@@ -94,10 +97,16 @@ function ConfigurationForm({
         return;
       }
 
-      const completePackage =
-        await keyPackageStore.getCompletePackage(keyPackage);
-      if (completePackage) {
-        setSelectedKeyPackage(completePackage);
+      const ref = await calculateKeyPackageRef(
+        keyPackage,
+        client.cryptoProvider,
+      );
+      const stored = await client.keyPackages.get(ref);
+      if (stored?.privatePackage) {
+        setSelectedKeyPackage({
+          publicPackage: stored.publicPackage,
+          privatePackage: stored.privatePackage,
+        });
       }
     } catch (err) {
       // Silently handle key package loading errors
@@ -134,17 +143,17 @@ function ConfigurationForm({
 
         // Persist locally so we have the private init_key material when a Welcome arrives.
         // Without this, Join may fail with: "No matching KeyPackage found in local store".
-        if (keyPackageStore === undefined) {
+        if (!client) {
           console.error(
-            "[CreateGroup] keyPackageStore is undefined (keyPackageStore$ not ready). " +
+            "[CreateGroup] client is undefined (marmotClient$ not ready). " +
               "Cannot persist generated key package locally.",
           );
         } else {
           try {
-            await keyPackageStore.add(generated);
+            await client.keyPackages.add(generated);
           } catch (err) {
             console.error(
-              `[CreateGroup] Failed to persist key package to keyPackageStore: ${err instanceof Error ? err.message : String(err)}`,
+              `[CreateGroup] Failed to persist key package: ${err instanceof Error ? err.message : String(err)}`,
               { generated },
             );
           }
@@ -297,12 +306,12 @@ function ConfigurationForm({
 export default withSignIn(function GroupCreation() {
   const client = useObservable(marmotClient$);
   const mailboxes = useObservable(mailboxes$);
-  const keyPackageStore = useObservable(keyPackageStore$);
   const keyPackages =
     useObservableMemo(
       () =>
-        keyPackageStore$.pipe(
-          switchMap((store) => store.list()),
+        marmotClient$.pipe(
+          defined(),
+          switchMap((c) => c.keyPackages.list()),
           map((packages) => packages.map((kp) => kp.publicPackage)),
         ),
       [],
@@ -341,7 +350,7 @@ export default withSignIn(function GroupCreation() {
       const adminPubkeysList = [...data.adminPubkeys];
       const allRelays = [...data.relays];
 
-      const group = await client.createGroup(data.groupName, {
+      const group = await client.groups.create(data.groupName, {
         description: data.groupDescription,
         adminPubkeys: adminPubkeysList,
         relays: allRelays,
@@ -374,7 +383,7 @@ export default withSignIn(function GroupCreation() {
       {!result && (
         <ConfigurationForm
           keyPackages={keyPackages}
-          keyPackageStore={keyPackageStore}
+          client={client}
           isCreating={isCreating}
           defaultRelays={
             mailboxes?.outboxes?.length

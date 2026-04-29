@@ -5,20 +5,20 @@ import { useMemo, useState } from "react";
 import { of } from "rxjs";
 import { map } from "rxjs/operators";
 import {
+  type CredentialBasic,
+  defaultCredentialTypes,
+  encode,
   KeyPackage,
   keyPackageEncoder,
-  encode,
-  defaultCredentialTypes,
 } from "ts-mls";
-import { CredentialBasic } from "ts-mls/credential.js";
 
 import {
   addRelayHintsToPointer,
   getEventPointerForEvent,
   getSeenRelays,
+  neventEncode,
   NostrEvent,
 } from "applesauce-core/helpers";
-import { neventEncode } from "nostr-tools/nip19";
 import {
   getCredentialPubkey,
   getKeyPackage,

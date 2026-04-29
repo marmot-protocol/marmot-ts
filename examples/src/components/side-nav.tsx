@@ -1,15 +1,24 @@
 import { useMemo, useState } from "react";
+import { defined } from "applesauce-core";
+import { switchMap } from "rxjs";
 import examples from "../examples";
 import useHash from "../hooks/use-hash";
-import { useObservable } from "../hooks/use-observable";
-import { keyPackageCount$ } from "../lib/key-package-store";
+import { useObservable, useObservableMemo } from "../hooks/use-observable";
+import { marmotClient$ } from "../lib/marmot-client";
 import { groupCount$ } from "../lib/groups";
 import AccountSwitcher from "./accounts/picker";
 
 export default function SideNav() {
   const [searchTerm, setSearchTerm] = useState<string>("");
   const hash = useHash();
-  const localKeyPackages = useObservable(keyPackageCount$);
+  const localKeyPackages = useObservableMemo(
+    () =>
+      marmotClient$.pipe(
+        defined(),
+        switchMap((c) => c.keyPackages.count()),
+      ),
+    [],
+  );
   const localGroups = useObservable(groupCount$);
 
   const filtered = useMemo(

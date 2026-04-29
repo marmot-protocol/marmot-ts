@@ -1,6 +1,6 @@
 import { type CustomExtension, makeCustomExtension } from "ts-mls";
 import {
-  LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+  LAST_RESORT_EXTENSION_TYPE,
   MARMOT_GROUP_DATA_EXTENSION_TYPE,
 } from "./protocol.js";
 
@@ -20,6 +20,16 @@ export function supportsMarmotExtensions(
   );
 }
 
+/** Checks if an extension is the last_resort extension */
+export function isLastResortExtension(
+  extension: CustomExtension,
+): extension is CustomExtension {
+  return (
+    typeof extension.extensionType === "number" &&
+    extension.extensionType === LAST_RESORT_EXTENSION_TYPE
+  );
+}
+
 /**
  * Modifies an {@link Extension} array to ensure it includes the last_resort extension.
  * This is useful for ensuring that key packages are compliant with MIP-00.
@@ -34,7 +44,7 @@ export function ensureLastResortExtension(
     extensions.some(
       (ext) =>
         typeof ext.extensionType === "number" &&
-        ext.extensionType === LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+        ext.extensionType === LAST_RESORT_EXTENSION_TYPE,
     )
   )
     return extensions;
@@ -42,7 +52,7 @@ export function ensureLastResortExtension(
   return [
     ...extensions,
     makeCustomExtension({
-      extensionType: LAST_RESORT_KEY_PACKAGE_EXTENSION_TYPE,
+      extensionType: LAST_RESORT_EXTENSION_TYPE,
       extensionData: new Uint8Array(0),
     }),
   ];

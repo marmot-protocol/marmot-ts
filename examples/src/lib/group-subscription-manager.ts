@@ -82,7 +82,7 @@ export class GroupSubscriptionManager {
 
     try {
       // Get all groups from the store
-      const groups = await this.client.groupStateStore.list();
+      const groups = await this.client.groups.listIds();
       const groupIds = new Set<string>();
 
       // Ensure we have subscriptions for all groups
@@ -112,7 +112,7 @@ export class GroupSubscriptionManager {
   private async subscribeToGroup(groupIdHex: string): Promise<void> {
     try {
       // Load the group to get its relays and data
-      const group = await this.client.getGroup(groupIdHex);
+      const group = await this.client.groups.get(groupIdHex);
       const relays = group.relays;
 
       // MIP-01 v2: Nostr relay-visible group events are keyed by the *nostr_group_id* ("#h" tag),
@@ -213,16 +213,19 @@ export class GroupSubscriptionManager {
         // already updates the group state and persists it via group.save()
 
         // Log commit processing for debugging
-        if (result.kind === "newState") {
+        if (result.kind === "processed" && result.result.kind === "newState") {
           console.log(
             `Processed commit for group ${nostrGroupIdHex}, new epoch: ${group.state.groupContext.epoch}`,
           );
         }
 
         // Collect application messages for UI
-        if (result.kind === "applicationMessage") {
+        if (
+          result.kind === "processed" &&
+          result.result.kind === "applicationMessage"
+        ) {
           try {
-            const applicationData = result.message;
+            const applicationData = result.result.message;
             const rumor = deserializeApplicationData(applicationData);
             newMessages.push(rumor);
           } catch (parseErr) {

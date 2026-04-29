@@ -1,12 +1,12 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { useEffect, useState } from "react";
-import { ClientState } from "ts-mls/clientState.js";
+import type { ClientState } from "ts-mls";
 import {
-  extractMarmotGroupData,
   getEpoch,
   getGroupIdHex,
   getNostrGroupIdHex,
   getMemberCount,
+  getMarmotGroupData,
 } from "../../../../src/core";
 import ClientStateDataView from "../../components/data-view/client-state";
 import { withSignIn } from "../../components/with-signIn";
@@ -27,7 +27,7 @@ function GroupCard({ clientState, onDelete }: GroupCardProps) {
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Extract metadata from the client state
-  const marmotData = extractMarmotGroupData(clientState);
+  const marmotData = getMarmotGroupData(clientState);
   const groupIdHex = getGroupIdHex(clientState);
   const epoch = getEpoch(clientState);
   const memberCount = getMemberCount(clientState);

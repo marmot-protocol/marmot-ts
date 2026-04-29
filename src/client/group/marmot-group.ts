@@ -1,50 +1,144 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { EventSigner } from "applesauce-core/event-factory";
-import { bytesToHex, type NostrEvent } from "applesauce-core/helpers/event";
+import {
+  bytesToHex,
+  getEventHash,
+  type NostrEvent,
+} from "applesauce-core/helpers/event";
+import { Debugger } from "debug";
 import { EventEmitter } from "eventemitter3";
 import {
+  acceptAll,
   CiphersuiteImpl,
   ClientState,
+  contentTypes,
   createApplicationMessage,
   createCommit,
   CreateCommitOptions,
   createProposal,
-  contentTypes,
   CryptoProvider,
+  defaultCryptoProvider,
+  defaultProposalTypes,
+  getCredentialFromLeafIndex,
+  type IncomingMessageCallback,
+  type LeafIndex,
+  MlsMessage,
   processMessage,
   type ProcessMessageResult,
   Proposal,
   wireformats,
-  defaultCryptoProvider,
 } from "ts-mls";
+
+import { sha256 } from "@noble/hashes/sha2.js";
+import { marmotAuthService } from "../../core/auth-service.js";
 import {
-  acceptAll,
-  type IncomingMessageCallback,
-} from "ts-mls/incomingMessageAction.js";
-import { getCredentialFromLeafIndex } from "ts-mls/ratchetTree.js";
-import { type LeafIndex, toLeafIndex } from "ts-mls/treemath.js";
-import {
-  extractMarmotGroupData,
+  getMarmotGroupData,
   serializeClientState,
 } from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
 import {
   createGroupEvent,
+  decryptGroupMessages,
   GroupMessagePair,
-  readGroupMessages,
   serializeApplicationRumor,
   sortGroupCommits,
 } from "../../core/group-message.js";
 import { getKeyPackage } from "../../core/key-package-event.js";
+import {
+  canonicalizeMimeType,
+  decryptMediaFile,
+  deriveMediaEncryptionKey,
+  encryptMediaFile,
+  type MediaAttachment,
+  MIP04_VERSION,
+} from "../../core/media.js";
 import { isPrivateMessage } from "../../core/message.js";
-import { MarmotGroupData } from "../../core/protocol.js";
+import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
+  KEY_PACKAGE_KIND,
+  MarmotGroupData,
+} from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
-import { GroupStateStore } from "../../store/group-state-store.js";
+import { logger } from "../../utils/debug.js";
+import type { GenericKeyValueStore } from "../../utils/key-value.js";
+import type { SerializedClientState } from "../../core/client-state.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
-import { NoGroupRelaysError, NoMarmotGroupDataError } from "../errors.js";
+import { unixNow } from "../../utils/nostr.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
-import { marmotAuthService } from "../../core/auth-service.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
+import { proposeLeaveGroup } from "./proposals/leave-group.js";
+
+/** An error that is thrown when a group has no relays available to send messages. */
+export class NoGroupRelaysError extends Error {
+  constructor() {
+    super("Group has no relays available to send messages.");
+  }
+}
+
+/** An error that is thrown the client is unable to find the MarmotGroupData in the ClientState of a group. */
+export class NoMarmotGroupDataError extends Error {
+  constructor() {
+    super("MarmotGroupData not found in ClientState.");
+  }
+}
+
+function toLeafIndex(index: number): LeafIndex {
+  return index as LeafIndex;
+}
+
+/** An event whose MLS message was successfully processed */
+export type ProcessedIngestResult = {
+  kind: "processed";
+  /** The result of processing the event */
+  result: ProcessMessageResult;
+  /** The event that was processed */
+  event: NostrEvent;
+  /** The MLS message that was processed */
+  message: MlsMessage;
+};
+
+/** A commit that was rejected by the admin-verification callback */
+export type RejectedIngestResult = {
+  kind: "rejected";
+  /** The result returned by processMessage (actionTaken === "reject") */
+  result: ProcessMessageResult;
+  /** The event that was rejected */
+  event: NostrEvent;
+  /** The MLS message that was rejected */
+  message: MlsMessage;
+};
+
+/** An event that was skipped without processing */
+export type SkippedIngestResult = {
+  kind: "skipped";
+  /** The event that was skipped */
+  event: NostrEvent;
+  /** The decoded MLS message */
+  message: MlsMessage;
+  /**
+   * Why the event was skipped:
+   * - `"past-epoch"` – commit belongs to an epoch we have already advanced past
+   * - `"wrong-wireformat"` – the MLS wireformat is unexpected for a group message
+   * - `"self-echo"` – this event was sent by us; state was already advanced at send time
+   */
+  reason: "past-epoch" | "wrong-wireformat" | "self-echo";
+};
+
+/** An event that could not be decrypted or processed after all retry attempts */
+export type UnreadableIngestResult = {
+  kind: "unreadable";
+  /** The event that could not be processed */
+  event: NostrEvent;
+  /** All errors captured across every retry attempt, in chronological order */
+  errors: unknown[];
+};
+
+/** Result from ingesting a group event */
+export type IngestResult =
+  | ProcessedIngestResult
+  | RejectedIngestResult
+  | SkippedIngestResult
+  | UnreadableIngestResult;
 
 /**
  * The minimum interface for a group to store them MLS messages
@@ -57,10 +151,37 @@ export interface BaseGroupHistory {
   purgeMessages(): Promise<void>;
 }
 
+/** Shape of the stored media in a {@link BaseGroupMedia} implementation */
+export type StoredMedia = {
+  /** Plaintext (decrypted) file bytes. */
+  data: Uint8Array;
+  /** The full MIP-04 attachment metadata associated with this blob. */
+  attachment: MediaAttachment;
+};
+
 /** A factory function that creates a {@link BaseGroupHistory} instance for a group id */
 export type GroupHistoryFactory<
   THistory extends BaseGroupHistory | undefined = undefined,
 > = (groupId: Uint8Array) => THistory;
+
+/** The minimal implementation of a group media store */
+export interface BaseGroupMedia {
+  /** Adds a new media entry to the group media store */
+  addMedia(sha256: string, entry: StoredMedia): Promise<void>;
+  /** Retrieves a media entry from the group media store */
+  getMedia(sha256: string): Promise<StoredMedia | null>;
+  /** Removes a media entry from the group media store */
+  removeMedia(sha256: string): Promise<void>;
+  /** Lists all media entries in the group media store */
+  listMedia(): Promise<MediaAttachment[]>;
+  /** Clears all media entries from the group media store */
+  clearMedia(): Promise<void>;
+}
+
+/** A factory function that creates a {@link BaseGroupHistory} instance for a group id */
+export type GroupMediaFactory<
+  TMedia extends BaseGroupMedia | undefined = undefined,
+> = (groupId: Uint8Array) => TMedia;
 
 export type ProposalContext = {
   state: ClientState;
@@ -81,9 +202,10 @@ export type ProposalBuilder<
 
 export type MarmotGroupOptions<
   THistory extends BaseGroupHistory | undefined = undefined,
+  TMedia extends BaseGroupMedia | undefined = undefined,
 > = {
-  /** The state store to store and load group state from */
-  stateStore: GroupStateStore;
+  /** The key-value backend where serialized group state bytes are persisted */
+  store: GenericKeyValueStore<SerializedClientState>;
   /** The signer used for the clients identity */
   signer: EventSigner;
   /** The ciphersuite implementation to use for the group */
@@ -92,6 +214,12 @@ export type MarmotGroupOptions<
   network: NostrNetworkInterface;
   /** The storage interface for the groups application message history (optional) */
   history?: THistory | GroupHistoryFactory<THistory>;
+  /**
+   * Backend (or pre-wrapped store) for the plaintext blob cache used by
+   * {@link MarmotGroup.decryptMedia}. Defaults to an in-memory cache when
+   * not provided.
+   */
+  media?: TMedia | GroupMediaFactory<TMedia>;
 };
 
 /** Information about a welcome recipient */
@@ -119,11 +247,7 @@ export function createAdminCommitPolicyCallback(args: {
   return (incoming) => {
     if (incoming.kind === "proposal") return "accept";
 
-    // MIP-02: post-join self-updates are expressed as commits with no proposals.
-    // These MUST be accepted from any member (admin or not) to allow key hygiene.
-    if (incoming.proposals.length === 0) return "accept";
-
-    // Commit must be attributable to an admin.
+    // Commit must be attributable to a concrete member leaf.
     const senderLeafIndexUnknown = incoming.senderLeafIndex;
     if (senderLeafIndexUnknown === undefined) return "reject";
 
@@ -138,7 +262,23 @@ export function createAdminCommitPolicyCallback(args: {
         senderLeafIndex,
       );
       const senderPubkey = getCredentialPubkey(senderCredential);
-      return adminPubkeys.includes(senderPubkey) ? "accept" : "reject";
+
+      // Admins may commit any proposal set.
+      if (adminPubkeys.includes(senderPubkey)) return "accept";
+
+      // Non-admin compatibility path:
+      // - accept no-proposal commits (current ts-mls self-update shape), OR
+      // - accept commits whose proposals are ONLY update proposals authored by sender.
+      if (incoming.proposals.length === 0) return "accept";
+
+      const isSelfUpdateOnly = incoming.proposals.every(
+        (p) =>
+          p.proposal.proposalType === defaultProposalTypes.update &&
+          p.senderLeafIndex !== undefined &&
+          Number(p.senderLeafIndex) === Number(senderLeafIndex),
+      );
+
+      return isSelfUpdateOnly ? "accept" : "reject";
     } catch {
       // "retry" here means we don't want to permanently reject the commit;
       // MarmotGroup.ingest() will treat processing errors as unreadable/retryable.
@@ -151,15 +291,18 @@ export function createAdminCommitPolicyCallback(args: {
 }
 
 /** Map of events that can be emitted by a MarmotGroup */
-type MarmotGroupEvents<THistory extends BaseGroupHistory | undefined = any> = {
+type MarmotGroupEvents<
+  THistory extends BaseGroupHistory | undefined = any,
+  TMedia extends BaseGroupMedia | undefined = any,
+> = {
   /** Emitted when the group state is updated */
   stateChanged: (state: ClientState) => void;
   /** Emitted when a new application message is received */
   applicationMessage: (message: Uint8Array) => void;
   /** Emitted when the group state is saved */
-  stateSaved: (group: MarmotGroup<THistory>) => void;
+  stateSaved: (group: MarmotGroup<THistory, TMedia>) => void;
   /** Emitted when the group is destroyed */
-  destroyed: (group: MarmotGroup<THistory>) => void;
+  destroyed: (group: MarmotGroup<THistory, TMedia>) => void;
   /** Emitted when history persistence fails (best-effort, non-blocking) */
   historyError: (error: Error) => void;
 };
@@ -170,9 +313,10 @@ type MarmotGroupEvents<THistory extends BaseGroupHistory | undefined = any> = {
  */
 export class MarmotGroup<
   THistory extends BaseGroupHistory | undefined = undefined,
-> extends EventEmitter<MarmotGroupEvents<THistory>> {
-  /** The state store to store and load group state from */
-  readonly stateStore: GroupStateStore;
+  TMedia extends BaseGroupMedia | undefined = undefined,
+> extends EventEmitter<MarmotGroupEvents<THistory, TMedia>> {
+  /** The key-value backend where serialized group state bytes are persisted */
+  readonly store: GenericKeyValueStore<SerializedClientState>;
 
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
@@ -186,12 +330,24 @@ export class MarmotGroup<
   /** The storage interface for the groups application message history */
   readonly history: THistory;
 
+  /** The storage interface for the groups media */
+  readonly media: TMedia;
+
   /** Whether group state has been modified */
   dirty = false;
 
   /** Internal ClientState */
   #state: ClientState;
   #groupData: MarmotGroupData | null = null;
+
+  /**
+   * Event IDs of application messages we sent ourselves, used to skip self-echoes in ingest()
+   * NOTE: this is not persisted at the moment, its only in memory and used to skip self-echoes in ingest()
+   */
+  readonly #sentEventIds = new Set<string>();
+
+  /** In-flight media decrypts keyed by plaintext SHA-256 hex. */
+  readonly #decryptingMedia = new Map<string, Promise<StoredMedia>>();
 
   get id() {
     return this.state.groupContext.groupId;
@@ -206,7 +362,7 @@ export class MarmotGroup<
   }
   get groupData() {
     // If not cached, extract the group data from the state
-    if (!this.#groupData) this.#groupData = extractMarmotGroupData(this.state);
+    if (!this.#groupData) this.#groupData = getMarmotGroupData(this.state);
     return this.#groupData;
   }
   get unappliedProposals() {
@@ -219,7 +375,7 @@ export class MarmotGroup<
    */
   set state(newState: ClientState) {
     // Read new group data from the state
-    this.#groupData = extractMarmotGroupData(newState);
+    this.#groupData = getMarmotGroupData(newState);
 
     // Set new state and mark as dirty
     this.#state = newState;
@@ -232,6 +388,84 @@ export class MarmotGroup<
     return this.groupData?.relays;
   }
 
+  private log: Debugger;
+
+  constructor(
+    state: ClientState,
+    options: MarmotGroupOptions<THistory, TMedia>,
+  ) {
+    super();
+    this.#state = state;
+    this.store = options.store;
+    this.signer = options.signer;
+    this.ciphersuite = options.ciphersuite;
+    this.network = options.network;
+
+    // Create the history store (optional)
+    if (options.history) {
+      if (typeof options.history === "function") {
+        this.history = options.history(this.id);
+      } else {
+        this.history = options.history;
+      }
+    } else {
+      this.history = undefined as THistory;
+    }
+
+    // Create the media store
+    if (options.media) {
+      if (typeof options.media === "function") {
+        this.media = options.media(this.id);
+      } else {
+        this.media = options.media;
+      }
+    } else {
+      this.media = undefined as TMedia;
+    }
+
+    // Set useful fields
+    this.idStr = bytesToHex(this.id);
+
+    this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
+  }
+
+  /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
+  static async fromClientState<
+    THistory extends BaseGroupHistory | undefined = undefined,
+    TMedia extends BaseGroupMedia | undefined = undefined,
+  >(
+    state: ClientState,
+    options: Omit<MarmotGroupOptions<THistory, TMedia>, "ciphersuite"> & {
+      cryptoProvider?: CryptoProvider;
+    },
+  ): Promise<MarmotGroup<THistory, TMedia>> {
+    // Get the group's ciphersuite implementation
+    // In v2, getCiphersuiteImpl is available on the cryptoProvider and takes a CiphersuiteName directly
+    const cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
+    const cipherSuite = await cryptoProvider.getCiphersuiteImpl(
+      state.groupContext.cipherSuite,
+    );
+
+    return new MarmotGroup(state, { ...options, ciphersuite: cipherSuite });
+  }
+
+  /**
+   * Persists any pending changes to the group state in the store.
+   *
+   * @param force - When `true`, writes the current state even if `dirty` is
+   *   `false`. Useful for persisting the initial state of a freshly constructed
+   *   group (e.g. after `createGroup` / `joinGroupFromWelcome` / import) without
+   *   having to mutate `dirty` externally.
+   */
+  async save(force = false) {
+    if (!force && !this.dirty) return;
+
+    const stateBytes = serializeClientState(this.state);
+    await this.store.setItem(bytesToHex(this.id), stateBytes);
+    this.dirty = false;
+    this.emit("stateSaved", this);
+  }
+
   /**
    * Performs a self-update commit (no proposals) to rotate this member's leaf key material.
    *
@@ -240,6 +474,7 @@ export class MarmotGroup<
    * Unlike {@link commit}, this operation is allowed for non-admin members.
    */
   async selfUpdate(): Promise<Record<string, PublishResponse>> {
+    this.log("self-update commit");
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
@@ -277,64 +512,56 @@ export class MarmotGroup<
     return response;
   }
 
-  constructor(state: ClientState, options: MarmotGroupOptions<THistory>) {
-    super();
-    this.#state = state;
-    this.stateStore = options.stateStore;
-    this.signer = options.signer;
-    this.ciphersuite = options.ciphersuite;
-    this.network = options.network;
+  /**
+   * Leaves the group by publishing a self-remove proposal for each of the
+   * caller's leaf nodes, then purging all local group data from storage.
+   *
+   * Per RFC 9420 §12.4 a member cannot commit a Remove targeting their own
+   * leaf. Instead, a Remove *proposal* is sent so that the next committer
+   * (e.g. an admin calling {@link commit}) can include it and finalise the
+   * departure. At least one relay must acknowledge the proposals before local
+   * state is destroyed; if no relay acks, an error is thrown and local state
+   * is preserved so the caller can retry.
+   *
+   * Unlike {@link commit}, this operation is allowed for non-admin members.
+   *
+   * @returns The relay publish responses for the leave proposal event(s).
+   */
+  async leave(): Promise<Record<string, PublishResponse>> {
+    this.log("leave group");
+    const groupData = this.groupData;
+    if (!groupData) throw new NoMarmotGroupDataError();
 
-    // Create the history store (optional)
-    if (options.history) {
-      if (typeof options.history === "function") {
-        this.history = options.history(this.id);
-      } else {
-        this.history = options.history;
-      }
-    } else {
-      this.history = undefined as THistory;
-    }
-
-    // Set useful fields
-    this.idStr = bytesToHex(this.id);
-  }
-
-  /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
-  static async fromClientState<
-    THistory extends BaseGroupHistory | undefined = undefined,
-  >(
-    state: ClientState,
-    options: Omit<MarmotGroupOptions<THistory>, "ciphersuite"> & {
-      cryptoProvider?: CryptoProvider;
-    },
-  ): Promise<MarmotGroup<THistory>> {
-    // Get the group's ciphersuite implementation
-    // In v2, getCiphersuiteImpl is available on the cryptoProvider and takes a CiphersuiteName directly
-    const cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
-    const cipherSuite = await cryptoProvider.getCiphersuiteImpl(
-      state.groupContext.cipherSuite,
-    );
-
-    return new MarmotGroup(state, { ...options, ciphersuite: cipherSuite });
-  }
-
-  /** Persists any pending changes to the group state in the store */
-  async save() {
-    if (!this.dirty) return;
-
-    // Import serializeClientState dynamically to avoid circular dependencies
-    const stateBytes = serializeClientState(this.state);
-    await this.stateStore.set(this.id, stateBytes);
-    this.dirty = false;
-    this.emit("stateSaved", this);
-  }
-
-  /** Publish an event to the group relays */
-  async publish(event: NostrEvent): Promise<Record<string, PublishResponse>> {
     const relays = this.relays;
     if (!relays) throw new NoGroupRelaysError();
-    return await this.network.publish(relays, event);
+
+    // Resolve own pubkey and build self-remove proposals via the shared action.
+    const ownPubkey = await this.signer.getPublicKey();
+    const removeProposals = await proposeLeaveGroup(ownPubkey)({
+      state: this.state,
+      ciphersuite: this.ciphersuite,
+      groupData,
+    });
+
+    // Publish one proposal event per leaf index (handles multi-device members).
+    // RFC 9420 §12.4 forbids committing a Remove targeting own leaf, so we
+    // send proposals and let the next admin commit pick them up.
+    const responses: Record<string, PublishResponse> = {};
+    for (const proposal of removeProposals) {
+      const response = await this.sendProposal(proposal);
+      Object.assign(responses, response);
+    }
+
+    if (!hasAck(responses)) {
+      throw new Error(
+        "Failed to publish leave proposals: no relay acknowledged. Local state preserved — retry leave() to try again.",
+      );
+    }
+
+    // Purge all local group data (history, media, state store).
+    await this.destroy();
+
+    return responses;
   }
 
   /**
@@ -389,12 +616,7 @@ export class MarmotGroup<
   async sendProposal(
     proposal: Proposal,
   ): Promise<Record<string, PublishResponse>> {
-    // NOTE: We don't update state here because:
-    // 1. The proposal will be received back from relays and processed via ingest()
-    // 2. When processed via ingest(), it will be added to state.unappliedProposals
-    // 3. If you need to commit immediately with this proposal, pass it explicitly to commit()
-    // In v2, createProposal takes a single params object with context
-    const { message } = await createProposal({
+    const { message, newState } = await createProposal({
       context: {
         cipherSuite: this.ciphersuite,
         authService: marmotAuthService,
@@ -413,7 +635,21 @@ export class MarmotGroup<
     });
 
     // Publish to the group's relays
-    return await this.publish(proposalEvent);
+    const relays = this.relays;
+    if (!relays) throw new NoGroupRelaysError();
+
+    const response = await this.network.publish(relays, proposalEvent);
+    if (!hasAck(response)) {
+      throw new Error(
+        "Failed to publish proposal event: no relay acknowledged",
+      );
+    }
+
+    // Advance local state only after at least one relay acknowledges the event.
+    this.state = newState;
+    await this.save();
+
+    return response;
   }
 
   /**
@@ -429,6 +665,7 @@ export class MarmotGroup<
   async sendApplicationRumor(
     rumor: Rumor,
   ): Promise<Record<string, PublishResponse>> {
+    this.log("sending application rumor kind:%d", rumor.kind);
     // Serialize the Nostr event (rumor) to application data according to the Marmot spec
     const applicationData = serializeApplicationRumor(rumor);
 
@@ -444,16 +681,32 @@ export class MarmotGroup<
       message: applicationData,
     });
 
-    // The message returned is the MLS message (not privateMessage directly)
-    const mlsMessage = message;
-
     // Wrap the message in a group event
     // Use this.state (not newState) to get the exporter_secret for the current epoch
     const applicationEvent = await createGroupEvent({
-      message: mlsMessage,
+      message,
       state: this.state,
       ciphersuite: this.ciphersuite,
     });
+
+    // Track this event ID so ingest() can skip the self-echo without re-running
+    // processMessage against an already-advanced ratchet (which would throw
+    // "desired gen in the past").
+    this.#sentEventIds.add(applicationEvent.id);
+
+    // Save to history immediately so the sender sees their own message without
+    // waiting for the relay echo to arrive and be ingested.
+    if (this.history) {
+      try {
+        await this.history.saveMessage(applicationData);
+      } catch (err) {
+        this.emit("historyError", err as Error);
+      }
+    }
+
+    // Update the group state after successful publish
+    // Application messages update state for forward secrecy (key schedule rotation)
+    this.state = newState;
 
     // Publish to the group's relays
     const relays = this.relays;
@@ -465,15 +718,47 @@ export class MarmotGroup<
         .map((r) => r.message)
         .join("; ");
       throw new Error(
-        `Failed to publish application message: ${errors || "no relay acknowledged"}`,
+        `Failed to publish application message: ${
+          errors || "no relay acknowledged"
+        }`,
       );
     }
 
-    // Update the group state after successful publish
-    // Application messages update state for forward secrecy (key schedule rotation)
-    this.state = newState;
-
     return response;
+  }
+
+  /**
+   * Creates and sends a kind 9 chat message to the group.
+   *
+   * This is a convenience wrapper around {@link sendApplicationRumor} that constructs
+   * the rumor for you. The message is encrypted via MLS and published as a kind 445
+   * group event to the group's relays.
+   *
+   * @param content - The text content of the chat message
+   * @param tags - Optional Nostr tags to include on the rumor
+   * @returns Promise resolving to the publish response from the relays
+   *
+   * @example
+   * ```ts
+   * await group.sendChatMessage("Hello, group!");
+   * await group.sendChatMessage("Reply", [["e", replyToId]]);
+   * ```
+   */
+  async sendChatMessage(
+    content: string,
+    tags: string[][] = [],
+  ): Promise<Record<string, PublishResponse>> {
+    const pubkey = await this.signer.getPublicKey();
+    const rumor: Rumor = {
+      id: "",
+      kind: 9,
+      pubkey,
+      created_at: unixNow(),
+      content,
+      tags,
+    };
+    rumor.id = getEventHash(rumor);
+    return this.sendApplicationRumor(rumor);
   }
 
   /**
@@ -501,6 +786,11 @@ export class MarmotGroup<
     proposalRefs?: string[];
     welcomeRecipients?: WelcomeRecipient[];
   }): Promise<Record<string, PublishResponse>> {
+    this.log(
+      "committing (%d extra proposals, %d recipients)",
+      options?.extraProposals?.length ?? 0,
+      options?.welcomeRecipients?.length ?? 0,
+    );
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
@@ -608,8 +898,9 @@ export class MarmotGroup<
       options?.welcomeRecipients &&
       options.welcomeRecipients.length > 0
     ) {
-      console.log(
-        `[MarmotGroup.commit] Sending Welcome messages to ${options.welcomeRecipients.length} recipient(s)`,
+      this.log(
+        "Sending Welcome messages to %d recipient(s)",
+        options.welcomeRecipients.length,
       );
 
       // Send all welcome events in parallel
@@ -641,16 +932,11 @@ export class MarmotGroup<
             inboxRelays = await this.network.getUserInboxRelays(
               recipient.pubkey,
             );
-            console.log(
-              `[MarmotGroup.commit] Retrieved inbox relays for recipient:`,
-              inboxRelays,
-            );
+            this.log("Retrieved inbox relays for recipient: %O", inboxRelays);
           } catch (error) {
-            console.warn(
-              `[MarmotGroup.commit] Failed to get inbox relays for recipient ${recipient.pubkey.slice(
-                0,
-                16,
-              )}...:`,
+            this.log(
+              "Failed to get inbox relays for recipient %s...: %O",
+              recipient.pubkey.slice(0, 16),
               error,
             );
             // Fallback to group relays
@@ -659,7 +945,10 @@ export class MarmotGroup<
 
           if (inboxRelays.length === 0) {
             throw new Error(
-              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(0, 16)}...`,
+              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(
+                0,
+                16,
+              )}...`,
             );
           }
 
@@ -669,10 +958,7 @@ export class MarmotGroup<
             giftWrapEvent,
           );
 
-          console.log(
-            `[MarmotGroup.commit] Gift wrap publish result:`,
-            publishResult,
-          );
+          this.log("Gift wrap publish result: %O", publishResult);
 
           return publishResult;
         }),
@@ -701,12 +987,16 @@ export class MarmotGroup<
         });
 
       if (failureDetails.length > 0) {
-        console.error(
-          `[MarmotGroup.commit] ${failureDetails.length}/${options.welcomeRecipients.length} Welcome(s) failed to deliver:`,
+        this.log(
+          "%d/%d Welcome(s) failed to deliver: %O",
+          failureDetails.length,
+          options.welcomeRecipients.length,
           failureDetails,
         );
         throw new Error(
-          `Failed to deliver ${failureDetails.length}/${options.welcomeRecipients.length} Welcome message(s): ${failureDetails.join("; ")}`,
+          `Failed to deliver ${failureDetails.length}/${options.welcomeRecipients.length} Welcome message(s): ${failureDetails.join(
+            "; ",
+          )}`,
         );
       }
     }
@@ -724,17 +1014,20 @@ export class MarmotGroup<
    * 4. Commits the proposal
    * 5. After commit ack, sends a Welcome message to the invitee via NIP-59 gift wrap
    *
-   * @param keyPackageEvent - The KeyPackage event (kind 443) for the user to invite
+   * @param keyPackageEvent - The KeyPackage event (kind 443 or kind 30443) for the user to invite
    * @returns Promise resolving to the publish response from the relays
-   * @throws Error if the event is not kind 443 or if the credential identity doesn't match
+   * @throws Error if the event is not a key package kind or if the credential identity doesn't match
    */
   async inviteByKeyPackageEvent(
     keyPackageEvent: NostrEvent,
   ): Promise<Record<string, PublishResponse>> {
-    // Validate the event is a KeyPackage event (kind 443)
-    if (keyPackageEvent.kind !== 443) {
+    // Validate the event is a KeyPackage event (kind 443 or kind 30443)
+    if (
+      keyPackageEvent.kind !== KEY_PACKAGE_KIND &&
+      keyPackageEvent.kind !== ADDRESSABLE_KEY_PACKAGE_KIND
+    ) {
       throw new Error(
-        `inviteByKeyPackageEvent: Expected KeyPackage event kind 443, got ${keyPackageEvent.kind}`,
+        `inviteByKeyPackageEvent: Expected KeyPackage event kind ${KEY_PACKAGE_KIND} or ${ADDRESSABLE_KEY_PACKAGE_KIND}, got ${keyPackageEvent.kind}`,
       );
     }
 
@@ -799,31 +1092,68 @@ export class MarmotGroup<
    *    - Commits advance the epoch and update the group state
    *
    * After both stages, recursively retry unreadable messages until no more can be read.
+   * Events that can never be processed are yielded as {@link UnreadableIngestResult}.
    *
    * @param events - Array of Nostr events containing encrypted MLS messages
    * @param options - Options for controlling retry behavior
    * @param options.retryCount - Current retry attempt count (internal use)
    * @param options.maxRetries - Maximum number of retry attempts (default: 5)
-   * @yields ProcessMessageResult - Either a new state (from commits/proposals) or an application message
+   * @yields IngestResult - The result of processing the event
    */
   async *ingest(
     events: NostrEvent[],
     options?: {
       retryCount?: number;
       maxRetries?: number;
+      /**
+       * @internal Flat list of `{ eventId, error }` entries accumulated across
+       * all retry rounds.  Passed by reference so every recursive call appends
+       * to the same array, giving the final unreadable yield the full history.
+       */
+      _errors?: Array<{ eventId: string; error: unknown }>;
     },
-  ): AsyncGenerator<ProcessMessageResult> {
+  ): AsyncGenerator<IngestResult> {
+    // Each ingest call gets its own sub-namespace so concurrent or sequential
+    // batches can be distinguished at a glance in debug output.
+    const log = this.log.extend(`ingest:${Date.now().toString(36).slice(-5)}`);
+
     // Set default retry options
     const retryCount = options?.retryCount ?? 0;
     const maxRetries = options?.maxRetries ?? 5;
+    const errorList: Array<{ eventId: string; error: unknown }> =
+      options?._errors ?? [];
+
+    if (retryCount === 0) {
+      log("start – %d event(s), maxRetries=%d", events.length, maxRetries);
+    } else {
+      log(
+        "retry %d/%d – %d event(s) remaining",
+        retryCount,
+        maxRetries,
+        events.length,
+      );
+    }
 
     // Check if we've exceeded the maximum retry attempts.
     //
     // IMPORTANT: ingest() processes untrusted network input. If we throw here,
     // a single permanently-unreadable message (e.g. encrypted under an epoch we
     // can never decrypt, malformed ciphertext, spam) can DoS consumers.
-    // Instead, stop retrying and drop the remaining unreadable events.
+    // Instead, stop retrying and yield the remaining events as unreadable.
     if (retryCount > maxRetries) {
+      log(
+        "max retries exceeded – yielding %d event(s) as unreadable",
+        events.length,
+      );
+      for (const event of events) {
+        yield {
+          kind: "unreadable",
+          event,
+          errors: errorList
+            .filter((e) => e.eventId === event.id)
+            .map((e) => e.error),
+        };
+      }
       return;
     }
     // Early return if no events to process
@@ -836,14 +1166,50 @@ export class MarmotGroup<
     // group's exporter_secret. We decrypt this first layer to get the actual
     // MLS message structure.
 
-    const { read, unreadable } = await readGroupMessages(
+    const { read, unreadable: decryptFailed } = await decryptGroupMessages(
       events,
       this.state,
       this.ciphersuite,
     );
 
-    // If nothing was readable, exit
-    if (read.length === 0) return;
+    log(
+      "decryption: %d/%d readable, %d failed",
+      read.length,
+      events.length,
+      decryptFailed.length,
+    );
+
+    // Record a decryption error for each event that failed the NIP-44 layer.
+    for (const event of decryptFailed) {
+      log("decrypt failed event:%s", event.id.slice(0, 8));
+      errorList.push({
+        eventId: event.id,
+        error: new Error("Failed to decrypt group message"),
+      });
+    }
+
+    // If nothing was readable the exporter_secret cannot change this round, so
+    // retrying would always fail the same way.  Yield decrypt failures now.
+    if (read.length === 0) {
+      log(
+        "nothing readable – yielding %d decrypt failure(s) as unreadable",
+        decryptFailed.length,
+      );
+      for (const event of decryptFailed) {
+        yield {
+          kind: "unreadable",
+          event,
+          errors: errorList
+            .filter((e) => e.eventId === event.id)
+            .map((e) => e.error),
+        };
+      }
+      return;
+    }
+
+    // Collect events that need a retry after state advances (e.g. after a commit
+    // rotates the exporter_secret so we can decrypt previously opaque events).
+    const unreadable: NostrEvent[] = [...decryptFailed];
 
     // ============================================================================
     // STEP 2: Separate commits from non-commit messages
@@ -866,6 +1232,12 @@ export class MarmotGroup<
       }
     }
 
+    log(
+      "split: %d commit(s), %d non-commit(s)",
+      commits.length,
+      nonCommits.length,
+    );
+
     // ============================================================================
     // STEP 3: Process all non-commit messages
     // ============================================================================
@@ -877,11 +1249,25 @@ export class MarmotGroup<
 
     for (const { event, message } of nonCommits) {
       try {
-        // Skip non-private/public messages (welcome, groupInfo, keyPackage, etc.)
+        // Skip application messages that we sent ourselves.  When we sent the
+        // message we already advanced this.state via the newState returned by
+        // createApplicationMessage.  If we ran processMessage again against that
+        // advanced ratchet the generation counter would be in the past and
+        // ts-mls would throw "desired gen in the past".  History was already
+        // saved at send time, so nothing is lost by skipping here.
+        if (this.#sentEventIds.delete(event.id)) {
+          log("skip event:%s reason:self-echo", event.id.slice(0, 8));
+          yield { kind: "skipped", event, message, reason: "self-echo" };
+          continue;
+        }
+
+        // Yield unexpected wireformats as skipped rather than silently ignoring them.
         if (
           message.wireformat !== wireformats.mls_private_message &&
           message.wireformat !== wireformats.mls_public_message
         ) {
+          log("skip event:%s reason:wrong-wireformat", event.id.slice(0, 8));
+          yield { kind: "skipped", event, message, reason: "wrong-wireformat" };
           continue;
         }
 
@@ -903,9 +1289,15 @@ export class MarmotGroup<
 
         // Update state if message changed it
         if (result.kind === "newState") {
+          log(
+            "proposal accepted event:%s epoch:%d",
+            event.id.slice(0, 8),
+            this.state.groupContext.epoch,
+          );
           this.state = result.newState;
-          yield result;
+          yield { kind: "processed", result, event, message };
         } else if (result.kind === "applicationMessage") {
+          log("application message event:%s", event.id.slice(0, 8));
           // Application messages also update state (for forward secrecy)
           this.state = result.newState;
 
@@ -918,12 +1310,18 @@ export class MarmotGroup<
             }
           }
 
-          yield result;
+          yield { kind: "processed", result, event, message };
           this.emit("applicationMessage", result.message);
         }
       } catch (error) {
         // Message processing failed - might be invalid or from wrong epoch
         // Add to unreadable for retry later (might become readable after state updates)
+        log(
+          "non-commit failed event:%s – queued for retry: %O",
+          event.id.slice(0, 8),
+          error,
+        );
+        errorList.push({ eventId: event.id, error });
         unreadable.push(event);
       }
     }
@@ -944,7 +1342,14 @@ export class MarmotGroup<
     const adminCallback = this.createAdminVerificationCallback();
 
     for (const { event, message } of commits) {
-      if (!isPrivateMessage(message)) continue;
+      if (!isPrivateMessage(message)) {
+        log(
+          "skip commit event:%s reason:wrong-wireformat",
+          event.id.slice(0, 8),
+        );
+        yield { kind: "skipped", event, message, reason: "wrong-wireformat" };
+        continue;
+      }
 
       const commitEpoch =
         typeof message.privateMessage.epoch === "bigint"
@@ -952,17 +1357,43 @@ export class MarmotGroup<
           : BigInt(message.privateMessage.epoch);
       const currentEpoch = this.state.groupContext.epoch;
 
-      // Skip commits from past epochs - we've already processed these
+      // Commits from past epochs were already applied — skip and report them.
       if (commitEpoch < currentEpoch) {
+        log(
+          "skip commit event:%s reason:past-epoch (commit=%d current=%d)",
+          event.id.slice(0, 8),
+          commitEpoch,
+          currentEpoch,
+        );
+        yield { kind: "skipped", event, message, reason: "past-epoch" };
         continue;
       }
 
-      // Skip commits that are too far in the future
-      // We can only process commits for the current epoch or the next epoch
+      // Commits too far in the future can't be applied yet.
+      // Add to unreadable so they are retried after state advances.
       if (commitEpoch > currentEpoch + 1n) {
+        log(
+          "defer commit event:%s epoch:%d too far ahead (current=%d)",
+          event.id.slice(0, 8),
+          commitEpoch,
+          currentEpoch,
+        );
+        errorList.push({
+          eventId: event.id,
+          error: new Error(
+            `Commit epoch ${commitEpoch} is too far ahead of current epoch ${currentEpoch}`,
+          ),
+        });
         unreadable.push(event);
         continue;
       }
+
+      log(
+        "processing commit event:%s epoch:%d->%d",
+        event.id.slice(0, 8),
+        currentEpoch,
+        commitEpoch,
+      );
 
       try {
         // processMessage handles:
@@ -984,25 +1415,42 @@ export class MarmotGroup<
 
         if (result.kind === "newState") {
           // If the commit was rejected by the callback (admin verification),
-          // do not advance state, do not yield, and do not retry.
+          // do not advance state and do not retry — yield it so callers can observe it.
           if (result.actionTaken === "reject") {
+            log(
+              "commit event:%s rejected by admin policy",
+              event.id.slice(0, 8),
+            );
+            yield { kind: "rejected", result, event, message };
             continue;
           }
 
           // Successfully processed the commit - update our state
           // After each commit, the epoch advances and keys rotate
           this.state = result.newState;
-          yield result;
+          log(
+            "commit event:%s applied – new epoch:%d",
+            event.id.slice(0, 8),
+            this.state.groupContext.epoch,
+          );
+          yield { kind: "processed", result, event, message };
         }
       } catch (error) {
         // Commit processing failed - add to unreadable for retry
         // It might become valid after processing more proposals or state updates
+        log(
+          "commit failed event:%s – queued for retry: %O",
+          event.id.slice(0, 8),
+          error,
+        );
+        errorList.push({ eventId: event.id, error });
         unreadable.push(event);
       }
     }
 
     // Save the group state after processing all messages
     await this.save();
+    log("state saved – epoch:%d", this.state.groupContext.epoch);
 
     // ============================================================================
     // STEP 6: Recursively retry unreadable events
@@ -1016,19 +1464,137 @@ export class MarmotGroup<
     // This continues until no more events can be read.
 
     if (unreadable.length > 0) {
+      log("scheduling retry for %d unreadable event(s)", unreadable.length);
       yield* this.ingest(unreadable, {
         retryCount: retryCount + 1,
         maxRetries: maxRetries,
+        _errors: errorList,
       });
+    } else {
+      log("done – no unreadable events remain");
+    }
+  }
+
+  /**
+   * Encrypts a media file for sharing in a group message (MIP-04 v2).
+   *
+   * Derives the per-file key from the current MLS epoch, encrypts with
+   * ChaCha20-Poly1305, and returns the ciphertext alongside a fully
+   * populated {@link MediaAttachment} ready to be serialised into an
+   * `imeta` tag via `createImetaTagForAttachment` from applesauce.
+   *
+   * **Caller responsibilities:**
+   * 1. Upload `encrypted` to Blossom (or any content-addressed store).
+   * 2. Set `attachment.url` to the resulting upload URL.
+   * 3. Pass `attachment` (with `url`) to `createImetaTagForAttachment` and
+   *    include the resulting tag on the group message rumor.
+   */
+  async encryptMedia(
+    blob: Blob,
+    metadata: {
+      filename: string;
+      type?: string;
+      dimensions?: string;
+      blurhash?: string;
+      alt?: string;
+      size?: number;
+    },
+  ): Promise<{ encrypted: Uint8Array; attachment: MediaAttachment }> {
+    const mimeType = metadata.type ?? blob.type;
+    if (!mimeType) {
+      throw new Error(
+        "encryptMedia: MIME type is required — pass metadata.type or ensure blob.type is set",
+      );
+    }
+
+    const plaintext = new Uint8Array(await blob.arrayBuffer());
+    const plaintextHash = bytesToHex(sha256(plaintext));
+
+    const skeleton: MediaAttachment = {
+      sha256: plaintextHash,
+      type: canonicalizeMimeType(mimeType),
+      filename: metadata.filename,
+      nonce: "", // filled by encryptMediaFile
+      version: MIP04_VERSION,
+      size: metadata.size ?? blob.size,
+      ...(metadata.dimensions !== undefined
+        ? { dimensions: metadata.dimensions }
+        : {}),
+      ...(metadata.blurhash !== undefined
+        ? { blurhash: metadata.blurhash }
+        : {}),
+      ...(metadata.alt !== undefined ? { alt: metadata.alt } : {}),
+    };
+
+    const fileKey = await deriveMediaEncryptionKey(
+      this.state,
+      this.ciphersuite,
+      skeleton,
+    );
+
+    return encryptMediaFile(plaintext, fileKey, skeleton);
+  }
+
+  /**
+   * Decrypts a MIP-04 v2 media attachment downloaded from Blossom.
+   *
+   * On the first call for a given file the plaintext bytes are derived via
+   * key-derivation + ChaCha20-Poly1305 decryption and stored in
+   * {`@link` media}. Subsequent calls for the same `attachment.sha256`
+   * are served directly from the cache, skipping key-derivation entirely.
+   */
+  async decryptMedia(
+    encrypted: Uint8Array,
+    attachment: MediaAttachment,
+  ): Promise<StoredMedia> {
+    if (!attachment.sha256) {
+      throw new Error("decryptMedia: attachment.sha256 is required");
+    }
+
+    // Cache hit — return immediately without re-deriving the key
+    const cached = await this.media?.getMedia(attachment.sha256);
+    if (cached) return cached;
+
+    const inFlight = this.#decryptingMedia.get(attachment.sha256);
+    if (inFlight) return inFlight;
+
+    const decryptPromise = (async () => {
+      const fileKey = await deriveMediaEncryptionKey(
+        this.state,
+        this.ciphersuite,
+        attachment,
+      );
+      const plaintext = decryptMediaFile(encrypted, fileKey, attachment);
+
+      await this.media?.addMedia(attachment.sha256, {
+        data: plaintext,
+        attachment,
+      });
+
+      return { data: plaintext, attachment };
+    })();
+
+    this.#decryptingMedia.set(attachment.sha256, decryptPromise);
+
+    try {
+      return await decryptPromise;
+    } finally {
+      this.#decryptingMedia.delete(attachment.sha256);
     }
   }
 
   /** Destroys the group and purges the group history */
   async destroy() {
+    this.log("destroying group");
+
+    this.log("clearing group history");
     if (this.history) await this.history.purgeMessages();
 
-    // Remove the group from the store
-    await this.stateStore.remove(this.id);
+    this.log("clearing group media");
+    if (this.media) await this.media.clearMedia();
+
+    this.log("removing group from store");
+    await this.store.removeItem(bytesToHex(this.id));
 
     // Emit the destroyed event
     this.emit("destroyed", this);

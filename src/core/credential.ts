@@ -1,7 +1,5 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { Credential, CredentialBasic } from "ts-mls/credential.js";
-import { defaultCredentialTypes, encode } from "ts-mls";
-import { credentialEncoder } from "ts-mls/credential.js";
+import { Credential, CredentialBasic, defaultCredentialTypes } from "ts-mls";
 
 export function isHexKey(str: string): boolean {
   return /^[0-9a-fA-F]{64}$/.test(str);
@@ -48,10 +46,5 @@ export function isSameCredential(a: Credential, b: Credential): boolean {
     const bBasic = b as CredentialBasic;
     return bytesToHex(aBasic.identity) === bytesToHex(bBasic.identity);
   }
-
-  // NOTE: assuming the encoding is deterministic
-  return (
-    bytesToHex(encode(credentialEncoder, a)) ===
-    bytesToHex(encode(credentialEncoder, b))
-  );
+  return false;
 }

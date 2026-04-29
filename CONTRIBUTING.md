@@ -1,6 +1,6 @@
-# Contributing to @internet-privacy/marmots
+# Contributing to @internet-privacy/marmot-ts
 
-Thank you for your interest in contributing to marmots! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to marmot-ts! This document provides guidelines and information for contributors.
 
 ## Getting Started
 

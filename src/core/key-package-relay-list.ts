@@ -75,15 +75,6 @@ export type CreateKeyPackageRelayListEventOptions = {
  *
  * @param options - Configuration for creating the relay list event
  * @returns An unsigned Nostr event ready to be signed and published
- *
- * @example
- * ```typescript
- * const event = createKeyPackageRelayListEvent({
- *   pubkey: "02a1633cafe37eeebe2b39b4ec5f3d74c35e61fa7e7e6b7b8c5f7c4f3b2a1b2c3d",
- *   relays: ["wss://inbox.nostr.wine", "wss://myrelay.nostr1.com"],
- *   client: "marmot-examples"
- * });
- * ```
  */
 export function createKeyPackageRelayListEvent(
   options: CreateKeyPackageRelayListEventOptions,

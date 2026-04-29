@@ -1,42 +1,41 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
+import { finalizeEvent, NostrEvent } from "applesauce-core/helpers/event";
+import { generateSecretKey } from "applesauce-core/helpers/keys";
 import {
-  finalizeEvent,
-  generateSecretKey,
-  getPublicKey,
-  nip44,
-  NostrEvent,
-} from "nostr-tools";
-import { bytesToHex, hexToBytes } from "nostr-tools/utils";
-import { ClientState } from "ts-mls/clientState.js";
-import { CiphersuiteImpl } from "ts-mls/crypto/ciphersuite.js";
-import { mlsExporter } from "ts-mls/keySchedule.js";
-import { contentTypes, decode, encode, wireformats } from "ts-mls";
-import {
+  ClientState,
+  CiphersuiteImpl,
+  contentTypes,
+  decode,
+  encode,
+  mlsExporter,
   mlsMessageDecoder,
   mlsMessageEncoder,
   type MlsMessage,
-} from "ts-mls/message.js";
+  wireformats,
+} from "ts-mls";
+import { decodeContent, encodeContent } from "../utils/encoding.js";
 import { unixNow } from "../utils/nostr.js";
+import { decryptLegacyGroupMessageEventContent } from "./group-message-legacy.js";
 import { getNostrGroupIdHex } from "./client-state.js";
 import { isPrivateMessage } from "./message.js";
 import { GROUP_EVENT_KIND } from "./protocol.js";
+import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
+import { concatBytes, randomBytes } from "@noble/ciphers/utils.js";
 
 /**
- * Gets the exporter secret for NIP-44 encryption from the current group epoch.
+ * Derives the MIP-03 group-event encryption key for a group epoch.
  *
- * @param clientState - The ClientState to get exporter secret from
- * @param ciphersuite - The ciphersuite implementation
- * @returns The 32-byte exported secret
+ * Uses the MLS Exporter (RFC 9420 §8.5) with label "marmot" and context
+ * "group-event" to produce a 32-byte ChaCha20-Poly1305 key.
  */
-async function getExporterSecretForNip44(
+async function getGroupEventEncryptionKey(
   clientState: ClientState,
   ciphersuite: CiphersuiteImpl,
 ): Promise<Uint8Array> {
-  // Use MLS exporter with label "nostr" and context "nostr" to get 32-byte secret
   return mlsExporter(
     clientState.keySchedule.exporterSecret,
-    "nostr",
-    new TextEncoder().encode("nostr"),
+    "marmot",
+    new TextEncoder().encode("group-event"),
     32,
     ciphersuite,
   );
@@ -44,7 +43,7 @@ async function getExporterSecretForNip44(
 
 /**
  * Reads a {@link NostrEvent} and returns the {@link MlsMessage} it contains.
- * Decrypts the NIP-44 encrypted content using the exporter_secret from the group state.
+ * Decrypts group-event encrypted content using the exporter_secret from the group state.
  *
  * @param message - The Nostr event containing the encrypted MLS message
  * @param clientState - The ClientState for the group (to get exporter_secret)
@@ -56,34 +55,43 @@ export async function decryptGroupMessageEvent(
   clientState: ClientState,
   ciphersuite: CiphersuiteImpl,
 ): Promise<MlsMessage> {
-  // Step 1: Get exporter_secret for current epoch
-  const exporterSecret = await getExporterSecretForNip44(
-    clientState,
-    ciphersuite,
-  );
+  try {
+    const key = await getGroupEventEncryptionKey(clientState, ciphersuite);
+    const payload = decodeBase64(message.content);
+    if (payload.length < 28) {
+      throw new Error(
+        "Malformed group event content: expected at least 28 bytes",
+      );
+    }
 
-  // Step 2: Generate keypair from exporter_secret
-  // Use exporter_secret bytes directly as private key
-  const encryptionPrivateKey = exporterSecret;
-  const encryptionPublicKey = getPublicKey(encryptionPrivateKey);
+    const nonce = payload.subarray(0, 12);
+    const ciphertext = payload.subarray(12);
+    const serializedMessage = chacha20poly1305(
+      key,
+      nonce,
+      new Uint8Array(0),
+    ).decrypt(ciphertext);
 
-  // Step 3: Decrypt using NIP-44
-  // Use exporter_secret as sender key (private), and its public key as receiver key
-  const conversationKey = nip44.getConversationKey(
-    encryptionPrivateKey,
-    encryptionPublicKey,
-  );
-  const decryptedContent = nip44.decrypt(message.content, conversationKey);
-
-  // Step 4: Decode the serialized MlsMessage
-  const serializedMessage = hexToBytes(decryptedContent);
-  const decoded = decode(mlsMessageDecoder, serializedMessage);
-  if (!decoded) throw new Error("Failed to decode MLS message");
-  return decoded;
+    const decoded = decode(mlsMessageDecoder, serializedMessage);
+    if (!decoded) throw new Error("Failed to decode MLS message");
+    return decoded;
+  } catch (primaryError) {
+    try {
+      return await decryptLegacyGroupMessageEventContent(
+        message.content,
+        clientState,
+        ciphersuite,
+      );
+    } catch (legacyError) {
+      throw new Error(
+        `Failed to decrypt group message (new format and legacy fallback failed): ${formatError(primaryError)}; legacy: ${formatError(legacyError)}`,
+      );
+    }
+  }
 }
 
 /**
- * Encrypts the content of a group event using NIP-44.
+ * Encrypts the content of a group event using MIP-03.
  *
  * @param state - The ClientState for the group (to get exporter_secret)
  * @param ciphersuite - The ciphersuite implementation
@@ -99,28 +107,13 @@ export async function createEncryptedGroupEventContent({
   ciphersuite: CiphersuiteImpl;
   message: MlsMessage;
 }): Promise<string> {
-  // Step 1: Serialize the MLS message
   const serializedMessage = encode(mlsMessageEncoder, message);
-
-  // Step 2: Get exporter_secret for current epoch
-  const exporterSecret = await getExporterSecretForNip44(state, ciphersuite);
-
-  // Step 3: Generate keypair from exporter_secret
-  const encryptionPrivateKey = exporterSecret;
-  const encryptionPublicKey = getPublicKey(encryptionPrivateKey);
-
-  // Step 4: Encrypt using NIP-44
-  // Use exporter_secret as sender key (private), and its public key as receiver key
-  const conversationKey = nip44.getConversationKey(
-    encryptionPrivateKey,
-    encryptionPublicKey,
+  const key = await getGroupEventEncryptionKey(state, ciphersuite);
+  const nonce = randomBytes(12);
+  const ciphertext = chacha20poly1305(key, nonce, new Uint8Array(0)).encrypt(
+    serializedMessage,
   );
-  const encryptedContent = nip44.encrypt(
-    bytesToHex(serializedMessage),
-    conversationKey,
-  );
-
-  return encryptedContent;
+  return encodeBase64(concatBytes(nonce, ciphertext));
 }
 
 export type GroupMessagePair = {
@@ -129,14 +122,14 @@ export type GroupMessagePair = {
 };
 
 /**
- * Reads a kind 445 event and returns the {@link MlsMessage} it contains.
+ * Decrypts a kind 445 event and returns the {@link MlsMessage} it contains.
  *
  * @param event - The Nostr event containing the encrypted MLS message
  * @param clientState - The ClientState for the group (to get exporter_secret)
  * @param ciphersuite - The ciphersuite implementation
  * @returns The event and the decoded MlsMessage
  */
-export async function readGroupMessage(
+export async function decryptGroupMessage(
   event: NostrEvent,
   clientState: ClientState,
   ciphersuite: CiphersuiteImpl,
@@ -150,14 +143,14 @@ export async function readGroupMessage(
 }
 
 /**
- * Reads multiple kind 445 events and returns the {@link MlsMessage} they contain.
+ * Decrypts multiple kind 445 events and returns the {@link MlsMessage} they contain.
  *
  * @param events - The Nostr events containing the encrypted MLS messages
  * @param clientState - The ClientState for the group (to get exporter_secret)
  * @param ciphersuite - The ciphersuite implementation
  * @returns An array of event and decoded MlsMessage pairs
  */
-export async function readGroupMessages(
+export async function decryptGroupMessages(
   events: NostrEvent[],
   clientState: ClientState,
   ciphersuite: CiphersuiteImpl,
@@ -168,7 +161,7 @@ export async function readGroupMessages(
   await Promise.all(
     events.map(async (event) => {
       try {
-        read.push(await readGroupMessage(event, clientState, ciphersuite));
+        read.push(await decryptGroupMessage(event, clientState, ciphersuite));
       } catch {
         unreadable.push(event);
       }
@@ -198,14 +191,11 @@ export async function createGroupEvent(
 ): Promise<NostrEvent> {
   const { message, state, ciphersuite } = options;
 
-  // Encrypt the MLS message
   const content = await createEncryptedGroupEventContent({
     state,
     ciphersuite,
     message,
   });
-
-  // Get the Nostr group ID for the tags
   const groupId = getNostrGroupIdHex(state);
 
   const draft = {
@@ -215,10 +205,9 @@ export async function createGroupEvent(
     tags: [["h", groupId]],
   };
 
-  // Generate a random ephemeral key for signing
+  // Ephemeral keypair for signing — distinct from the encryption keypair (MIP-03)
   const ephemeralSecretKey = generateSecretKey();
 
-  // Finalize (sign) the event
   return finalizeEvent(draft, ephemeralSecretKey);
 }
 
@@ -313,22 +302,6 @@ export async function createCommitEvent(
 }
 
 /**
- * Type guard to check if a value is a Rumor
- */
-export function isRumorLike(value: unknown): value is Rumor {
-  if (!value || typeof value !== "object") return false;
-  const r = value as Record<string, unknown>;
-  return (
-    typeof r.id === "string" &&
-    typeof r.pubkey === "string" &&
-    typeof r.kind === "number" &&
-    typeof r.created_at === "number" &&
-    typeof r.content === "string" &&
-    Array.isArray(r.tags)
-  );
-}
-
-/**
  * Checks if a message is an application message (not a proposal or commit).
  */
 export function isApplicationMessage(
@@ -336,10 +309,8 @@ export function isApplicationMessage(
 ): pair is GroupMessagePair & {
   message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
 } {
-  return (
-    isPrivateMessage(pair.message) &&
-    pair.message.privateMessage.contentType === contentTypes.application
-  );
+  if (!isPrivateMessage(pair.message)) return false;
+  return pair.message.privateMessage.contentType === contentTypes.application;
 }
 
 /**
@@ -350,10 +321,8 @@ export function isCommitMessage(
 ): pair is GroupMessagePair & {
   message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
 } {
-  return (
-    isPrivateMessage(pair.message) &&
-    pair.message.privateMessage.contentType === contentTypes.commit
-  );
+  if (!isPrivateMessage(pair.message)) return false;
+  return pair.message.privateMessage.contentType === contentTypes.commit;
 }
 
 /**
@@ -364,8 +333,24 @@ export function isProposalMessage(
 ): pair is GroupMessagePair & {
   message: MlsMessage & { wireformat: typeof wireformats.mls_private_message };
 } {
-  return (
-    isPrivateMessage(pair.message) &&
-    pair.message.privateMessage.contentType === contentTypes.proposal
-  );
+  if (!isPrivateMessage(pair.message)) return false;
+  return pair.message.privateMessage.contentType === contentTypes.proposal;
+}
+
+function decodeBase64(value: string): Uint8Array {
+  try {
+    return decodeContent(value, "base64");
+  } catch (error) {
+    throw new Error(
+      `Invalid base64 group event content: ${formatError(error)}`,
+    );
+  }
+}
+
+function encodeBase64(value: Uint8Array): string {
+  return encodeContent(value, "base64");
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

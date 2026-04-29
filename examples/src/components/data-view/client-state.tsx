@@ -1,4 +1,4 @@
-import { ClientState } from "ts-mls/clientState.js";
+import type { ClientState } from "ts-mls";
 import DataView from "./index";
 
 /**

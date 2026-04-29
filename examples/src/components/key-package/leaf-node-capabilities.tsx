@@ -1,6 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { LeafNodeKeyPackage } from "ts-mls/leafNode.js";
-import { protocolVersions } from "ts-mls";
+import { protocolVersions, type LeafNodeKeyPackage } from "ts-mls";
 
 import CipherSuiteBadge from "../cipher-suite-badge";
 import CredentialTypeBadge from "../credential-type-badge";
@@ -35,7 +34,7 @@ export function LeafNodeCapabilitiesSection(props: {
         {/* Versions */}
         <DetailsField label="Protocol Versions">
           <div className="flex flex-wrap gap-2">
-            {leafNode.capabilities.versions.map((version) => (
+            {leafNode.capabilities.versions.map((version: number) => (
               <span key={version} className="badge badge-primary badge-outline">
                 {version} (
                 {protocolVersions.mls10 === version ? "mls10" : "Unknown"})
@@ -47,7 +46,7 @@ export function LeafNodeCapabilitiesSection(props: {
         {/* Ciphersuites */}
         <DetailsField label="Cipher Suites">
           <div className="flex flex-wrap gap-2">
-            {leafNode.capabilities.ciphersuites.map((suite) => (
+            {leafNode.capabilities.ciphersuites.map((suite: number) => (
               <CipherSuiteBadge key={suite} cipherSuite={suite} />
             ))}
           </div>
@@ -56,7 +55,7 @@ export function LeafNodeCapabilitiesSection(props: {
         {/* Credentials */}
         <DetailsField label="Credential Types">
           <div className="flex flex-wrap gap-2">
-            {leafNode.capabilities.credentials.map((cred) => (
+            {leafNode.capabilities.credentials.map((cred: number) => (
               <CredentialTypeBadge key={cred} credentialType={cred} />
             ))}
           </div>
@@ -66,7 +65,7 @@ export function LeafNodeCapabilitiesSection(props: {
         <DetailsField label="Extensions">
           <div className="flex flex-wrap gap-2">
             {leafNode.capabilities.extensions.length > 0 ? (
-              leafNode.capabilities.extensions.map((ext) => (
+              leafNode.capabilities.extensions.map((ext: number) => (
                 <ExtensionBadge key={ext} extensionType={ext} />
               ))
             ) : (

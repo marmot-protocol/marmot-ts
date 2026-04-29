@@ -42,9 +42,7 @@ export const groupStoreChanges$ = marmotClient$.pipe(
       // initial tick
       of(0),
       groupStoreManualRefresh$,
-      fromEvent(client.groupStateStore, "groupStateAdded"),
-      fromEvent(client.groupStateStore, "groupStateUpdated"),
-      fromEvent(client.groupStateStore, "groupStateRemoved"),
+      fromEvent(client.groups, "updated"),
     ).pipe(map(() => client)),
   ),
   shareReplay(1),
@@ -53,7 +51,7 @@ export const groupStoreChanges$ = marmotClient$.pipe(
 /** List of locally stored group ids (hex). */
 export const groupIds$ = groupStoreChanges$.pipe(
   switchMap(async (client) => {
-    const ids = await client.groupStateStore.list();
+    const ids = await client.groups.listIds();
     return ids.map((id) => bytesToHex(id));
   }),
   // Avoid noisy rerenders when ordering is stable and ids are unchanged
@@ -89,7 +87,7 @@ export const groups$ = groupIds$.pipe(
           await Promise.all(
             ids.map(async (id) => {
               try {
-                return await client.getGroup(id);
+                return await client.groups.get(id);
               } catch {
                 return null;
               }
@@ -137,16 +135,16 @@ export const groupSummaries$ = groups$.pipe(
 
 /**
  * Convenience helper for destructive removal.
- * Uses MarmotClient.destroyGroup so group history/backends (if any) can be cleaned.
+ * Uses client.groups.destroy so group history/backends (if any) can be cleaned.
  */
 export async function destroyGroup(groupIdHex: string): Promise<void> {
   const client = await firstValueFrom(marmotClient$.pipe(defined()));
 
-  await client.destroyGroup(hexToBytes(groupIdHex));
+  await client.groups.destroy(hexToBytes(groupIdHex));
 }
 
 /**
- * Selected group instance, hydrated via MarmotClient.getGroup().
+ * Selected group instance, hydrated via client.groups.get().
  * This is the single source-of-truth group object used by the examples UI.
  */
 export const selectedGroup$ = merge(
@@ -158,7 +156,7 @@ export const selectedGroup$ = merge(
         defined(),
         switchMap(async (client) => {
           if (!groupId) return null;
-          return await client.getGroup(groupId);
+          return await client.groups.get(groupId);
         }),
       ),
     ),

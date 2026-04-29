@@ -1,5 +1,5 @@
 /** A generic interface for a key-value store */
-export interface KeyValueStoreBackend<T> {
+export interface GenericKeyValueStore<T> {
   /** Get an item from the store */
   getItem(key: string): Promise<T | null>;
   /** Set an item in the store */
@@ -11,3 +11,6 @@ export interface KeyValueStoreBackend<T> {
   /** Get all keys in the store */
   keys(): Promise<string[]>;
 }
+
+/** @deprecated Use {@link GenericKeyValueStore} instead */
+export type KeyValueStoreBackend<I> = GenericKeyValueStore<I>;

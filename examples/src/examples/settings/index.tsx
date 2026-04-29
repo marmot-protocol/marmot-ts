@@ -1,17 +1,18 @@
-import { UnsignedEvent, relaySet } from "applesauce-core/helpers";
-import { npubEncode } from "nostr-tools/nip19";
+import { UnsignedEvent, npubEncode, relaySet } from "applesauce-core/helpers";
 import { useEffect, useState } from "react";
 import { RelayListCreator } from "../../components/form/relay-list-creator";
+import JsonBlock from "../../components/json-block";
 import { UserAvatar, UserName } from "../../components/nostr-user";
 import QRButton from "../../components/qr-button";
 import { useObservable } from "../../hooks/use-observable";
-import accountManager from "../../lib/accounts";
-import { lookupRelays$ } from "../../lib/settings";
-import accounts, { mailboxes$ } from "../../lib/accounts";
+import {
+  default as accountManager,
+  default as accounts,
+  mailboxes$,
+} from "../../lib/accounts";
 import { createNip65RelayListEvent } from "../../lib/nip65";
-import JsonBlock from "../../components/json-block";
-import { pool } from "../../lib/nostr";
-import { eventStore } from "../../lib/nostr";
+import { eventStore, pool } from "../../lib/nostr";
+import { lookupRelays$ } from "../../lib/settings";
 
 type Nip65RelayRow = { relay: string; read: boolean; write: boolean };
 

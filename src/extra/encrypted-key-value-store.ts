@@ -1,10 +1,13 @@
 import { cbc } from "@noble/ciphers/aes.js";
 import { pbkdf2 } from "@noble/hashes/pbkdf2.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { KeyValueStoreBackend } from "../utils/key-value.js";
+import { GenericKeyValueStore } from "../utils/key-value.js";
 import { utf8ToBytes } from "@noble/hashes/utils.js";
 
+/** A key to store the test value under */
 const TEST_KEY = "__test__";
+
+/** A value to test against to ensure the decryption worked */
 const TEST_VALUE = new TextEncoder().encode("decryption test value");
 
 /**
@@ -36,16 +39,19 @@ function unpad(bytes: Uint8Array): Uint8Array {
   const paddingLength = bytes[bytes.length - 1];
 
   // Validate padding length
-  if (paddingLength === 0 || paddingLength > 16)
+  if (paddingLength === 0 || paddingLength > 16) {
     throw new Error("Invalid padding: padding length out of range");
+  }
 
-  if (paddingLength > bytes.length)
+  if (paddingLength > bytes.length) {
     throw new Error("Invalid padding: padding length exceeds data length");
+  }
 
   // Validate all padding bytes have the correct value
   for (let i = bytes.length - paddingLength; i < bytes.length; i++) {
-    if (bytes[i] !== paddingLength)
+    if (bytes[i] !== paddingLength) {
       throw new Error("Invalid padding: inconsistent padding bytes");
+    }
   }
 
   // Return data without padding
@@ -53,17 +59,17 @@ function unpad(bytes: Uint8Array): Uint8Array {
 }
 
 /**
- * Wrapper around a {@link KeyValueStoreBackend} that encrypts and decrypts data using a password.
+ * Wrapper around a {@link GenericKeyValueStore} that encrypts and decrypts data using a password.
  * WARNING: THIS IS NOT SECURE AND SHOULD NOT BE USED IN PRODUCTION. IT IS ONLY FOR DEMONSTRATION PURPOSES.
  */
-export class EncryptedKeyValueStore implements KeyValueStoreBackend<Uint8Array> {
+export class EncryptedKeyValueStore implements GenericKeyValueStore<Uint8Array> {
   private key: Uint8Array | null = null;
   get unlocked() {
     return this.key !== null;
   }
 
   constructor(
-    private database: KeyValueStoreBackend<Uint8Array>,
+    private database: GenericKeyValueStore<Uint8Array>,
     private salt: Uint8Array,
   ) {}
 

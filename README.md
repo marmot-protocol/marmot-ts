@@ -11,17 +11,17 @@ This library provides the building blocks for creating secure, decentralized gro
 
 - 🔐 **End-to-end encrypted group messaging** using MLS protocol
 - 🌐 **Decentralized** - groups operate across Nostr relays
-- 🔑 **Key package management** - handle identity and invitations
-- 📦 **Storage-agnostic** - bring your own storage backend (LocalForage, IndexedDB, etc.)
+- 🔑 **Key package management** - handle identity, publishing, rotation, and invitations
+- 📦 **Storage-agnostic** - bring your own `GenericKeyValueStore` backend (LocalForage, IndexedDB, SQLite, in-memory, etc.)
 - 🔌 **Network-agnostic** - works with any Nostr client library
 - 📱 **Cross-platform** - works in browsers and Node.js (v20+)
 
 ## Installation
 
 ```bash
-npm install @internet-privacy/marmots
+npm install @internet-privacy/marmot-ts
 # or
-pnpm add @internet-privacy/marmots
+pnpm add @internet-privacy/marmot-ts
 ```
 
 ## Marmot Protocol Compliance
@@ -41,37 +41,40 @@ Comprehensive documentation is available in the `documentation/` directory:
 
 - [Getting Started](documentation/getting-started.md) - A fast track to initializing the library.
 - [Architecture](documentation/architecture.md) - High-level component overview and Nostr/MLS integration mapping.
-- [MarmotClient](documentation/marmot-client.md) - Deep dive into the main entry point class, initialization, and identity management.
+- [MarmotClient](documentation/marmot-client.md) - Deep dive into the main entry point class, its sub-managers, and identity management.
 - [Bytes-First Storage](documentation/bytes-first-storage.md) - Explaining the storage-agnostic philosophy and group state hydration.
 - [Ingest Methods](documentation/ingest-methods.md) - Handling incoming messages and network input robustly.
 - [Examples](documentation/examples.md) - Concise snippets for group creation, invitations, sending messages, and more.
 
 ## Quick Start Overview
 
-To begin using the client, you need an established `EventSigner` interface and proper storage backends:
+To begin using the client, you need an `EventSigner` (e.g. from `applesauce-core`), a `NostrNetworkInterface` implementation, and two `GenericKeyValueStore` backends — one for serialized group state bytes and one for key package metadata.
 
 ```typescript
-import { MarmotClient, KeyValueGroupStateBackend, KeyPackageStore } from "@internet-privacy/marmots";
+import { MarmotClient } from "@internet-privacy/marmot-ts";
+import localforage from "localforage";
 
-// Setup backends via your choice of db (e.g. LocalForage)
-const groupStateBackend = new KeyValueGroupStateBackend(/* ... */);
-const keyPackageStore = new KeyPackageStore(/* ... */);
+const client = new MarmotClient({
+  signer: yourNostrSigner,
+  // Any GenericKeyValueStore<SerializedClientState>. A LocalForage instance
+  // works directly because it already implements the getItem/setItem/keys API.
+  groupStateStore: localforage.createInstance({ name: "marmot-groups" }),
+  // Any GenericKeyValueStore<StoredKeyPackage> for key package metadata.
+  keyPackageStore: localforage.createInstance({ name: "marmot-keypackages" }),
+  // Your NostrNetworkInterface implementation (publish, request, subscription, getUserInboxRelays).
+  network: yourNetworkInterface,
+  // Optional: stable slot identifier for addressable (kind 30443) key packages.
+  clientId: "my-app-desktop",
+});
 
-  const client = new MarmotClient({
-    signer: yourNostrSigner,
-    groupStateBackend,
-    keyPackageStore,
-    network: /* NostrNetworkInterface */,
-  });
-
-  const group = await client.createGroup("My Secret Group", {
-    description: "A private discussion",
-    relays: ["wss://relay.example.com"],
-    // Optional: add additional admins (the creator is always included automatically)
-    adminPubkeys: ["<other-admin-pubkey-hex>"],
-    // Optional: override MLS ciphersuite
-    ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-  });
+const group = await client.groups.create("My Secret Group", {
+  description: "A private discussion",
+  relays: ["wss://relay.example.com"],
+  // Optional: add additional admins (the creator is always included automatically)
+  adminPubkeys: ["<other-admin-pubkey-hex>"],
+  // Optional: override MLS ciphersuite
+  ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+});
 ```
 
 See [Getting Started](documentation/getting-started.md) and [Examples](documentation/examples.md) for full usage instructions.

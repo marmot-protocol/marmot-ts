@@ -1,4 +1,5 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { base64 } from "@scure/base";
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { NostrEvent } from "applesauce-core/helpers/event";
 
@@ -21,13 +22,7 @@ export function encodeContent(
   format: EncodingFormat,
 ): string {
   if (format === "base64") {
-    // Convert Uint8Array to base64
-    let binary = "";
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
+    return base64.encode(bytes);
   } else {
     // hex format
     return bytesToHex(bytes);
@@ -50,12 +45,7 @@ export function decodeContent(
 
   if (actualFormat === "base64") {
     try {
-      const binaryString = atob(content);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return bytes;
+      return base64.decode(content);
     } catch (error) {
       throw new Error(
         `Failed to decode base64 content: ${error instanceof Error ? error.message : String(error)}`,

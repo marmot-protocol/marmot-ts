@@ -1,43 +1,14 @@
 import localforage from "localforage";
-import {
-  BehaviorSubject,
-  combineLatestWith,
-  fromEvent,
-  map,
-  merge,
-  of,
-  shareReplay,
-  switchMap,
-} from "rxjs";
-import { KeyPackageStore } from "../../../src/store/key-package-store";
+import { map, shareReplay } from "rxjs";
 import accounts from "./accounts";
 
-// Observable that triggers whenever the store changes
-const storeChanges$ = new BehaviorSubject<number>(0);
-
-// Create and export a shared KeyPackageStore instance
+// Create a per-account localforage backend for key package storage.
+// This is the raw GenericKeyValueStore passed to MarmotClient.
 export const keyPackageStore$ = accounts.active$.pipe(
-  map(() => {
-    return new KeyPackageStore(
-      localforage.createInstance({
-        name: "marmot-key-package-store",
-      }),
-    );
-  }),
-  switchMap((store) => {
-    return merge(
-      of(store),
-      // Listen for key package events
-      fromEvent(store, "keyPackageAdded"),
-      fromEvent(store, "keyPackageRemoved"),
-    ).pipe(map(() => store));
-  }),
+  map(() =>
+    localforage.createInstance({
+      name: "marmot-key-package-store",
+    }),
+  ),
   shareReplay(1),
-);
-
-// Observable for the count of key packages in the store
-// This will automatically update when the store changes
-export const keyPackageCount$ = keyPackageStore$.pipe(
-  combineLatestWith(storeChanges$),
-  switchMap(([store, _]) => store.count()),
 );

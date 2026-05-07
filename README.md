@@ -1,20 +1,29 @@
 # marmot-ts
 
-TypeScript implementation of the [Marmot protocol](https://github.com/marmot-protocol/marmot) - bringing end-to-end encrypted group messaging to Nostr using [MLS (Messaging Layer Security)](https://messaginglayersecurity.rocks/).
+TypeScript implementation of the [Marmot protocol](https://github.com/marmot-protocol/marmot) — end-to-end encrypted group messaging on Nostr using [MLS (Messaging Layer Security)](https://messaginglayersecurity.rocks/).
 
 > [!WARNING]
-> This library is currently in **Alpha** and under heavy development. The API is subject to breaking changes without notice. It relies heavily on [ts-mls](https://github.com/LukaJCB/ts-mls) for MLS cryptographic guarantees. Do not use in production yet.
-
-This library provides the building blocks for creating secure, decentralized group chat applications on Nostr. It wraps `ts-mls` with Nostr-specific functionality, similar to how [MDK](https://github.com/marmot-protocol/mdk) wraps [OpenMLS](https://github.com/openmls/openmls).
+> This library is in **Alpha** and under heavy development. The API is subject to breaking changes without notice. It relies on [ts-mls](https://github.com/LukaJCB/ts-mls) for MLS cryptographic guarantees. Do not use in production yet.
 
 ## Features
 
-- 🔐 **End-to-end encrypted group messaging** using MLS protocol
-- 🌐 **Decentralized** - groups operate across Nostr relays
-- 🔑 **Key package management** - handle identity, publishing, rotation, and invitations
-- 📦 **Storage-agnostic** - bring your own `GenericKeyValueStore` backend (LocalForage, IndexedDB, SQLite, in-memory, etc.)
-- 🔌 **Network-agnostic** - works with any Nostr client library
-- 📱 **Cross-platform** - works in browsers and Node.js (v20+)
+- 🔐 **End-to-end encrypted** group messaging using MLS (RFC 9420)
+- 🌐 **Decentralized** — groups operate across Nostr relays
+- 🔑 **Key package lifecycle** — publishing, rotation, deletion
+- 📦 **Storage-agnostic** — bring any `GenericKeyValueStore` backend (LocalForage, IndexedDB, in-memory, …)
+- 🔌 **Network-agnostic** — works with any Nostr client library
+- 📱 **Cross-platform** — browsers and Node.js (v20+)
+
+## Marmot Protocol Compliance
+
+`marmot-ts` currently supports the following [Marmot Improvement Proposals (MIPs)](https://github.com/marmot-protocol/mips):
+
+| MIP                                                                        | Description                             | Status       |
+| -------------------------------------------------------------------------- | --------------------------------------- | ------------ |
+| [MIP-00](https://github.com/marmot-protocol/mips/blob/main/mips/mip-00.md) | Introduction and Basic Operations       | ✅ Supported |
+| [MIP-01](https://github.com/marmot-protocol/mips/blob/main/mips/mip-01.md) | Network Transport & Relay Communication | ✅ Supported |
+| [MIP-02](https://github.com/marmot-protocol/mips/blob/main/mips/mip-02.md) | Identities and Keys                     | ✅ Supported |
+| [MIP-03](https://github.com/marmot-protocol/mips/blob/main/mips/mip-03.md) | Group State & Memberships               | ✅ Supported |
 
 ## Installation
 
@@ -24,58 +33,141 @@ npm install @internet-privacy/marmot-ts
 pnpm add @internet-privacy/marmot-ts
 ```
 
-## Marmot Protocol Compliance
+## Concepts
 
-Currently, `marmot-ts` supports the following [Marmot Improvement Proposals (MIPs)](https://github.com/marmot-protocol/mips):
+A `MarmotClient` needs four things to operate:
 
-| MIP                                                                        | Description                             | Status       |
-| -------------------------------------------------------------------------- | --------------------------------------- | ------------ |
-| [MIP-00](https://github.com/marmot-protocol/mips/blob/main/mips/mip-00.md) | Introduction and Basic Operations       | ✅ Supported |
-| [MIP-01](https://github.com/marmot-protocol/mips/blob/main/mips/mip-01.md) | Network Transport & Relay Communication | ✅ Supported |
-| [MIP-02](https://github.com/marmot-protocol/mips/blob/main/mips/mip-02.md) | Identities and Keys                     | ✅ Supported |
-| [MIP-03](https://github.com/marmot-protocol/mips/blob/main/mips/mip-03.md) | Group State & Memberships               | ✅ Supported |
+1. **A signer** (`EventSigner`) — signs Nostr events on behalf of the user.
+2. **A network interface** (`NostrNetworkInterface`) — publishes, requests, and subscribes to events on relays.
+3. **A group state store** — persists serialized MLS group state.
+4. **A key package store** — persists local key package material.
 
-## Documentation
+Both stores share a single interface: `GenericKeyValueStore<T>`.
 
-Comprehensive documentation is available in the `docs/` directory and served via VitePress. Run `pnpm docs:dev` to browse the docs locally.
+## Storage
 
-- **Getting Started** (`docs/getting-started.md`) - A fast track to initializing the library.
-- **Architecture Guide** (`docs/guide/architecture.md`) - High-level component overview and Nostr/MLS integration mapping.
-- **Client Module** (`docs/client/`) - Covers `MarmotClient`, `MarmotGroup`, proposals, history, network, storage, best practices, and UI framework integration.
-- **Core Module** (`docs/core/`) - Covers protocol, credentials, key packages, groups, messages, members, welcome, and state.
+```ts
+interface GenericKeyValueStore<T> {
+  getItem(key: string): Promise<T | null>;
+  setItem(key: string, value: T): Promise<T>;
+  removeItem(key: string): Promise<void>;
+  clear(): Promise<void>;
+  keys(): Promise<string[]>;
+}
+```
 
-## Quick Start Overview
+Any backend that matches this shape works. [LocalForage](https://github.com/localForage/localForage) instances satisfy it directly:
 
-To begin using the client, you need an `EventSigner` (e.g. from `applesauce-core`), a `NostrNetworkInterface` implementation, and two `GenericKeyValueStore` backends — one for serialized group state bytes and one for key package metadata.
-
-```typescript
-import { MarmotClient } from "@internet-privacy/marmot-ts";
+```ts
 import localforage from "localforage";
 
-const client = new MarmotClient({
-  signer: yourNostrSigner,
-  // Any GenericKeyValueStore<SerializedClientState>. A LocalForage instance
-  // works directly because it already implements the getItem/setItem/keys API.
-  groupStateStore: localforage.createInstance({ name: "marmot-groups" }),
-  // Any GenericKeyValueStore<StoredKeyPackage> for key package metadata.
-  keyPackageStore: localforage.createInstance({ name: "marmot-keypackages" }),
-  // Your NostrNetworkInterface implementation (publish, request, subscription, getUserInboxRelays).
-  network: yourNetworkInterface,
-  // Optional: stable slot identifier for addressable (kind 30443) key packages.
-  clientId: "my-app-desktop",
-});
+const groupStateStore = localforage.createInstance({ name: "marmot-groups" });
+const keyPackageStore = localforage.createInstance({ name: "marmot-keys" });
+```
 
-const group = await client.groups.create("My Secret Group", {
-  description: "A private discussion",
-  relays: ["wss://relay.example.com"],
-  // Optional: add additional admins (the creator is always included automatically)
-  adminPubkeys: ["<other-admin-pubkey-hex>"],
-  // Optional: override MLS ciphersuite
-  ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+For tests or short-lived processes, the library ships an in-memory implementation:
+
+```ts
+import { InMemoryKeyValueStore } from "@internet-privacy/marmot-ts";
+
+const groupStateStore = new InMemoryKeyValueStore();
+const keyPackageStore = new InMemoryKeyValueStore();
+```
+
+## Quick Start
+
+### Create the client
+
+```ts
+import { MarmotClient } from "@internet-privacy/marmot-ts";
+
+const client = new MarmotClient({
+  signer,           // your EventSigner (e.g. from applesauce-core)
+  network,          // your NostrNetworkInterface implementation
+  groupStateStore,  // GenericKeyValueStore<SerializedClientState>
+  keyPackageStore,  // GenericKeyValueStore<StoredKeyPackage>
+  clientId: "my-app-desktop", // stable d-tag for kind 30443 key packages
 });
 ```
 
-See [Getting Started](docs/getting-started.md) for full usage instructions.
+### Publish a key package
+
+Other users invite you by referencing a key package you've published to relays.
+
+```ts
+await client.keyPackages.create({
+  relays: ["wss://relay.example.com"],
+});
+```
+
+### Create a group
+
+```ts
+const group = await client.groups.create("My Secret Group", {
+  description: "A private discussion",
+  relays: ["wss://relay.example.com"],
+});
+```
+
+### Send a message
+
+```ts
+await group.sendChatMessage("Hello, world!");
+```
+
+### Invite a member
+
+Look up their key package event on a relay, then invite by event:
+
+```ts
+const [keyPackageEvent] = await client.network.request(
+  ["wss://relay.example.com"],
+  [{ kinds: [30443], authors: [memberPubkey], limit: 1 }],
+);
+
+if (keyPackageEvent) {
+  await group.inviteByKeyPackageEvent(keyPackageEvent);
+}
+```
+
+### Join a group from an invite
+
+When you receive a kind 1059 gift wrap, decrypt it to a kind 444 rumor and pass it to `joinGroupFromWelcome`:
+
+```ts
+const { group } = await client.joinGroupFromWelcome({ welcomeRumor });
+```
+
+### Receive messages
+
+Subscribe to the group's relays for kind 445 events and feed them to `group.ingest`:
+
+```ts
+import { bytesToHex } from "@noble/hashes/utils.js";
+
+const subscription = client.network.subscription(group.relays, [
+  { kinds: [445], "#h": [bytesToHex(group.groupData.nostrGroupId)] },
+]);
+
+subscription.subscribe({
+  next: async (event) => {
+    for await (const result of group.ingest([event])) {
+      if (result.kind === "applicationMessage") {
+        console.log(result.message);
+      }
+    }
+  },
+});
+```
+
+## Documentation
+
+Full documentation is in `docs/` and served via VitePress. Run `pnpm docs:dev` to browse locally.
+
+- **[Getting Started](docs/getting-started.md)** — first-run walkthrough
+- **[Architecture](docs/guide/architecture.md)** — component overview and Nostr/MLS mapping
+- **[Client Module](docs/client/)** — `MarmotClient`, `MarmotGroup`, storage, network, UI integration
+- **[Core Module](docs/core/)** — protocol, credentials, key packages, groups, messages, welcome
 
 ## Development
 

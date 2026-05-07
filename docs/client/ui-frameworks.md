@@ -1,4 +1,8 @@
-# UI Framework Integration
+# UI Frameworks
+
+:::info
+This page needs to be rewritten and cleaned up
+:::
 
 `MarmotClient` exposes reactive APIs through **async generators** (`watchGroups()` and `watchKeyPackages()`) that emit updates whenever state changes. To integrate with UI frameworks, you'll need to convert these async generators into your framework's native reactivity system.
 

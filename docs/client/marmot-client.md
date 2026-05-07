@@ -1,4 +1,4 @@
-# MarmotClient
+# Marmot Client
 
 `MarmotClient` is the orchestration layer for your Marmot application. It manages the lifecycle of multiple encrypted groups, coordinates between your Nostr network and local storage, and provides reactive APIs for building real-time user interfaces.
 

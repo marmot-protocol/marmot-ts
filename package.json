@@ -18,6 +18,7 @@
     "docs": "vitepress dev",
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
+    "postdocs:build": "pnpm run typedoc:build",
     "docs:preview": "vitepress preview",
     "typedoc:build": "typedoc",
     "typedoc:serve": "pnpx serve .vitepress/dist/reference"

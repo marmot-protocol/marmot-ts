@@ -1,0 +1,18 @@
+{
+  "$schema": "https://nsyte.run/schemas/config.schema.json",
+  "bunkerPubkey": "266815e0c9210dfa324c6cba3573b14bee49da4209a9456f9484e5106cd408a5",
+  "relays": [
+    "wss://relay.wellorder.net",
+    "wss://relay.primal.net",
+    "wss://relay.damus.io",
+    "wss://nsite.run"
+  ],
+  "servers": [
+    "https://cdn.hzrd149.com",
+    "https://blossom.primal.net",
+    "https://blssm.us"
+  ],
+  "id": "marmot-ts",
+  "title": "Marmot TS",
+  "description": "Marmot TS documentation"
+}

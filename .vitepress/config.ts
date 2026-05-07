@@ -11,9 +11,7 @@ export default defineConfig({
     nav: [
       { text: "Home", link: "/" },
       { text: "Getting Started", link: "/getting-started" },
-      { text: "Guide", link: "/guide/architecture" },
-      { text: "Core", link: "/core/" },
-      { text: "Client", link: "/client/" },
+      { text: "Reference", link: "/reference/index.html", target: "_blank" },
     ],
 
     sidebar: [
@@ -28,13 +26,13 @@ export default defineConfig({
         text: "Marmot Client",
         items: [
           { text: "Overview", link: "/client/" },
-          { text: "MarmotClient", link: "/client/marmot-client" },
-          { text: "MarmotGroup", link: "/client/marmot-group" },
-          { text: "UI Framework Integration", link: "/client/ui-frameworks" },
+          { text: "Client", link: "/client/marmot-client" },
+          { text: "Groups", link: "/client/marmot-group" },
           { text: "Proposals", link: "/client/proposals" },
           { text: "History", link: "/client/history" },
           { text: "Network", link: "/client/network" },
           { text: "Storage", link: "/client/storage" },
+          { text: "UI Frameworks", link: "/client/ui-frameworks" },
           { text: "Best Practices", link: "/client/best-practices" },
         ],
       },

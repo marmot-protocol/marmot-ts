@@ -131,6 +131,7 @@ describe("exports", () => {
         "sortGroupCommits",
         "supportsMarmotExtensions",
         "unixNow",
+        "uploadGroupImage",
       ]
     `);
   });

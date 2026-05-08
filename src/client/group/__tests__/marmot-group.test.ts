@@ -122,7 +122,7 @@ describe("MarmotGroup group image helpers", () => {
     const { clientState } = await createTestGroupState(adminPubkey, impl);
     const image = new Uint8Array([1, 2, 3, 4]);
     const encryptedImage = encryptGroupImage(image);
-    const stateWithImage = withGroupImage(clientState, encryptedImage);
+    const stateWithImage = withGroupImage(clientState, encryptedImage.metadata);
 
     const fetchMock = vi.fn(
       async () =>
@@ -187,7 +187,7 @@ describe("MarmotGroup group image helpers", () => {
       },
     );
 
-    const group = new MarmotGroup(withGroupImage(clientState, firstImage), {
+    const group = new MarmotGroup(withGroupImage(clientState, firstImage.metadata), {
       store: new InMemoryKeyValueStore<SerializedClientState>(),
       signer: {
         getPublicKey: async () => adminPubkey,
@@ -210,7 +210,7 @@ describe("MarmotGroup group image helpers", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledTimes(0);
 
-    group.state = withGroupImage(group.state, secondImage);
+    group.state = withGroupImage(group.state, secondImage.metadata);
 
     const secondGroupImage = group.image;
     expect(secondGroupImage).not.toBeNull();
@@ -253,7 +253,7 @@ describe("MarmotGroup group image helpers", () => {
       },
     );
 
-    const group = new MarmotGroup(withGroupImage(clientState, encryptedImage), {
+    const group = new MarmotGroup(withGroupImage(clientState, encryptedImage.metadata), {
       store: new InMemoryKeyValueStore<SerializedClientState>(),
       signer: {
         getPublicKey: async () => adminPubkey,
@@ -287,7 +287,7 @@ describe("MarmotGroup group image helpers", () => {
       ),
     );
 
-    const group = new MarmotGroup(withGroupImage(clientState, encryptedImage), {
+    const group = new MarmotGroup(withGroupImage(clientState, encryptedImage.metadata), {
       store: new InMemoryKeyValueStore<SerializedClientState>(),
       signer: {
         getPublicKey: async () => adminPubkey,

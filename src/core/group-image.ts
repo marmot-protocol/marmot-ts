@@ -15,8 +15,16 @@ import {
   extract as hkdf_extract,
 } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { randomBytes } from "@noble/hashes/utils.js";
-import { getPublicKey } from "applesauce-core/helpers";
+import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
+import { base64 } from "@scure/base";
+import {
+  finalizeEvent,
+  getPublicKey,
+  type NostrEvent,
+} from "applesauce-core/helpers";
+
+import { unixNow } from "../utils/nostr.js";
+import type { MarmotGroupData } from "./protocol.js";
 
 // ---------------------------------------------------------------------------
 // Internals
@@ -51,20 +59,8 @@ function deriveMIP01Key(seed: Uint8Array, info: Uint8Array): Uint8Array {
 export type EncryptGroupImageResult = {
   /** The encrypted image bytes. Upload this blob to Blossom. */
   encrypted: Uint8Array;
-  /** 32-byte ChaCha20-Poly1305 encryption key. Store in `MarmotGroupData.imageKey`. */
-  imageKey: Uint8Array;
-  /** 12-byte ChaCha20-Poly1305 nonce. Store in `MarmotGroupData.imageNonce`. */
-  imageNonce: Uint8Array;
-  /** SHA-256 of `encrypted`. Store in `MarmotGroupData.imageHash`. */
-  imageHash: Uint8Array;
-  /**
-   * Independent Blossom upload seed (32 bytes).
-   * Store in `MarmotGroupData.imageUploadKey`.
-   *
-   * Used to derive the Blossom authentication keypair via HKDF-SHA256.
-   * Can also be recomputed at any time via {@link deriveGroupImageBlossomAuthKeypair}.
-   */
-  imageUploadKey: Uint8Array;
+  /** Metadata fields ready to merge into `MarmotGroupData`. */
+  metadata: GroupImageMetadataFields;
 };
 
 /**
@@ -75,6 +71,34 @@ export type GroupImageBlossomAuthKeypair = {
   secretKey: Uint8Array;
   /** Hex-encoded x-only secp256k1 public key (64 characters). */
   pubkey: string;
+};
+
+/** JSON response returned by Blossom `PUT /upload` endpoints (BUD-02). */
+export type BlossomBlobDescriptor = {
+  url: string;
+  sha256: string;
+  size: number;
+  type: string;
+  uploaded: number;
+};
+
+/** The subset of {@link MarmotGroupData} updated by a successful image upload. */
+export type GroupImageMetadataFields = Pick<
+  MarmotGroupData,
+  "imageHash" | "imageKey" | "imageNonce" | "imageUploadKey"
+>;
+
+/** Result of uploading a group image to one or more Blossom servers. */
+export type UploadGroupImageResult = {
+  /** The encrypted image bytes uploaded to each server. */
+  encrypted: Uint8Array;
+  /** The returned blob descriptor from each upload target. */
+  uploads: PromiseSettledResult<{
+    server: URL;
+    descriptor: BlossomBlobDescriptor;
+  }>[];
+  /** Metadata fields ready to merge into `MarmotGroupData`. */
+  metadata: GroupImageMetadataFields;
 };
 
 // ---------------------------------------------------------------------------
@@ -102,9 +126,19 @@ export function encryptGroupImage(
   const encrypted = chacha20poly1305(encryptionKey, imageNonce).encrypt(
     imageData,
   );
+
+  // Calculate the hash of the encrypted image
   const imageHash = sha256(encrypted);
 
-  return { encrypted, imageKey, imageNonce, imageHash, imageUploadKey };
+  // Create an object all all MIP-01 metadata fields
+  const metadata: GroupImageMetadataFields = {
+    imageHash: imageHash,
+    imageKey: imageKey,
+    imageNonce: imageNonce,
+    imageUploadKey: imageUploadKey,
+  };
+
+  return { encrypted, metadata };
 }
 
 /**
@@ -118,11 +152,15 @@ export function encryptGroupImage(
  */
 export function decryptGroupImage(
   encrypted: Uint8Array,
-  imageKey: Uint8Array,
-  imageNonce: Uint8Array,
+  metadata: Pick<GroupImageMetadataFields, "imageKey" | "imageNonce">,
 ): Uint8Array {
-  const encryptionKey = deriveMIP01Key(imageKey, MIP01_IMAGE_ENCRYPTION_LABEL);
-  return chacha20poly1305(encryptionKey, imageNonce).decrypt(encrypted);
+  const encryptionKey = deriveMIP01Key(
+    metadata.imageKey,
+    MIP01_IMAGE_ENCRYPTION_LABEL,
+  );
+  return chacha20poly1305(encryptionKey, metadata.imageNonce).decrypt(
+    encrypted,
+  );
 }
 
 /**
@@ -149,4 +187,106 @@ export function deriveGroupImageBlossomAuthKeypair(
   const secretKey = deriveMIP01Key(imageUploadKey, MIP01_BLOSSOM_LABEL);
   const pubkey = getPublicKey(secretKey);
   return { secretKey, pubkey };
+}
+
+export type UploadGroupImageOptions = {
+  /** The raw image bytes to encrypt and upload. */
+  imageData: Uint8Array;
+  /** One or more Blossom server base URLs. */
+  servers: string[];
+  /** Optional fetch implementation for testing or custom runtimes. */
+  fetchImplementation?: typeof fetch;
+};
+
+/**
+ * Encrypts a group image, signs one BUD-11 auth event with the derived image
+ * upload key, and uploads the encrypted blob to all supplied Blossom servers.
+ */
+export async function uploadGroupImage(
+  options: UploadGroupImageOptions,
+): Promise<UploadGroupImageResult> {
+  const { imageData, servers, fetchImplementation = fetch } = options;
+
+  if (servers.length === 0) {
+    throw new Error("uploadGroupImage requires at least one Blossom server");
+  }
+
+  const { encrypted, metadata } = encryptGroupImage(imageData);
+
+  const imageHashHex = bytesToHex(metadata.imageHash);
+  const normalizedServers = servers.map((server) => new URL(server));
+  const authEvent = createBlossomUploadAuthEvent({
+    imageHashHex,
+    imageUploadKey: metadata.imageUploadKey,
+    servers: normalizedServers,
+  });
+  const authorizationHeader = `Nostr ${encodeAuthEvent(authEvent)}`;
+  const uploadBody = Uint8Array.from(encrypted).buffer;
+
+  const uploads = await Promise.allSettled(
+    normalizedServers.map(async (server) => {
+      const response = await fetchImplementation(new URL("/upload", server), {
+        method: "PUT",
+        headers: {
+          Authorization: authorizationHeader,
+          "X-SHA-256": imageHashHex,
+        },
+        body: uploadBody,
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Failed to upload group image to ${server.toString()}: ${response.status}`,
+        );
+      }
+
+      const descriptor = (await response.json()) as BlossomBlobDescriptor;
+      if (descriptor.sha256 !== imageHashHex) {
+        throw new Error(
+          `Blossom server returned mismatched sha256 for ${server.toString()}`,
+        );
+      }
+
+      return { server, descriptor };
+    }),
+  );
+
+  return {
+    encrypted,
+    uploads,
+    metadata,
+  };
+}
+
+function createBlossomUploadAuthEvent(args: {
+  imageHashHex: string;
+  imageUploadKey: Uint8Array;
+  servers: URL[];
+}): NostrEvent {
+  const { imageHashHex, imageUploadKey } = args;
+  const { secretKey } = deriveGroupImageBlossomAuthKeypair(imageUploadKey);
+  const createdAt = unixNow();
+
+  return finalizeEvent(
+    {
+      kind: 24242,
+      created_at: createdAt,
+      content: "",
+      tags: [
+        ["t", "upload"],
+        ["expiration", String(createdAt + 300)],
+        ["x", imageHashHex],
+      ],
+    },
+    secretKey,
+  );
+}
+
+function encodeAuthEvent(event: NostrEvent): string {
+  const json = new TextEncoder().encode(JSON.stringify(event));
+  return base64
+    .encode(json)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }

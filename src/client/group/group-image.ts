@@ -63,21 +63,14 @@ export class GroupImage {
         throw new Error("group image hash mismatch");
       }
 
-      const plaintext = decryptGroupImage(
-        encrypted,
-        this.groupData.imageKey,
-        this.groupData.imageNonce,
-      );
+      const plaintext = decryptGroupImage(encrypted, this.groupData);
 
       this.#groupImageData = plaintext;
       this.#groupImageHashHex = imageHashHex;
 
-      const headerMimeType = response.headers.get("content-type");
       this.#groupImageMimeType = options?.mimeType
         ? canonicalizeMimeType(options.mimeType)
-        : headerMimeType
-          ? canonicalizeMimeType(headerMimeType)
-          : null;
+        : null;
 
       return plaintext;
     })();
@@ -107,8 +100,7 @@ export class GroupImage {
     this.revokeObjectUrl();
 
     const blob = new Blob([Uint8Array.from(plaintext).buffer], {
-      type:
-        options?.mimeType ??
+      type: options?.mimeType ??
         this.#groupImageMimeType ??
         "application/octet-stream",
     });

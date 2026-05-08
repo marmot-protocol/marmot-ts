@@ -7,6 +7,7 @@ describe("exports", () => {
       [
         "ADDRESSABLE_KEY_PACKAGE_KIND",
         "GROUP_EVENT_KIND",
+        "GroupImage",
         "GroupMediaStore",
         "GroupRumorHistory",
         "GroupsManager",

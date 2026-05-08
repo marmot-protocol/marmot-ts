@@ -1,5 +1,6 @@
 import { EventSigner } from "applesauce-core/event-factory";
 import {
+  type ClientState,
   CiphersuiteImpl,
   createCommit,
   defaultCryptoProvider,
@@ -9,13 +10,17 @@ import {
   processMessage,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { getMarmotGroupData } from "../../../core/client-state.js";
 import { SerializedClientState } from "../../../core/client-state.js";
 import { createCredential } from "../../../core/credential.js";
+import { replaceExtension } from "../../../core/extensions.js";
 import { createSimpleGroup } from "../../../core/group.js";
+import { encryptGroupImage } from "../../../core/group-image.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
+import { marmotGroupDataToExtension } from "../../../core/marmot-group-data.js";
 import { InMemoryKeyValueStore } from "../../../extra";
 import type { NostrNetworkInterface } from "../../nostr-interface.js";
 import {
@@ -37,6 +42,265 @@ async function createTestGroupState(
   );
   return { clientState, kp };
 }
+
+function createUnusedNetwork(): NostrNetworkInterface {
+  return {
+    request: async () => {
+      throw new Error("not used");
+    },
+    subscription: () => {
+      throw new Error("not used");
+    },
+    publish: async () => {
+      throw new Error("not used");
+    },
+    getUserInboxRelays: async () => {
+      throw new Error("not used");
+    },
+  };
+}
+
+function withGroupImage(
+  state: ClientState,
+  image: {
+    imageHash: Uint8Array;
+    imageKey: Uint8Array;
+    imageNonce: Uint8Array;
+    imageUploadKey: Uint8Array;
+  },
+): ClientState {
+  const groupData = getMarmotGroupData(state);
+  const extension = marmotGroupDataToExtension({
+    ...groupData,
+    ...image,
+  });
+
+  return {
+    ...state,
+    groupContext: {
+      ...state.groupContext,
+      extensions: replaceExtension(
+        state.groupContext.extensions,
+        extension,
+      ) as any,
+    },
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("MarmotGroup group image helpers", () => {
+  it("returns null when no group image metadata exists", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { clientState } = await createTestGroupState(adminPubkey, impl);
+
+    const group = new MarmotGroup(clientState, {
+      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      signer: {
+        getPublicKey: async () => adminPubkey,
+      } as EventSigner,
+      ciphersuite: impl,
+      network: createUnusedNetwork(),
+    });
+
+    expect(group.image).toBeNull();
+  });
+
+  it("downloads and decrypts the group image once per hash", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { clientState } = await createTestGroupState(adminPubkey, impl);
+    const image = new Uint8Array([1, 2, 3, 4]);
+    const encryptedImage = encryptGroupImage(image);
+    const stateWithImage = withGroupImage(clientState, encryptedImage);
+
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(encryptedImage.encrypted, {
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const group = new MarmotGroup(stateWithImage, {
+      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      signer: {
+        getPublicKey: async () => adminPubkey,
+      } as EventSigner,
+      ciphersuite: impl,
+      network: createUnusedNetwork(),
+    });
+
+    expect(group.image?.hasImage()).toBe(true);
+
+    await expect(
+      group.image?.download("https://example.com/group-image"),
+    ).resolves.toEqual(image);
+    await expect(
+      group.image?.download("https://example.com/group-image"),
+    ).resolves.toEqual(image);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates and reuses a group image object URL until the image changes", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { clientState } = await createTestGroupState(adminPubkey, impl);
+    const firstImage = encryptGroupImage(new Uint8Array([1, 2, 3]));
+    const secondImage = encryptGroupImage(new Uint8Array([4, 5, 6]));
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("first")) {
+        return new Response(firstImage.encrypted, {
+          headers: { "content-type": "image/png; charset=utf-8" },
+        });
+      }
+
+      return new Response(secondImage.encrypted, {
+        headers: { "content-type": "image/jpeg" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const createObjectURL = vi.fn(() => "blob:group-image");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = createObjectURL;
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
+
+    const group = new MarmotGroup(withGroupImage(clientState, firstImage), {
+      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      signer: {
+        getPublicKey: async () => adminPubkey,
+      } as EventSigner,
+      ciphersuite: impl,
+      network: createUnusedNetwork(),
+    });
+
+    const firstGroupImage = group.image;
+    expect(firstGroupImage).not.toBeNull();
+    if (!firstGroupImage) throw new Error("expected group image");
+
+    await expect(
+      firstGroupImage.getObjectUrl("https://example.com/first"),
+    ).resolves.toBe("blob:group-image");
+    await expect(
+      firstGroupImage.getObjectUrl("https://example.com/first"),
+    ).resolves.toBe("blob:group-image");
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(0);
+
+    group.state = withGroupImage(group.state, secondImage);
+
+    const secondGroupImage = group.image;
+    expect(secondGroupImage).not.toBeNull();
+    expect(secondGroupImage).not.toBe(firstGroupImage);
+
+    if (!secondGroupImage) throw new Error("expected group image");
+
+    await secondGroupImage.getObjectUrl("https://example.com/second");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(createObjectURL).toHaveBeenCalledTimes(2);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  it("revokes the group image object URL when destroyed", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { clientState } = await createTestGroupState(adminPubkey, impl);
+    const encryptedImage = encryptGroupImage(new Uint8Array([1, 2, 3]));
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(encryptedImage.encrypted, {
+            headers: { "content-type": "image/png" },
+          }),
+      ),
+    );
+
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = vi.fn(() => "blob:group-image");
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
+
+    const group = new MarmotGroup(withGroupImage(clientState, encryptedImage), {
+      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      signer: {
+        getPublicKey: async () => adminPubkey,
+      } as EventSigner,
+      ciphersuite: impl,
+      network: createUnusedNetwork(),
+    });
+
+    await group.image?.getObjectUrl("https://example.com/group-image");
+    await group.destroy();
+
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws when the downloaded encrypted blob hash does not match group metadata", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { clientState } = await createTestGroupState(adminPubkey, impl);
+    const encryptedImage = encryptGroupImage(new Uint8Array([1, 2, 3]));
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(new Uint8Array([9, 9, 9]), {
+            headers: { "content-type": "image/png" },
+          }),
+      ),
+    );
+
+    const group = new MarmotGroup(withGroupImage(clientState, encryptedImage), {
+      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      signer: {
+        getPublicKey: async () => adminPubkey,
+      } as EventSigner,
+      ciphersuite: impl,
+      network: createUnusedNetwork(),
+    });
+
+    await expect(
+      group.image?.download("https://example.com/group-image"),
+    ).rejects.toThrow("group image hash mismatch");
+  });
+});
 
 describe("MarmotGroup admin verification (MIP-03)", () => {
   it("rejects commits from non-admin members", async () => {

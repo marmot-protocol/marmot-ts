@@ -395,7 +395,9 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       const publishedChanged =
         existing.published === undefined ||
         published.length !== existing.published.length ||
-        !published.every((e, index) => e.id === existing.published?.[index]?.id);
+        !published.every(
+          (e, index) => e.id === existing.published?.[index]?.id,
+        );
 
       if (!publishedChanged && !shouldPersistIdentifier) {
         return;
@@ -475,15 +477,13 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
         (pkg): pkg is LocalKeyPackage =>
           pkg !== null && pkg.privatePackage !== undefined,
       )
-      .map(
-        ({ keyPackageRef, publicPackage, identifier, published, used }) => ({
-          keyPackageRef,
-          publicPackage,
-          ...(identifier !== undefined ? { identifier } : {}),
-          ...(published !== undefined ? { published } : {}),
-          ...(used !== undefined ? { used } : {}),
-        }),
-      );
+      .map(({ keyPackageRef, publicPackage, identifier, published, used }) => ({
+        keyPackageRef,
+        publicPackage,
+        ...(identifier !== undefined ? { identifier } : {}),
+        ...(published !== undefined ? { published } : {}),
+        ...(used !== undefined ? { used } : {}),
+      }));
   }
 
   // ---------------------------------------------------------------------------

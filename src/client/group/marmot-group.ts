@@ -1,3 +1,4 @@
+import { sha256 } from "@noble/hashes/sha2.js";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { EventSigner } from "applesauce-core/event-factory";
 import {
@@ -29,8 +30,8 @@ import {
   wireformats,
 } from "ts-mls";
 
-import { sha256 } from "@noble/hashes/sha2.js";
 import { marmotAuthService } from "../../core/auth-service.js";
+import type { SerializedClientState } from "../../core/client-state.js";
 import {
   getMarmotGroupData,
   serializeClientState,
@@ -60,11 +61,11 @@ import {
 } from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
 import { logger } from "../../utils/debug.js";
-import type { GenericKeyValueStore } from "../../utils/key-value.js";
-import type { SerializedClientState } from "../../core/client-state.js";
 import { createGiftWrap, hasAck } from "../../utils/index.js";
+import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { unixNow } from "../../utils/nostr.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
+import { GroupImage } from "./group-image.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 import { proposeLeaveGroup } from "./proposals/leave-group.js";
 
@@ -349,6 +350,9 @@ export class MarmotGroup<
   /** In-flight media decrypts keyed by plaintext SHA-256 hex. */
   readonly #decryptingMedia = new Map<string, Promise<StoredMedia>>();
 
+  #image: GroupImage | null = null;
+  #imageHashHex: string | null = null;
+
   get id() {
     return this.state.groupContext.groupId;
   }
@@ -365,17 +369,58 @@ export class MarmotGroup<
     if (!this.#groupData) this.#groupData = getMarmotGroupData(this.state);
     return this.#groupData;
   }
+
+  /** Returns the {@link GroupImage} for the group, or null if the group does not have an image */
+  get image() {
+    const groupData = this.groupData;
+
+    // Destroy the image and reset the hash if the group data does not have image metadata
+    if (!groupData || !hasGroupImageMetadata(groupData)) {
+      this.#image?.destroy();
+      this.#image = null;
+      this.#imageHashHex = null;
+      return null;
+    }
+
+    const imageHashHex = bytesToHex(groupData.imageHash);
+
+    // Create a new image if the hash has changed
+    if (!this.#image || this.#imageHashHex !== imageHashHex) {
+      this.#image?.destroy();
+      this.#image = new GroupImage(groupData);
+      this.#imageHashHex = imageHashHex;
+    }
+
+    return this.#image;
+  }
+
   get unappliedProposals() {
     return this.state.unappliedProposals;
   }
 
   /**
    * Overrides the current group state
-   * @warning It is not recommended to use this
+   * @warning It is not recommended to directly set this
    */
   set state(newState: ClientState) {
+    const previousGroupData = this.groupData;
+    const previousImageHashHex = previousGroupData
+      ? bytesToHex(previousGroupData.imageHash)
+      : null;
+
     // Read new group data from the state
-    this.#groupData = getMarmotGroupData(newState);
+    const nextGroupData = getMarmotGroupData(newState);
+    this.#groupData = nextGroupData;
+
+    // When the group data changes, we need to destroy the image and reset the hash
+    const nextImageHashHex = nextGroupData
+      ? bytesToHex(nextGroupData.imageHash)
+      : null;
+    if (previousImageHashHex !== nextImageHashHex) {
+      this.#image?.destroy();
+      this.#image = null;
+      this.#imageHashHex = null;
+    }
 
     // Set new state and mark as dirty
     this.#state = newState;
@@ -1587,6 +1632,10 @@ export class MarmotGroup<
   async destroy() {
     this.log("destroying group");
 
+    this.#image?.destroy();
+    this.#image = null;
+    this.#imageHashHex = null;
+
     this.log("clearing group history");
     if (this.history) await this.history.purgeMessages();
 
@@ -1599,4 +1648,12 @@ export class MarmotGroup<
     // Emit the destroyed event
     this.emit("destroyed", this);
   }
+}
+
+function hasGroupImageMetadata(groupData: MarmotGroupData): boolean {
+  return (
+    groupData.imageHash.length === 32 &&
+    groupData.imageKey.length === 32 &&
+    groupData.imageNonce.length === 12
+  );
 }

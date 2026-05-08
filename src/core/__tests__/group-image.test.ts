@@ -1,5 +1,10 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
+import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
+import {
+  expand as hkdf_expand,
+  extract as hkdf_extract,
+} from "@noble/hashes/hkdf.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,6 +12,10 @@ import {
   deriveGroupImageBlossomAuthKeypair,
   encryptGroupImage,
 } from "../group-image.js";
+
+const enc = new TextEncoder();
+const MIP01_IMAGE_ENCRYPTION_LABEL = enc.encode("mip01-image-encryption-v2");
+const MIP01_BLOSSOM_LABEL = enc.encode("mip01-blossom-upload-v2");
 
 // ---------------------------------------------------------------------------
 // encryptGroupImage
@@ -33,6 +42,27 @@ describe("encryptGroupImage", () => {
     const image = randomBytes(128);
     const { encrypted, imageHash } = encryptGroupImage(image);
     expect(imageHash).toEqual(sha256(encrypted));
+  });
+
+  it("derives the encryption key from imageKey using HKDF-SHA256", () => {
+    const image = randomBytes(128);
+    const { encrypted, imageKey, imageNonce } = encryptGroupImage(image);
+    const prk = hkdf_extract(sha256, imageKey, new Uint8Array(0));
+    const encryptionKey = hkdf_expand(
+      sha256,
+      prk,
+      MIP01_IMAGE_ENCRYPTION_LABEL,
+      32,
+    );
+
+    expect(encrypted).toEqual(
+      chacha20poly1305(encryptionKey, imageNonce).encrypt(image),
+    );
+  });
+
+  it("generates imageUploadKey independently from imageKey", () => {
+    const { imageKey, imageUploadKey } = encryptGroupImage(randomBytes(64));
+    expect(bytesToHex(imageUploadKey)).not.toBe(bytesToHex(imageKey));
   });
 
   it("encrypted bytes are longer than plaintext (Poly1305 tag adds 16 bytes)", () => {
@@ -111,22 +141,34 @@ describe("deriveGroupImageBlossomAuthKeypair", () => {
     expect(/^[0-9a-f]{64}$/.test(pubkey)).toBe(true);
   });
 
-  it("is deterministic — same imageKey yields same keypair", () => {
-    const imageKey = randomBytes(32);
-    const a = deriveGroupImageBlossomAuthKeypair(imageKey);
-    const b = deriveGroupImageBlossomAuthKeypair(imageKey);
+  it("is deterministic — same imageUploadKey yields same keypair", () => {
+    const imageUploadKey = randomBytes(32);
+    const a = deriveGroupImageBlossomAuthKeypair(imageUploadKey);
+    const b = deriveGroupImageBlossomAuthKeypair(imageUploadKey);
 
     expect(bytesToHex(a.secretKey)).toBe(bytesToHex(b.secretKey));
     expect(a.pubkey).toBe(b.pubkey);
   });
 
-  it("matches the imageUploadKey stored by encryptGroupImage", () => {
-    const { imageKey, imageUploadKey } = encryptGroupImage(randomBytes(64));
-    const { secretKey } = deriveGroupImageBlossomAuthKeypair(imageKey);
-    expect(bytesToHex(secretKey)).toBe(bytesToHex(imageUploadKey));
+  it("derives the upload secret from imageUploadKey using HKDF-SHA256", () => {
+    const imageUploadKey = randomBytes(32);
+    const { secretKey } = deriveGroupImageBlossomAuthKeypair(imageUploadKey);
+    const prk = hkdf_extract(sha256, imageUploadKey, new Uint8Array(0));
+    const expectedSecretKey = hkdf_expand(sha256, prk, MIP01_BLOSSOM_LABEL, 32);
+
+    expect(bytesToHex(secretKey)).toBe(bytesToHex(expectedSecretKey));
   });
 
-  it("different imageKeys yield different keypairs (domain separation)", () => {
+  it("matches the upload seed stored by encryptGroupImage", () => {
+    const { imageUploadKey } = encryptGroupImage(randomBytes(64));
+    const { secretKey } = deriveGroupImageBlossomAuthKeypair(imageUploadKey);
+    const prk = hkdf_extract(sha256, imageUploadKey, new Uint8Array(0));
+    const expectedSecretKey = hkdf_expand(sha256, prk, MIP01_BLOSSOM_LABEL, 32);
+
+    expect(bytesToHex(secretKey)).toBe(bytesToHex(expectedSecretKey));
+  });
+
+  it("different imageUploadKeys yield different keypairs (domain separation)", () => {
     const a = deriveGroupImageBlossomAuthKeypair(randomBytes(32));
     const b = deriveGroupImageBlossomAuthKeypair(randomBytes(32));
     expect(a.pubkey).not.toBe(b.pubkey);

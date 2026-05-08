@@ -10,7 +10,10 @@
  */
 
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
-import { expand as hkdf_expand } from "@noble/hashes/hkdf.js";
+import {
+  expand as hkdf_expand,
+  extract as hkdf_extract,
+} from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import { getPublicKey } from "applesauce-core/helpers";
@@ -21,8 +24,18 @@ import { getPublicKey } from "applesauce-core/helpers";
 
 const enc = new TextEncoder();
 
-/** HKDF info label for MIP-01 Blossom upload keypair derivation. */
-const MIP01_BLOSSOM_LABEL = enc.encode("mip01-blossom-upload-v1");
+const EMPTY_HKDF_SALT = new Uint8Array(0);
+
+/** HKDF info label for MIP-01 v2 image encryption key derivation. */
+const MIP01_IMAGE_ENCRYPTION_LABEL = enc.encode("mip01-image-encryption-v2");
+
+/** HKDF info label for MIP-01 v2 Blossom upload keypair derivation. */
+const MIP01_BLOSSOM_LABEL = enc.encode("mip01-blossom-upload-v2");
+
+function deriveMIP01Key(seed: Uint8Array, info: Uint8Array): Uint8Array {
+  const prk = hkdf_extract(sha256, seed, EMPTY_HKDF_SALT);
+  return hkdf_expand(sha256, prk, info, 32);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,10 +58,10 @@ export type EncryptGroupImageResult = {
   /** SHA-256 of `encrypted`. Store in `MarmotGroupData.imageHash`. */
   imageHash: Uint8Array;
   /**
-   * Pre-derived Blossom upload keypair seed (32 bytes).
+   * Independent Blossom upload seed (32 bytes).
    * Store in `MarmotGroupData.imageUploadKey`.
    *
-   * Equal to `HKDF-Expand(imageKey, "mip01-blossom-upload-v1", 32)`.
+   * Used to derive the Blossom authentication keypair via HKDF-SHA256.
    * Can also be recomputed at any time via {@link deriveGroupImageBlossomAuthKeypair}.
    */
   imageUploadKey: Uint8Array;
@@ -71,8 +84,8 @@ export type GroupImageBlossomAuthKeypair = {
 /**
  * Encrypts a group image using ChaCha20-Poly1305 (MIP-01).
  *
- * Generates cryptographically random `imageKey` and `imageNonce`, encrypts
- * the image, and pre-derives the Blossom upload keypair seed. All output
+ * Generates cryptographically random image and upload seeds, derives the
+ * ChaCha20-Poly1305 key with HKDF-SHA256, and encrypts the image. All output
  * fields should be stored in `MarmotGroupData` via an MLS proposal/commit.
  *
  * @param imageData - The raw image bytes to encrypt
@@ -83,10 +96,13 @@ export function encryptGroupImage(
 ): EncryptGroupImageResult {
   const imageKey = randomBytes(32);
   const imageNonce = randomBytes(12);
+  const imageUploadKey = randomBytes(32);
+  const encryptionKey = deriveMIP01Key(imageKey, MIP01_IMAGE_ENCRYPTION_LABEL);
 
-  const encrypted = chacha20poly1305(imageKey, imageNonce).encrypt(imageData);
+  const encrypted = chacha20poly1305(encryptionKey, imageNonce).encrypt(
+    imageData,
+  );
   const imageHash = sha256(encrypted);
-  const imageUploadKey = hkdf_expand(sha256, imageKey, MIP01_BLOSSOM_LABEL, 32);
 
   return { encrypted, imageKey, imageNonce, imageHash, imageUploadKey };
 }
@@ -105,7 +121,8 @@ export function decryptGroupImage(
   imageKey: Uint8Array,
   imageNonce: Uint8Array,
 ): Uint8Array {
-  return chacha20poly1305(imageKey, imageNonce).decrypt(encrypted);
+  const encryptionKey = deriveMIP01Key(imageKey, MIP01_IMAGE_ENCRYPTION_LABEL);
+  return chacha20poly1305(encryptionKey, imageNonce).decrypt(encrypted);
 }
 
 /**
@@ -114,22 +131,22 @@ export function decryptGroupImage(
  *
  * Derivation:
  * ```
- * upload_secret = HKDF-Expand(imageKey, "mip01-blossom-upload-v1", 32)
+ * prk = HKDF-Extract-SHA256(salt="", IKM=imageUploadKey)
+ * upload_secret = HKDF-Expand-SHA256(prk, "mip01-blossom-upload-v2", 32)
  * upload_keypair = secp256k1_keypair_from_secret(upload_secret)
  * ```
  *
- * This is the same value stored in `MarmotGroupData.imageUploadKey`. The
- * function exists so callers can re-derive the keypair from a previously
- * stored `imageKey` at any time — for example, to delete an old image blob
- * from Blossom after updating the group avatar.
+ * The function exists so callers can derive the keypair from a previously
+ * stored `imageUploadKey` — for example, to delete an old image blob from
+ * Blossom after updating the group avatar.
  *
- * @param imageKey - `MarmotGroupData.imageKey` (32 bytes)
+ * @param imageUploadKey - `MarmotGroupData.imageUploadKey` (32 bytes)
  * @returns The Blossom upload/delete keypair
  */
 export function deriveGroupImageBlossomAuthKeypair(
-  imageKey: Uint8Array,
+  imageUploadKey: Uint8Array,
 ): GroupImageBlossomAuthKeypair {
-  const secretKey = hkdf_expand(sha256, imageKey, MIP01_BLOSSOM_LABEL, 32);
+  const secretKey = deriveMIP01Key(imageUploadKey, MIP01_BLOSSOM_LABEL);
   const pubkey = getPublicKey(secretKey);
   return { secretKey, pubkey };
 }

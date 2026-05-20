@@ -37,8 +37,26 @@
 - Shared test doubles live in `src/__tests__/helpers`; prefer those over inline mocks for network/client flows.
 - Integration tests use in-memory stores and mock Nostr networking, not external relays or services.
 
-## Docs And Release
+## Docs
 
 - When adding a docs page under `docs/`, also add it to `.vitepress/config.ts`; VitePress uses `srcDir: "docs"`.
 - TypeDoc reference is generated from `src/index.ts` into `.vitepress/dist/reference` using `typedoc.json` and `typedocs/cascade-category.mjs`.
-- User-facing package changes should include a Changesets entry. `.changeset/config.json` ignores the `examples` package and targets `master` as the base branch.
+
+## Changesets
+
+- Add a changeset for user-facing library changes while the PR context is fresh; skip for docs-only, tests-only, examples-only, and internal refactors with no package behavior/API impact.
+- Create one with `pnpm changeset` or add `.changeset/<unique-name>.md` manually; this repo publishes only `@internet-privacy/marmot-ts` and `.changeset/config.json` ignores `examples`.
+- Use `patch` for fixes/internal behavior changes, `minor` for new backward-compatible APIs/features, and `major` for breaking API or behavior changes.
+- Each changeset body must be one sentence describing one user-facing change; if a PR has multiple user-facing changes, add multiple changesets.
+- Do not use markdown lists or tables in changeset bodies.
+- Manual changeset shape:
+
+```md
+---
+"@internet-privacy/marmot-ts": patch
+---
+
+Describe the user-facing change in one sentence.
+```
+
+- Never publish packages locally; all package releases must happen from the GitHub Changesets workflow on `master`.

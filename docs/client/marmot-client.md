@@ -18,7 +18,7 @@ Once you have a client instance, you'll use it to get [`MarmotGroup`](/client/ma
 Setting up a client requires providing the infrastructure adapters:
 
 ```typescript
-import { MarmotClient } from "@internet-privacy/marmots";
+import { MarmotClient } from "@internet-privacy/marmot-ts";
 
 const client = new MarmotClient({
   signer: yourNostrSigner,

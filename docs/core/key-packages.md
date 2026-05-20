@@ -29,7 +29,7 @@ type CompleteKeyPackage = {
 ## Generating Key Packages
 
 ```typescript
-import { generateKeyPackage } from "@internet-privacy/marmots";
+import { generateKeyPackage } from "@internet-privacy/marmot-ts";
 import { CipherSuite } from "ts-mls";
 
 const keyPackage = await generateKeyPackage({
@@ -59,7 +59,7 @@ These requirements are automatically enforced by `generateKeyPackage()`.
 MLS identifies key packages by their "reference" (a hash):
 
 ```typescript
-import { calculateKeyPackageRef } from "@internet-privacy/marmots";
+import { calculateKeyPackageRef } from "@internet-privacy/marmot-ts";
 
 const ref = calculateKeyPackageRef(keyPackage.publicPackage, ciphersuiteImpl);
 
@@ -69,7 +69,7 @@ const ref = calculateKeyPackageRef(keyPackage.publicPackage, ciphersuiteImpl);
 ## Default Extensions
 
 ```typescript
-import { keyPackageDefaultExtensions } from "@internet-privacy/marmots";
+import { keyPackageDefaultExtensions } from "@internet-privacy/marmot-ts";
 
 const extensions = keyPackageDefaultExtensions();
 // Returns: [{ extensionType: 0x000a, extensionData: ... }]
@@ -84,7 +84,7 @@ Key packages declare which MLS features they support:
 import {
   defaultCapabilities,
   ensureMarmotCapabilities,
-} from "@internet-privacy/marmots";
+} from "@internet-privacy/marmot-ts";
 
 // Get Marmot-compliant default capabilities
 const caps = defaultCapabilities();
@@ -128,7 +128,7 @@ const updated = ensureMarmotCapabilities(myCapabilities);
 import {
   generateKeyPackage,
   calculateKeyPackageRef,
-} from "@internet-privacy/marmots";
+} from "@internet-privacy/marmot-ts";
 import { CipherSuite } from "ts-mls";
 
 // 1. Generate key package

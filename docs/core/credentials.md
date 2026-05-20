@@ -18,7 +18,7 @@ This separation allows for key rotation and device-specific signing keys while m
 ## Creating Credentials
 
 ```typescript
-import { createCredential } from "@internet-privacy/marmots";
+import { createCredential } from "@internet-privacy/marmot-ts";
 
 // Create MLS credential from Nostr pubkey (hex string)
 const credential = createCredential(nostrPubkey);
@@ -29,7 +29,7 @@ The credential embeds the Nostr public key as the identity.
 ## Extracting Pubkeys
 
 ```typescript
-import { getCredentialPubkey } from "@internet-privacy/marmots";
+import { getCredentialPubkey } from "@internet-privacy/marmot-ts";
 
 // Get Nostr pubkey from MLS credential
 const pubkey = getCredentialPubkey(credential);
@@ -40,7 +40,7 @@ Returns the Nostr public key as a hex string.
 ## Comparing Credentials
 
 ```typescript
-import { isSameCredential } from "@internet-privacy/marmots";
+import { isSameCredential } from "@internet-privacy/marmot-ts";
 
 if (isSameCredential(credential1, credential2)) {
   // Same identity (same Nostr pubkey)
@@ -60,7 +60,7 @@ import {
   createCredential,
   getCredentialPubkey,
   isSameCredential,
-} from "@internet-privacy/marmots";
+} from "@internet-privacy/marmot-ts";
 
 // User's Nostr pubkey
 const myPubkey = "0x1234...";
@@ -82,7 +82,7 @@ assert(!isSameCredential(myCredential, otherCredential));
 Credentials are validated by the `marmotAuthService`:
 
 ```typescript
-import { marmotAuthService } from "@internet-privacy/marmots";
+import { marmotAuthService } from "@internet-privacy/marmot-ts";
 
 // Used internally by MLS library
 const isValid = await marmotAuthService.validateCredential(

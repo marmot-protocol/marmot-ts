@@ -47,15 +47,15 @@ Nostr is a decentralized protocol for distributing signed events over relays. Ma
 ::: code-group
 
 ```bash [npm]
-npm install @internet-privacy/marmots
+npm install @internet-privacy/marmot-ts
 ```
 
 ```bash [pnpm]
-pnpm add @internet-privacy/marmots
+pnpm add @internet-privacy/marmot-ts
 ```
 
 ```bash [yarn]
-yarn add @internet-privacy/marmots
+yarn add @internet-privacy/marmot-ts
 ```
 
 :::
@@ -138,7 +138,7 @@ const network = {
 ## Initialize the Client
 
 ```typescript
-import { MarmotClient } from "@internet-privacy/marmots";
+import { MarmotClient } from "@internet-privacy/marmot-ts";
 
 const client = new MarmotClient({
   signer: yourNostrSigner, // EventSigner from applesauce-core or similar
@@ -161,7 +161,7 @@ import {
   createCredential,
   generateKeyPackage,
   createKeyPackageEvent,
-} from "@internet-privacy/marmots";
+} from "@internet-privacy/marmot-ts";
 import { defaultCryptoProvider } from "ts-mls";
 
 // Get ciphersuite implementation
@@ -251,7 +251,7 @@ await group.sendApplicationRumor(rumor);
 ## Receive Messages
 
 ```typescript
-import { deserializeApplicationRumor } from "@internet-privacy/marmots";
+import { deserializeApplicationRumor } from "@internet-privacy/marmot-ts";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 // Subscribe to group events

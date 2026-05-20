@@ -18,7 +18,7 @@ The Welcome allows them to decrypt past messages from the current epoch and part
 After creating a commit that adds members, you get Welcome messages:
 
 ```typescript
-import { createWelcomeRumor } from "@internet-privacy/marmots";
+import { createWelcomeRumor } from "@internet-privacy/marmot-ts";
 
 // After MLS createCommit with add proposals
 const { welcome } = commitResult;
@@ -49,7 +49,7 @@ tags:
 Welcome messages are wrapped in NIP-59 gift wraps for privacy (MIP-00):
 
 ```typescript
-import { createWelcomeRumor } from "@internet-privacy/marmots";
+import { createWelcomeRumor } from "@internet-privacy/marmot-ts";
 import { createGiftWrap } from "applesauce-core/nip59";
 
 // 1. Create welcome rumor
@@ -78,7 +78,7 @@ See [MIP-00](https://github.com/parres-hq/marmot/blob/main/00.md) for gift wrap 
 When you receive a gift wrap with a Welcome:
 
 ```typescript
-import { getWelcome } from "@internet-privacy/marmots";
+import { getWelcome } from "@internet-privacy/marmot-ts";
 import { unwrapGiftWrap } from "applesauce-core/nip59";
 
 // 1. Unwrap gift wrap
@@ -93,7 +93,7 @@ const welcome = getWelcome(rumor);
 ## Joining from Welcome
 
 ```typescript
-import { getWelcome } from "@internet-privacy/marmots";
+import { getWelcome } from "@internet-privacy/marmot-ts";
 import { joinGroup } from "ts-mls";
 
 // Get Welcome from rumor

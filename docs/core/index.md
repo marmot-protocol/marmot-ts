@@ -31,7 +31,7 @@ import {
   generateKeyPackage,
   createGroup,
   // ... other exports
-} from "@internet-privacy/marmots";
+} from "@internet-privacy/marmot-ts";
 ```
 
 ## Topics

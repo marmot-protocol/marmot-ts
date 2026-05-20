@@ -35,7 +35,7 @@ import {
   MarmotClient,
   MarmotGroup,
   Proposals,
-} from "@internet-privacy/marmots";
+} from "@internet-privacy/marmot-ts";
 ```
 
 ## Topics
@@ -84,7 +84,7 @@ For fine-grained control or protocol research, use the [Core module](/core/) dir
 ## Quick Example
 
 ```typescript
-import { MarmotClient } from "@internet-privacy/marmots";
+import { MarmotClient } from "@internet-privacy/marmot-ts";
 
 // Create client
 const client = new MarmotClient({

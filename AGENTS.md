@@ -1,289 +1,44 @@
-# Agent Guidelines for @internet-privacy/marmot-ts
+# Agent Notes for marmot-ts
 
-This document provides essential information for AI coding agents working in this repository.
+## Commands
 
-## Project Overview
+- Use `pnpm` in this workspace; CI installs with pnpm 10 and `--frozen-lockfile`.
+- `pnpm build` runs `rimraf ./dist` then `tsc -b tsconfig.build.json` for the library only.
+- `pnpm compile` is the focused library typecheck/build step; `pnpm lint` is only `prettier --check .`.
+- `pnpm test` starts Vitest watch mode. Use `pnpm vitest run` for a one-shot test run.
+- Run one test file with `pnpm vitest run src/path/to/file.test.ts`; tests match only `src/**/*.test.ts`.
+- Examples are a separate workspace package: `pnpm --filter examples build`, `pnpm --filter examples dev`, or root `pnpm dev`.
+- Docs are VitePress: `pnpm docs:dev`, `pnpm docs:build`; `docs:build` also runs TypeDoc via `postdocs:build`.
 
-This is a TypeScript library implementing the Marmot protocol (MLS over Nostr) using ESM modules with strict TypeScript configuration. The codebase uses pnpm, Vitest for testing, and Prettier for formatting.
+## CI Expectations
 
-## Build, Lint, and Test Commands
+- Test CI runs Vitest on Node 20/22/24, Deno 2 via `deno run -A --node-modules-dir=auto npm:vitest run`, and Bun latest/1.1 via `bun run vitest run`.
+- Build CI runs `pnpm build` and `pnpm --filter examples build`; verify examples when changing public APIs or workspace exports.
+- Pre-commit is Husky + lint-staged and only formats staged files with Prettier.
 
-### Build
+## Package Shape
 
-```bash
-pnpm build          # Clean and compile (runs clean + compile)
-pnpm compile        # TypeScript compilation only
-pnpm clean          # Remove dist/ directory
-```
+- This is an ESM TypeScript library for Marmot (MLS over Nostr). Library source is under `src/`; examples live under `examples/` and consume the package as `workspace:*`.
+- Public entrypoints are controlled by `package.json` `exports`: `.`, `./client`, `./core`, `./extra`, `./utils`, and `./mls`.
+- `src/index.ts` re-exports client/core/utils only. Extra utilities are exposed through `@internet-privacy/marmot-ts/extra`.
+- `src/mls.ts` intentionally re-exports `ts-mls` for downstream apps through the `./mls` subpath.
+- Main architecture split: `src/core` is protocol/crypto/state logic with no app I/O; `src/client` adds storage, network, lifecycle, groups, invites, and event-oriented APIs; `src/extra` contains optional store implementations.
 
-### Linting and Formatting
+## TypeScript Gotchas
 
-```bash
-pnpm lint           # Check code formatting with Prettier
-pnpm format         # Auto-format code with Prettier
-```
+- Library TS uses `module`/`moduleResolution: NodeNext`; all relative imports in `src` need the emitted `.js` extension, even when importing `.ts` files.
+- Build config is strict and fails on unused locals/parameters and missing returns; tests are excluded from `tsconfig.build.json` but included by root `tsconfig.json` with `noEmit`.
+- Use named exports; existing source has no default exports.
+- Binary/protocol data is represented with `Uint8Array`; Nostr/MLS helpers commonly use hex conversion from `@noble/hashes/utils.js`.
 
-### Testing
+## Tests
 
-```bash
-pnpm test           # Run tests in watch mode (default)
-pnpm vitest run     # Run all tests once
-vitest run src/__tests__/encoding.test.ts    # Run single test file
-vitest -t "test name"                        # Run tests matching pattern
-```
+- Tests are colocated under `src/**/__tests__` plus integration tests in `src/__tests__/integration`.
+- Shared test doubles live in `src/__tests__/helpers`; prefer those over inline mocks for network/client flows.
+- Integration tests use in-memory stores and mock Nostr networking, not external relays or services.
 
-**Test Framework:** Vitest 3.2.4
-**Test Pattern:** `src/**/*.test.ts`
-**Test Location:** All tests in `src/__tests__/` directory
+## Docs And Release
 
-## Code Style Guidelines
-
-### Module System and Imports
-
-**CRITICAL:** This project uses ESM with NodeNext module resolution. All imports MUST include `.js` extensions, even when importing `.ts` files:
-
-```typescript
-// ✓ Correct
-import { createGroup } from "./core/group.js";
-import type { NostrEvent } from "../types.js";
-
-// ✗ Wrong - will cause compilation errors
-import { createGroup } from "./core/group";
-import type { NostrEvent } from "../types";
-```
-
-**Import Order:**
-
-1. Third-party libraries
-2. Internal absolute imports
-3. Relative imports
-4. Type-only imports (using `import type`)
-
-```typescript
-import { bytesToHex } from "@noble/hashes/utils.js";
-import { EventEmitter } from "eventemitter3";
-import { createCredential } from "../core/credential.js";
-import type { NostrNetworkInterface } from "./nostr-interface.js";
-```
-
-### Naming Conventions
-
-- **Files:** kebab-case (`marmot-client.ts`, `key-package-event.ts`)
-- **Classes:** PascalCase (`MarmotClient`, `GroupStateStore`, `NoGroupRelaysError`)
-- **Functions:** camelCase (`createGroup`, `getCredentialPubkey`, `ensureMarmotCapabilities`)
-- **Constants:** UPPER_SNAKE_CASE (`WELCOME_EVENT_KIND`, `KEY_PACKAGE_KIND`)
-- **Types/Interfaces:** PascalCase (`CreateGroupParams`, `MarmotClientOptions`)
-
-### Exports
-
-**Use named exports only** - no default exports:
-
-```typescript
-// ✓ Correct
-export function createGroup(...) { }
-export const marmotAuthService = { };
-export type CreateGroupParams = { };
-export class MarmotClient { }
-
-// ✗ Wrong
-export default class MarmotClient { }
-```
-
-### TypeScript Style
-
-**Strict Mode:** All strict flags are enabled. Code must satisfy:
-
-- No implicit any types
-- Explicit return types on public functions
-- No unused locals or parameters
-- No implicit returns
-- No implicit this
-
-```typescript
-// ✓ Good - explicit types and return type
-export function encodeData(bytes: Uint8Array, format: EncodingFormat): string {
-  if (format === "base64") {
-    return bytesToBase64(bytes);
-  }
-  return bytesToHex(bytes);
-}
-
-// ✗ Bad - missing return type, implicit any
-export function encodeData(bytes, format) {
-  // ...
-}
-```
-
-**Type Guards:** Use for runtime type checking:
-
-```typescript
-export function isRumorLike(value: unknown): value is Rumor {
-  return typeof value === "object" && value !== null && "kind" in value;
-}
-```
-
-### Error Handling
-
-**Custom Error Classes:** Create specific error types:
-
-```typescript
-export class NoGroupRelaysError extends Error {
-  constructor() {
-    super("Group has no relays available to send messages.");
-  }
-}
-```
-
-**Try-Catch:** Provide informative error messages:
-
-```typescript
-try {
-  return hexToBytes(content);
-} catch (error) {
-  throw new Error(
-    `Failed to decode hex content: ${error instanceof Error ? error.message : String(error)}`,
-  );
-}
-```
-
-### Documentation
-
-Use JSDoc comments for public APIs:
-
-```typescript
-/**
- * Encodes binary data to a string using the specified format.
- *
- * @param bytes - The binary data to encode
- * @param format - The encoding format ('base64' or 'hex')
- * @returns The encoded string
- */
-export function encodeData(bytes: Uint8Array, format: EncodingFormat): string {
-  // ...
-}
-```
-
-### Formatting
-
-**Prettier Configuration:**
-
-- Tab width: 2 spaces
-- No tabs
-- Run `pnpm format` before committing
-
-## Architecture Patterns
-
-### Project Structure
-
-```
-src/
-  client/       # Client implementation (MarmotClient, network interface)
-  core/         # Core protocol logic (groups, messages, credentials, extensions)
-  store/        # Storage backends (group state, key packages, invites)
-  utils/        # Utility functions (encoding, nostr, timestamps)
-  extra/        # Extra features (encrypted key-value store)
-  __tests__/    # Test files
-```
-
-### Common Patterns
-
-**EventEmitter for State Updates:**
-
-```typescript
-export class MarmotClient extends EventEmitter<MarmotClientEvents> {
-  // ...
-}
-```
-
-**Interface-Based Abstractions:**
-
-- `NostrNetworkInterface` for network operations
-- `GroupStateStoreBackend` for storage
-- `KeyPackageStore` for key management
-
-**Async/Await:** Use for all asynchronous operations
-
-**Binary Data:** Use `Uint8Array` for binary data handling
-
-## Documentation Guidelines
-
-When writing or updating documentation in the `docs/` directory:
-
-- **Minimal Code Snippets:** Use short, focused code examples that demonstrate a single concept. Avoid complete working examples that clutter the page with boilerplate.
-- **Conceptual Focus:** Explain what developers need to know and why, not just API surfaces. Focus on usage patterns and integration guidance.
-- **Cross-Linking:** Link to related documentation pages to provide context and help developers navigate between topics.
-- **Progressive Disclosure:** Start with high-level concepts, then introduce details. Use tip/warning blocks for additional guidance without cluttering main content.
-- **⚠️ UPDATE VITEPRESS CONFIG:** When adding new documentation pages, **always update `.vitepress/config.ts`** to add the page to the sidebar navigation. This is easy to forget!
-
-**Good Example:**
-
-```typescript
-// Convert async generator to reactive state
-for await (const groups of client.watchGroups()) {
-  updateUI(groups);
-}
-```
-
-**Bad Example:** (Too much boilerplate)
-
-```typescript
-import { MarmotClient } from "@internet-privacy/marmots";
-import { useState, useEffect } from "react";
-
-function MyComponent() {
-  const [groups, setGroups] = useState([]);
-
-  useEffect(() => {
-    const abortController = new AbortController();
-    (async () => {
-      for await (const groups of client.watchGroups()) {
-        if (abortController.signal.aborted) break;
-        setGroups(groups);
-      }
-    })();
-    return () => abortController.abort();
-  }, []);
-
-  return <div>{groups.map(g => ...)}</div>;
-}
-```
-
-## Testing Guidelines
-
-- Place test files in `src/__tests__/`
-- Use `.test.ts` suffix
-- Import test utilities: `import { describe, expect, it } from "vitest"`
-- Write unit tests for new functions
-- Write integration tests for complex workflows
-- Use mock implementations in `__tests__/helpers/` when needed
-
-Example test structure:
-
-```typescript
-import { describe, expect, it } from "vitest";
-
-describe("encoding utilities", () => {
-  it("should encode bytes to hex", () => {
-    const bytes = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f]);
-    expect(encodeData(bytes, "hex")).toBe("48656c6c6f");
-  });
-});
-```
-
-## Key Configuration Files
-
-- `package.json` - Package configuration and scripts
-- `tsconfig.build.json` - Production TypeScript config
-- `tsconfig.json` - Development TypeScript config (includes tests)
-- `vitest.config.ts` - Test configuration
-- `.prettierrc` - Code formatting rules
-- `pnpm-workspace.yaml` - Monorepo configuration
-
-## Git Workflow
-
-1. Make changes in appropriate directory (`src/`, `examples/`, etc.)
-2. Run `pnpm format` to format code
-3. Run `pnpm test` to ensure tests pass
-4. Run `pnpm build` to verify compilation
-5. **Create a changeset if changes affect user-facing APIs**
-6. Commit with descriptive messages (including changeset file if created)
+- When adding a docs page under `docs/`, also add it to `.vitepress/config.ts`; VitePress uses `srcDir: "docs"`.
+- TypeDoc reference is generated from `src/index.ts` into `.vitepress/dist/reference` using `typedoc.json` and `typedocs/cascade-category.mjs`.
+- User-facing package changes should include a Changesets entry. `.changeset/config.json` ignores the `examples` package and targets `master` as the base branch.

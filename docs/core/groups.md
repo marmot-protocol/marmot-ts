@@ -16,7 +16,7 @@ Marmot extends MLS groups with Nostr-specific metadata via the MarmotGroupData e
 ## Creating a Group
 
 ```typescript
-import { createGroup } from "@internet-privacy/marmots";
+import { createGroup } from "@internet-privacy/marmot-ts";
 import { CipherSuite, getCipherSuiteById } from "ts-mls";
 
 const ciphersuiteImpl = getCipherSuiteById(
@@ -53,7 +53,7 @@ interface CreateGroupResult {
 For testing or simple use cases:
 
 ```typescript
-import { createSimpleGroup } from "@internet-privacy/marmots";
+import { createSimpleGroup } from "@internet-privacy/marmot-ts";
 
 const { clientState } = await createSimpleGroup(
   myKeyPackage,
@@ -92,7 +92,7 @@ import {
   generateKeyPackage,
   createGroup,
   marmotGroupDataToExtension,
-} from "@internet-privacy/marmots";
+} from "@internet-privacy/marmot-ts";
 import { CipherSuite, getCipherSuiteById } from "ts-mls";
 
 // 1. Generate creator's key package
@@ -134,7 +134,7 @@ console.log("Group created with ID:", getNostrGroupIdHex(clientState));
 Every Marmot group has associated metadata:
 
 ```typescript
-import { extractMarmotGroupData } from "@internet-privacy/marmots";
+import { extractMarmotGroupData } from "@internet-privacy/marmot-ts";
 
 const groupData = extractMarmotGroupData(clientState);
 

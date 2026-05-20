@@ -7,7 +7,7 @@ Key packages are published as Nostr events so others can add you to groups.
 ### Creating Key Package Events
 
 ```typescript
-import { createKeyPackageEvent } from "@internet-privacy/marmots";
+import { createKeyPackageEvent } from "@internet-privacy/marmot-ts";
 
 const event = createKeyPackageEvent({
   keyPackage: keyPackage.publicPackage,
@@ -37,7 +37,7 @@ tags:
 ### Extracting Key Packages
 
 ```typescript
-import { getKeyPackage } from "@internet-privacy/marmots";
+import { getKeyPackage } from "@internet-privacy/marmot-ts";
 
 // Fetch from relays
 const events = await fetchEvents(relays, {
@@ -53,7 +53,7 @@ const keyPackage = getKeyPackage(events[0]);
 ### Deleting Key Packages
 
 ```typescript
-import { createDeleteKeyPackageEvent } from "@internet-privacy/marmots";
+import { createDeleteKeyPackageEvent } from "@internet-privacy/marmot-ts";
 
 // Create kind 5 deletion event
 const deleteEvent = createDeleteKeyPackageEvent(
@@ -72,7 +72,7 @@ Tell others where to find your key packages.
 ### Creating Relay Lists
 
 ```typescript
-import { createKeyPackageRelayListEvent } from "@internet-privacy/marmots";
+import { createKeyPackageRelayListEvent } from "@internet-privacy/marmot-ts";
 
 const eventTemplate = createKeyPackageRelayListEvent({
   pubkey: myPubkey,
@@ -89,7 +89,7 @@ await network.publish(relays, signed);
 import {
   getKeyPackageRelayList,
   isValidKeyPackageRelayListEvent,
-} from "@internet-privacy/marmots";
+} from "@internet-privacy/marmot-ts";
 
 // Fetch user's relay list
 const events = await fetchEvents(relays, {

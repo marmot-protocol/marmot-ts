@@ -45,7 +45,7 @@ This approach:
 ### Encrypt and Create Event
 
 ```typescript
-import { createGroupEvent } from "@internet-privacy/marmots";
+import { createGroupEvent } from "@internet-privacy/marmot-ts";
 
 const event = await createGroupEvent({
   message: mlsMessage, // MLSMessage from MLS operations
@@ -69,7 +69,7 @@ The Marmot implementation handles per-event ephemeral signing internally.
 ### Single Event Decryption
 
 ```typescript
-import { decryptGroupMessageEvent } from "@internet-privacy/marmots";
+import { decryptGroupMessageEvent } from "@internet-privacy/marmot-ts";
 
 try {
   const mlsMessage = await decryptGroupMessageEvent(
@@ -88,7 +88,7 @@ try {
 For multiple events with error handling:
 
 ```typescript
-import { readGroupMessages } from "@internet-privacy/marmots";
+import { readGroupMessages } from "@internet-privacy/marmot-ts";
 
 const { read, unreadable } = await readGroupMessages(
   events, // Array of kind 445 events
@@ -107,7 +107,7 @@ When multiple admins send commits for the same epoch, Marmot uses deterministic 
 ### Sorting Commits
 
 ```typescript
-import { sortGroupCommits } from "@internet-privacy/marmots";
+import { sortGroupCommits } from "@internet-privacy/marmot-ts";
 
 // Sort commits by: epoch → timestamp → event ID
 const sortedPairs = sortGroupCommits(messagePairs);
@@ -155,7 +155,7 @@ interface Rumor {
 ### Serializing Rumors
 
 ```typescript
-import { serializeApplicationRumor } from "@internet-privacy/marmots";
+import { serializeApplicationRumor } from "@internet-privacy/marmot-ts";
 
 const rumor = {
   kind: 1,
@@ -173,7 +173,7 @@ const serialized = serializeApplicationRumor(rumor);
 ### Deserializing Rumors
 
 ```typescript
-import { deserializeApplicationRumor } from "@internet-privacy/marmots";
+import { deserializeApplicationRumor } from "@internet-privacy/marmot-ts";
 
 // After processing MLS message, extract application data
 const rumor = deserializeApplicationRumor(applicationData);
@@ -191,7 +191,7 @@ import {
   serializeApplicationRumor,
   createGroupEvent,
   getNostrGroupIdHex,
-} from "@internet-privacy/marmots";
+} from "@internet-privacy/marmot-ts";
 import { createApplicationMessage } from "ts-mls";
 
 // 1. Create rumor
@@ -232,7 +232,7 @@ import {
   readGroupMessages,
   sortGroupCommits,
   deserializeApplicationRumor,
-} from "@internet-privacy/marmots";
+} from "@internet-privacy/marmot-ts";
 import { processMessage } from "ts-mls";
 
 // 1. Fetch events from relays

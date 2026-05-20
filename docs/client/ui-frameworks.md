@@ -76,7 +76,7 @@ React components re-render frequently, so you need to ensure the async generator
 
 ```typescript
 import { useState, useEffect, useRef } from "react";
-import type { MarmotClient, MarmotGroup } from "@internet-privacy/marmots";
+import type { MarmotClient, MarmotGroup } from "@internet-privacy/marmot-ts";
 
 function useWatchGroups(client: MarmotClient | null) {
   const [groups, setGroups] = useState<MarmotGroup[]>([]);
@@ -234,7 +234,7 @@ SolidJS components run once, making this the cleanest integration:
 
 ```typescript
 import { createSignal, onCleanup } from "solid-js";
-import type { MarmotClient } from "@internet-privacy/marmots";
+import type { MarmotClient } from "@internet-privacy/marmot-ts";
 
 function useWatchGroups(client: MarmotClient) {
   const [groups, setGroups] = createSignal([]);

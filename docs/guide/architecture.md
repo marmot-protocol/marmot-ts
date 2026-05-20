@@ -117,7 +117,7 @@ Your chat UI, commands, and business logic.
 ### Adding Members
 
 ```
-1. Fetch recipient's key package (kind 443 from relays)
+1. Fetch recipient's key package (kind 30443, with legacy kind 443 fallback, from relays)
 2. MLS add proposal + commit → Welcome + MLSMessage
 3. createWelcomeRumor() → kind 444 rumor
 4. createGiftWrap() → kind 1059 encrypted gift wrap
@@ -141,7 +141,7 @@ Your chat UI, commands, and business logic.
 1. Fetch kind 445 events from relays
 2. decryptGroupMessageEvent() → MLSMessage
 3. Process commits/proposals → Update ClientState
-4. Extract application data → deserializeApplicationRumor()
+4. Extract application data → deserializeApplicationData()
 5. Display message in UI
 ```
 

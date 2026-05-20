@@ -11,6 +11,8 @@ The Client module (`marmot-ts/client`) provides a high-level, production-ready i
 
 - **MarmotClient:** Multi-group orchestration with lifecycle management
 - **MarmotGroup:** Group operations (messaging, proposals, commits)
+- **GroupsManager:** Group creation, loading, watching, leaving, and destruction via `client.groups`
+- **KeyPackageManager:** Key package creation, publishing, watching, and rotation via `client.keyPackages`
 - **History Management:** Optional message storage with querying and pagination
 - **Proposal System:** Type-safe builders for group operations
 - **Network Abstraction:** Pluggable Nostr client integration
@@ -62,7 +64,7 @@ NostrNetworkInterface abstraction for integrating with Nostr clients.
 
 ### [Storage](./storage)
 
-GroupStateStore and KeyPackageStore for persisting group state and key packages.
+Key/value stores for persisting serialized group state, key packages, and invites.
 
 ### [Best Practices](./best-practices)
 
@@ -84,18 +86,21 @@ For fine-grained control or protocol research, use the [Core module](/core/) dir
 ## Quick Example
 
 ```typescript
-import { MarmotClient } from "@internet-privacy/marmot-ts";
+import {
+  MarmotClient,
+  deserializeApplicationData,
+} from "@internet-privacy/marmot-ts";
 
 // Create client
 const client = new MarmotClient({
   signer,
   network,
-  groupStateBackend,
+  groupStateStore,
   keyPackageStore,
 });
 
 // Create group
-const group = await client.createGroup("My Group", {
+const group = await client.groups.create("My Group", {
   relays: ["wss://relay.example.com"],
   adminPubkeys: [myPubkey],
 });
@@ -111,7 +116,8 @@ await group.sendApplicationRumor({
 });
 
 // Listen for messages
-group.on("applicationMessage", ({ rumor }) => {
+group.on("applicationMessage", (message) => {
+  const rumor = deserializeApplicationData(message);
   console.log(`${rumor.pubkey}: ${rumor.content}`);
 });
 ```
@@ -120,7 +126,7 @@ group.on("applicationMessage", ({ rumor }) => {
 
 ### Event-Driven Architecture
 
-Both MarmotClient and MarmotGroup emit events for reactive UI updates.
+`GroupsManager`, `KeyPackageManager`, `InviteManager`, and `MarmotGroup` emit events for reactive UI updates.
 
 ### Type Safety
 

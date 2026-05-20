@@ -7,9 +7,9 @@
 Think of `MarmotClient` as the central hub that:
 
 - **Creates and joins groups** - Handles the cryptographic ceremony required to establish new groups or join existing ones
-- **Manages group lifecycle** - Loads groups from storage on demand, caches them in memory, and handles cleanup
+- **Manages group lifecycle** - Exposes `client.groups` for loading groups from storage on demand, caching them in memory, and cleanup
 - **Coordinates I/O** - Bridges between the [network interface](/client/network) (Nostr relays) and [storage backends](/client/storage) (IndexedDB, filesystem, etc.)
-- **Emits state changes** - Provides reactive streams and events so your UI can respond to group updates in real-time
+- **Exposes managers** - Provides `client.groups`, `client.keyPackages`, and `client.invites` for reactive streams and lifecycle events
 
 Once you have a client instance, you'll use it to get [`MarmotGroup`](/client/marmot-group) instances that handle the actual messaging, member management, and cryptographic operations.
 
@@ -23,7 +23,7 @@ import { MarmotClient } from "@internet-privacy/marmot-ts";
 const client = new MarmotClient({
   signer: yourNostrSigner,
   network: yourNostrNetworkInterface,
-  groupStateBackend: yourGroupStateBackend,
+  groupStateStore: yourGroupStateStore,
   keyPackageStore: yourKeyPackageStore,
 });
 ```
@@ -32,8 +32,8 @@ const client = new MarmotClient({
 
 - **`signer`** - Signs Nostr events (compatible with NIP-07, `applesauce-signers` or similar)
 - **`network`** - Publishes/fetches events from Nostr relays (see [Network Interface](/client/network))
-- **`groupStateBackend`** - Persists encrypted group state (see [Storage](/client/storage))
-- **`keyPackageStore`** - Stores key packages with private material (see [Storage](/client/storage))
+- **`groupStateStore`** - Persists serialized MLS group state (see [Storage](/client/storage))
+- **`keyPackageStore`** - Stores key package private material and publish tracking (see [Storage](/client/storage))
 
 ::: tip Complete Setup Guide
 For a complete walkthrough of setting up storage and network interfaces, see the [Getting Started](/getting-started) guide.
@@ -51,7 +51,7 @@ When you create a group, the client:
 4. Returns a `MarmotGroup` instance you can immediately use
 
 ```typescript
-const group = await client.createGroup("Team Chat", {
+const group = await client.groups.create("Team Chat", {
   relays: ["wss://relay.example.com"],
   description: "Private team discussions",
   adminPubkeys: [myPubkey], // Who can manage the group
@@ -65,9 +65,8 @@ Learn more: [Groups in Core Module](/core/groups)
 When someone invites you to a group, they send you a [Welcome message](/core/welcome) (encrypted via NIP-59 gift wrap). After decrypting it, use the client to initialize your group state:
 
 ```typescript
-const group = await client.joinGroupFromWelcome({
+const { group } = await client.joinGroupFromWelcome({
   welcomeRumor,
-  keyPackageEventId,
 });
 ```
 
@@ -79,10 +78,10 @@ Groups are loaded into an in-memory cache on demand. This is useful for displayi
 
 ```typescript
 // Load a specific group by ID
-const group = await client.getGroup(groupId);
+const group = await client.groups.get(groupId);
 
 // Load all groups from storage
-const allGroups = await client.loadAllGroups();
+const allGroups = await client.groups.loadAll();
 ```
 
 Once loaded, the `MarmotGroup` instance remains in the client's cache until explicitly unloaded or the client is destroyed.
@@ -92,7 +91,7 @@ Once loaded, the `MarmotGroup` instance remains in the client's cache until expl
 To free up memory when a group is no longer actively used:
 
 ```typescript
-await client.unloadGroup(groupId);
+await client.groups.unload(groupId);
 ```
 
 This removes the group from the in-memory cache but preserves all data in storage.
@@ -100,19 +99,19 @@ This removes the group from the in-memory cache but preserves all data in storag
 To permanently delete a group and all its history:
 
 ```typescript
-await client.destroyGroup(groupId);
+await client.groups.destroy(groupId);
 ```
 
 ## Reactive State
 
-The client provides two ways to react to state changes: **async generators** for continuous streaming updates and **events** for one-off lifecycle hooks.
+The client managers provide two ways to react to state changes: **async generators** for continuous streaming updates and **events** for one-off lifecycle hooks.
 
 ### Async Generators
 
-The `watchGroups()` and `watchKeyPackages()` methods return **async generators** that yield new values whenever state changes:
+`client.groups.watch()` and `client.keyPackages.watchKeyPackages()` return **async generators** that yield new values whenever state changes:
 
 ```typescript
-for await (const groups of client.watchGroups()) {
+for await (const groups of client.groups.watch()) {
   updateGroupListUI(groups);
 }
 ```
@@ -126,7 +125,7 @@ for await (const groups of client.watchGroups()) {
 **Key package monitoring:**
 
 ```typescript
-for await (const packages of client.watchKeyPackages()) {
+for await (const packages of client.keyPackages.watchKeyPackages()) {
   if (packages.length < 5) {
     await generateMoreKeyPackages();
   }
@@ -145,7 +144,7 @@ When your component unmounts or you want to stop watching, you need to break out
 const abortController = new AbortController();
 
 (async () => {
-  for await (const groups of client.watchGroups()) {
+  for await (const groups of client.groups.watch()) {
     if (abortController.signal.aborted) break;
     updateUI(groups);
   }
@@ -157,23 +156,23 @@ abortController.abort();
 
 ### Events for Lifecycle Hooks
 
-For more granular control, listen to specific lifecycle events:
+For more granular control, listen to specific lifecycle events on `client.groups`:
 
 ```typescript
-client.on("groupCreated", ({ group }) => {
+client.groups.on("created", (group) => {
   // Navigate to new group
 });
 
-client.on("groupJoined", ({ group }) => {
+client.groups.on("joined", (group) => {
   // Show welcome notification
 });
 
-client.on("groupDestroyed", ({ groupId }) => {
+client.groups.on("destroyed", (groupId) => {
   // Remove from UI
 });
 ```
 
-**Available events:** `groupCreated`, `groupJoined`, `groupLoaded`, `groupImported`, `groupUnloaded`, `groupDestroyed`, `groupsUpdated`
+**Available group events:** `updated`, `loaded`, `created`, `imported`, `joined`, `unloaded`, `destroyed`, `left`
 
 ## Working with Groups
 
@@ -192,7 +191,7 @@ Before others can invite you to groups, you need to publish [key packages](/core
 
 ```typescript
 // Watch your key package inventory
-for await (const packages of client.watchKeyPackages()) {
+for await (const packages of client.keyPackages.watchKeyPackages()) {
   if (packages.length === 0) {
     // Generate and publish more key packages
   }
@@ -213,21 +212,17 @@ Create separate storage instances namespaced by the user's public key:
 
 ```typescript
 function getStorageForAccount(pubkey: string) {
-  return new GroupStateStore(
-    localforage.createInstance({
-      name: `marmot-${pubkey}`,
-      storeName: "groups",
-    }),
-  );
+  return createAppKeyValueStore({
+    name: `marmot-${pubkey}`,
+    storeName: "groups",
+  });
 }
 
 function getKeyPackageStoreForAccount(pubkey: string) {
-  return new KeyPackageStore(
-    localforage.createInstance({
-      name: `marmot-${pubkey}`,
-      storeName: "keyPackages",
-    }),
-  );
+  return createAppKeyValueStore({
+    name: `marmot-${pubkey}`,
+    storeName: "keyPackages",
+  });
 }
 ```
 
@@ -240,7 +235,7 @@ async function switchToAccount(newAccount: Account) {
   const newClient = new MarmotClient({
     signer: newAccount.signer,
     network: sharedNetworkInterface, // Can be reused across accounts
-    groupStateBackend: getStorageForAccount(newAccount.pubkey),
+    groupStateStore: getStorageForAccount(newAccount.pubkey),
     keyPackageStore: getKeyPackageStoreForAccount(newAccount.pubkey),
   });
 

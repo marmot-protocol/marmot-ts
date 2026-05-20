@@ -2,15 +2,16 @@
 
 Key packages are published as Nostr events so others can add you to groups.
 
-## Key Package Events (Kind 443)
+## Key Package Events (Kind 30443)
 
 ### Creating Key Package Events
 
 ```typescript
 import { createKeyPackageEvent } from "@internet-privacy/marmot-ts";
 
-const event = createKeyPackageEvent({
+const event = await createKeyPackageEvent({
   keyPackage: keyPackage.publicPackage,
+  identifier: "my-app-desktop",
   relays: ["wss://relay1.com", "wss://relay2.com"],
   client: "my-app-v1.0", // Optional client identifier
 });
@@ -23,9 +24,10 @@ await network.publish(["wss://relay1.com", "wss://relay2.com"], signed);
 ### Event Structure
 
 ```
-kind: 443
+kind: 30443
 content: base64-encoded KeyPackage
 tags:
+  - ["d", "my-app-desktop"]
   - ["mls_protocol_version", "1.0"]
   - ["mls_ciphersuite", "0x0001"]
   - ["mls_extensions", "0xf2ee", "0x000a"]
@@ -41,7 +43,7 @@ import { getKeyPackage } from "@internet-privacy/marmot-ts";
 
 // Fetch from relays
 const events = await fetchEvents(relays, {
-  kinds: [443],
+  kinds: [30443, 443],
   authors: [targetPubkey],
   limit: 1,
 });
@@ -56,10 +58,9 @@ const keyPackage = getKeyPackage(events[0]);
 import { createDeleteKeyPackageEvent } from "@internet-privacy/marmot-ts";
 
 // Create kind 5 deletion event
-const deleteEvent = createDeleteKeyPackageEvent(
-  keyPackageEventId,
-  "Key package consumed", // Optional reason
-);
+const deleteEvent = createDeleteKeyPackageEvent({
+  events: [keyPackageEvent],
+});
 
 const signedDeleteEvent = await signer.signEvent(deleteEvent);
 await network.publish(relays, signedDeleteEvent);
@@ -108,7 +109,7 @@ if (isValidKeyPackageRelayListEvent(events[0])) {
 
 1. **Publish Relay List:** User publishes kind 10051 to well-known relays
 2. **Discover Relays:** Others fetch the relay list
-3. **Publish Key Packages:** User publishes kind 443 to their relay list
+3. **Publish Key Packages:** User publishes kind 30443 to their relay list
 4. **Fetch Key Packages:** Others fetch from the discovered relays
 5. **Add to Group:** Use key package to create add proposal
 

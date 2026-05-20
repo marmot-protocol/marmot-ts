@@ -23,19 +23,25 @@ type CompleteKeyPackage = {
 };
 ```
 
-- **Public Package:** Published to Nostr relays (kind 443 events)
+- **Public Package:** Published to Nostr relays (kind 30443 addressable events; legacy kind 443 is read/delete compatible)
 - **Private Package:** Kept secret, used to join the group when added
 
 ## Generating Key Packages
 
 ```typescript
 import { generateKeyPackage } from "@internet-privacy/marmot-ts";
-import { CipherSuite } from "ts-mls";
+import { createCredential } from "@internet-privacy/marmot-ts";
+import { ciphersuites, defaultCryptoProvider } from "ts-mls";
+
+const credential = createCredential(nostrPubkey);
+const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
+  ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+);
 
 const keyPackage = await generateKeyPackage({
-  pubkey: nostrPubkey,
-  ciphersuite: CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
-  lifetime: 7776000, // 90 days in seconds (optional)
+  credential,
+  ciphersuiteImpl,
+  isLastResort: true,
 });
 
 // keyPackage.publicPackage - publish this
@@ -48,7 +54,7 @@ All Marmot key packages must:
 
 - Use **basic credentials** (Nostr pubkeys)
 - Support **Marmot Group Data Extension** (0xf2ee)
-- Include **last_resort extension** (0x000a) for reusability
+- Include **last_resort extension** (0x000a) when reusable key packages are desired
 - Only use `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` ciphersuite
 - Have default lifetime of 3 months (configurable)
 
@@ -96,7 +102,7 @@ const updated = ensureMarmotCapabilities(myCapabilities);
 ## Lifecycle
 
 1. **Generate:** Create key package with public/private parts
-2. **Publish:** Share public package via Nostr (kind 443 event)
+2. **Publish:** Share public package via Nostr (kind 30443 event)
 3. **Store:** Securely store private package locally
 4. **Consume:** When someone adds you to a group, use private package to join
 5. **Rotate:** Generate new key packages periodically or after use
@@ -128,24 +134,32 @@ const updated = ensureMarmotCapabilities(myCapabilities);
 import {
   generateKeyPackage,
   calculateKeyPackageRef,
+  createCredential,
+  createKeyPackageEvent,
 } from "@internet-privacy/marmot-ts";
-import { CipherSuite } from "ts-mls";
+import { ciphersuites, defaultCryptoProvider } from "ts-mls";
+
+const credential = createCredential(myPubkey);
+const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
+  ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+);
 
 // 1. Generate key package
 const kp = await generateKeyPackage({
-  pubkey: myPubkey,
-  ciphersuite: CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+  credential,
+  ciphersuiteImpl,
 });
 
 // 2. Calculate reference for storage
-const ref = calculateKeyPackageRef(kp.publicPackage, ciphersuiteImpl);
+const ref = await calculateKeyPackageRef(kp.publicPackage);
 
 // 3. Store private package securely
-await keyPackageStore.set(ref, kp);
+await client.keyPackages.add(kp);
 
 // 4. Publish public package to Nostr
-const event = createKeyPackageEvent({
+const event = await createKeyPackageEvent({
   keyPackage: kp.publicPackage,
+  identifier: "my-app-desktop",
   relays: myRelays,
 });
 const signed = await signer.signEvent(event);

@@ -52,7 +52,9 @@ const METADATA_RELAYS = ["wss://relay.damus.io"];
 
 function dedupeById(events: Event[]): Event[] {
   const seen = new Set<string>();
-  return events.filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)));
+  return events.filter((e) =>
+    seen.has(e.id) ? false : (seen.add(e.id), true),
+  );
 }
 
 export function nostrToolsNetwork(): NostrNetworkInterface {
@@ -66,7 +68,11 @@ export function nostrToolsNetwork(): NostrNetworkInterface {
             const reason = await pending[i];
             const msg = String(reason);
             const softFail = msg.startsWith("connection failure:");
-            out[url] = { from: url, ok: !softFail, message: softFail ? msg : msg || undefined };
+            out[url] = {
+              from: url,
+              ok: !softFail,
+              message: softFail ? msg : msg || undefined,
+            };
           } catch (err) {
             out[url] = {
               from: url,

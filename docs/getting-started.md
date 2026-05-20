@@ -62,42 +62,17 @@ yarn add @internet-privacy/marmot-ts
 
 ## Setup Storage
 
-Marmot uses a bytes-first storage approach. You'll need to provide storage backends for group state and key packages:
+Marmot stores serialized MLS state and key package metadata in app-provided key/value stores. For development, use the in-memory store from the `extra` subpath:
 
 ```typescript
-import { EventEmitter } from "eventemitter3";
+import type {
+  SerializedClientState,
+  StoredKeyPackage,
+} from "@internet-privacy/marmot-ts";
+import { InMemoryKeyValueStore } from "@internet-privacy/marmot-ts/extra";
 
-// Minimal in-memory GroupStateStoreBackend for development.
-// Notes:
-// - IDs are *bytes-first*; the backend receives `Uint8Array`, not hex strings.
-// - Implementations are expected to emit "updated" when state changes.
-class MemoryGroupStateBackend extends EventEmitter {
-  private states = new Map<string, Uint8Array>();
-
-  async get(groupId: Uint8Array): Promise<Uint8Array | null> {
-    return this.states.get(bytesToHex(groupId)) ?? null;
-  }
-
-  async set(groupId: Uint8Array, state: Uint8Array): Promise<void> {
-    this.states.set(bytesToHex(groupId), state);
-    this.emit("updated");
-  }
-
-  async remove(groupId: Uint8Array): Promise<void> {
-    this.states.delete(bytesToHex(groupId));
-    this.emit("updated");
-  }
-
-  async list(): Promise<Uint8Array[]> {
-    return Array.from(this.states.keys()).map((hex) => hexToBytes(hex));
-  }
-}
-
-const groupStateBackend = new MemoryGroupStateBackend();
-
-// For KeyPackageStore, use the library's store with an app-provided key/value backend.
-// See the Storage docs for a complete example.
-const keyPackageStore = yourKeyPackageStore;
+const groupStateStore = new InMemoryKeyValueStore<SerializedClientState>();
+const keyPackageStore = new InMemoryKeyValueStore<StoredKeyPackage>();
 ```
 
 ::: tip Production Storage
@@ -143,9 +118,12 @@ import { MarmotClient } from "@internet-privacy/marmot-ts";
 const client = new MarmotClient({
   signer: yourNostrSigner, // EventSigner from applesauce-core or similar
   network,
-  groupStateBackend,
+  groupStateStore,
   keyPackageStore,
+  clientId: "my-chat-app-desktop", // default key package slot identifier
 });
+
+const myPubkey = await client.signer.getPublicKey();
 ```
 
 ::: tip Multi-Account Applications
@@ -157,49 +135,23 @@ If your app supports multiple user accounts, each account must have isolated sto
 Before others can add you to groups, publish a key package:
 
 ```typescript
-import {
-  createCredential,
-  generateKeyPackage,
-  createKeyPackageEvent,
-} from "@internet-privacy/marmot-ts";
-import { defaultCryptoProvider } from "ts-mls";
+import { bytesToHex } from "@noble/hashes/utils.js";
 
-// Get ciphersuite implementation
-const ciphersuiteImpl = await defaultCryptoProvider.getCipherSuiteById(
-  "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-);
-
-// Create credential from your Nostr pubkey
-const myPubkey = await client.signer.getPublicKey();
-const credential = createCredential(myPubkey);
-
-// Generate key package
-const completeKeyPackage = await generateKeyPackage({
-  credential,
-  ciphersuiteImpl,
-  isLastResort: true, // Reusable
-});
-
-// Create and publish event (kind 443)
-const unsignedEvent = await createKeyPackageEvent({
-  keyPackage: completeKeyPackage.publicPackage,
+const keyPackage = await client.keyPackages.create({
   relays: ["wss://relay.example.com"],
+  identifier: "my-chat-app-desktop", // kind 30443 `d` tag; optional if clientId is set
   client: "my-chat-app",
 });
 
-const signedEvent = await client.signer.signEvent(unsignedEvent);
-await client.network.publish(["wss://relay.example.com"], signedEvent);
-
-// Save private material locally
-await client.keyPackageStore.add(completeKeyPackage);
+console.log(`Published key package ${bytesToHex(keyPackage.keyPackageRef)}`);
 ```
 
 ## Create a Group
 
 ```typescript
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 
-const group = await client.createGroup("Engineering Team", {
+const group = await client.groups.create("Engineering Team", {
   description: "Secure team communications",
   relays: ["wss://relay.nostr.info"],
   adminPubkeys: [myPubkey],
@@ -219,7 +171,7 @@ const memberPubkey = "abc123...";
 const keyPackageEvent = await client.network
   .request(
     ["wss://relay.example.com"],
-    [{ kinds: [443], authors: [memberPubkey], limit: 1 }],
+    [{ kinds: [30443, 443], authors: [memberPubkey], limit: 1 }],
   )
   .then((events) => events[0]);
 
@@ -241,9 +193,9 @@ const rumor = {
   created_at: Math.floor(Date.now() / 1000),
   content: "Hello team!",
   tags: [],
-  id: rumorId,
+  id: "",
 };
-const rumorId = getEventHash(rumor);
+rumor.id = getEventHash(rumor);
 
 await group.sendApplicationRumor(rumor);
 ```
@@ -251,7 +203,7 @@ await group.sendApplicationRumor(rumor);
 ## Receive Messages
 
 ```typescript
-import { deserializeApplicationRumor } from "@internet-privacy/marmot-ts";
+import { deserializeApplicationData } from "@internet-privacy/marmot-ts";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 // Subscribe to group events
@@ -264,8 +216,11 @@ subscription.subscribe({
     const results = group.ingest([event]);
 
     for await (const result of results) {
-      if (result.kind === "applicationMessage") {
-        const message = deserializeApplicationRumor(result.message);
+      if (
+        result.kind === "processed" &&
+        result.result.kind === "applicationMessage"
+      ) {
+        const message = deserializeApplicationData(result.result.message);
         console.log(`${message.pubkey}: ${message.content}`);
       }
     }
@@ -280,11 +235,8 @@ subscription.subscribe({
 // After decrypting it to get the inner kind 444 rumor:
 
 const inviteRumor = decryptedGiftWrap;
-const keyPackageEventId = inviteRumor.tags.find((t) => t[0] === "e")?.[1];
-
-const group = await client.joinGroupFromWelcome({
+const { group } = await client.joinGroupFromWelcome({
   welcomeRumor: inviteRumor,
-  keyPackageEventId,
 });
 
 console.log(`Joined group: ${bytesToHex(group.id)}`);

@@ -17,10 +17,10 @@ Marmot extends MLS groups with Nostr-specific metadata via the MarmotGroupData e
 
 ```typescript
 import { createGroup } from "@internet-privacy/marmot-ts";
-import { CipherSuite, getCipherSuiteById } from "ts-mls";
+import { ciphersuites, defaultCryptoProvider } from "ts-mls";
 
-const ciphersuiteImpl = getCipherSuiteById(
-  CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
+  ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
 );
 
 const result = await createGroup({
@@ -57,10 +57,12 @@ import { createSimpleGroup } from "@internet-privacy/marmot-ts";
 
 const { clientState } = await createSimpleGroup(
   myKeyPackage,
+  ciphersuiteImpl,
   "Group Name",
-  groupId, // 32-byte Uint8Array
-  relays, // string[]
-  adminPubkeys, // string[]
+  {
+    relays,
+    adminPubkeys,
+  },
 );
 ```
 
@@ -91,34 +93,37 @@ The `ClientState` object contains everything needed to operate the group:
 import {
   generateKeyPackage,
   createGroup,
-  marmotGroupDataToExtension,
+  createCredential,
+  getNostrGroupIdHex,
 } from "@internet-privacy/marmot-ts";
-import { CipherSuite, getCipherSuiteById } from "ts-mls";
+import { ciphersuites, defaultCryptoProvider } from "ts-mls";
+
+const credential = createCredential(myPubkey);
+const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
+  ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+);
 
 // 1. Generate creator's key package
 const myKeyPackage = await generateKeyPackage({
-  pubkey: myPubkey,
-  ciphersuite: CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+  credential,
+  ciphersuiteImpl,
 });
 
 // 2. Define group metadata
 const groupData = {
-  version: 1,
+  version: 2,
   nostrGroupId: crypto.getRandomValues(new Uint8Array(32)),
   name: "Developer Chat",
   description: "A group for TypeScript developers",
   adminPubkeys: [myPubkey],
   relays: ["wss://relay.damus.io", "wss://relay.snort.social"],
-  imageHash: null,
-  imageKey: null,
-  imageNonce: null,
+  imageHash: new Uint8Array(0),
+  imageKey: new Uint8Array(0),
+  imageNonce: new Uint8Array(0),
+  imageUploadKey: new Uint8Array(0),
 };
 
 // 3. Create the group
-const ciphersuiteImpl = getCipherSuiteById(
-  CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
-);
-
 const { clientState } = await createGroup({
   creatorKeyPackage: myKeyPackage,
   marmotGroupData: groupData,
@@ -134,9 +139,9 @@ console.log("Group created with ID:", getNostrGroupIdHex(clientState));
 Every Marmot group has associated metadata:
 
 ```typescript
-import { extractMarmotGroupData } from "@internet-privacy/marmot-ts";
+import { getMarmotGroupData } from "@internet-privacy/marmot-ts";
 
-const groupData = extractMarmotGroupData(clientState);
+const groupData = getMarmotGroupData(clientState);
 
 console.log(groupData.name); // "Developer Chat"
 console.log(groupData.description); // "A group for..."

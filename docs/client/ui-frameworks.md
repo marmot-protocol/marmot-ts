@@ -4,7 +4,7 @@
 This page needs to be rewritten and cleaned up
 :::
 
-`MarmotClient` exposes reactive APIs through **async generators** (`watchGroups()` and `watchKeyPackages()`) that emit updates whenever state changes. To integrate with UI frameworks, you'll need to convert these async generators into your framework's native reactivity system.
+`MarmotClient` exposes reactive APIs through manager **async generators** (`client.groups.watch()` and `client.keyPackages.watchKeyPackages()`) that emit updates whenever state changes. To integrate with UI frameworks, you'll need to convert these async generators into your framework's native reactivity system.
 
 This guide shows how to consume these async iterators in different frameworks and patterns for managing the client instance lifecycle.
 
@@ -14,12 +14,12 @@ The client provides two primary reactive APIs that return [async generators](htt
 
 ```typescript
 // Emits whenever groups are created, joined, loaded, or destroyed
-for await (const groups of client.watchGroups()) {
+for await (const groups of client.groups.watch()) {
   console.log(`You have ${groups.length} groups`);
 }
 
 // Emits whenever key packages change
-for await (const packages of client.watchKeyPackages()) {
+for await (const packages of client.keyPackages.watchKeyPackages()) {
   console.log(`You have ${packages.length} key packages`);
 }
 ```
@@ -39,7 +39,7 @@ The `for await...of` loop is the most convenient way to consume async generators
 For more control, you can manually iterate using the `.next()` method:
 
 ```typescript
-const iterator = client.watchGroups()[Symbol.asyncIterator]();
+const iterator = client.groups.watch()[Symbol.asyncIterator]();
 
 // Get first value
 const { value: groups1, done } = await iterator.next();
@@ -90,7 +90,7 @@ function useWatchGroups(client: MarmotClient | null) {
 
     // Create generator only once
     if (!genRef.current) {
-      genRef.current = client.watchGroups();
+      genRef.current = client.groups.watch();
     }
 
     let cancelled = false;
@@ -119,7 +119,7 @@ function GroupList({ client }) {
   return (
     <ul>
       {groups.map(group => (
-        <li key={group.groupId}>{group.name}</li>
+        <li key={group.idStr}>{group.groupData.name}</li>
       ))}
     </ul>
   );
@@ -147,7 +147,7 @@ function useWatchKeyPackages(client: MarmotClient | null) {
     }
 
     if (!genRef.current) {
-      genRef.current = client.watchKeyPackages();
+      genRef.current = client.keyPackages.watchKeyPackages();
     }
 
     let cancelled = false;
@@ -180,7 +180,7 @@ Svelte 5 uses runes (`$state`, `$effect`) which work in `.svelte.js` files for r
 // useWatchGroups.svelte.js
 export function useWatchGroups(client) {
   let groups = $state([]);
-  const gen = client.watchGroups();
+  const gen = client.groups.watch();
   let cancelled = false;
 
   $effect(() => {
@@ -217,7 +217,7 @@ export function useWatchGroups(client) {
 
 <ul>
   {#each stream.value as group}
-    <li>{group.name}</li>
+    <li>{group.groupData.name}</li>
   {/each}
 </ul>
 ```
@@ -238,7 +238,7 @@ import type { MarmotClient } from "@internet-privacy/marmot-ts";
 
 function useWatchGroups(client: MarmotClient) {
   const [groups, setGroups] = createSignal([]);
-  const gen = client.watchGroups();
+  const gen = client.groups.watch();
   let cancelled = false;
 
   (async () => {
@@ -262,7 +262,7 @@ function GroupList(props) {
 
   return (
     <ul>
-      <For each={groups()}>{(group) => <li>{group.name}</li>}</For>
+      <For each={groups()}>{(group) => <li>{group.groupData.name}</li>}</For>
     </ul>
   );
 }
@@ -284,7 +284,7 @@ import { ref, onUnmounted } from "vue";
 
 export function useWatchGroups(client) {
   const groups = ref([]);
-  const gen = client.watchGroups();
+  const gen = client.groups.watch();
   let cancelled = false;
 
   (async () => {
@@ -314,7 +314,9 @@ const groups = useWatchGroups(props.client);
 
 <template>
   <ul>
-    <li v-for="group in groups" :key="group.groupId">{{ group.name }}</li>
+    <li v-for="group in groups" :key="group.idStr">
+      {{ group.groupData.name }}
+    </li>
   </ul>
 </template>
 ```
@@ -327,7 +329,7 @@ const groups = useWatchGroups(props.client);
 const client = new MarmotClient({
   /* ... */
 });
-const gen = client.watchGroups();
+const gen = client.groups.watch();
 let cancelled = false;
 
 (async () => {
@@ -340,7 +342,7 @@ let cancelled = false;
 
     groups.forEach((group) => {
       const li = document.createElement("li");
-      li.textContent = group.name;
+      li.textContent = group.groupData.name;
       container.appendChild(li);
     });
   }
@@ -358,12 +360,12 @@ window.addEventListener("beforeunload", () => {
 For simpler use cases, subscribe to client events instead:
 
 ```typescript
-client.on("groupsUpdated", ({ groups }) => {
+client.groups.on("updated", (groups) => {
   updateGroupListUI(groups);
 });
 
-client.on("groupCreated", ({ group }) => {
-  showNotification(`New group: ${group.name}`);
+client.groups.on("created", (group) => {
+  showNotification(`New group: ${group.groupData.name}`);
 });
 ```
 
@@ -404,12 +406,10 @@ function getStorageForAccount(pubkey: string) {
 }
 
 function getKeyPackageStoreForAccount(pubkey: string) {
-  return new KeyPackageStore(
-    localforage.createInstance({
-      name: `marmot-${pubkey}`,
-      storeName: "keyPackages",
-    }),
-  );
+  return createAppKeyValueStore({
+    name: `marmot-${pubkey}`,
+    storeName: "keyPackages",
+  });
 }
 ```
 
@@ -434,7 +434,7 @@ async function switchToAccount(account: Account) {
   currentClient = new MarmotClient({
     signer: account.signer,
     network: sharedNetworkInterface, // Can be shared
-    groupStateBackend: getStorageForAccount(account.pubkey),
+    groupStateStore: getStorageForAccount(account.pubkey),
     keyPackageStore: getKeyPackageStoreForAccount(account.pubkey),
   });
 

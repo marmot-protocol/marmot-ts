@@ -1,19 +1,19 @@
 # Messages
 
-Marmot uses a two-layer encryption approach for group messages: MLS for end-to-end encryption and NIP-44 for Nostr relay distribution.
+Marmot uses MLS for end-to-end encryption and an epoch-scoped group event envelope for Nostr relay distribution.
 
 ## Encryption Strategy
 
 ### Two-Layer Encryption
 
 1. **MLS Layer:** Encrypts application data with forward secrecy and post-compromise security
-2. **NIP-44 Layer:** Encrypts the MLS message for Nostr relay distribution
+2. **Group Event Envelope:** Encrypts the serialized MLS message with a ChaCha20-Poly1305 key derived from the MLS exporter secret
 
 ```
 Application Data (rumor)
   ↓ MLS Encrypt
 MLSMessage
-  ↓ NIP-44 Encrypt (with exporter_secret)
+  ↓ group-event encryption (with exporter_secret)
 Nostr Event (kind 445)
 ```
 
@@ -21,10 +21,10 @@ Nostr Event (kind 445)
 
 ```typescript
 // Derives encryption key from current MLS epoch
-exporter_secret = MLS_Exporter(clientState, "marmot group message", epoch);
+key = MLS_Exporter(exporter_secret, "marmot", "group-event", 32);
 
-// Uses exporter_secret as NIP-44 encryption key
-encrypted = NIP44_Encrypt(exporter_secret, mlsMessage);
+// Uses the derived key as a ChaCha20-Poly1305 key
+encrypted = ChaCha20Poly1305_Encrypt(key, mlsMessage);
 ```
 
 This approach:
@@ -88,9 +88,9 @@ try {
 For multiple events with error handling:
 
 ```typescript
-import { readGroupMessages } from "@internet-privacy/marmot-ts";
+import { decryptGroupMessages } from "@internet-privacy/marmot-ts";
 
-const { read, unreadable } = await readGroupMessages(
+const { read, unreadable } = await decryptGroupMessages(
   events, // Array of kind 445 events
   clientState,
   ciphersuiteImpl,
@@ -109,7 +109,7 @@ When multiple admins send commits for the same epoch, Marmot uses deterministic 
 ```typescript
 import { sortGroupCommits } from "@internet-privacy/marmot-ts";
 
-// Sort commits by: epoch → timestamp → event ID
+// Sort commits by: timestamp → event ID
 const sortedPairs = sortGroupCommits(messagePairs);
 
 // Process commits in deterministic order
@@ -120,9 +120,8 @@ for (const { event, message } of sortedPairs) {
 
 ### Ordering Rules
 
-1. **Epoch number:** Lower epochs processed first
-2. **Timestamp (`created_at`):** Earlier timestamp wins
-3. **Event ID:** Lexicographically smallest as tiebreaker
+1. **Timestamp (`created_at`):** Earlier timestamp wins
+2. **Event ID:** Lexicographically smallest as tiebreaker
 
 This ensures all group members converge to the same state regardless of message arrival order.
 
@@ -173,10 +172,10 @@ const serialized = serializeApplicationRumor(rumor);
 ### Deserializing Rumors
 
 ```typescript
-import { deserializeApplicationRumor } from "@internet-privacy/marmot-ts";
+import { deserializeApplicationData } from "@internet-privacy/marmot-ts";
 
 // After processing MLS message, extract application data
-const rumor = deserializeApplicationRumor(applicationData);
+const rumor = deserializeApplicationData(applicationData);
 
 console.log(rumor.content); // "Hello, group!"
 console.log(rumor.pubkey); // Sender's pubkey
@@ -190,7 +189,6 @@ console.log(rumor.pubkey); // Sender's pubkey
 import {
   serializeApplicationRumor,
   createGroupEvent,
-  getNostrGroupIdHex,
 } from "@internet-privacy/marmot-ts";
 import { createApplicationMessage } from "ts-mls";
 
@@ -208,30 +206,37 @@ const rumor = {
 const appData = serializeApplicationRumor(rumor);
 
 // 3. Encrypt with MLS
-const mlsMessage = createApplicationMessage(
-  clientState,
-  appData,
-  ciphersuiteImpl,
-);
+const { newState, message } = await createApplicationMessage({
+  context: {
+    cipherSuite: ciphersuiteImpl,
+    authService,
+    externalPsks: {},
+  },
+  state: clientState,
+  message: appData,
+});
 
 // 4. Create group event
 const event = await createGroupEvent({
-  message: mlsMessage,
+  message,
   state: clientState,
   ciphersuite: ciphersuiteImpl,
 });
 
 // 5. Publish to relays
 await network.publish(relays, event);
+clientState = newState;
 ```
 
 ### Receiving Messages
 
 ```typescript
 import {
-  readGroupMessages,
+  decryptGroupMessages,
   sortGroupCommits,
-  deserializeApplicationRumor,
+  deserializeApplicationData,
+  isApplicationMessage,
+  isCommitMessage,
 } from "@internet-privacy/marmot-ts";
 import { processMessage } from "ts-mls";
 
@@ -239,26 +244,46 @@ import { processMessage } from "ts-mls";
 const events = await fetchGroupEvents(relays, groupId);
 
 // 2. Decrypt all events
-const { read: pairs, unreadable } = await readGroupMessages(
+const { read: pairs, unreadable } = await decryptGroupMessages(
   events,
   clientState,
   ciphersuiteImpl,
 );
 
 // 3. Separate commits from application messages
-const commits = pairs.filter((p) => isCommit(p.message));
-const appMessages = pairs.filter((p) => isApplicationMessage(p.message));
+const commits = pairs.filter(isCommitMessage);
+const appMessages = pairs.filter(isApplicationMessage);
 
 // 4. Sort and process commits first
 const sortedCommits = sortGroupCommits(commits);
 for (const { message } of sortedCommits) {
-  clientState = processMessage(clientState, message, ciphersuiteImpl);
+  const result = await processMessage({
+    context: {
+      cipherSuite: ciphersuiteImpl,
+      authService,
+      externalPsks: {},
+    },
+    state: clientState,
+    message,
+  });
+  if (result.kind === "newState") clientState = result.newState;
 }
 
 // 5. Process application messages
 for (const { message } of appMessages) {
-  const rumor = deserializeApplicationRumor(message.message.applicationData);
-  displayMessage(rumor);
+  const result = await processMessage({
+    context: {
+      cipherSuite: ciphersuiteImpl,
+      authService,
+      externalPsks: {},
+    },
+    state: clientState,
+    message,
+  });
+  if (result.kind === "applicationMessage") {
+    clientState = result.newState;
+    displayMessage(deserializeApplicationData(result.message));
+  }
 }
 ```
 

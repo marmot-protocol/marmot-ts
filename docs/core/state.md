@@ -20,9 +20,9 @@ Think of it as a snapshot of the group at a specific point in time.
 ### Get Marmot Group Data
 
 ```typescript
-import { extractMarmotGroupData } from "@internet-privacy/marmot-ts";
+import { getMarmotGroupData } from "@internet-privacy/marmot-ts";
 
-const groupData = extractMarmotGroupData(clientState);
+const groupData = getMarmotGroupData(clientState);
 
 console.log(groupData.name); // "Developer Chat"
 console.log(groupData.adminPubkeys); // ["admin-hex"]
@@ -70,15 +70,10 @@ await storage.save(groupId, serialized);
 
 ```typescript
 import { deserializeClientState } from "@internet-privacy/marmot-ts";
-import { CipherSuite, getCipherSuiteById } from "ts-mls";
 
 const serialized = await storage.load(groupId);
 
-const clientState = deserializeClientState(
-  serialized,
-  getCipherSuiteById(CipherSuite.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519),
-  defaultMarmotClientConfig, // Includes credential validation
-);
+const clientState = deserializeClientState(serialized);
 ```
 
 ### Default Configuration
@@ -86,12 +81,8 @@ const clientState = deserializeClientState(
 ```typescript
 import { defaultMarmotClientConfig } from "@internet-privacy/marmot-ts";
 
-// Includes marmotAuthService for credential validation
-const clientState = deserializeClientState(
-  data,
-  ciphersuite,
-  defaultMarmotClientConfig,
-);
+// Default ts-mls configuration used by Marmot helpers.
+console.log(defaultMarmotClientConfig);
 ```
 
 ## State Updates
@@ -102,10 +93,21 @@ ClientState is immutable - operations return a new state:
 import { processMessage } from "ts-mls";
 
 // Process a message (commit, proposal)
-const newState = processMessage(clientState, mlsMessage, ciphersuiteImpl);
+const result = await processMessage({
+  context: {
+    cipherSuite: ciphersuiteImpl,
+    authService,
+    externalPsks: {},
+  },
+  state: clientState,
+  message: mlsMessage,
+});
 
-// Old state is unchanged, use newState going forward
-clientState = newState;
+if (result.kind === "newState") {
+  clientState = result.newState;
+}
+
+// Old state is unchanged; use result.newState going forward when returned.
 ```
 
 ## Epoch Advancement
@@ -118,7 +120,16 @@ import { getEpoch } from "@internet-privacy/marmot-ts";
 console.log("Before commit:", getEpoch(clientState)); // 5
 
 // Process commit
-clientState = processMessage(clientState, commit, ciphersuiteImpl);
+const result = await processMessage({
+  context: {
+    cipherSuite: ciphersuiteImpl,
+    authService,
+    externalPsks: {},
+  },
+  state: clientState,
+  message: commit,
+});
+if (result.kind === "newState") clientState = result.newState;
 
 console.log("After commit:", getEpoch(clientState)); // 6
 ```
@@ -152,7 +163,7 @@ import {
   createGroup,
   serializeClientState,
   deserializeClientState,
-  extractMarmotGroupData,
+  getMarmotGroupData,
   defaultMarmotClientConfig,
 } from "@internet-privacy/marmot-ts";
 
@@ -169,14 +180,10 @@ await storage.save(groupId, serialized);
 
 // 3. Later: load from storage
 const loaded = await storage.load(groupId);
-let restoredState = deserializeClientState(
-  loaded,
-  ciphersuiteImpl,
-  defaultMarmotClientConfig,
-);
+let restoredState = deserializeClientState(loaded);
 
 // 4. Use the restored state
-const groupData = extractMarmotGroupData(restoredState);
+const groupData = getMarmotGroupData(restoredState);
 console.log("Restored group:", groupData.name);
 ```
 

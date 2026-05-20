@@ -82,10 +82,10 @@ const keyPackageStore = new InMemoryKeyValueStore();
 import { MarmotClient } from "@internet-privacy/marmot-ts";
 
 const client = new MarmotClient({
-  signer,           // your EventSigner (e.g. from applesauce-core)
-  network,          // your NostrNetworkInterface implementation
-  groupStateStore,  // GenericKeyValueStore<SerializedClientState>
-  keyPackageStore,  // GenericKeyValueStore<StoredKeyPackage>
+  signer, // your EventSigner (e.g. from applesauce-core)
+  network, // your NostrNetworkInterface implementation
+  groupStateStore, // GenericKeyValueStore<SerializedClientState>
+  keyPackageStore, // GenericKeyValueStore<StoredKeyPackage>
   clientId: "my-app-desktop", // stable d-tag for kind 30443 key packages
 });
 ```

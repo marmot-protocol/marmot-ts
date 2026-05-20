@@ -55,13 +55,3 @@ jobs:
           name: library-dist
           path: dist/
           retention-days: 7
-
-      - name: Build Examples
-        run: pnpm --filter examples build
-
-      - name: Upload Examples Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: examples-dist
-          path: examples/dist/
-          retention-days: 7

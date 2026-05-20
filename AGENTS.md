@@ -7,18 +7,17 @@
 - `pnpm compile` is the focused library typecheck/build step; `pnpm lint` is only `prettier --check .`.
 - `pnpm test` starts Vitest watch mode. Use `pnpm vitest run` for a one-shot test run.
 - Run one test file with `pnpm vitest run src/path/to/file.test.ts`; tests match only `src/**/*.test.ts`.
-- Examples are a separate workspace package: `pnpm --filter examples build`, `pnpm --filter examples dev`, or root `pnpm dev`.
 - Docs are VitePress: `pnpm docs:dev`, `pnpm docs:build`; `docs:build` also runs TypeDoc via `postdocs:build`.
 
 ## CI Expectations
 
 - Test CI runs Vitest on Node 20/22/24, Deno 2 via `deno run -A --node-modules-dir=auto npm:vitest run`, and Bun latest/1.1 via `bun run vitest run`.
-- Build CI runs `pnpm build` and `pnpm --filter examples build`; verify examples when changing public APIs or workspace exports.
+- Build CI runs `pnpm build`.
 - Pre-commit is Husky + lint-staged and only formats staged files with Prettier.
 
 ## Package Shape
 
-- This is an ESM TypeScript library for Marmot (MLS over Nostr). Library source is under `src/`; examples live under `examples/` and consume the package as `workspace:*`.
+- This is an ESM TypeScript library for Marmot (MLS over Nostr). Library source is under `src/`.
 - Public entrypoints are controlled by `package.json` `exports`: `.`, `./client`, `./core`, `./extra`, `./utils`, and `./mls`.
 - `src/index.ts` re-exports client/core/utils only. Extra utilities are exposed through `@internet-privacy/marmot-ts/extra`.
 - `src/mls.ts` intentionally re-exports `ts-mls` for downstream apps through the `./mls` subpath.
@@ -44,8 +43,8 @@
 
 ## Changesets
 
-- Add a changeset for user-facing library changes while the PR context is fresh; skip for docs-only, tests-only, examples-only, and internal refactors with no package behavior/API impact.
-- Create one with `pnpm changeset` or add `.changeset/<unique-name>.md` manually; this repo publishes only `@internet-privacy/marmot-ts` and `.changeset/config.json` ignores `examples`.
+- Add a changeset for user-facing library changes while the PR context is fresh; skip for docs-only, tests-only, and internal refactors with no package behavior/API impact.
+- Create one with `pnpm changeset` or add `.changeset/<unique-name>.md` manually; this repo publishes only `@internet-privacy/marmot-ts`.
 - Use `patch` for fixes/internal behavior changes, `minor` for new backward-compatible APIs/features, and `major` for breaking API or behavior changes.
 - Each changeset body must be one sentence describing one user-facing change; if a PR has multiple user-facing changes, add multiple changesets.
 - Do not use markdown lists or tables in changeset bodies.

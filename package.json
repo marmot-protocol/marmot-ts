@@ -11,6 +11,7 @@
     "compile": "tsc -b tsconfig.build.json",
     "prepublishOnly": "pnpm run build",
     "release": "pnpm build && changeset publish --provenance",
+    "release-next": "./scripts/release-next.sh",
     "lint": "prettier --check .",
     "format": "prettier --write .",
     "test": "vitest",

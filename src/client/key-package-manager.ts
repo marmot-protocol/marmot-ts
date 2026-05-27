@@ -4,6 +4,7 @@ import { EventSigner } from "applesauce-core";
 import { NostrEvent } from "applesauce-core/helpers/event";
 import { EventEmitter } from "eventemitter3";
 import {
+  Capabilities,
   CiphersuiteName,
   ciphersuites,
   CryptoProvider,
@@ -265,6 +266,8 @@ export type KeyPackageManagerOptions = {
   network: NostrNetworkInterface;
   /** The crypto provider to use for cryptographic operations */
   cryptoProvider?: CryptoProvider;
+  /** Capabilities to advertise in generated key packages. Falls back to ts-mls `defaultCapabilities()` when omitted. */
+  capabilities?: Capabilities;
 };
 
 /**
@@ -287,6 +290,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   private readonly cryptoProvider: CryptoProvider;
   private readonly signer: EventSigner;
   private readonly network: NostrNetworkInterface;
+  private readonly capabilities: Capabilities | undefined;
 
   #log = logger.extend("KeyPackageManager");
 
@@ -297,6 +301,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     this.signer = options.signer;
     this.network = options.network;
     this.clientId = options.clientId;
+    this.capabilities = options.capabilities;
   }
 
   // ---------------------------------------------------------------------------
@@ -506,6 +511,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       credential,
       ciphersuiteImpl: ciphersuite,
       isLastResort: options.isLastResort,
+      capabilities: this.capabilities,
     });
 
     // Store private material locally, including the slot identifier

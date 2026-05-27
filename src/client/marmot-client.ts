@@ -106,6 +106,7 @@ export class MarmotClient<
       signer: options.signer,
       network: options.network,
       clientId: options.clientId,
+      capabilities: this.capabilities,
     });
 
     const historyFactory = (

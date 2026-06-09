@@ -436,6 +436,141 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     );
   });
 
+  it("converges onto a deeper competing branch whose child commit is encrypted under an unreached epoch", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { clientState: createdState } = await createTestGroupState(
+      adminPubkey,
+      impl,
+    );
+    const ctx = {
+      cipherSuite: impl,
+      authService: unsafeTestingAuthenticationService,
+    };
+
+    // 2-member group; the member is the receiver.
+    const memberPubkey = "c".repeat(64);
+    const memberKeyPackage = await generateKeyPackage({
+      credential: createCredential(memberPubkey),
+      ciphersuiteImpl: impl,
+    });
+    const { newState: adminStateEpoch1, welcome } = await createCommit({
+      context: ctx,
+      state: createdState,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: memberKeyPackage.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+    const memberStateEpoch1 = await joinGroup({
+      context: ctx,
+      welcome: welcome!.welcome ?? (welcome as never),
+      keyPackage: memberKeyPackage.publicPackage,
+      privateKeys: memberKeyPackage.privatePackage,
+      ratchetTree: undefined,
+    });
+
+    // Our (shallow) branch: a single commit A from epoch 1.
+    const commitA = await createCommit({
+      context: ctx,
+      state: adminStateEpoch1,
+      extraProposals: [],
+    });
+    // Competing (deeper) branch: B from epoch 1, then B2 from B's epoch. The
+    // committer cannot process its own commit, so use createCommit's newState.
+    const commitB = await createCommit({
+      context: ctx,
+      state: adminStateEpoch1,
+      extraProposals: [],
+    });
+    const commitB2 = await createCommit({
+      context: ctx,
+      state: commitB.newState,
+      extraProposals: [],
+    });
+
+    const eventA = await createGroupEvent({
+      message: commitA.commit,
+      state: adminStateEpoch1,
+      ciphersuite: impl,
+    });
+    const eventB = await createGroupEvent({
+      message: commitB.commit,
+      state: adminStateEpoch1,
+      ciphersuite: impl,
+    });
+    // B2 is encrypted under B's epoch — an epoch the member never applies directly.
+    const eventB2 = await createGroupEvent({
+      message: commitB2.commit,
+      state: commitB.newState,
+      ciphersuite: impl,
+    });
+
+    // Canonical state = the member applying B then B2.
+    const memberAfterB = await processMessage({
+      context: ctx,
+      state: memberStateEpoch1,
+      message: commitB.commit,
+    });
+    if (memberAfterB.kind !== "newState") throw new Error("expected newState");
+    const memberAfterB2 = await processMessage({
+      context: ctx,
+      state: memberAfterB.newState,
+      message: commitB2.commit,
+    });
+    if (memberAfterB2.kind !== "newState") throw new Error("expected newState");
+    const expectedTag = memberAfterB2.newState.confirmationTag;
+
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
+    await store.setItem(
+      bytesToHex(memberStateEpoch1.groupContext.groupId),
+      encode(clientStateEncoder, memberStateEpoch1),
+    );
+    const network: NostrNetworkInterface = {
+      request: async () => {
+        throw new Error("not used");
+      },
+      subscription: () => {
+        throw new Error("not used");
+      },
+      publish: async () => {
+        throw new Error("not used");
+      },
+      getUserInboxRelays: async () => {
+        throw new Error("not used");
+      },
+    };
+    const group = new MarmotGroup(memberStateEpoch1, {
+      store,
+      signer: { getPublicKey: async () => memberPubkey } as EventSigner,
+      ciphersuite: impl,
+      network,
+    });
+
+    // Apply our shallow branch A first.
+    for await (const _ of group.ingest([eventA])) void _;
+    expect(group.state.groupContext.epoch).toBe(
+      memberStateEpoch1.groupContext.epoch + 1n,
+    );
+
+    // The deeper competing branch arrives late (B + its unreached-epoch child B2).
+    for await (const _ of group.ingest([eventB, eventB2])) void _;
+
+    // Converged onto B+B2: two epochs deep and matching that branch's tag.
+    expect(group.state.groupContext.epoch).toBe(
+      memberStateEpoch1.groupContext.epoch + 2n,
+    );
+    expect(group.state.confirmationTag).toEqual(expectedTag);
+    expect(group.lifecycle).toBe("Stable");
+  });
+
   it("persists application message epoch advancement (forward secrecy)", async () => {
     const adminPubkey = "a".repeat(64);
     const impl = await getCiphersuiteImpl(

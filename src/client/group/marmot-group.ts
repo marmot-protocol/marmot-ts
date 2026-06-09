@@ -40,6 +40,10 @@ import {
   serializeClientState,
 } from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
+import {
+  ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+  verifyLeafAccountIdentityProof,
+} from "../../core/account-identity-proof.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import {
   type AppWitness,
@@ -288,12 +292,38 @@ export type WelcomeRecipient = {
 export function createAdminCommitPolicyCallback(args: {
   ratchetTree: ClientState["ratchetTree"];
   adminPubkeys: string[];
+  ciphersuiteId: number;
   onUnverifiableCommit?: "reject" | "retry";
 }): IncomingMessageCallback {
-  const { ratchetTree, adminPubkeys, onUnverifiableCommit = "retry" } = args;
+  const {
+    ratchetTree,
+    adminPubkeys,
+    ciphersuiteId,
+    onUnverifiableCommit = "retry",
+  } = args;
 
   return (incoming) => {
     if (incoming.kind === "proposal") return "accept";
+
+    // Reject the whole commit if any added leaf carries a Marmot account
+    // identity proof that does not verify (darkmatter validates the proof on
+    // every leaf). Checked before the admin short-circuit so an admin cannot
+    // splice in a forged account binding. Leaves without a proof are still
+    // allowed for backwards compatibility (verify-if-present).
+    for (const { proposal } of incoming.proposals) {
+      if (proposal.proposalType !== defaultProposalTypes.add) continue;
+      if (!("add" in proposal)) continue;
+      const leaf = proposal.add.keyPackage.leafNode;
+      const hasProof = leaf.extensions.some(
+        (e) => e.extensionType === ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+      );
+      if (!hasProof) continue;
+      try {
+        verifyLeafAccountIdentityProof(leaf, ciphersuiteId);
+      } catch {
+        return "reject";
+      }
+    }
 
     // Commit must be attributable to a concrete member leaf.
     const senderLeafIndexUnknown = incoming.senderLeafIndex;
@@ -1481,6 +1511,7 @@ export class MarmotGroup<
     return createAdminCommitPolicyCallback({
       ratchetTree: this.state.ratchetTree,
       adminPubkeys: groupData.adminPubkeys,
+      ciphersuiteId: this.ciphersuite.id,
       onUnverifiableCommit: "retry",
     });
   }

@@ -12,7 +12,14 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { schnorr } from "@noble/curves/secp256k1.js";
 import { SerializedClientState } from "../../../core/client-state.js";
+import {
+  type AccountIdentityProofRequest,
+  makeAccountIdentityProofExtension,
+  mlsSignatureScheme,
+  signAccountIdentityProof,
+} from "../../../core/account-identity-proof.js";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
@@ -213,6 +220,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     const adminCallback = createAdminCommitPolicyCallback({
       ratchetTree: group.state.ratchetTree,
       adminPubkeys: [adminPubkey],
+      ciphersuiteId: impl.id,
       onUnverifiableCommit: "reject",
     });
 
@@ -233,6 +241,58 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     expect(result.actionTaken).toBe("reject");
     // Rejecting must not advance the group epoch.
     expect(group.state.groupContext.epoch).toBe(initialEpoch);
+  });
+
+  it("rejects a commit that adds a leaf with a forged account identity proof", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+
+    // A leaf whose account-identity-proof signature does not verify for the
+    // credential identity it claims (one tampered signature byte).
+    const secretKey = new Uint8Array(32).fill(3);
+    secretKey[31] = 9;
+    const accountId = schnorr.getPublicKey(secretKey);
+    const mlsKey = new Uint8Array(32).fill(0xcd);
+    const request: AccountIdentityProofRequest = {
+      accountIdentity: accountId,
+      mlsSignaturePublicKey: mlsKey,
+      ciphersuite: impl.id,
+      signatureScheme: mlsSignatureScheme(impl.id),
+    };
+    const signature = signAccountIdentityProof(request, secretKey);
+    signature[0] ^= 0xff; // forge
+
+    const forgedLeaf = {
+      credential: createCredential(bytesToHex(accountId)),
+      signaturePublicKey: mlsKey,
+      extensions: [makeAccountIdentityProofExtension({ request, signature })],
+    };
+    const incoming = {
+      kind: "commit" as const,
+      senderLeafIndex: 0,
+      proposals: [
+        {
+          proposal: {
+            proposalType: defaultProposalTypes.add,
+            add: { keyPackage: { leafNode: forgedLeaf } },
+          },
+          senderLeafIndex: 0,
+        },
+      ],
+    };
+
+    // The committer is an admin (would otherwise be accepted); the forged proof
+    // is rejected regardless, before the admin short-circuit.
+    const callback = createAdminCommitPolicyCallback({
+      ratchetTree: [] as never,
+      adminPubkeys: [bytesToHex(accountId)],
+      ciphersuiteId: impl.id,
+      onUnverifiableCommit: "reject",
+    });
+
+    expect(callback(incoming as never)).toBe("reject");
   });
 
   it("accepts non-admin self-update commits (no proposals) (MIP-02)", async () => {
@@ -332,6 +392,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     const adminCallback = createAdminCommitPolicyCallback({
       ratchetTree: group.state.ratchetTree,
       adminPubkeys: [adminPubkey],
+      ciphersuiteId: impl.id,
       onUnverifiableCommit: "reject",
     });
 
@@ -456,6 +517,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     const adminCallback = createAdminCommitPolicyCallback({
       ratchetTree: group.state.ratchetTree,
       adminPubkeys: [adminPubkey],
+      ciphersuiteId: impl.id,
       onUnverifiableCommit: "reject",
     });
 

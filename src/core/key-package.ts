@@ -17,6 +17,7 @@ import {
 
 import { createThreeMonthLifetime } from "../utils/timestamp.js";
 import { ensureMarmotCapabilities } from "./capabilities.js";
+import { makeLeafAppComponentsExtension } from "./components/index.js";
 import { getCredentialPubkey } from "./credential.js";
 import { defaultCapabilities } from "./default-capabilities.js";
 import { ensureLastResortExtension } from "./extensions.js";
@@ -97,6 +98,9 @@ export async function generateKeyPackage({
     extensions: isLastResort
       ? ensureLastResortExtension(extensions ?? [])
       : extensions,
+    // Advertise the supported app components on the LeafNode so this member can
+    // be added to groups that require them (matches darkmatter's leaf state).
+    leafNodeExtensions: [makeLeafAppComponentsExtension()],
     cipherSuite: ciphersuiteImpl,
   });
 }

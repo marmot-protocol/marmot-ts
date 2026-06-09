@@ -28,7 +28,9 @@ import {
   GROUP_ADMIN_POLICY_COMPONENT_ID,
   GROUP_PROFILE_COMPONENT_ID,
   NOSTR_ROUTING_COMPONENT_ID,
+  SUPPORTED_APP_COMPONENT_IDS,
 } from "../ids.js";
+import { makeLeafAppComponentsExtension } from "../dictionary.js";
 
 const gid = new Uint8Array(32);
 for (let i = 0; i < 32; i++) gid[i] = i;
@@ -109,5 +111,15 @@ describe("typed read facade round-trips through the extension", () => {
   it("returns undefined when no app_data_dictionary extension exists", () => {
     expect(getGroupProfile([])).toBeUndefined();
     expect(getComponentData([], GROUP_PROFILE_COMPONENT_ID)).toBeUndefined();
+  });
+});
+
+describe("makeLeafAppComponentsExtension", () => {
+  it("advertises the supported component ids via the app_components list", () => {
+    const extension = makeLeafAppComponentsExtension();
+    const extensions = [extension] as GroupContextExtension[];
+    expect(getAppComponents(extensions)).toEqual([
+      ...SUPPORTED_APP_COMPONENT_IDS,
+    ]);
   });
 });

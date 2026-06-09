@@ -19,6 +19,7 @@ import {
   GROUP_PROFILE_COMPONENT_ID,
   AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
   NOSTR_ROUTING_COMPONENT_ID,
+  SUPPORTED_APP_COMPONENT_IDS,
 } from "./ids.js";
 import {
   decodeComponentsList,
@@ -117,6 +118,18 @@ export function makeAppComponentsExtension(
   entries: ComponentData[],
 ): CustomExtension {
   return makeAppDataDictionaryExtension(buildAppDataDictionary(entries));
+}
+
+/**
+ * Builds the `app_data_dictionary` extension carried on a key package's LeafNode
+ * to advertise the component ids this member supports. The dictionary holds a
+ * single `app_components` (`0x0001`) entry listing {@link SUPPORTED_APP_COMPONENT_IDS}
+ * (or the given override). Mirrors darkmatter's `leaf_app_components_extension`.
+ */
+export function makeLeafAppComponentsExtension(
+  supportedIds: readonly AppComponentId[] = SUPPORTED_APP_COMPONENT_IDS,
+): CustomExtension {
+  return makeAppComponentsExtension([appComponentsEntry([...supportedIds])]);
 }
 
 // ---------------------------------------------------------------------------

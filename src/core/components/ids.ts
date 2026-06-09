@@ -54,3 +54,24 @@ export const DEFAULT_GROUP_COMPONENT_IDS: readonly AppComponentId[] = [
   GROUP_PROFILE_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
 ];
+
+/**
+ * Component ids this implementation can encode/decode and therefore advertises
+ * support for in the `app_components` list carried on a key package's LeafNode.
+ * A group may only require components every member's leaf advertises here.
+ *
+ * This is a superset of the darkmatter reference app's supported set
+ * (`{0x8001, 0x8003, 0x8004, 0x8006, 0x8008}`); the negotiated required set for
+ * any group is the intersection across members, so advertising extra supported
+ * components is safe. Excludes `group.blossom.image` (`0x8002`), which has no
+ * wire codec, and the `app_components` list id (`0x0001`) itself.
+ */
+export const SUPPORTED_APP_COMPONENT_IDS: readonly AppComponentId[] = [
+  GROUP_PROFILE_COMPONENT_ID,
+  GROUP_ADMIN_POLICY_COMPONENT_ID,
+  NOSTR_ROUTING_COMPONENT_ID,
+  GROUP_MESSAGE_RETENTION_COMPONENT_ID,
+  AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
+  GROUP_AVATAR_URL_COMPONENT_ID,
+  GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
+];

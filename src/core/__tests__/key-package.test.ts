@@ -38,7 +38,11 @@ describe("generateKeyPackage", () => {
     expect(keyPackage.privatePackage).toBeDefined();
     expect(keyPackage.publicPackage.leafNode.credential).toEqual(credential);
     expect(keyPackage.publicPackage.extensions).toHaveLength(1);
-    expect(keyPackage.publicPackage.leafNode.extensions).toHaveLength(0);
+    // The LeafNode advertises supported app components (app_data_dictionary, 0x0006).
+    expect(keyPackage.publicPackage.leafNode.extensions).toHaveLength(1);
+    expect(keyPackage.publicPackage.leafNode.extensions[0].extensionType).toBe(
+      appDataDictionaryExtensionType,
+    );
   });
 
   it("should include Marmot Group Data Extension in capabilities", async () => {

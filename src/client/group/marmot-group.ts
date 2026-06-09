@@ -20,9 +20,11 @@ import {
   CryptoProvider,
   defaultCryptoProvider,
   defaultProposalTypes,
+  encode,
   getCredentialFromLeafIndex,
   type IncomingMessageCallback,
   type LeafIndex,
+  mlsMessageEncoder,
   MlsMessage,
   processMessage,
   type ProcessMessageResult,
@@ -38,6 +40,12 @@ import {
   serializeClientState,
 } from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
+import {
+  type BranchCandidate,
+  commitDigest,
+  DEFAULT_CONVERGENCE_POLICY,
+  selectCanonicalBranch,
+} from "../../core/convergence.js";
 import {
   type GroupLifecycleState,
   groupLifecycleStates,
@@ -349,6 +357,19 @@ export class MarmotGroup<
   #lifecycle: GroupLifecycleState = groupLifecycleStates.stable;
 
   /**
+   * Retained canonical states keyed by epoch number, used to rebuild candidate
+   * branches for fork recovery (retained-history.md). Bounded to the rollback
+   * horizon. Holds the state *at* each epoch (its parent for the next commit).
+   */
+  readonly #retainedStates = new Map<number, ClientState>();
+  /**
+   * The winning commit_digest applied to advance *from* each source epoch, used
+   * to detect and resolve forks when a competing commit for that source epoch
+   * arrives in a later ingest pass (convergence.md "Same-epoch races").
+   */
+  readonly #appliedCommitDigests = new Map<number, Uint8Array>();
+
+  /**
    * Event IDs of application messages we sent ourselves, used to skip self-echoes in ingest()
    * NOTE: this is not persisted at the moment, its only in memory and used to skip self-echoes in ingest()
    */
@@ -406,6 +427,126 @@ export class MarmotGroup<
     return this.groupData?.relays;
   }
 
+  /** The `commit_digest` (SHA-256 of the MLS message bytes) for a commit. */
+  #commitDigestOf(message: MlsMessage): Uint8Array {
+    return commitDigest(encode(mlsMessageEncoder, message));
+  }
+
+  /**
+   * Records the retained parent state and the winning commit digest after
+   * advancing an epoch, then prunes retained material beyond the rollback
+   * horizon (retained-history.md).
+   */
+  #retainAppliedCommit(
+    parentState: ClientState,
+    appliedDigest: Uint8Array,
+    newState: ClientState,
+  ): void {
+    const parentEpoch = Number(parentState.groupContext.epoch);
+    const newEpoch = Number(newState.groupContext.epoch);
+    this.#retainedStates.set(parentEpoch, parentState);
+    this.#retainedStates.set(newEpoch, newState);
+    this.#appliedCommitDigests.set(parentEpoch, appliedDigest);
+
+    const floor = newEpoch - DEFAULT_CONVERGENCE_POLICY.maxRewindCommits;
+    for (const epoch of this.#retainedStates.keys())
+      if (epoch < floor) this.#retainedStates.delete(epoch);
+    for (const epoch of this.#appliedCommitDigests.keys())
+      if (epoch < floor) this.#appliedCommitDigests.delete(epoch);
+  }
+
+  /**
+   * Attempts single-step fork recovery for a competing commit whose source epoch
+   * is our immediate parent (`currentTip - 1`) and is still retained. If the
+   * competitor wins the convergence race (lower `commit_digest` for equal-depth
+   * branches), rewinds to the retained parent and applies it. Returns the new
+   * `ProcessMessageResult` on recovery, or an outcome marker otherwise.
+   *
+   * Bounded to single-step rewinds; deeper multi-epoch forks fall through to the
+   * past-epoch handling (a future Recovering/Unrecoverable extension).
+   */
+  async #tryForkRecovery(
+    sourceEpoch: bigint,
+    message: MlsMessage,
+  ): Promise<
+    | { outcome: "recovered"; result: ProcessMessageResult }
+    | { outcome: "superseded" | "skip" }
+  > {
+    if (message.wireformat !== wireformats.mls_private_message)
+      return { outcome: "skip" };
+
+    const currentEpoch = this.state.groupContext.epoch;
+    if (sourceEpoch !== currentEpoch - 1n) return { outcome: "skip" };
+
+    const parentEpoch = Number(sourceEpoch);
+    const parent = this.#retainedStates.get(parentEpoch);
+    const appliedDigest = this.#appliedCommitDigests.get(parentEpoch);
+    if (!parent || !appliedDigest) return { outcome: "skip" };
+
+    const newDigest = this.#commitDigestOf(message);
+    const tipEpoch = parentEpoch + 1;
+    const branches: BranchCandidate[] = [
+      {
+        id: "applied",
+        forkEpoch: parentEpoch,
+        tipEpoch,
+        tipDigest: appliedDigest,
+        appWitnesses: [],
+      },
+      {
+        id: "new",
+        forkEpoch: parentEpoch,
+        tipEpoch,
+        tipDigest: newDigest,
+        appWitnesses: [],
+      },
+    ];
+    const winner = selectCanonicalBranch(
+      tipEpoch,
+      branches,
+      DEFAULT_CONVERGENCE_POLICY,
+    );
+    if (winner?.id !== "new") return { outcome: "superseded" };
+
+    // The competitor is canonical: rewind to the retained parent and apply it.
+    this.#lifecycle = transitionLifecycle(
+      this.#lifecycle,
+      groupLifecycleStates.recovering,
+    );
+    try {
+      const result = await processMessage({
+        context: {
+          cipherSuite: this.ciphersuite,
+          authService: marmotAuthService,
+          externalPsks: {},
+        },
+        state: parent,
+        message,
+        callback: this.createAdminVerificationCallback(),
+      });
+      if (result.kind !== "newState" || result.actionTaken === "reject") {
+        this.#lifecycle = transitionLifecycle(
+          this.#lifecycle,
+          groupLifecycleStates.stable,
+        );
+        return { outcome: "superseded" };
+      }
+      this.state = result.newState;
+      this.#retainAppliedCommit(parent, newDigest, result.newState);
+      this.#lifecycle = transitionLifecycle(
+        this.#lifecycle,
+        groupLifecycleStates.stable,
+      );
+      return { outcome: "recovered", result };
+    } catch {
+      this.#lifecycle = transitionLifecycle(
+        this.#lifecycle,
+        groupLifecycleStates.stable,
+      );
+      return { outcome: "superseded" };
+    }
+  }
+
   private log: Debugger;
 
   constructor(
@@ -443,6 +584,9 @@ export class MarmotGroup<
 
     // Set useful fields
     this.idStr = bytesToHex(this.id);
+
+    // Retain the initial canonical state as a fork-recovery anchor.
+    this.#retainedStates.set(Number(state.groupContext.epoch), state);
 
     this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
   }
@@ -940,8 +1084,15 @@ export class MarmotGroup<
       groupLifecycleStates.merging,
     );
 
-    // Update the group state after successful publish
+    // Update the group state after successful publish.
+    // Retain the parent state + applied commit digest for fork recovery.
+    const parentState = this.state;
     this.state = newState;
+    this.#retainAppliedCommit(
+      parentState,
+      this.#commitDigestOf(commit),
+      newState,
+    );
 
     // Persist local-authoritative epoch transition immediately.
     await this.save();
@@ -1226,11 +1377,37 @@ export class MarmotGroup<
     // group's exporter_secret. We decrypt this first layer to get the actual
     // MLS message structure.
 
-    const { read, unreadable: decryptFailed } = await decryptGroupMessages(
+    let { read, unreadable: decryptFailed } = await decryptGroupMessages(
       events,
       this.state,
       this.ciphersuite,
     );
+
+    // A late fork competitor is encrypted under its source epoch's exporter
+    // secret, which is no longer current once we have advanced. Retry decrypt
+    // failures against retained past-epoch states so they can reach fork
+    // recovery (convergence.md) instead of being dropped as unreadable.
+    if (decryptFailed.length > 0 && this.#retainedStates.size > 0) {
+      const stillFailed: typeof decryptFailed = [];
+      for (const event of decryptFailed) {
+        let recovered = false;
+        for (const retained of this.#retainedStates.values()) {
+          if (retained === this.state) continue;
+          const retry = await decryptGroupMessages(
+            [event],
+            retained,
+            this.ciphersuite,
+          );
+          if (retry.read.length > 0) {
+            read = [...read, ...retry.read];
+            recovered = true;
+            break;
+          }
+        }
+        if (!recovered) stillFailed.push(event);
+      }
+      decryptFailed = stillFailed;
+    }
 
     log(
       "decryption: %d/%d readable, %d failed",
@@ -1420,13 +1597,27 @@ export class MarmotGroup<
           : BigInt(message.privateMessage.epoch);
       const currentEpoch = this.state.groupContext.epoch;
 
-      // Commits from past epochs were already applied — skip and report them.
+      // A commit for a past epoch may be a fork competitor that arrived after we
+      // already advanced. Try convergence fork recovery against retained state;
+      // if it wins, we rewind and apply it, otherwise it is a past-epoch loser.
       if (commitEpoch < currentEpoch) {
+        const recovery = await this.#tryForkRecovery(commitEpoch, message);
+        if (recovery.outcome === "recovered") {
+          log(
+            "fork recovery applied competing commit event:%s at epoch:%d -> %d",
+            event.id.slice(0, 8),
+            commitEpoch,
+            this.state.groupContext.epoch,
+          );
+          yield { kind: "processed", result: recovery.result, event, message };
+          continue;
+        }
         log(
-          "skip commit event:%s reason:past-epoch (commit=%d current=%d)",
+          "skip commit event:%s reason:past-epoch (commit=%d current=%d outcome=%s)",
           event.id.slice(0, 8),
           commitEpoch,
           currentEpoch,
+          recovery.outcome,
         );
         yield { kind: "skipped", event, message, reason: "past-epoch" };
         continue;
@@ -1489,8 +1680,15 @@ export class MarmotGroup<
           }
 
           // Successfully processed the commit - update our state
-          // After each commit, the epoch advances and keys rotate
+          // After each commit, the epoch advances and keys rotate.
+          // Retain the parent state + applied commit digest for fork recovery.
+          const parentState = this.state;
           this.state = result.newState;
+          this.#retainAppliedCommit(
+            parentState,
+            this.#commitDigestOf(message),
+            result.newState,
+          );
           log(
             "commit event:%s applied – new epoch:%d",
             event.id.slice(0, 8),

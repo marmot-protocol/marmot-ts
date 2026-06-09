@@ -15,6 +15,7 @@ import {
   getCiphersuiteImpl,
   joinGroup,
   mlsMessageEncoder,
+  processMessage,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
 import { commitDigest } from "../../core/convergence.js";
@@ -302,6 +303,137 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     const reloaded = decode(clientStateDecoder, reloadedBytes!);
     expect(reloaded).not.toBeNull();
     expect(reloaded!.groupContext.epoch).toBe(group.state.groupContext.epoch);
+  });
+
+  it("recovers from a cross-ingest fork by rewinding to retained state and applying the canonical commit", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { clientState: createdState } = await createTestGroupState(
+      adminPubkey,
+      impl,
+    );
+
+    // Build a 2-member group; the member is the fork-recovery receiver.
+    const memberPubkey = "c".repeat(64);
+    const memberKeyPackage = await generateKeyPackage({
+      credential: createCredential(memberPubkey),
+      ciphersuiteImpl: impl,
+    });
+    const ctx = {
+      cipherSuite: impl,
+      authService: unsafeTestingAuthenticationService,
+    };
+    const { newState: adminStateEpoch1, welcome } = await createCommit({
+      context: ctx,
+      state: createdState,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: memberKeyPackage.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+    const memberStateEpoch1 = await joinGroup({
+      context: ctx,
+      welcome: welcome!.welcome ?? (welcome as never),
+      keyPackage: memberKeyPackage.publicPackage,
+      privateKeys: memberKeyPackage.privatePackage,
+      ratchetTree: undefined,
+    });
+
+    // Two competing commits from the same epoch-1 admin state.
+    const commitA = await createCommit({
+      context: ctx,
+      state: adminStateEpoch1,
+      extraProposals: [],
+    });
+    const commitB = await createCommit({
+      context: ctx,
+      state: adminStateEpoch1,
+      extraProposals: [],
+    });
+
+    // The canonical winner is the lower commit_digest; ingest the loser first.
+    const digestA = commitDigest(encode(mlsMessageEncoder, commitA.commit));
+    const digestB = commitDigest(encode(mlsMessageEncoder, commitB.commit));
+    const aWins =
+      Buffer.compare(Buffer.from(digestA), Buffer.from(digestB)) < 0;
+    const lower = aWins ? commitA : commitB;
+    const higher = aWins ? commitB : commitA;
+
+    const lowerEvent = await createGroupEvent({
+      message: lower.commit,
+      state: adminStateEpoch1,
+      ciphersuite: impl,
+    });
+    const higherEvent = await createGroupEvent({
+      message: higher.commit,
+      state: adminStateEpoch1,
+      ciphersuite: impl,
+    });
+
+    // The canonical state = the member applying the lower commit directly.
+    const expected = await processMessage({
+      context: ctx,
+      state: memberStateEpoch1,
+      message: lower.commit,
+    });
+    if (expected.kind !== "newState") throw new Error("expected newState");
+
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
+    await store.setItem(
+      bytesToHex(memberStateEpoch1.groupContext.groupId),
+      encode(clientStateEncoder, memberStateEpoch1),
+    );
+    const network: NostrNetworkInterface = {
+      request: async () => {
+        throw new Error("not used");
+      },
+      subscription: () => {
+        throw new Error("not used");
+      },
+      publish: async () => {
+        throw new Error("not used");
+      },
+      getUserInboxRelays: async () => {
+        throw new Error("not used");
+      },
+    };
+    const group = new MarmotGroup(memberStateEpoch1, {
+      store,
+      signer: { getPublicKey: async () => memberPubkey } as EventSigner,
+      ciphersuite: impl,
+      network,
+    });
+
+    // Ingest the non-canonical (higher) commit first: advance onto the wrong branch.
+    for await (const _ of group.ingest([higherEvent])) {
+      void _;
+    }
+    expect(group.state.groupContext.epoch).toBe(
+      memberStateEpoch1.groupContext.epoch + 1n,
+    );
+
+    // The canonical (lower) commit arrives late → fork recovery rewinds and applies it.
+    let recovered = false;
+    for await (const res of group.ingest([lowerEvent])) {
+      if (res.kind === "processed") recovered = true;
+    }
+
+    expect(recovered).toBe(true);
+    expect(group.lifecycle).toBe("Stable");
+    expect(group.state.groupContext.epoch).toBe(
+      memberStateEpoch1.groupContext.epoch + 1n,
+    );
+    // Converged onto the canonical branch (same confirmation tag as applying lower).
+    expect(group.state.confirmationTag).toEqual(
+      expected.newState.confirmationTag,
+    );
   });
 
   it("persists application message epoch advancement (forward secrecy)", async () => {

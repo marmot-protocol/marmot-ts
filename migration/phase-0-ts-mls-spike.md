@@ -2,6 +2,12 @@
 
 Status: complete. Decision resolved — **Option A (cross-impl interop)**. Last updated 2026-06-09.
 
+> **GATE RESOLVED (2026-06-09): the Option A prerequisite has landed.** ts-mls now ships native
+> draft-ietf-mls-extensions-09 AppData on the vendored `app-data-update` branch
+> (`ts-mls@2.0.0-rc.13`, commit `da72dc1`), and marmot-ts already consumes it via the `./ts-mls` path
+> dependency. See **"Gate resolution"** at the end of this doc. Phase 3 mutation is **unblocked**; no
+> type-7 scaffold is needed.
+
 Spike probes: `src/__tests__/spikes/phase0-ts-mls.spike.test.ts` (run with
 `pnpm vitest run src/__tests__/spikes/phase0-ts-mls.spike.test.ts`). All four probes pass against
 `ts-mls@2.0.0-rc.10`; the probe assertions ARE the evidence below. If a future ts-mls bump changes a
@@ -123,3 +129,63 @@ every component byte format and the identity-proof preimage need.
 - Phase 9 branch replay is feasible on ts-mls as-is. ✅
 - The v2 KeyPackage/capabilities builder must advertise `0x0006` (extension) and `0x0008` (proposal). ✅
 - Phase 1 (encoding) does not depend on the open decision and can proceed immediately. ✅
+
+## Gate resolution (2026-06-09): native AppData landed in ts-mls
+
+The Phase 3 prerequisite — "real `app_data_update` (`0x0008`) draft-09 semantics in ts-mls" — is **done**.
+A ts-mls contribution (commit `da72dc1`, "Add app_data_dictionary extension and app_data_update proposal
+support (draft-ietf-mls-extensions-09)", `2.0.0-rc.13`, branch `app-data-update`) implements it, and
+marmot-ts already depends on that tree via `"ts-mls": "./ts-mls"` (symlinked into `node_modules`, built by
+the `prepare` script). So this is the **Option A "upstream contribution"** path, satisfied in-repo.
+
+What ts-mls now provides (verified importable from `ts-mls`):
+
+- `appDataDictionaryExtensionType = 6` — the `app_data_dictionary` GroupContext extension (our `0x0006`).
+- `ComponentData { componentId: number; data: Uint8Array }` and `AppDataDictionary = ComponentData[]`,
+  with the **sorted-by-componentId + at-most-one-per-id** invariant enforced in codec and constructor.
+  Wire: `componentData = uint16 componentId ++ varLenData data`; dictionary = a var-length vector of those.
+  Our per-component `data` codecs (`group.profile.v1`, …) slot in directly as the `data` bytes.
+- `makeAppDataDictionaryExtension(dictionary)` — build the extension for **group creation** (initial state).
+- `getAppDataDictionary(extensions)` — **read** components from a `ClientState`'s GroupContext extensions.
+- `appDataUpdateProposalType = 8` (our `0x0008`) and a first-class `ProposalAppDataUpdate`
+  (`{ proposalType, appDataUpdate }`), with `AppDataUpdate = {componentId, operation:"update", update}
+  | {componentId, operation:"remove"}`. Built and passed via `createCommit({ extraProposals: [...] })`.
+- Full **commit integration**, draft-compliant: AppDataUpdate proposals are validated (must follow any
+  GroupContextExtensions proposal; a component gets either one `remove` — only if state exists — or one or
+  more `update`s; a type-7 GCE proposal may not touch the dictionary when required-capabilities include
+  proposal type 8), applied **after** all other proposals when forming the new GroupContext, and bound to
+  the transcript hash / key schedule / confirmation tag. They do **not** force an UpdatePath.
+- `ClientConfig.appDataUpdateCallback` with `defaultAppDataUpdateCallback` = **last-update-wins full
+  replacement** — which exactly matches Marmot v1 component update semantics (read-modify-write full state).
+- `isAppDataUpdateProposal` type guard; opaque `ProposalCustom` with type 8 is now **rejected** (type 8 has
+  assigned semantics).
+
+### Consequences for the migration plan
+
+- **Probe 3 is superseded.** Injecting `ProposalCustom { proposalType: 0x0008 }` (the old opaque carry) now
+  throws instead of silently no-op'ing — that is the intended behavior change. The spike's PROBE 3
+  assertion is expected to flip; it documents the *pre-resolution* state and should be read as historical.
+- **No type-7 scaffold.** The temporary `group_context_extensions` substitution discussed under Option B is
+  no longer needed at any stage; the public-API work wires straight onto native AppData.
+- **The generic core is no longer hand-rolled/provisional.** marmot-ts must **not** ship its own dictionary
+  container codec — it would risk diverging from the transcript-bound bytes ts-mls produces. Use ts-mls
+  `ComponentData` / `AppDataDictionary` / `make…` / `get…` as the container, and keep marmot's codecs scoped
+  to the per-component `data` payloads only.
+- **Interop validation is now possible against the real wire.** The dictionary/proposal bytes are produced
+  by the same draft-09 machinery on both sides, so cross-impl conformance tests against darkmatter Rust
+  vectors become meaningful (was previously blocked).
+
+### Revised Phase 3 / public-API build order (supersedes the gated plan)
+
+1. **Capabilities** — `default-capabilities.ts` / `capabilities.ts` advertise extension `6` and proposal
+   `8` on every v2 KeyPackage (still required — leaf-capability validation is enforced; from the spike).
+2. **Read accessors** — wrap `getAppDataDictionary(state.groupContext.extensions)` + marmot's `decode*`
+   codecs into typed getters (`group.profile`, `group.adminPolicy`, `group.nostrRouting`, …) and a generic
+   `getComponent(id)`. Replaces `getMarmotGroupData`.
+3. **Group creation** — provision `DEFAULT_GROUP_COMPONENT_IDS` initial state via
+   `makeAppDataDictionaryExtension([...])` in the createGroup path.
+4. **Mutation** — typed setters + generic `setComponent(id, bytes)` that emit `ProposalAppDataUpdate`
+   (operation `update`, or `remove`) into `createCommit({ extraProposals })`. Default callback (full
+   replacement) is correct for v1 components; leave it unless a component needs merge semantics.
+5. **Delete v1** — remove `marmot-group-data.ts` and the `marmot_group_data` (`0xf2ee`) API once the typed
+   facade covers the surface.

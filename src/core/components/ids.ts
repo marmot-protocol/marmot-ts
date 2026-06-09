@@ -45,9 +45,12 @@ export const GROUP_AVATAR_URL_COMPONENT = "marmot.group.avatar-url.v1";
 export const GROUP_ENCRYPTED_MEDIA_COMPONENT =
   "marmot.group.encrypted-media.v1";
 
-/** Default group component ids provisioned for a new Marmot group. */
+/**
+ * Default group component ids provisioned for a new Marmot group, matching the
+ * darkmatter `default_group_components()` set (profile + admin-policy only;
+ * nostr routing is added by the transport layer, not the default group state).
+ */
 export const DEFAULT_GROUP_COMPONENT_IDS: readonly AppComponentId[] = [
   GROUP_PROFILE_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
-  NOSTR_ROUTING_COMPONENT_ID,
 ];

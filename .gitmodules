@@ -1,0 +1,3 @@
+[submodule "darkmatter"]
+	path = darkmatter
+	url = https://github.com/marmot-protocol/darkmatter.git

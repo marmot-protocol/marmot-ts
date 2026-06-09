@@ -1,3 +1,4 @@
+export * from "./binary.js";
 export * from "./capabilities.js";
 export * from "./client-state.js";
 export * from "./credential.js";

@@ -6,6 +6,9 @@ describe("exports", () => {
     expect(Object.keys(exports).sort()).toMatchInlineSnapshot(`
       [
         "ADDRESSABLE_KEY_PACKAGE_KIND",
+        "BinaryDecodeError",
+        "BinaryReader",
+        "BinaryWriter",
         "GROUP_EVENT_KIND",
         "GroupMediaStore",
         "GroupRumorHistory",
@@ -25,6 +28,7 @@ describe("exports", () => {
         "LAST_RESORT_EXTENSION_TYPE",
         "MARMOT_GROUP_DATA_EXTENSION_TYPE",
         "MARMOT_GROUP_DATA_VERSION",
+        "MAX_VARINT",
         "MIP04_VERSION",
         "MarmotClient",
         "MarmotGroup",
@@ -53,6 +57,8 @@ describe("exports", () => {
         "createWelcomeRumor",
         "decodeContent",
         "decodeMarmotGroupData",
+        "decodeUtf8",
+        "decodeVarint",
         "decryptGroupImage",
         "decryptGroupMessage",
         "decryptGroupMessageEvent",
@@ -68,6 +74,8 @@ describe("exports", () => {
         "detectEncoding",
         "encodeContent",
         "encodeMarmotGroupData",
+        "encodeUtf8",
+        "encodeVarint",
         "encryptGroupImage",
         "encryptMediaFile",
         "ensureLastResortExtension",
@@ -129,6 +137,7 @@ describe("exports", () => {
         "sortGroupCommits",
         "supportsMarmotExtensions",
         "unixNow",
+        "varintSize",
       ]
     `);
   });

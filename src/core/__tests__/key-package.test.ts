@@ -12,14 +12,52 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { schnorr } from "@noble/curves/secp256k1.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
+
 import { createCredential } from "../credential.js";
 import { calculateKeyPackageRef, generateKeyPackage } from "../key-package.js";
 import { appDataDictionaryExtensionType } from "ts-mls";
+import {
+  ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+  signAccountIdentityProof,
+  verifyLeafAccountIdentityProof,
+} from "../account-identity-proof.js";
 import { LAST_RESORT_EXTENSION_TYPE } from "../protocol.js";
 
 describe("generateKeyPackage", () => {
   const validPubkey =
     "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+
+  it("carries a verifiable account identity proof when given an account signer", async () => {
+    const secretKey = new Uint8Array(32).fill(3);
+    secretKey[31] = 9;
+    const accountPubkey = bytesToHex(schnorr.getPublicKey(secretKey));
+    const credential = createCredential(accountPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+      accountProofSigner: (request) =>
+        signAccountIdentityProof(request, secretKey),
+    });
+
+    const leaf = keyPackage.publicPackage.leafNode;
+    // The LeafNode carries both the app_components advertisement and the proof.
+    expect(
+      leaf.extensions.some(
+        (e) => e.extensionType === ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+      ),
+    ).toBe(true);
+    // The proof binds the generated leaf signature key and verifies.
+    expect(() =>
+      verifyLeafAccountIdentityProof(leaf, ciphersuiteImpl.id),
+    ).not.toThrow();
+  });
 
   it("should generate a valid key package with default capabilities", async () => {
     const credential = createCredential(validPubkey);

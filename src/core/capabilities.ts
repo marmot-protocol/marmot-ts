@@ -4,6 +4,7 @@ import {
   appDataUpdateProposalType,
   Capabilities,
 } from "ts-mls";
+import { ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE } from "./account-identity-proof.js";
 import { LAST_RESORT_EXTENSION_TYPE } from "./protocol.js";
 
 /**
@@ -30,6 +31,10 @@ export function ensureMarmotCapabilities(
   // last_resort extension for reusable key packages.
   if (!extensions.includes(LAST_RESORT_EXTENSION_TYPE))
     extensions.push(LAST_RESORT_EXTENSION_TYPE);
+
+  // account identity proof carried on the LeafNode binding the Nostr account.
+  if (!extensions.includes(ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE))
+    extensions.push(ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE);
 
   // app_data_update proposal that mutates the dictionary inside a commit.
   if (!proposals.includes(appDataUpdateProposalType))

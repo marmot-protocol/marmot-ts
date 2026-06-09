@@ -10,12 +10,18 @@ import {
   CustomExtension,
   KeyPackage,
   generateKeyPackage as MLSGenerateKeyPackage,
+  generateKeyPackageWithKey as MLSGenerateKeyPackageWithKey,
   Lifetime,
   makeKeyPackageRef,
   PrivateKeyPackage,
 } from "ts-mls";
+import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { createThreeMonthLifetime } from "../utils/timestamp.js";
+import {
+  type AccountIdentityProofSigner,
+  buildAccountIdentityProofExtension,
+} from "./account-identity-proof.js";
 import { ensureMarmotCapabilities } from "./capabilities.js";
 import { makeLeafAppComponentsExtension } from "./components/index.js";
 import { getCredentialPubkey } from "./credential.js";
@@ -67,6 +73,13 @@ export type GenerateKeyPackageOptions = {
    * Default: `true` for backwards compatibility with existing marmot-ts behavior.
    */
   isLastResort?: boolean;
+  /**
+   * Optional Nostr-account signer. When provided, the generated key package
+   * carries a `marmot.account-identity-proof.v1` LeafNode extension binding the
+   * credential's Nostr account to the leaf signature key — required for wire
+   * interop with darkmatter, which validates this proof on every leaf.
+   */
+  accountProofSigner?: AccountIdentityProofSigner;
   ciphersuiteImpl: CiphersuiteImpl;
 };
 
@@ -77,30 +90,62 @@ export async function generateKeyPackage({
   lifetime,
   extensions,
   isLastResort = true,
+  accountProofSigner,
   ciphersuiteImpl,
 }: GenerateKeyPackageOptions): Promise<CompleteKeyPackage> {
   if (credential.credentialType !== defaultCredentialTypes.basic)
     throw new Error("Marmot key packages must use a basic credential");
 
   // Ensure the credential has a valid pubkey
-  getCredentialPubkey(credential);
+  const accountPubkey = getCredentialPubkey(credential);
+
+  const resolvedCapabilities = capabilities
+    ? ensureMarmotCapabilities(capabilities)
+    : defaultCapabilities();
+  const resolvedLifetime = lifetime ?? createThreeMonthLifetime();
+  // Marmot requires support for last_resort capability signaling (MIP-00),
+  // but individual KeyPackages may be single-use or last-resort reusable.
+  // `isLastResort` controls whether this KeyPackage is marked reusable.
+  const resolvedExtensions = isLastResort
+    ? ensureLastResortExtension(extensions ?? [])
+    : (extensions ?? []);
+  // Advertise the supported app components on the LeafNode so this member can
+  // be added to groups that require them (matches darkmatter's leaf state).
+  const leafNodeExtensions: CustomExtension[] = [
+    makeLeafAppComponentsExtension(),
+  ];
+
+  // When an account signer is supplied, generate the leaf signature keypair
+  // first, bind it to the Nostr account with an identity proof, and carry the
+  // proof on the LeafNode (darkmatter validates this on every leaf).
+  if (accountProofSigner) {
+    const signatureKeyPair = await ciphersuiteImpl.signature.keygen();
+    leafNodeExtensions.push(
+      await buildAccountIdentityProofExtension({
+        accountIdentity: hexToBytes(accountPubkey),
+        mlsSignaturePublicKey: signatureKeyPair.publicKey,
+        ciphersuite: ciphersuiteImpl.id,
+        signer: accountProofSigner,
+      }),
+    );
+    return await MLSGenerateKeyPackageWithKey({
+      credential,
+      capabilities: resolvedCapabilities,
+      lifetime: resolvedLifetime,
+      extensions: resolvedExtensions,
+      signatureKeyPair,
+      leafNodeExtensions,
+      cipherSuite: ciphersuiteImpl,
+    });
+  }
 
   // In v2, generateKeyPackage takes a single params object
   return await MLSGenerateKeyPackage({
     credential,
-    capabilities: capabilities
-      ? ensureMarmotCapabilities(capabilities)
-      : defaultCapabilities(),
-    lifetime: lifetime ?? createThreeMonthLifetime(),
-    // Marmot requires support for last_resort capability signaling (MIP-00),
-    // but individual KeyPackages may be single-use or last-resort reusable.
-    // `isLastResort` controls whether this KeyPackage is marked reusable.
-    extensions: isLastResort
-      ? ensureLastResortExtension(extensions ?? [])
-      : extensions,
-    // Advertise the supported app components on the LeafNode so this member can
-    // be added to groups that require them (matches darkmatter's leaf state).
-    leafNodeExtensions: [makeLeafAppComponentsExtension()],
+    capabilities: resolvedCapabilities,
+    lifetime: resolvedLifetime,
+    extensions: resolvedExtensions,
+    leafNodeExtensions,
     cipherSuite: ciphersuiteImpl,
   });
 }

@@ -5,6 +5,7 @@ describe("exports", () => {
   it("should export the expected members", () => {
     expect(Object.keys(exports).sort()).toMatchInlineSnapshot(`
       [
+        "ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE",
         "ADDRESSABLE_KEY_PACKAGE_KIND",
         "AGENT_TEXT_STREAM_QUIC_COMPONENT",
         "AGENT_TEXT_STREAM_QUIC_COMPONENT_ID",
@@ -62,9 +63,11 @@ describe("exports", () => {
         "Proposals",
         "SUPPORTED_APP_COMPONENT_IDS",
         "WELCOME_EVENT_KIND",
+        "accountIdentityProofSigningDigest",
         "adminPolicyEntry",
         "agentTextStreamEntry",
         "appComponentsEntry",
+        "buildAccountIdentityProofExtension",
         "buildAppDataDictionary",
         "calculateKeyPackageRef",
         "canonicalizeMimeType",
@@ -83,6 +86,7 @@ describe("exports", () => {
         "createSimpleGroup",
         "createThreeMonthLifetime",
         "createWelcomeRumor",
+        "decodeAccountIdentityProof",
         "decodeAdminPolicyV1",
         "decodeAgentTextStreamQuicPolicyV1",
         "decodeComponentsList",
@@ -107,6 +111,7 @@ describe("exports", () => {
         "deserializeApplicationRumor",
         "deserializeClientState",
         "detectEncoding",
+        "encodeAccountIdentityProof",
         "encodeAdminPolicyV1",
         "encodeAgentTextStreamQuicPolicyV1",
         "encodeComponentsList",
@@ -177,9 +182,11 @@ describe("exports", () => {
         "isValidKeyPackageRelayListEvent",
         "isValidRelayUrl",
         "keyPackageDefaultExtensions",
+        "makeAccountIdentityProofExtension",
         "makeAppComponentsExtension",
         "makeLeafAppComponentsExtension",
         "messageRetentionEntry",
+        "mlsSignatureScheme",
         "normalizeRelayUrl",
         "nostrRoutingEntry",
         "parseMediaImetaTag",
@@ -188,9 +195,11 @@ describe("exports", () => {
         "replaceExtension",
         "serializeApplicationRumor",
         "serializeClientState",
+        "signAccountIdentityProof",
         "sortGroupCommits",
         "unixNow",
         "varintSize",
+        "verifyLeafAccountIdentityProof",
       ]
     `);
   });

@@ -8,6 +8,7 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 import {
+  ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
   ensureMarmotCapabilities,
   LAST_RESORT_EXTENSION_TYPE,
 } from "../index.js";
@@ -98,6 +99,7 @@ describe("ensureMarmotCapabilities", () => {
     expect(result.extensions).toEqual([
       appDataDictionaryExtensionType,
       LAST_RESORT_EXTENSION_TYPE,
+      ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
     ]);
     expect(result.proposals).toEqual([appDataUpdateProposalType]);
   });

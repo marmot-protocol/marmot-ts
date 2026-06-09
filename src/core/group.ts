@@ -8,6 +8,7 @@ import {
   GroupContextExtension,
 } from "ts-mls";
 import { marmotAuthService } from "./auth-service.js";
+import { marmotRequiredCapabilitiesExtension } from "./capabilities.js";
 import {
   adminPolicyEntry,
   AppComponentId,
@@ -68,7 +69,18 @@ export async function createGroup(
     ...components,
   ]);
 
-  const groupExtensions = [appDataExtension, ...extensions];
+  // Every Marmot group declares the protocol-mandatory required_capabilities so
+  // MLS enforces them on every add (capability-negotiation.md §5.2). A caller
+  // may override by supplying their own required_capabilities in `extensions`.
+  const hasRequiredCapabilities = extensions.some(
+    (e) =>
+      e.extensionType === marmotRequiredCapabilitiesExtension().extensionType,
+  );
+  const groupExtensions = [
+    appDataExtension,
+    ...(hasRequiredCapabilities ? [] : [marmotRequiredCapabilitiesExtension()]),
+    ...extensions,
+  ];
 
   const clientState = await MLSCreateGroup({
     context: {

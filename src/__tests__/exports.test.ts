@@ -199,6 +199,7 @@ describe("exports", () => {
         "makeAccountIdentityProofExtension",
         "makeAppComponentsExtension",
         "makeLeafAppComponentsExtension",
+        "marmotRequiredCapabilitiesExtension",
         "mayApplyRetainedInbound",
         "mayPrepareLocalCommit",
         "mayRunForkDetection",

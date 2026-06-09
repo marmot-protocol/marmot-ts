@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
+import {
+  defaultCryptoProvider,
+  defaultExtensionTypes,
+  type ExtensionRequiredCapabilities,
+  getCiphersuiteImpl,
+} from "ts-mls";
 
 import { createCredential } from "../credential.js";
 import { generateKeyPackage } from "../key-package.js";
 import { createGroup } from "../group.js";
+import { marmotRequiredCapabilitiesExtension } from "../capabilities.js";
 import { getMarmotGroupView } from "../client-state.js";
 import {
   adminPolicyEntry,
@@ -51,5 +57,15 @@ describe("group construction", () => {
 
     // MLS group_id must be distinct from the public nostr_group_id.
     expect(clientState.groupContext.groupId).not.toEqual(nostrGroupId);
+
+    // The group declares the Marmot baseline required_capabilities so MLS
+    // enforces them on every future add (capability-negotiation.md §5.2).
+    const required = clientState.groupContext.extensions.find(
+      (e) => e.extensionType === defaultExtensionTypes.required_capabilities,
+    );
+    expect(required).toBeTruthy();
+    expect((required as ExtensionRequiredCapabilities).extensionData).toEqual(
+      marmotRequiredCapabilitiesExtension().extensionData,
+    );
   });
 });

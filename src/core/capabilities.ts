@@ -3,6 +3,8 @@ import {
   appDataDictionaryExtensionType,
   appDataUpdateProposalType,
   Capabilities,
+  defaultExtensionTypes,
+  type ExtensionRequiredCapabilities,
 } from "ts-mls";
 import { ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE } from "./account-identity-proof.js";
 import { LAST_RESORT_EXTENSION_TYPE } from "./protocol.js";
@@ -44,5 +46,34 @@ export function ensureMarmotCapabilities(
     ...capabilities,
     extensions,
     proposals,
+  };
+}
+
+/**
+ * The Marmot v2 baseline `required_capabilities` (`0x0003`) GroupContext
+ * extension, set at group creation so every current and future member MUST
+ * advertise the protocol-mandatory code points. MLS then refuses to add a
+ * member whose LeafNode does not cover them (capability-negotiation.md §5.2
+ * "enforce on add").
+ *
+ * The baseline is fixed, not member-derived: the `app_data_dictionary`
+ * extension (`0x0006`) and account-identity-proof extension (`0xF2F1`) plus the
+ * `app_data_update` proposal (`0x0008`) — byte-matched to darkmatter
+ * `required_capabilities_extension`. Lists are sorted ascending to mirror the
+ * Rust `BTreeSet` ordering; `credentialTypes` is empty.
+ */
+export function marmotRequiredCapabilitiesExtension(): ExtensionRequiredCapabilities {
+  const extensionTypes = [
+    appDataDictionaryExtensionType,
+    ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+  ].sort((a, b) => a - b);
+
+  return {
+    extensionType: defaultExtensionTypes.required_capabilities,
+    extensionData: {
+      extensionTypes,
+      proposalTypes: [appDataUpdateProposalType],
+      credentialTypes: [],
+    },
   };
 }

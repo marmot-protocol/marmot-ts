@@ -4,6 +4,7 @@ import {
   Capabilities,
   ciphersuites,
   defaultCredentialTypes,
+  defaultExtensionTypes,
   protocolVersions,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
@@ -11,6 +12,7 @@ import {
   ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
   ensureMarmotCapabilities,
   LAST_RESORT_EXTENSION_TYPE,
+  marmotRequiredCapabilitiesExtension,
 } from "../index.js";
 
 describe("ensureMarmotCapabilities", () => {
@@ -102,5 +104,22 @@ describe("ensureMarmotCapabilities", () => {
       ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
     ]);
     expect(result.proposals).toEqual([appDataUpdateProposalType]);
+  });
+});
+
+describe("marmotRequiredCapabilitiesExtension", () => {
+  it("declares the fixed Marmot baseline, sorted ascending to match the Rust BTreeSet", () => {
+    const ext = marmotRequiredCapabilitiesExtension();
+
+    expect(ext.extensionType).toBe(defaultExtensionTypes.required_capabilities);
+    // app_data_dictionary (0x0006) before account-identity-proof (0xF2F1).
+    expect(ext.extensionData.extensionTypes).toEqual([
+      appDataDictionaryExtensionType,
+      ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+    ]);
+    expect(ext.extensionData.proposalTypes).toEqual([
+      appDataUpdateProposalType,
+    ]);
+    expect(ext.extensionData.credentialTypes).toEqual([]);
   });
 });

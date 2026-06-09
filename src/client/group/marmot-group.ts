@@ -1334,8 +1334,11 @@ export class MarmotGroup<
     }
 
     // ============================================================================
-    // STEP 4: Sort commits to handle race conditions (MIP-03)
+    // STEP 4: Order commits by the content-derived convergence key
     // ============================================================================
+    // Same-epoch races resolve by commit_digest (SHA-256 of the MLS bytes), not
+    // transport time/order — see convergence.md. The lowest-digest commit for an
+    // epoch wins; later same-epoch commits are skipped as past-epoch below.
     commits = sortGroupCommits(commits);
 
     // ============================================================================

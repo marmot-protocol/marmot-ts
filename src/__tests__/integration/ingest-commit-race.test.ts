@@ -14,8 +14,10 @@ import {
   encode,
   getCiphersuiteImpl,
   joinGroup,
+  mlsMessageEncoder,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
+import { commitDigest } from "../../core/convergence.js";
 import { describe, expect, it } from "vitest";
 
 import { MarmotGroup } from "../../client/group/marmot-group.js";
@@ -47,7 +49,7 @@ async function createTestGroupState(
 }
 
 describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
-  it("sortGroupCommits breaks created_at ties by lexicographically smallest event id (MIP-03)", async () => {
+  it("orders same-epoch commits by content-derived commit_digest, ignoring transport fields", async () => {
     const adminPubkey = "a".repeat(64);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -113,23 +115,30 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       ciphersuite: impl,
     });
 
-    // Tie on created_at; order must be chosen by smallest id.
+    // Assign transport fields that would flip a v1 (created_at-then-id) order;
+    // convergence ordering MUST ignore them and use commit_digest only.
     eventA.created_at = 1;
-    eventB.created_at = 1;
-    eventA.id = "b".repeat(64);
-    eventB.id = "a".repeat(64);
+    eventB.created_at = 999;
+    eventA.id = "f".repeat(64);
+    eventB.id = "0".repeat(64);
 
     const a = { event: eventA, message: commitA.commit };
     const b = { event: eventB, message: commitB.commit };
 
-    const sorted = sortGroupCommits([a, b]);
-    expect(sorted.map((p) => p.event.id)).toEqual([
-      "a".repeat(64),
-      "b".repeat(64),
-    ]);
+    // Expected winner = the lower commit_digest = SHA-256(MLS message bytes).
+    const digestA = commitDigest(encode(mlsMessageEncoder, commitA.commit));
+    const digestB = commitDigest(encode(mlsMessageEncoder, commitB.commit));
+    const lowerFirst =
+      Buffer.compare(Buffer.from(digestA), Buffer.from(digestB)) <= 0
+        ? [a, b]
+        : [b, a];
+
+    // Order is content-derived and independent of input order.
+    expect(sortGroupCommits([a, b])).toEqual(lowerFirst);
+    expect(sortGroupCommits([b, a])).toEqual(lowerFirst);
   });
 
-  it("applies exactly one commit for an epoch (earliest created_at wins), even if events arrive reversed", async () => {
+  it("applies exactly one commit for an epoch (convergence picks the winner), even if events arrive reversed", async () => {
     const adminPubkey = "a".repeat(64);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -226,11 +235,11 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       ciphersuite: impl,
     });
 
-    // Force deterministic race ordering according to MIP-03:
-    // created_at first, then lexicographically smallest event id.
+    // Transport fields are intentionally set to values that would matter under
+    // the old created_at/id rule; convergence ignores them and resolves the
+    // race by commit_digest. Exactly one commit still wins and advances the epoch.
     eventA.created_at = 1;
     eventB.created_at = 2;
-    // Signature validity is irrelevant for ingest; id is used only as a tie-breaker.
     eventA.id = "a".repeat(64);
     eventB.id = "b".repeat(64);
 

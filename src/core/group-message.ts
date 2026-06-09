@@ -14,6 +14,11 @@ import {
   type MlsMessage,
   wireformats,
 } from "ts-mls";
+import {
+  commitDigest,
+  compareCommitOrderingKeys,
+  type CommitOrderingKey,
+} from "./convergence.js";
 import { decodeContent, encodeContent } from "../utils/encoding.js";
 import { unixNow } from "../utils/nostr.js";
 import { decryptLegacyGroupMessageEventContent } from "./group-message-legacy.js";
@@ -254,27 +259,37 @@ export function deserializeApplicationData(data: Uint8Array): Rumor {
 export const deserializeApplicationRumor = deserializeApplicationData;
 
 /**
- * Sorts group commits to handle race conditions according to MIP-03.
+ * Orders group commits by the content-derived convergence key
+ * (`protocol-core/convergence.md`): by MLS source epoch ascending, then by the
+ * lower `commit_digest = SHA-256(MLS message bytes)`. For a same-epoch race the
+ * lowest commit digest wins.
  *
- * Sorting order (MIP-03):
- * 1. First, sort by commit time (created_at) - older commits first
- * 2. If equal, sort by event id (lexicographically) - lower id first
+ * Transport arrival order, transport timestamps (`created_at`), and outer event
+ * ids MUST NOT participate in this ordering — every member computes the same
+ * order from the same MLS bytes, which is what makes convergence deterministic
+ * across implementations.
  *
- * @param commits - Array of commit message pairs to sort
- * @returns Sorted array of commits
+ * @param commits - Array of commit message pairs to order
+ * @returns A new array ordered by the convergence key
  */
 export function sortGroupCommits(
   commits: GroupMessagePair[],
 ): GroupMessagePair[] {
-  return commits.sort((a, b) => {
-    // Rule 1: Sort by created_at (older first)
-    if (a.event.created_at !== b.event.created_at) {
-      return a.event.created_at - b.event.created_at;
-    }
-
-    // Rule 2: If equal, sort by event id (lexicographically)
-    return a.event.id.localeCompare(b.event.id);
+  const keyed = commits.map((pair) => {
+    const sourceEpoch =
+      pair.message.wireformat === wireformats.mls_private_message
+        ? Number(pair.message.privateMessage.epoch)
+        : 0;
+    const key: CommitOrderingKey = {
+      sourceEpoch,
+      // commit_digest is over the serialized MLS message bytes; ts-mls TLS
+      // encoding is canonical, so this matches the transmitted commit bytes.
+      commitDigest: commitDigest(encode(mlsMessageEncoder, pair.message)),
+    };
+    return { pair, key };
   });
+  keyed.sort((a, b) => compareCommitOrderingKeys(a.key, b.key));
+  return keyed.map((entry) => entry.pair);
 }
 
 /**

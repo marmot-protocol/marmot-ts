@@ -53,6 +53,11 @@ import {
   transitionLifecycle,
 } from "../../core/group-lifecycle.js";
 import {
+  type Disposition,
+  disposition,
+  inputCategories,
+} from "../../core/inbound.js";
+import {
   createGroupEvent,
   decryptGroupMessages,
   GroupMessagePair,
@@ -153,6 +158,33 @@ export type IngestResult =
   | RejectedIngestResult
   | SkippedIngestResult
   | UnreadableIngestResult;
+
+/**
+ * Maps an {@link IngestResult} to its protocol-visible {@link Disposition}
+ * (`protocol-core/inbound-processing.md`). `processed` accepts; `rejected` is a
+ * stale `authorization_failed`; `skipped` maps by reason; `unreadable` is a
+ * terminal stale `invalid_encoding` after retries are exhausted.
+ */
+export function ingestResultDisposition(result: IngestResult): Disposition {
+  switch (result.kind) {
+    case "processed":
+      return disposition.accepted();
+    case "rejected":
+      return disposition.stale(inputCategories.authorizationFailed);
+    case "skipped":
+      switch (result.reason) {
+        case "past-epoch":
+          return disposition.stale(inputCategories.alreadyApplied);
+        case "self-echo":
+          return disposition.stale(inputCategories.ownEcho);
+        case "wrong-wireformat":
+          return disposition.stale(inputCategories.invalidEncoding);
+      }
+    // eslint-disable-next-line no-fallthrough
+    case "unreadable":
+      return disposition.stale(inputCategories.invalidEncoding);
+  }
+}
 
 /**
  * The minimum interface for a group to store them MLS messages

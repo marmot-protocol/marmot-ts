@@ -182,6 +182,7 @@ describe("exports", () => {
         "groupLifecycleStates",
         "groupProfileEntry",
         "hasAck",
+        "ingestResultDisposition",
         "inputCategories",
         "isAppPayloadExpired",
         "isApplicationMessage",

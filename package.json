@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
+    "prepare": "cd ts-mls && pnpm install && pnpm build",
     "build": "pnpm run clean && pnpm run compile",
     "clean": "rimraf ./dist",
     "compile": "tsc -b tsconfig.build.json",
@@ -96,7 +97,7 @@
     "applesauce-core": "^5.2.0",
     "debug": "^4.4.3",
     "eventemitter3": "^5.0.4",
-    "ts-mls": "2.0.0-rc.10"
+    "ts-mls": "./ts-mls"
   },
   "lint-staged": {
     "*": "prettier --write --ignore-unknown"

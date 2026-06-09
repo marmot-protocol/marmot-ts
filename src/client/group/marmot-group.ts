@@ -39,6 +39,12 @@ import {
 } from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
 import {
+  type GroupLifecycleState,
+  groupLifecycleStates,
+  mayPrepareLocalCommit,
+  transitionLifecycle,
+} from "../../core/group-lifecycle.js";
+import {
   createGroupEvent,
   decryptGroupMessages,
   GroupMessagePair,
@@ -339,6 +345,8 @@ export class MarmotGroup<
   /** Internal ClientState */
   #state: ClientState;
   #groupData: MarmotGroupView | null = null;
+  /** Group lifecycle state (group-state.md); only `Stable` may prepare a commit. */
+  #lifecycle: GroupLifecycleState = groupLifecycleStates.stable;
 
   /**
    * Event IDs of application messages we sent ourselves, used to skip self-echoes in ingest()
@@ -359,6 +367,16 @@ export class MarmotGroup<
   /** Read the current group state */
   get state() {
     return this.#state;
+  }
+
+  /**
+   * The group's lifecycle state (`group-state.md`). A new local commit may only
+   * be prepared while `Stable`; the commit flow moves through `PendingPublish`
+   * (commit prepared, publish unconfirmed) and `Merging` (publish acked, staged
+   * commit applying) and back to `Stable`.
+   */
+  get lifecycle(): GroupLifecycleState {
+    return this.#lifecycle;
   }
   get groupData() {
     // If not cached, extract the group data from the state
@@ -807,6 +825,13 @@ export class MarmotGroup<
       throw new Error("Not a group admin. Cannot commit proposals.");
     }
 
+    // group-state.md: a local group-state commit may only be prepared in Stable.
+    if (!mayPrepareLocalCommit(this.#lifecycle)) {
+      throw new Error(
+        `Cannot prepare a commit while the group is ${this.#lifecycle}`,
+      );
+    }
+
     const context: ProposalContext = {
       state: this.state,
       ciphersuite: this.ciphersuite,
@@ -867,37 +892,65 @@ export class MarmotGroup<
       ...commitOptions,
     });
 
-    // Wrap the commit in a group event
-    // Use this.state (not newState) to get the exporter_secret for the current epoch
-    // This ensures all members at the current epoch can decrypt the commit
-    const commitEvent = await createGroupEvent({
-      message: commit,
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-    });
+    // group-state.md: the staged commit is prepared but not yet published.
+    this.#lifecycle = transitionLifecycle(
+      this.#lifecycle,
+      groupLifecycleStates.pendingPublish,
+    );
 
-    // Publish to the group's relays.
-    // MIP-02 REQUIRES: Commit MUST be published and acknowledged by relays BEFORE sending Welcome messages.
-    // This ordering is critical for protocol correctness - new members must be able to fetch the commit
-    // that added them before processing their Welcome.
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
-    const response = await this.network.publish(relays, commitEvent);
-    if (!hasAck(response)) {
-      const errors = Object.values(response)
-        .filter((r) => !r.ok && r.message)
-        .map((r) => r.message)
-        .join("; ");
-      throw new Error(
-        `Failed to publish commit: ${errors || "no relay acknowledged"}`,
+    let response: Record<string, PublishResponse>;
+    try {
+      // Wrap the commit in a group event
+      // Use this.state (not newState) to get the exporter_secret for the current epoch
+      // This ensures all members at the current epoch can decrypt the commit
+      const commitEvent = await createGroupEvent({
+        message: commit,
+        state: this.state,
+        ciphersuite: this.ciphersuite,
+      });
+
+      // Publish to the group's relays.
+      // MIP-02 REQUIRES: Commit MUST be published and acknowledged by relays BEFORE sending Welcome messages.
+      // This ordering is critical for protocol correctness - new members must be able to fetch the commit
+      // that added them before processing their Welcome.
+      const relays = this.relays;
+      if (!relays) throw new NoGroupRelaysError();
+      response = await this.network.publish(relays, commitEvent);
+      if (!hasAck(response)) {
+        const errors = Object.values(response)
+          .filter((r) => !r.ok && r.message)
+          .map((r) => r.message)
+          .join("; ");
+        throw new Error(
+          `Failed to publish commit: ${errors || "no relay acknowledged"}`,
+        );
+      }
+    } catch (err) {
+      // Publish obligation failed or was abandoned: PendingPublish -> Stable.
+      this.#lifecycle = transitionLifecycle(
+        this.#lifecycle,
+        groupLifecycleStates.stable,
       );
+      throw err;
     }
+
+    // Publish confirmed: apply the staged commit (PendingPublish -> Merging).
+    this.#lifecycle = transitionLifecycle(
+      this.#lifecycle,
+      groupLifecycleStates.merging,
+    );
 
     // Update the group state after successful publish
     this.state = newState;
 
     // Persist local-authoritative epoch transition immediately.
     await this.save();
+
+    // Staged commit applied: Merging -> Stable.
+    this.#lifecycle = transitionLifecycle(
+      this.#lifecycle,
+      groupLifecycleStates.stable,
+    );
 
     // If new users were added, send welcome events
     // The commit has been published and acked, so it's safe to send Welcomes now (MIP-02 compliance)

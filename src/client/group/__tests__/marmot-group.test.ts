@@ -38,6 +38,65 @@ async function createTestGroupState(
   return { clientState, kp };
 }
 
+describe("MarmotGroup lifecycle (group-state.md)", () => {
+  it("starts Stable, returns to Stable after commit, and resets to Stable on publish failure", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const credential = createCredential(adminPubkey);
+    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
+      adminPubkeys: [adminPubkey],
+      relays: ["wss://relay.test"],
+    });
+
+    let failPublish = true;
+    const network: NostrNetworkInterface = {
+      request: async () => {
+        throw new Error("not used");
+      },
+      subscription: () => {
+        throw new Error("not used");
+      },
+      getUserInboxRelays: async () => {
+        throw new Error("not used");
+      },
+      publish: async () => ({
+        "wss://relay.test": failPublish
+          ? { from: "wss://relay.test", ok: false, message: "nope" }
+          : { from: "wss://relay.test", ok: true },
+      }),
+    };
+    const signer = {
+      getPublicKey: async () => adminPubkey,
+    } as EventSigner;
+
+    const group = new MarmotGroup(clientState, {
+      store: new InMemoryKeyValueStore(),
+      signer,
+      ciphersuite: impl,
+      network,
+    });
+
+    expect(group.lifecycle).toBe("Stable");
+
+    // Publish fails (no ack) → PendingPublish is abandoned back to Stable.
+    await expect(group.commit({ extraProposals: [] })).rejects.toThrow();
+    expect(group.lifecycle).toBe("Stable");
+    expect(group.state.groupContext.epoch).toBe(clientState.groupContext.epoch);
+
+    // Publish succeeds → Merging → apply → Stable, epoch advanced.
+    failPublish = false;
+    await group.commit({ extraProposals: [] });
+    expect(group.lifecycle).toBe("Stable");
+    expect(group.state.groupContext.epoch).toBe(
+      clientState.groupContext.epoch + 1n,
+    );
+  });
+});
+
 describe("MarmotGroup admin verification (MIP-03)", () => {
   it("rejects commits from non-admin members", async () => {
     const adminPubkey = "a".repeat(64);

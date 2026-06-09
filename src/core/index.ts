@@ -8,6 +8,7 @@ export * from "./credential.js";
 export * from "./default-capabilities.js";
 export * from "./extensions.js";
 export * from "./group-image.js";
+export * from "./inbound.js";
 export * from "./group-members.js";
 export * from "./group-message.js";
 export * from "./group.js";

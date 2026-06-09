@@ -14,10 +14,8 @@ import { describe, expect, it } from "vitest";
 
 import { createCredential } from "../credential.js";
 import { calculateKeyPackageRef, generateKeyPackage } from "../key-package.js";
-import {
-  LAST_RESORT_EXTENSION_TYPE,
-  MARMOT_GROUP_DATA_EXTENSION_TYPE,
-} from "../protocol.js";
+import { appDataDictionaryExtensionType } from "ts-mls";
+import { LAST_RESORT_EXTENSION_TYPE } from "../protocol.js";
 
 describe("generateKeyPackage", () => {
   const validPubkey =
@@ -58,7 +56,7 @@ describe("generateKeyPackage", () => {
     const capabilities =
       keyPackage.publicPackage.leafNode.capabilities?.extensions;
     expect(capabilities).toBeDefined();
-    expect(capabilities).toContain(MARMOT_GROUP_DATA_EXTENSION_TYPE);
+    expect(capabilities).toContain(appDataDictionaryExtensionType);
   });
 
   it("should include last_resort extension by default", async () => {
@@ -131,7 +129,7 @@ describe("generateKeyPackage", () => {
     // Should include both custom extensions and Marmot extension
     expect(capabilities).toContain(1);
     expect(capabilities).toContain(2);
-    expect(capabilities).toContain(MARMOT_GROUP_DATA_EXTENSION_TYPE);
+    expect(capabilities).toContain(appDataDictionaryExtensionType);
   });
 
   it("should accept custom extensions and still ensure last_resort extension", async () => {

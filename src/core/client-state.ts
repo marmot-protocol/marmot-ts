@@ -6,6 +6,7 @@ import {
   clientStateDecoder,
   clientStateEncoder,
   decode,
+  defaultAppDataUpdateCallback,
   defaultKeyPackageEqualityConfig,
   defaultKeyRetentionConfig,
   defaultLifetimeConfig,
@@ -26,6 +27,9 @@ export const defaultMarmotClientConfig: ClientConfig = {
   lifetimeConfig: defaultLifetimeConfig,
   keyPackageEqualityConfig: defaultKeyPackageEqualityConfig,
   paddingConfig: defaultPaddingConfig,
+  // Marmot v2 app components use full-replacement update payloads, so the
+  // default last-update-wins callback is the correct merge policy.
+  appDataUpdateCallback: defaultAppDataUpdateCallback,
 };
 
 /** Reads the MarmotGroupData from a ClientState or GroupInfo objects */

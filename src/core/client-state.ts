@@ -16,8 +16,12 @@ import {
   encode,
 } from "ts-mls";
 import {
+  type EncryptedMediaPolicyV1,
   getAdminPolicy,
+  getEncryptedMediaPolicy,
+  getGroupAvatarUrl,
   getGroupProfile,
+  getMessageRetention,
   getNostrRouting,
 } from "./components/index.js";
 
@@ -34,9 +38,8 @@ export const defaultMarmotClientConfig: ClientConfig = {
 
 /**
  * A read projection of a Marmot group's app-component state, assembled from the
- * `group.profile.v1`, `admin-policy.v1`, and `transport.nostr.routing.v1`
- * components in the MLS `app_data_dictionary` extension. This is the v2
- * replacement for the legacy `MarmotGroupData` monolith.
+ * group-scoped components in the MLS `app_data_dictionary` extension. This is
+ * the v2 replacement for the legacy `MarmotGroupData` monolith.
  */
 export interface MarmotGroupView {
   /** Public 32-byte nostr group id (from nostr routing), if routing is set. */
@@ -49,6 +52,18 @@ export interface MarmotGroupView {
   adminPubkeys: string[];
   /** Nostr relay URLs (from nostr routing). */
   relays: string[];
+  /** Group avatar URL (`group.avatar-url.v1`, `0x8007`), if set. */
+  avatarUrl?: string;
+  /**
+   * Group encrypted-media policy (`group.encrypted-media.v1`, `0x8008`): the
+   * group-scoped blob-store endpoints and format, if set.
+   */
+  encryptedMedia?: EncryptedMediaPolicyV1;
+  /**
+   * Message-retention window in seconds (`message-retention.v1`, `0x8005`), if
+   * set; `0n` means retain indefinitely.
+   */
+  messageRetention?: bigint;
 }
 
 /**
@@ -63,6 +78,9 @@ export function getMarmotGroupView(
     const profile = getGroupProfile(extensions);
     const adminPubkeys = getAdminPolicy(extensions);
     const routing = getNostrRouting(extensions);
+    const avatar = getGroupAvatarUrl(extensions);
+    const encryptedMedia = getEncryptedMediaPolicy(extensions);
+    const messageRetention = getMessageRetention(extensions);
 
     if (!profile && !adminPubkeys && !routing) return null;
 
@@ -72,6 +90,9 @@ export function getMarmotGroupView(
       description: profile?.description ?? "",
       adminPubkeys: adminPubkeys ?? [],
       relays: routing?.relays ?? [],
+      avatarUrl: avatar?.url,
+      encryptedMedia,
+      messageRetention,
     };
   } catch {
     return null;

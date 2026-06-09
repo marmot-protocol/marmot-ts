@@ -13,8 +13,12 @@ import { marmotRequiredCapabilitiesExtension } from "../capabilities.js";
 import { getMarmotGroupView } from "../client-state.js";
 import {
   adminPolicyEntry,
+  encryptedMediaBlossomDefault,
+  encryptedMediaEntry,
   getAppComponents,
+  groupAvatarUrlEntry,
   groupProfileEntry,
+  messageRetentionEntry,
   nostrRoutingEntry,
 } from "../components/index.js";
 
@@ -67,5 +71,37 @@ describe("group construction", () => {
     expect((required as ExtensionRequiredCapabilities).extensionData).toEqual(
       marmotRequiredCapabilitiesExtension().extensionData,
     );
+  });
+
+  it("surfaces avatar, encrypted-media policy, and retention through the group view", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const kp = await generateKeyPackage({
+      credential: createCredential(adminPubkey),
+      ciphersuiteImpl: impl,
+    });
+
+    const policy = encryptedMediaBlossomDefault([
+      "https://blossom.example.com",
+    ]);
+    const { clientState } = await createGroup({
+      creatorKeyPackage: kp,
+      components: [
+        groupProfileEntry({ name: "Media Group", description: "" }),
+        adminPolicyEntry([adminPubkey]),
+        groupAvatarUrlEntry({ url: "https://cdn.example.com/avatar.png" }),
+        encryptedMediaEntry(policy),
+        messageRetentionEntry(3600),
+      ],
+      ciphersuiteImpl: impl,
+    });
+
+    const view = getMarmotGroupView(clientState);
+    expect(view?.avatarUrl).toBe("https://cdn.example.com/avatar.png");
+    expect(view?.encryptedMedia).toEqual(policy);
+    expect(view?.messageRetention).toBe(3600n);
   });
 });

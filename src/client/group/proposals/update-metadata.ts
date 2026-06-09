@@ -8,7 +8,11 @@ import {
 
 import {
   adminPolicyEntry,
+  type EncryptedMediaPolicyV1,
+  encryptedMediaEntry,
+  groupAvatarUrlEntry,
   groupProfileEntry,
+  messageRetentionEntry,
   nostrRoutingEntry,
 } from "../../../core/components/index.js";
 import type { ProposalAction } from "../marmot-group.js";
@@ -25,6 +29,15 @@ export interface UpdateGroupMetadata {
   relays?: string[];
   /** New nostr group id (transport.nostr.routing.v1). */
   nostrGroupId?: Uint8Array;
+  /** New group avatar URL (group.avatar-url.v1). */
+  avatarUrl?: string;
+  /** New encrypted-media policy (group.encrypted-media.v1). */
+  encryptedMedia?: EncryptedMediaPolicyV1;
+  /**
+   * New message-retention window in seconds (message-retention.v1); `0` retains
+   * indefinitely.
+   */
+  messageRetention?: number | bigint;
 }
 
 /** Wraps a component entry in a full-replacement `app_data_update` proposal. */
@@ -79,6 +92,24 @@ export function proposeUpdateMetadata(
             relays: metadata.relays ?? groupData.relays,
           }),
         ),
+      );
+    }
+
+    if (metadata.avatarUrl !== undefined) {
+      proposals.push(
+        componentUpdate(groupAvatarUrlEntry({ url: metadata.avatarUrl })),
+      );
+    }
+
+    if (metadata.encryptedMedia !== undefined) {
+      proposals.push(
+        componentUpdate(encryptedMediaEntry(metadata.encryptedMedia)),
+      );
+    }
+
+    if (metadata.messageRetention !== undefined) {
+      proposals.push(
+        componentUpdate(messageRetentionEntry(metadata.messageRetention)),
       );
     }
 

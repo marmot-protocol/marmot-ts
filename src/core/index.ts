@@ -7,7 +7,6 @@ export * from "./convergence.js";
 export * from "./credential.js";
 export * from "./default-capabilities.js";
 export * from "./extensions.js";
-export * from "./group-image.js";
 export * from "./group-lifecycle.js";
 export * from "./inbound.js";
 export * from "./group-members.js";

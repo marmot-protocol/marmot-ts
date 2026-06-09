@@ -23,7 +23,7 @@ import { decodeContent, encodeContent } from "../utils/encoding.js";
 import { unixNow } from "../utils/nostr.js";
 import { decryptLegacyGroupMessageEventContent } from "./group-message-legacy.js";
 import { getNostrGroupIdHex } from "./client-state.js";
-import { GROUP_EVENT_KIND } from "./protocol.js";
+import { nostrTransportBinding } from "./transport.js";
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { concatBytes, randomBytes } from "@noble/ciphers/utils.js";
 
@@ -204,10 +204,10 @@ export async function createGroupEvent(
   const groupId = getNostrGroupIdHex(state);
 
   const draft = {
-    kind: GROUP_EVENT_KIND,
+    kind: nostrTransportBinding.groupMessageKind,
     created_at: unixNow(),
     content,
-    tags: [["h", groupId]],
+    tags: [[nostrTransportBinding.groupIdTag, groupId]],
   };
 
   // Ephemeral keypair for signing — distinct from the encryption keypair (MIP-03)

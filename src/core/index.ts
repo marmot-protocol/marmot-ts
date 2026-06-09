@@ -17,5 +17,6 @@ export * from "./key-package-relay-list.js";
 export * from "./key-package.js";
 export * from "./media.js";
 export * from "./protocol.js";
+export * from "./transport.js";
 export * from "./retained-history.js";
 export * from "./welcome.js";

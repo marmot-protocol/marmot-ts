@@ -40,7 +40,9 @@ import {
   serializeClientState,
 } from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
+import { hexToBytes } from "@noble/hashes/utils.js";
 import {
+  type AppWitness,
   type BranchCandidate,
   commitDigest,
   DEFAULT_CONVERGENCE_POLICY,
@@ -509,11 +511,59 @@ export class MarmotGroup<
     root: ClientState,
     pool: MlsMessage[],
     encrypted: NostrEvent[] = [],
+    witnessEvents: NostrEvent[] = [],
   ): Promise<BranchCandidate[]> {
     const forkEpoch = Number(root.groupContext.epoch);
     const branches: BranchCandidate[] = [];
     const callback = this.createAdminVerificationCallback();
     let counter = 0;
+
+    // App-payload witnesses on this branch epoch: application messages that
+    // decrypt against `state` (convergence.md). The sender is the account
+    // identity authenticated by the MLS leaf credential, not a transport id.
+    const witnessesAt = async (state: ClientState): Promise<AppWitness[]> => {
+      const epoch = Number(state.groupContext.epoch);
+      const out: AppWitness[] = [];
+      for (const ev of witnessEvents) {
+        try {
+          const decrypted = await decryptGroupMessages(
+            [ev],
+            state,
+            this.ciphersuite,
+          );
+          for (const pair of decrypted.read) {
+            if (pair.message.wireformat !== wireformats.mls_private_message)
+              continue;
+            const r = await processMessage({
+              context: {
+                cipherSuite: this.ciphersuite,
+                authService: marmotAuthService,
+                externalPsks: {},
+              },
+              state,
+              message: pair.message,
+              callback,
+            });
+            if (
+              r.kind === "applicationMessage" &&
+              r.senderLeafIndex !== undefined
+            ) {
+              const credential = getCredentialFromLeafIndex(
+                state.ratchetTree,
+                r.senderLeafIndex as LeafIndex,
+              );
+              out.push({
+                epoch,
+                sender: hexToBytes(getCredentialPubkey(credential)),
+              });
+            }
+          }
+        } catch {
+          /* not a witness on this state */
+        }
+      }
+      return out;
+    };
 
     // Gathers the commit messages that apply to `state`'s epoch: decrypted pool
     // entries plus any still-encrypted candidates that decrypt under this state.
@@ -557,7 +607,10 @@ export class MarmotGroup<
       tipMessage: MlsMessage | undefined,
       seen: ReadonlySet<string>,
       chain: ChainLink[],
+      witnesses: AppWitness[],
     ): Promise<void> => {
+      // App-payload witnesses observed on this branch epoch.
+      const accumulated = [...witnesses, ...(await witnessesAt(state))];
       let extended = false;
       for (const message of await candidatesAt(state)) {
         if (message.wireformat !== wireformats.mls_private_message) continue;
@@ -580,10 +633,13 @@ export class MarmotGroup<
         const tag = bytesToHex(next.newState.confirmationTag);
         if (seen.has(tag)) continue; // cycle / already explored this state
         extended = true;
-        await explore(next.newState, message, new Set([...seen, tag]), [
-          ...chain,
-          { parent: state, message, child: next.newState },
-        ]);
+        await explore(
+          next.newState,
+          message,
+          new Set([...seen, tag]),
+          [...chain, { parent: state, message, child: next.newState }],
+          accumulated,
+        );
       }
       if (!extended && tipMessage !== undefined) {
         const branch: BranchCandidate = {
@@ -591,7 +647,7 @@ export class MarmotGroup<
           forkEpoch,
           tipEpoch: Number(state.groupContext.epoch),
           tipDigest: this.#commitDigestOf(tipMessage),
-          appWitnesses: [],
+          appWitnesses: accumulated,
         };
         this.#branchTip.set(branch, state);
         this.#branchChain.set(branch, chain);
@@ -603,6 +659,7 @@ export class MarmotGroup<
       root,
       undefined,
       new Set([bytesToHex(root.confirmationTag)]),
+      [],
       [],
     );
     return branches;
@@ -619,6 +676,7 @@ export class MarmotGroup<
     forkEpoch: number,
     pool: MlsMessage[],
     encrypted: NostrEvent[] = [],
+    witnessEvents: NostrEvent[] = [],
   ): Promise<
     | { outcome: "recovered"; result: ProcessMessageResult }
     | { outcome: "superseded" | "skip" }
@@ -639,6 +697,7 @@ export class MarmotGroup<
       root,
       [...ours, ...pool],
       encrypted,
+      witnessEvents,
     );
     if (branches.length === 0) return { outcome: "skip" };
 
@@ -1848,6 +1907,9 @@ export class MarmotGroup<
           // Still-encrypted events may be a deeper competing branch's children,
           // decryptable only once replay reaches their (never-applied) epoch.
           decryptFailed,
+          // All batch events are candidate app-payload witnesses; only those that
+          // decrypt as application messages on a branch state count toward quorum.
+          events,
         );
         if (resolution.outcome === "recovered") {
           log(

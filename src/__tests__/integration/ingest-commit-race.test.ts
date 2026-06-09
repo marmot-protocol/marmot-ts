@@ -571,6 +571,184 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     expect(group.lifecycle).toBe("Stable");
   });
 
+  it("converges onto a witnessed branch via app-payload witness quorum, overriding the lower-digest competitor", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { clientState: createdState } = await createTestGroupState(
+      adminPubkey,
+      impl,
+    );
+    const ctx = {
+      cipherSuite: impl,
+      authService: unsafeTestingAuthenticationService,
+    };
+
+    // 3-member group: admin (committer), C (receiver + witness), D (witness).
+    const cPub = "c".repeat(64);
+    const dPub = "d".repeat(64);
+    const cKp = await generateKeyPackage({
+      credential: createCredential(cPub),
+      ciphersuiteImpl: impl,
+    });
+    const dKp = await generateKeyPackage({
+      credential: createCredential(dPub),
+      ciphersuiteImpl: impl,
+    });
+    const { newState: adminEpoch1, welcome } = await createCommit({
+      context: ctx,
+      state: createdState,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: cKp.publicPackage },
+        },
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: dKp.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+    const welcomeMsg = welcome!.welcome ?? (welcome as never);
+    const cEpoch1 = await joinGroup({
+      context: ctx,
+      welcome: welcomeMsg,
+      keyPackage: cKp.publicPackage,
+      privateKeys: cKp.privatePackage,
+      ratchetTree: undefined,
+    });
+    const dEpoch1 = await joinGroup({
+      context: ctx,
+      welcome: welcomeMsg,
+      keyPackage: dKp.publicPackage,
+      privateKeys: dKp.privatePackage,
+      ratchetTree: undefined,
+    });
+
+    // Two competing commits from the same epoch-1 admin state.
+    const commitA = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      extraProposals: [],
+    });
+    const commitB = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      extraProposals: [],
+    });
+
+    // Our applied branch is the LOWER commit_digest — the one that WINS the
+    // tip-digest tie-break absent witnesses. The witnessed competitor is the
+    // higher digest, so a flip to it can only be the quorum boost at work.
+    const digestA = commitDigest(encode(mlsMessageEncoder, commitA.commit));
+    const digestB = commitDigest(encode(mlsMessageEncoder, commitB.commit));
+    const aLower =
+      Buffer.compare(Buffer.from(digestA), Buffer.from(digestB)) < 0;
+    const applied = aLower ? commitA : commitB;
+    const witnessed = aLower ? commitB : commitA;
+
+    // C and D each apply the witnessed branch and emit one app payload on it.
+    // Two distinct account senders at that epoch → witness quorum (2/epoch).
+    const cAfterW = await processMessage({
+      context: ctx,
+      state: cEpoch1,
+      message: witnessed.commit,
+    });
+    if (cAfterW.kind !== "newState") throw new Error("expected newState");
+    const dAfterW = await processMessage({
+      context: ctx,
+      state: dEpoch1,
+      message: witnessed.commit,
+    });
+    if (dAfterW.kind !== "newState") throw new Error("expected newState");
+    const cMsg = await createApplicationMessage({
+      context: ctx,
+      state: cAfterW.newState,
+      message: new TextEncoder().encode("witness-c"),
+    });
+    const dMsg = await createApplicationMessage({
+      context: ctx,
+      state: dAfterW.newState,
+      message: new TextEncoder().encode("witness-d"),
+    });
+    // App-payload events are keyed under the witnessed branch's epoch secret, so
+    // they only decrypt once replay reaches that (never-applied) branch state.
+    const cWitnessEvent = await createGroupEvent({
+      message: cMsg.message,
+      state: cAfterW.newState,
+      ciphersuite: impl,
+    });
+    const dWitnessEvent = await createGroupEvent({
+      message: dMsg.message,
+      state: dAfterW.newState,
+      ciphersuite: impl,
+    });
+
+    const appliedEvent = await createGroupEvent({
+      message: applied.commit,
+      state: adminEpoch1,
+      ciphersuite: impl,
+    });
+    const witnessedEvent = await createGroupEvent({
+      message: witnessed.commit,
+      state: adminEpoch1,
+      ciphersuite: impl,
+    });
+    const expectedTag = cAfterW.newState.confirmationTag;
+
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
+    await store.setItem(
+      bytesToHex(cEpoch1.groupContext.groupId),
+      encode(clientStateEncoder, cEpoch1),
+    );
+    const network: NostrNetworkInterface = {
+      request: async () => {
+        throw new Error("not used");
+      },
+      subscription: () => {
+        throw new Error("not used");
+      },
+      publish: async () => {
+        throw new Error("not used");
+      },
+      getUserInboxRelays: async () => {
+        throw new Error("not used");
+      },
+    };
+    const group = new MarmotGroup(cEpoch1, {
+      store,
+      signer: { getPublicKey: async () => cPub } as EventSigner,
+      ciphersuite: impl,
+      network,
+    });
+
+    // Apply our lower-digest branch first: it becomes the current tip.
+    for await (const _ of group.ingest([appliedEvent])) void _;
+    expect(group.state.groupContext.epoch).toBe(
+      cEpoch1.groupContext.epoch + 1n,
+    );
+
+    // The higher-digest competitor arrives late, witnessed by C and D payloads.
+    for await (const _ of group.ingest([
+      witnessedEvent,
+      cWitnessEvent,
+      dWitnessEvent,
+    ])) {
+      void _;
+    }
+
+    // Witness quorum boosted the higher-digest branch past our lower-digest tip.
+    expect(group.state.groupContext.epoch).toBe(
+      cEpoch1.groupContext.epoch + 1n,
+    );
+    expect(group.state.confirmationTag).toEqual(expectedTag);
+    expect(group.lifecycle).toBe("Stable");
+  });
+
   it("persists application message epoch advancement (forward secrecy)", async () => {
     const adminPubkey = "a".repeat(64);
     const impl = await getCiphersuiteImpl(

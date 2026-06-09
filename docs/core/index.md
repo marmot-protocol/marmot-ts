@@ -38,7 +38,7 @@ import {
 
 ### [Protocol Constants & Concepts](./protocol)
 
-Learn about Nostr event kinds, extension types, and core protocol concepts like MarmotGroupData.
+Learn about Nostr event kinds, extension types, and core protocol concepts like app components.
 
 ### [Credentials](./credentials)
 

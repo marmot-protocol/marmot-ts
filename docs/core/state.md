@@ -8,7 +8,7 @@ ClientState is the MLS group state object containing:
 
 - Current encryption keys
 - Member list and their credentials
-- Group context (including MarmotGroupData)
+- Group context (including the app-component dictionary)
 - Epoch number
 - Pending proposals
 - Tree structure
@@ -17,16 +17,16 @@ Think of it as a snapshot of the group at a specific point in time.
 
 ## Extracting Group Information
 
-### Get Marmot Group Data
+### Get the Marmot Group View
 
 ```typescript
-import { getMarmotGroupData } from "@internet-privacy/marmot-ts";
+import { getMarmotGroupView } from "@internet-privacy/marmot-ts";
 
-const groupData = getMarmotGroupData(clientState);
+const view = getMarmotGroupView(clientState);
 
-console.log(groupData.name); // "Developer Chat"
-console.log(groupData.adminPubkeys); // ["admin-hex"]
-console.log(groupData.relays); // ["wss://..."]
+console.log(view?.name); // "Developer Chat"
+console.log(view?.adminPubkeys); // ["admin-hex"]
+console.log(view?.relays); // ["wss://..."]
 ```
 
 ### Get Group Identifiers
@@ -37,7 +37,7 @@ import { getGroupIdHex, getNostrGroupIdHex } from "@internet-privacy/marmot-ts";
 // MLS group ID
 const mlsGroupId = getGroupIdHex(clientState);
 
-// Nostr group ID (from MarmotGroupData)
+// Nostr group ID (from the transport.nostr.routing.v1 component)
 const nostrGroupId = getNostrGroupIdHex(clientState);
 ```
 
@@ -160,19 +160,19 @@ Each epoch has unique encryption keys. Messages from epoch N can only be decrypt
 
 ```typescript
 import {
-  createGroup,
+  createSimpleGroup,
   serializeClientState,
   deserializeClientState,
-  getMarmotGroupData,
-  defaultMarmotClientConfig,
+  getMarmotGroupView,
 } from "@internet-privacy/marmot-ts";
 
-// 1. Create group
-const { clientState } = await createGroup({
+// 1. Create group (seeds the default app components)
+const { clientState } = await createSimpleGroup(
   creatorKeyPackage,
-  marmotGroupData,
   ciphersuiteImpl,
-});
+  "Developer Chat",
+  { adminPubkeys: [creatorPubkey], relays: ["wss://relay.example.com"] },
+);
 
 // 2. Serialize and store
 const serialized = serializeClientState(clientState);
@@ -183,8 +183,8 @@ const loaded = await storage.load(groupId);
 let restoredState = deserializeClientState(loaded);
 
 // 4. Use the restored state
-const groupData = getMarmotGroupData(restoredState);
-console.log("Restored group:", groupData.name);
+const view = getMarmotGroupView(restoredState);
+console.log("Restored group:", view?.name);
 ```
 
 ## Related

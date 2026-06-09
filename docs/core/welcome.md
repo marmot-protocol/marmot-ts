@@ -9,7 +9,7 @@ When someone is added to a group, they receive a Welcome message containing:
 - Current group state
 - Encryption keys for the current epoch
 - Member list
-- Group context (including MarmotGroupData)
+- Group context (including the app-component dictionary)
 
 The Welcome allows them to decrypt past messages from the current epoch and participate in the group.
 

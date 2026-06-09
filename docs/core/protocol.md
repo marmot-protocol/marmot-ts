@@ -45,86 +45,54 @@ import {
 
 Key package events use MLS protocol version tag value `"1.0"`. The exported `MLS_VERSIONS` name is a TypeScript type alias for supported values.
 
-## MarmotGroupData Extension
+## App Components (group state)
 
-The `MarmotGroupData` extension is the centerpiece of Marmot's integration between MLS and Nostr. It's embedded in the MLS group context and cryptographically bound to the group state.
+Marmot v2 stores group state as versioned **app components** inside the MLS
+`app_data_dictionary` GroupContext extension (`0x0006`, draft-ietf-mls-extensions-09),
+replacing the v1 `MarmotGroupData` monolith. Each component has a stable id and
+its own binary codec; the dictionary is cryptographically bound to the group
+state and mutated through `app_data_update` proposals (`0x0008`).
 
-### Structure
+### Group components
 
-```typescript
-interface MarmotGroupData {
-  version: number; // Extension version (current: 2)
-  nostrGroupId: Uint8Array; // 32-byte unique group identifier
-  name: string; // Human-readable group name
-  description: string; // Group description
-  adminPubkeys: string[]; // Array of admin Nostr pubkeys (hex)
-  relays: string[]; // WebSocket URLs for group relays
-  imageHash: Uint8Array; // Empty or 32-byte SHA-256 hash of encrypted image
-  imageKey: Uint8Array; // Empty or 32-byte image encryption seed
-  imageNonce: Uint8Array; // Empty or 12-byte ChaCha20-Poly1305 nonce for image
-  imageUploadKey: Uint8Array; // Empty or 32-byte Blossom upload identity seed
-}
-```
+| Id       | Component                    | Holds                       |
+| -------- | ---------------------------- | --------------------------- |
+| `0x8001` | `group.profile.v1`           | name, description           |
+| `0x8003` | `admin-policy.v1`            | admin Nostr pubkeys         |
+| `0x8004` | `transport.nostr.routing.v1` | nostr group id + relays     |
+| `0x8005` | `message-retention.v1`       | retention window (seconds)  |
+| `0x8007` | `group.avatar-url.v1`        | avatar URL                  |
+| `0x8008` | `group.encrypted-media.v1`   | blob-store policy for media |
 
-### Purpose
+### Reading group state
 
-- **Links MLS groups to Nostr:** Provides Nostr group ID and relay information
-- **Defines admin policy:** Specifies which pubkeys can send commits
-- **Stores metadata:** Group name, description, and image information accessible to all members
-- **Enables relay routing:** Tells clients where to publish/fetch group messages
-
-### Encoding/Decoding
+`getMarmotGroupView` projects the recognized components into one object:
 
 ```typescript
-import {
-  encodeMarmotGroupData,
-  decodeMarmotGroupData,
-  marmotGroupDataToExtension,
-} from "@internet-privacy/marmot-ts";
+import { getMarmotGroupView } from "@internet-privacy/marmot-ts";
 
-// Create group data
-const groupData: MarmotGroupData = {
-  version: 2,
-  nostrGroupId: crypto.getRandomValues(new Uint8Array(32)),
-  name: "Developer Chat",
-  description: "A group for TypeScript developers",
-  adminPubkeys: ["admin-pubkey-hex"],
-  relays: ["wss://relay.example.com"],
-  imageHash: new Uint8Array(0),
-  imageKey: new Uint8Array(0),
-  imageNonce: new Uint8Array(0),
-  imageUploadKey: new Uint8Array(0),
-};
-
-// Convert to MLS extension
-const extension = marmotGroupDataToExtension(groupData);
-
-// Encode to binary (for storage or transmission)
-const encoded = encodeMarmotGroupData(groupData);
-
-// Later: decode from binary
-const decoded = decodeMarmotGroupData(encoded);
+const view = getMarmotGroupView(clientState);
+view?.name; // "Developer Chat"
+view?.adminPubkeys; // ["admin-pubkey-hex"]
+view?.relays; // ["wss://relay.example.com"]
+view?.nostrGroupId; // Uint8Array(32)
+view?.avatarUrl; // "https://..." | undefined
+view?.encryptedMedia; // EncryptedMediaPolicyV1 | undefined
 ```
 
-### Admin Verification
+Individual components can be read with the typed getters
+(`getGroupProfile`, `getAdminPolicy`, `getNostrRouting`, `getGroupAvatarUrl`,
+`getEncryptedMediaPolicy`, ...) and built with the matching entry builders
+(`groupProfileEntry`, `adminPolicyEntry`, `nostrRoutingEntry`, ...).
 
-```typescript
-import { isAdmin } from "@internet-privacy/marmot-ts";
+### Required capabilities
 
-const userIsAdmin = isAdmin(groupData, userPubkey);
-if (userIsAdmin) {
-  // User can send commits
-}
-```
-
-### Forward Compatibility
-
-The `decodeMarmotGroupData` function handles future versions gracefully:
-
-- Unknown fields are ignored
-- Version field indicates structure version
-- Warnings are logged for newer versions
+New groups declare a `required_capabilities` (`0x0003`) extension covering the
+Marmot baseline — `app_data_dictionary` (`0x0006`), account-identity-proof
+(`0xF2F1`), and the `app_data_update` proposal (`0x0008`) — so MLS refuses to
+add a member whose KeyPackage does not advertise them.
 
 ## Specification Reference
 
-See [MIP-01](https://github.com/parres-hq/marmot/blob/main/01.md) for the complete MarmotGroupData extension specification.
+See the darkmatter (Marmot v2) spec for the complete app-component and
+capability-negotiation model.

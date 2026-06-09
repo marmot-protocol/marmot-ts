@@ -314,4 +314,4 @@ Group events are signed with ephemeral keys:
 
 - [Groups](./groups) - Creating groups to send messages in
 - [Client State](./state) - Managing group state for encryption
-- [Protocol](./protocol) - MarmotGroupData and event kinds
+- [Protocol](./protocol) - app components and event kinds

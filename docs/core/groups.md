@@ -11,12 +11,17 @@ An MLS group is a cryptographic context where:
 - Members can be added or removed
 - Keys rotate with each state change (epoch)
 
-Marmot extends MLS groups with Nostr-specific metadata via the MarmotGroupData extension.
+Marmot extends MLS groups with Nostr-specific metadata via versioned app components in the `app_data_dictionary` extension.
 
 ## Creating a Group
 
 ```typescript
-import { createGroup } from "@internet-privacy/marmot-ts";
+import {
+  createGroup,
+  groupProfileEntry,
+  adminPolicyEntry,
+  nostrRoutingEntry,
+} from "@internet-privacy/marmot-ts";
 import { ciphersuites, defaultCryptoProvider } from "ts-mls";
 
 const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
@@ -25,9 +30,16 @@ const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
 
 const result = await createGroup({
   creatorKeyPackage: myKeyPackage,
-  marmotGroupData: groupData,
+  components: [
+    groupProfileEntry({ name: "Developer Chat", description: "" }),
+    adminPolicyEntry([myPubkey]),
+    nostrRoutingEntry({
+      nostrGroupId: crypto.getRandomValues(new Uint8Array(32)),
+      relays: ["wss://relay.example.com"],
+    }),
+  ],
   ciphersuiteImpl,
-  extensions: [], // Optional additional extensions
+  extensions: [], // Optional additional group context extensions
 });
 
 // result.clientState contains the MLS group state
@@ -36,9 +48,9 @@ const result = await createGroup({
 ### Parameters
 
 - **creatorKeyPackage:** Your complete key package (public + private)
-- **marmotGroupData:** Group metadata (name, description, relays, admins)
+- **components:** Initial app components seeded into the `app_data_dictionary`
 - **ciphersuiteImpl:** Cryptographic implementation
-- **extensions:** (Optional) Additional MLS extensions
+- **extensions:** (Optional) Additional MLS group context extensions
 
 ### Returns
 
@@ -71,7 +83,7 @@ const { clientState } = await createSimpleGroup(
 When you create a group:
 
 1. **Creates MLS Group:** Initializes MLS group with creator as sole member
-2. **Embeds Metadata:** Adds Marmot Group Data Extension to group context
+2. **Seeds Components:** Writes the initial app components into the `app_data_dictionary` and declares the Marmot `required_capabilities`
 3. **Generates Secrets:** Creates initial encryption keys
 4. **Returns State:** Provides ClientState for ongoing operations
 
@@ -81,7 +93,7 @@ The `ClientState` object contains everything needed to operate the group:
 
 - Current encryption keys
 - Member list and their credentials
-- Group context (including MarmotGroupData)
+- Group context (including the app-component dictionary)
 - Epoch number
 - Pending proposals
 
@@ -92,7 +104,7 @@ The `ClientState` object contains everything needed to operate the group:
 ```typescript
 import {
   generateKeyPackage,
-  createGroup,
+  createSimpleGroup,
   createCredential,
   getNostrGroupIdHex,
 } from "@internet-privacy/marmot-ts";
@@ -109,28 +121,19 @@ const myKeyPackage = await generateKeyPackage({
   ciphersuiteImpl,
 });
 
-// 2. Define group metadata
-const groupData = {
-  version: 2,
-  nostrGroupId: crypto.getRandomValues(new Uint8Array(32)),
-  name: "Developer Chat",
-  description: "A group for TypeScript developers",
-  adminPubkeys: [myPubkey],
-  relays: ["wss://relay.damus.io", "wss://relay.snort.social"],
-  imageHash: new Uint8Array(0),
-  imageKey: new Uint8Array(0),
-  imageNonce: new Uint8Array(0),
-  imageUploadKey: new Uint8Array(0),
-};
-
-// 3. Create the group
-const { clientState } = await createGroup({
-  creatorKeyPackage: myKeyPackage,
-  marmotGroupData: groupData,
+// 2. Create the group (seeds profile + admin-policy + nostr routing components)
+const { clientState } = await createSimpleGroup(
+  myKeyPackage,
   ciphersuiteImpl,
-});
+  "Developer Chat",
+  {
+    description: "A group for TypeScript developers",
+    adminPubkeys: [myPubkey],
+    relays: ["wss://relay.damus.io", "wss://relay.snort.social"],
+  },
+);
 
-// 4. Group is ready to use!
+// 3. Group is ready to use!
 console.log("Group created with ID:", getNostrGroupIdHex(clientState));
 ```
 
@@ -138,22 +141,27 @@ console.log("Group created with ID:", getNostrGroupIdHex(clientState));
 
 Every Marmot group has associated metadata:
 
+In Marmot v2 group metadata lives in versioned app components (the
+`app_data_dictionary` MLS extension). Read it as a single projection with
+`getMarmotGroupView`:
+
 ```typescript
-import { getMarmotGroupData } from "@internet-privacy/marmot-ts";
+import { getMarmotGroupView } from "@internet-privacy/marmot-ts";
 
-const groupData = getMarmotGroupData(clientState);
+const view = getMarmotGroupView(clientState);
 
-console.log(groupData.name); // "Developer Chat"
-console.log(groupData.description); // "A group for..."
-console.log(groupData.relays); // ["wss://..."]
-console.log(groupData.adminPubkeys); // ["admin-hex"]
+console.log(view?.name); // "Developer Chat"
+console.log(view?.description); // "A group for..."
+console.log(view?.relays); // ["wss://..."]
+console.log(view?.adminPubkeys); // ["admin-hex"]
+console.log(view?.avatarUrl); // "https://..." (group.avatar-url.v1)
 ```
 
-See [Protocol Constants & Concepts](./protocol) for MarmotGroupData details.
+See [Protocol Constants & Concepts](./protocol) for the app-component model.
 
 ## Related
 
 - [Client State](./state) - Managing and persisting group state
 - [Messages](./messages) - Sending messages in groups
 - [Members](./members) - Managing group membership
-- [Protocol](./protocol) - MarmotGroupData extension details
+- [Protocol](./protocol) - app-component extension details

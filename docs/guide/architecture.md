@@ -109,7 +109,7 @@ Your chat UI, commands, and business logic.
 
 ```
 1. generateKeyPackage() → CompleteKeyPackage
-2. createGroup() → ClientState with MarmotGroupData
+2. createGroup() → ClientState with the app-component dictionary
 3. createGroupEvent() → Encrypted kind 445 event
 4. Publish to Nostr relays
 ```

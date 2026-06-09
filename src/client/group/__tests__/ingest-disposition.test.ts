@@ -34,6 +34,9 @@ describe("ingestResultDisposition", () => {
       ["skipped", "past-epoch", "already_applied"],
       ["skipped", "self-echo", "own_echo"],
       ["skipped", "wrong-wireformat", "invalid_encoding"],
+      // Retained-anchor convergence outcomes (retained-history.md).
+      ["skipped", "beyond-anchor", "missing_history"],
+      ["skipped", "missing-retained-anchor", "missing_history"],
     ];
     for (const [, reason, category] of cases) {
       expect(

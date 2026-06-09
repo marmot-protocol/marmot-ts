@@ -53,6 +53,7 @@ import {
   selectCanonicalBranch,
 } from "../../core/convergence.js";
 import {
+  canTransitionLifecycle,
   type GroupLifecycleState,
   groupLifecycleStates,
   mayPrepareLocalCommit,
@@ -63,6 +64,7 @@ import {
   disposition,
   inputCategories,
 } from "../../core/inbound.js";
+import { classifyLateCommit } from "../../core/retained-history.js";
 import {
   createGroupEvent,
   decryptGroupMessages,
@@ -145,8 +147,18 @@ export type SkippedIngestResult = {
    * - `"past-epoch"` – commit belongs to an epoch we have already advanced past
    * - `"wrong-wireformat"` – the MLS wireformat is unexpected for a group message
    * - `"self-echo"` – this event was sent by us; state was already advanced at send time
+   * - `"beyond-anchor"` – competing commit forks from before our retained anchor;
+   *   the history needed to evaluate it was already pruned (retained-history.md)
+   * - `"missing-retained-anchor"` – competing commit forks inside the rollback
+   *   horizon but its retained anchor state was lost; the group can no longer
+   *   converge and transitions to `Unrecoverable`
    */
-  reason: "past-epoch" | "wrong-wireformat" | "self-echo";
+  reason:
+    | "past-epoch"
+    | "wrong-wireformat"
+    | "self-echo"
+    | "beyond-anchor"
+    | "missing-retained-anchor";
 };
 
 /** An event that could not be decrypted or processed after all retry attempts */
@@ -196,6 +208,11 @@ export function ingestResultDisposition(result: IngestResult): Disposition {
           return disposition.stale(inputCategories.ownEcho);
         case "wrong-wireformat":
           return disposition.stale(inputCategories.invalidEncoding);
+        case "beyond-anchor":
+        case "missing-retained-anchor":
+          // Both convergence outcomes need history we no longer hold
+          // (convergenceOutcomeToCategory in inbound.ts).
+          return disposition.stale(inputCategories.missingHistory);
       }
     // eslint-disable-next-line no-fallthrough
     case "unreadable":
@@ -529,6 +546,30 @@ export class MarmotGroup<
       if (epoch < floor) this.#retainedStates.delete(epoch);
     for (const epoch of this.#appliedCommitMessages.keys())
       if (epoch < floor) this.#appliedCommitMessages.delete(epoch);
+  }
+
+  /**
+   * Drives the lifecycle to the terminal `Unrecoverable` state, routing through
+   * `Recovering` when needed (the only legal predecessor per group-state.md).
+   * Idempotent: a no-op once already `Unrecoverable`.
+   */
+  #toUnrecoverable(): void {
+    if (this.#lifecycle === groupLifecycleStates.unrecoverable) return;
+    if (this.#lifecycle === groupLifecycleStates.stable)
+      this.#lifecycle = transitionLifecycle(
+        this.#lifecycle,
+        groupLifecycleStates.recovering,
+      );
+    if (
+      canTransitionLifecycle(
+        this.#lifecycle,
+        groupLifecycleStates.unrecoverable,
+      )
+    )
+      this.#lifecycle = transitionLifecycle(
+        this.#lifecycle,
+        groupLifecycleStates.unrecoverable,
+      );
   }
 
   /** The reached tip state for a candidate branch. */
@@ -1958,14 +1999,21 @@ export class MarmotGroup<
     // applied commits plus the pooled competitors, select the canonical branch
     // (convergence.md), and rewind to it if it differs from our current tip.
     if (forkPool.length > 0) {
-      const retainedForkEpochs = forkPool
-        .map((p) => p.epoch)
-        .filter((e) => this.#retainedStates.has(e));
-      if (retainedForkEpochs.length > 0) {
-        const minForkEpoch = Math.min(...retainedForkEpochs);
+      // Competitors whose fork point we still retain can be rebuilt and scored;
+      // those whose fork point is no longer retained are classified against the
+      // retained anchor (retained-history.md "Late commits").
+      const retainedPool = forkPool.filter((p) =>
+        this.#retainedStates.has(p.epoch),
+      );
+      const orphanPool = forkPool.filter(
+        (p) => !this.#retainedStates.has(p.epoch),
+      );
+
+      if (retainedPool.length > 0) {
+        const minForkEpoch = Math.min(...retainedPool.map((p) => p.epoch));
         const resolution = await this.#resolveFork(
           minForkEpoch,
-          forkPool.map((p) => p.message),
+          retainedPool.map((p) => p.message),
           // Still-encrypted events may be a deeper competing branch's children,
           // decryptable only once replay reaches their (never-applied) epoch.
           decryptFailed,
@@ -1978,22 +2026,22 @@ export class MarmotGroup<
             "convergence rewound to canonical branch – epoch:%d",
             this.state.groupContext.epoch,
           );
-          const rep = forkPool[0];
+          const rep = retainedPool[0];
           yield {
             kind: "processed",
             result: resolution.result,
             event: rep.event,
             message: rep.message,
           };
-          for (let i = 1; i < forkPool.length; i++)
+          for (let i = 1; i < retainedPool.length; i++)
             yield {
               kind: "skipped",
-              event: forkPool[i].event,
-              message: forkPool[i].message,
+              event: retainedPool[i].event,
+              message: retainedPool[i].message,
               reason: "past-epoch",
             };
         } else {
-          for (const p of forkPool)
+          for (const p of retainedPool)
             yield {
               kind: "skipped",
               event: p.event,
@@ -2001,14 +2049,63 @@ export class MarmotGroup<
               reason: "past-epoch",
             };
         }
-      } else {
-        for (const p of forkPool)
-          yield {
-            kind: "skipped",
-            event: p.event,
-            message: p.message,
-            reason: "past-epoch",
-          };
+      }
+
+      // Classify competitors whose retained anchor is gone (retained-history.md).
+      if (orphanPool.length > 0) {
+        const currentTipEpoch = Number(this.state.groupContext.epoch);
+        const anchorEpoch =
+          this.#retainedStates.size > 0
+            ? Math.min(...this.#retainedStates.keys())
+            : currentTipEpoch;
+        for (const p of orphanPool) {
+          // The retained-anchor model classifies *late* (past-epoch) commits.
+          // Ahead-of-tip entries are future branches still being deferred for
+          // retry (added to `unreadable` in STEP 5), not anchor losses.
+          if (p.epoch >= currentTipEpoch) {
+            yield {
+              kind: "skipped",
+              event: p.event,
+              message: p.message,
+              reason: "past-epoch",
+            };
+            continue;
+          }
+          const outcome = classifyLateCommit({
+            sourceEpoch: p.epoch,
+            anchorEpoch,
+            currentTipEpoch,
+            maxRewindCommits: DEFAULT_CONVERGENCE_POLICY.maxRewindCommits,
+            parentArrived: true,
+            retainedParentStateAvailable: false,
+          });
+          if (outcome.kind === "missing_retained_anchor") {
+            // Inside the rollback horizon but the anchor state was lost: the
+            // group can no longer converge → Unrecoverable (via Recovering).
+            this.#toUnrecoverable();
+            log("convergence lost retained anchor – group is Unrecoverable");
+            yield {
+              kind: "skipped",
+              event: p.event,
+              message: p.message,
+              reason: "missing-retained-anchor",
+            };
+          } else if (outcome.kind === "beyond_anchor") {
+            yield {
+              kind: "skipped",
+              event: p.event,
+              message: p.message,
+              reason: "beyond-anchor",
+            };
+          } else {
+            yield {
+              kind: "skipped",
+              event: p.event,
+              message: p.message,
+              reason: "past-epoch",
+            };
+          }
+        }
       }
     }
 

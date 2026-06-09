@@ -12,6 +12,7 @@ import {
   PrivateKeyPackage,
   Welcome,
 } from "ts-mls";
+import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import { marmotAuthService } from "../core/auth-service.js";
 import { SerializedClientState } from "../core/client-state.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
@@ -44,6 +45,13 @@ export type MarmotClientOptions<
 > = {
   /** The signer used for the clients identity */
   signer: EventSigner;
+  /**
+   * Optional Nostr-account proof signer. When provided, key packages this
+   * client publishes carry a `marmot.account-identity-proof.v1` LeafNode
+   * extension required for darkmatter wire interop. Supply from a signer with
+   * raw BIP-340 access (the applesauce `EventSigner` cannot sign the digest).
+   */
+  accountProofSigner?: AccountIdentityProofSigner;
   /** The capabilities to use for the client */
   capabilities?: Capabilities;
   /** The backend to store and load the groups from */
@@ -104,6 +112,7 @@ export class MarmotClient<
     this.keyPackages = new KeyPackageManager({
       store: options.keyPackageStore,
       signer: options.signer,
+      accountProofSigner: options.accountProofSigner,
       network: options.network,
       clientId: options.clientId,
     });

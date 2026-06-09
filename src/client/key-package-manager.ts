@@ -11,6 +11,7 @@ import {
   KeyPackage,
   PrivateKeyPackage,
 } from "ts-mls";
+import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import { createCredential } from "../core/credential.js";
 import {
   createDeleteKeyPackageEvent,
@@ -261,6 +262,15 @@ export type KeyPackageManagerOptions = {
   clientId?: string;
   /** The signer used for the clients identity */
   signer: EventSigner;
+  /**
+   * Optional Nostr-account proof signer. When provided, generated key packages
+   * carry a `marmot.account-identity-proof.v1` LeafNode extension binding the
+   * account to the leaf signature key (required for darkmatter wire interop).
+   * Supply this from a signer with raw BIP-340 access (e.g. a PrivateKeyAccount
+   * secret key via `signAccountIdentityProof`); the applesauce `EventSigner`
+   * alone cannot sign the proof digest.
+   */
+  accountProofSigner?: AccountIdentityProofSigner;
   /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
   /** The crypto provider to use for cryptographic operations */
@@ -286,6 +296,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   private readonly store: GenericKeyValueStore<StoredKeyPackage>;
   private readonly cryptoProvider: CryptoProvider;
   private readonly signer: EventSigner;
+  private readonly accountProofSigner?: AccountIdentityProofSigner;
   private readonly network: NostrNetworkInterface;
 
   #log = logger.extend("KeyPackageManager");
@@ -295,6 +306,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     this.store = options.store;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.signer = options.signer;
+    this.accountProofSigner = options.accountProofSigner;
     this.network = options.network;
     this.clientId = options.clientId;
   }
@@ -506,6 +518,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       credential,
       ciphersuiteImpl: ciphersuite,
       isLastResort: options.isLastResort,
+      accountProofSigner: this.accountProofSigner,
     });
 
     // Store private material locally, including the slot identifier

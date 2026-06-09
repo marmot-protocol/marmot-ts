@@ -166,6 +166,17 @@ export type IngestResult =
   | UnreadableIngestResult;
 
 /**
+ * An {@link IngestResult} carrying its protocol-visible inbound-processing
+ * {@link Disposition} (`protocol-core/inbound-processing.md`). This is what
+ * {@link MarmotGroup.ingest} yields, so consumers can act on the classification
+ * (accepted / stale / deferred / invalidated) without re-deriving it.
+ */
+export type DispositionedIngestResult = IngestResult & {
+  /** The protocol-visible disposition classifying this result. */
+  disposition: Disposition;
+};
+
+/**
  * Maps an {@link IngestResult} to its protocol-visible {@link Disposition}
  * (`protocol-core/inbound-processing.md`). `processed` accepts; `rejected` is a
  * stale `authorization_failed`; `skipped` maps by reason; `unreadable` is a
@@ -1529,9 +1540,29 @@ export class MarmotGroup<
    * Events that can never be processed are yielded as {@link UnreadableIngestResult}.
    *
    * @param events - Array of Nostr events containing encrypted MLS messages
-   * @yields IngestResult - The result of processing the event
+   * @yields DispositionedIngestResult - The processing result plus its
+   *   inbound-processing {@link Disposition}.
    */
   async *ingest(
+    events: NostrEvent[],
+    options?: { maxRetries?: number },
+  ): AsyncGenerator<DispositionedIngestResult> {
+    // Attach the protocol-visible disposition to every raw result
+    // (inbound-processing.md classification) so callers don't re-derive it.
+    for await (const result of this.#ingestRaw(events, options)) {
+      yield {
+        ...result,
+        disposition: ingestResultDisposition(result),
+      } as DispositionedIngestResult;
+    }
+  }
+
+  /**
+   * The raw ingest pipeline (see {@link ingest}). Yields un-classified
+   * {@link IngestResult}s and owns the recursive unreadable-retry loop; the
+   * public {@link ingest} wraps each result with its {@link Disposition}.
+   */
+  async *#ingestRaw(
     events: NostrEvent[],
     options?: {
       /** Current retry attempt count (internal use) */
@@ -1998,7 +2029,7 @@ export class MarmotGroup<
 
     if (unreadable.length > 0) {
       log("scheduling retry for %d unreadable event(s)", unreadable.length);
-      yield* this.ingest(unreadable, {
+      yield* this.#ingestRaw(unreadable, {
         retryCount: retryCount + 1,
         maxRetries: maxRetries,
         _errors: errorList,

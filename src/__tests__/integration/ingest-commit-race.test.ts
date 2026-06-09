@@ -864,6 +864,8 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
         res.result.kind === "applicationMessage"
       ) {
         results.push(res.result.newState);
+        // ingest() emits the protocol-visible inbound-processing disposition.
+        expect(res.disposition).toEqual({ kind: "accepted" });
       }
     }
 

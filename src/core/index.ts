@@ -1,4 +1,5 @@
 export * from "./binary.js";
+export * from "./components/index.js";
 export * from "./capabilities.js";
 export * from "./client-state.js";
 export * from "./credential.js";

@@ -16,10 +16,10 @@ import {
   encode,
 } from "ts-mls";
 import {
-  decodeMarmotGroupData,
-  isMarmotGroupDataExtension,
-} from "./marmot-group-data.js";
-import { MarmotGroupData } from "./protocol.js";
+  getAdminPolicy,
+  getGroupProfile,
+  getNostrRouting,
+} from "./components/index.js";
 
 /** Default ClientConfig for Marmot. */
 export const defaultMarmotClientConfig: ClientConfig = {
@@ -32,25 +32,51 @@ export const defaultMarmotClientConfig: ClientConfig = {
   appDataUpdateCallback: defaultAppDataUpdateCallback,
 };
 
-/** Reads the MarmotGroupData from a ClientState or GroupInfo objects */
-export function getMarmotGroupData(
+/**
+ * A read projection of a Marmot group's app-component state, assembled from the
+ * `group.profile.v1`, `admin-policy.v1`, and `transport.nostr.routing.v1`
+ * components in the MLS `app_data_dictionary` extension. This is the v2
+ * replacement for the legacy `MarmotGroupData` monolith.
+ */
+export interface MarmotGroupView {
+  /** Public 32-byte nostr group id (from nostr routing), if routing is set. */
+  nostrGroupId?: Uint8Array;
+  /** Group display name (from the profile component). */
+  name: string;
+  /** Group description (from the profile component). */
+  description: string;
+  /** Admin nostr pubkeys (hex), from the admin-policy component. */
+  adminPubkeys: string[];
+  /** Nostr relay URLs (from nostr routing). */
+  relays: string[];
+}
+
+/**
+ * Reads the Marmot group view from a ClientState or GroupInfo. Returns null when
+ * the group carries no recognizable app components.
+ */
+export function getMarmotGroupView(
   clientState: ClientState | GroupInfo,
-): MarmotGroupData | null {
+): MarmotGroupView | null {
+  const extensions = clientState.groupContext.extensions;
   try {
-    const marmotExtension = clientState.groupContext.extensions.find(
-      isMarmotGroupDataExtension,
-    );
+    const profile = getGroupProfile(extensions);
+    const adminPubkeys = getAdminPolicy(extensions);
+    const routing = getNostrRouting(extensions);
 
-    if (!marmotExtension) return null;
+    if (!profile && !adminPubkeys && !routing) return null;
 
-    return decodeMarmotGroupData(marmotExtension.extensionData);
-  } catch (error) {
+    return {
+      nostrGroupId: routing?.nostrGroupId,
+      name: profile?.name ?? "",
+      description: profile?.description ?? "",
+      adminPubkeys: adminPubkeys ?? [],
+      relays: routing?.relays ?? [],
+    };
+  } catch {
     return null;
   }
 }
-
-/** @deprecated use getMarmotGroupData instead */
-export const extractMarmotGroupData = getMarmotGroupData;
 
 /** Reads the hex id of the group from a ClientState or GroupInfo object */
 export function getGroupIdHex(clientState: ClientState | GroupInfo): string {
@@ -58,10 +84,11 @@ export function getGroupIdHex(clientState: ClientState | GroupInfo): string {
 }
 
 export function getNostrGroupIdHex(clientState: ClientState): string {
-  const marmotData = getMarmotGroupData(clientState);
-  if (!marmotData) throw new Error("MarmotGroupData not found in ClientState");
+  const routing = getNostrRouting(clientState.groupContext.extensions);
+  if (!routing)
+    throw new Error("nostr routing component not found in ClientState");
 
-  return bytesToHex(marmotData.nostrGroupId);
+  return bytesToHex(routing.nostrGroupId);
 }
 
 /** Reads the epoch number from a ClientState or GroupInfo object */

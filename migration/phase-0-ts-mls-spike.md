@@ -8,10 +8,11 @@ Status: complete. Decision resolved — **Option A (cross-impl interop)**. Last 
 > dependency. See **"Gate resolution"** at the end of this doc. Phase 3 mutation is **unblocked**; no
 > type-7 scaffold is needed.
 
-Spike probes: `src/__tests__/spikes/phase0-ts-mls.spike.test.ts` (run with
-`pnpm vitest run src/__tests__/spikes/phase0-ts-mls.spike.test.ts`). All four probes pass against
-`ts-mls@2.0.0-rc.10`; the probe assertions ARE the evidence below. If a future ts-mls bump changes a
-capability, the matching probe flips — that is the signal to revisit this record.
+Spike probes: originally `src/__tests__/spikes/phase0-ts-mls.spike.test.ts`, run against
+`ts-mls@2.0.0-rc.10`; the probe assertions WERE the evidence below. **The spike test file has been
+retired** now that the gate is resolved (native AppData landed — see "Gate resolution" below): the probes
+exercised the pre-resolution opaque-carry behavior and the now-removed v1 `createGroup` signature, so they
+no longer apply. Their findings are preserved in this record.
 
 ## Questions (from MIGRATION_PLAN.md Phase 0)
 

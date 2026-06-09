@@ -15,7 +15,7 @@ import type {
 } from "../../client/group/marmot-group.js";
 import { MarmotClient } from "../../client/marmot-client.js";
 import {
-  getMarmotGroupData,
+  getNostrGroupIdHex,
   SerializedClientState,
 } from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
@@ -156,9 +156,7 @@ describe("MarmotGroup.sendChatMessage", () => {
     const content = "Hello via sendChatMessage!";
     await inviteeGroup.sendChatMessage(content);
 
-    const marmotGroupData = getMarmotGroupData(adminGroup.state);
-    if (!marmotGroupData) throw new Error("MarmotGroupData missing");
-    const nostrGroupIdHex = bytesToHex(marmotGroupData.nostrGroupId);
+    const nostrGroupIdHex = getNostrGroupIdHex(adminGroup.state);
 
     const rumors = await collectApplicationRumors(
       adminGroup,
@@ -189,9 +187,7 @@ describe("MarmotGroup.sendChatMessage", () => {
     const replyTag = ["e", "deadbeef".repeat(8), "", "reply"];
     await inviteeGroup.sendChatMessage("Replying to something", [replyTag]);
 
-    const marmotGroupData = getMarmotGroupData(adminGroup.state);
-    if (!marmotGroupData) throw new Error("MarmotGroupData missing");
-    const nostrGroupIdHex = bytesToHex(marmotGroupData.nostrGroupId);
+    const nostrGroupIdHex = getNostrGroupIdHex(adminGroup.state);
 
     const rumors = await collectApplicationRumors(
       adminGroup,
@@ -216,9 +212,7 @@ describe("MarmotGroup.sendChatMessage", () => {
 
     await inviteeGroup.sendChatMessage("Message from invitee");
 
-    const marmotGroupData = getMarmotGroupData(adminGroup.state);
-    if (!marmotGroupData) throw new Error("MarmotGroupData missing");
-    const nostrGroupIdHex = bytesToHex(marmotGroupData.nostrGroupId);
+    const nostrGroupIdHex = getNostrGroupIdHex(adminGroup.state);
 
     const rumors = await collectApplicationRumors(
       adminGroup,
@@ -244,9 +238,7 @@ describe("MarmotGroup.sendChatMessage", () => {
 
     await inviteeGroup.sendChatMessage("Hello from invitee");
 
-    const marmotGroupData = getMarmotGroupData(inviteeGroup.state);
-    if (!marmotGroupData) throw new Error("MarmotGroupData missing");
-    const nostrGroupIdHex = bytesToHex(marmotGroupData.nostrGroupId);
+    const nostrGroupIdHex = getNostrGroupIdHex(inviteeGroup.state);
 
     const groupEvents = await mockNetwork.request(["wss://mock-relay.test"], {
       kinds: [GROUP_EVENT_KIND],
@@ -284,9 +276,7 @@ describe("MarmotGroup.sendChatMessage", () => {
     await inviteeGroup.sendChatMessage("Message 2");
     await inviteeGroup.sendChatMessage("Message 3");
 
-    const marmotGroupData = getMarmotGroupData(adminGroup.state);
-    if (!marmotGroupData) throw new Error("MarmotGroupData missing");
-    const nostrGroupIdHex = bytesToHex(marmotGroupData.nostrGroupId);
+    const nostrGroupIdHex = getNostrGroupIdHex(adminGroup.state);
 
     // Admin (different ratchet state) should be able to read all three
     const rumors = await collectApplicationRumors(
@@ -361,9 +351,7 @@ describe("MarmotGroup.sendChatMessage", () => {
     expect(secondRumor.content).toBe("Second message");
 
     // Ingesting self echoes should not duplicate local history entries
-    const marmotGroupData = getMarmotGroupData(inviteeGroup.state);
-    if (!marmotGroupData) throw new Error("MarmotGroupData missing");
-    const nostrGroupIdHex = bytesToHex(marmotGroupData.nostrGroupId);
+    const nostrGroupIdHex = getNostrGroupIdHex(inviteeGroup.state);
 
     const allGroupEvents = await mockNetwork.request(
       ["wss://mock-relay.test"],
@@ -412,9 +400,7 @@ describe("MarmotGroup.sendChatMessage", () => {
 
     const reloadedGroup =
       await inviteeClientAfterRestart.groups.get(groupIdHex);
-    const marmotGroupData = getMarmotGroupData(reloadedGroup.state);
-    if (!marmotGroupData) throw new Error("MarmotGroupData missing");
-    const nostrGroupIdHex = bytesToHex(marmotGroupData.nostrGroupId);
+    const nostrGroupIdHex = getNostrGroupIdHex(reloadedGroup.state);
 
     const allGroupEvents = await mockNetwork.request(
       ["wss://mock-relay.test"],

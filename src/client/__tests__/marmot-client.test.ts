@@ -3,7 +3,7 @@ import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
 import { MarmotClient } from "../marmot-client.js";
-import { extractMarmotGroupData } from "../../core/client-state.js";
+import { getMarmotGroupView } from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
@@ -24,7 +24,7 @@ describe("admin pubkey deduplication — createSimpleGroup", () => {
       adminPubkeys: [pubkey, pubkey, pubkey],
     });
 
-    const groupData = extractMarmotGroupData(clientState);
+    const groupData = getMarmotGroupView(clientState);
     expect(groupData).toBeTruthy();
     // Each pubkey should appear exactly once
     const seen = new Set(groupData!.adminPubkeys);
@@ -43,7 +43,7 @@ describe("admin pubkey deduplication — createSimpleGroup", () => {
       adminPubkeys: [alice, bob, alice, bob, "c".repeat(64)],
     });
 
-    const groupData = extractMarmotGroupData(clientState);
+    const groupData = getMarmotGroupView(clientState);
     expect(groupData).toBeTruthy();
     const keys = groupData!.adminPubkeys;
     // No duplicates
@@ -64,7 +64,7 @@ describe("admin pubkey deduplication — createSimpleGroup", () => {
       adminPubkeys: [pubkey],
     });
 
-    const groupData = extractMarmotGroupData(clientState);
+    const groupData = getMarmotGroupView(clientState);
     expect(groupData).toBeTruthy();
     expect(groupData!.adminPubkeys).toEqual([pubkey]);
   });
@@ -79,9 +79,10 @@ describe("admin pubkey deduplication — createSimpleGroup", () => {
       adminPubkeys: [],
     });
 
-    const groupData = extractMarmotGroupData(clientState);
+    const groupData = getMarmotGroupView(clientState);
     expect(groupData).toBeTruthy();
-    expect(groupData!.adminPubkeys).toEqual([]);
+    // The creator is always an admin, so the set is never empty in v2.
+    expect(groupData!.adminPubkeys).toEqual([pubkey]);
   });
 });
 
@@ -104,7 +105,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
       relays: ["wss://relay.example.com"],
     });
 
-    const groupData = extractMarmotGroupData(group.state);
+    const groupData = getMarmotGroupView(group.state);
     expect(groupData).toBeTruthy();
     const creatorOccurrences = groupData!.adminPubkeys.filter(
       (k) => k === creatorPubkey,
@@ -130,7 +131,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
       relays: ["wss://relay.example.com"],
     });
 
-    const groupData = extractMarmotGroupData(group.state);
+    const groupData = getMarmotGroupView(group.state);
     expect(groupData).toBeTruthy();
     const keys = groupData!.adminPubkeys;
     // No duplicates
@@ -156,7 +157,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
       relays: ["wss://relay.example.com"],
     });
 
-    const groupData = extractMarmotGroupData(group.state);
+    const groupData = getMarmotGroupView(group.state);
     expect(groupData).toBeTruthy();
     expect(groupData!.adminPubkeys).toContain(creatorPubkey);
     // Still deduplicated (only one occurrence of the creator)

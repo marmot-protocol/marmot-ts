@@ -27,11 +27,8 @@ import {
   getEncodingTag,
 } from "../utils/encoding.js";
 import { unixNow } from "../utils/nostr.js";
-import {
-  decodeMarmotGroupData,
-  isMarmotGroupDataExtension,
-} from "./marmot-group-data.js";
-import { type MarmotGroupData, WELCOME_EVENT_KIND } from "./protocol.js";
+import { type MarmotGroupView, getMarmotGroupView } from "./client-state.js";
+import { WELCOME_EVENT_KIND } from "./protocol.js";
 
 /**
  * Creates a welcome rumor (kind 444) for a welcome message.
@@ -203,13 +200,13 @@ export async function readWelcomeGroupInfo({
 }
 
 /**
- * Reads the {@link MarmotGroupData} from a Welcome message using the provided key package,
- * without performing a full group join.
+ * Reads the {@link MarmotGroupView} from a Welcome message using the provided
+ * key package, without performing a full group join.
  *
- * Convenience wrapper around {@link readWelcomeGroupInfo} that extracts and decodes
- * the Marmot Group Data extension from `groupInfo.groupContext.extensions`.
+ * Convenience wrapper around {@link readWelcomeGroupInfo} that projects the
+ * app-component state from `groupInfo.groupContext.extensions`.
  *
- * @returns The decoded MarmotGroupData, or null if the extension is not present
+ * @returns The group view, or null if no app components are present
  */
 export async function readWelcomeMarmotGroupData({
   welcome,
@@ -225,17 +222,12 @@ export async function readWelcomeMarmotGroupData({
   };
   /** The ciphersuite implementation */
   ciphersuiteImpl: CiphersuiteImpl;
-}): Promise<MarmotGroupData | null> {
+}): Promise<MarmotGroupView | null> {
   const groupInfo = await readWelcomeGroupInfo({
     welcome,
     keyPackage,
     ciphersuiteImpl,
   });
 
-  const ext = groupInfo.groupContext.extensions.find(
-    isMarmotGroupDataExtension,
-  );
-  if (!ext) return null;
-
-  return decodeMarmotGroupData(ext.extensionData);
+  return getMarmotGroupView(groupInfo);
 }

@@ -1,25 +1,6 @@
 /** @module @category Core - Extensions */
 import { type CustomExtension, makeCustomExtension } from "ts-mls";
-import {
-  LAST_RESORT_EXTENSION_TYPE,
-  MARMOT_GROUP_DATA_EXTENSION_TYPE,
-} from "./protocol.js";
-
-/**
- * Validates that a key package supports the required Marmot extensions.
- *
- * @param extensions - The extensions from a key package
- * @returns true if the Marmot Group Data Extension is supported
- */
-export function supportsMarmotExtensions(
-  extensions: Array<{ extensionType: number }>,
-): boolean {
-  return extensions.some(
-    (ext) =>
-      typeof ext.extensionType === "number" &&
-      ext.extensionType === MARMOT_GROUP_DATA_EXTENSION_TYPE,
-  );
-}
+import { LAST_RESORT_EXTENSION_TYPE } from "./protocol.js";
 
 /** Checks if an extension is the last_resort extension */
 export function isLastResortExtension(

@@ -40,48 +40,15 @@ export type KeyPackageClient = {
   // TODO: this is probably a NIP-89 client tag, so it should probably have the rest of the fields
 };
 
-/** The identifier for the Marmot Group Data Extension (MIP-01) */
-export const MARMOT_GROUP_DATA_EXTENSION_TYPE = 0xf2ee;
-
-/** The latest supported version number for the Marmot Group Data Extension (MIP-01) */
-export const MARMOT_GROUP_DATA_VERSION = 2;
-
 /** Extended extension types that include Marmot-specific extensions */
 export const extendedExtensionTypes = {
   ...defaultExtensionTypes,
-  marmot_group_data: MARMOT_GROUP_DATA_EXTENSION_TYPE,
   last_resort: LAST_RESORT_EXTENSION_TYPE,
 } as const;
 
 export type ExtendedExtensionTypeName = keyof typeof extendedExtensionTypes;
 export type ExtendedExtensionTypeValue =
   (typeof extendedExtensionTypes)[ExtendedExtensionTypeName];
-
-/**
- * Represents the decoded Marmot Group Data Extension structure.
- */
-export interface MarmotGroupData {
-  /** Extension format version number (current: 2) */
-  version: number;
-  /** 32-byte identifier for the group used in Nostr protocol operations */
-  nostrGroupId: Uint8Array;
-  /** UTF-8 encoded group name */
-  name: string;
-  /** UTF-8 encoded group description */
-  description: string;
-  /** Array of 32-byte Nostr x-only public keys (hex-encoded strings) */
-  adminPubkeys: string[];
-  /** Array of WebSocket URLs for Nostr relays */
-  relays: string[];
-  /** SHA-256 hash of the encrypted group image (empty when no image) */
-  imageHash: Uint8Array;
-  /** Image encryption seed (empty when no image) */
-  imageKey: Uint8Array;
-  /** ChaCha20-Poly1305 nonce for group image encryption (empty when no image) */
-  imageNonce: Uint8Array;
-  /** Image upload seed for deterministic Blossom upload identity (empty when no image) */
-  imageUploadKey: Uint8Array;
-}
 
 /** Event kind for group events (commits, proposals, application messages) */
 export const GROUP_EVENT_KIND = 445;

@@ -4,11 +4,18 @@ import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { createCredential } from "../credential.js";
 import { generateKeyPackage } from "../key-package.js";
 import { createGroup } from "../group.js";
-import { extractMarmotGroupData } from "../client-state.js";
+import { getMarmotGroupView } from "../client-state.js";
+import {
+  adminPolicyEntry,
+  getAppComponents,
+  groupProfileEntry,
+  nostrRoutingEntry,
+} from "../components/index.js";
 
-describe("MIP-01: group construction", () => {
-  it("createGroup always includes a decodable Marmot Group Data extension", async () => {
+describe("group construction", () => {
+  it("createGroup seeds a decodable app_data_dictionary from components", async () => {
     const adminPubkey = "a".repeat(64);
+    const nostrGroupId = new Uint8Array(32).fill(7);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -17,34 +24,32 @@ describe("MIP-01: group construction", () => {
     const credential = createCredential(adminPubkey);
     const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
 
-    const marmotGroupData = {
-      version: 2,
-      nostrGroupId: new Uint8Array(32).fill(7),
-      name: "Test Group",
-      description: "",
-      adminPubkeys: [adminPubkey],
-      relays: ["wss://relay.example.com"],
-      imageHash: new Uint8Array(0),
-      imageKey: new Uint8Array(0),
-      imageNonce: new Uint8Array(0),
-      imageUploadKey: new Uint8Array(0),
-    };
-
     const { clientState } = await createGroup({
       creatorKeyPackage: kp,
-      marmotGroupData,
+      components: [
+        groupProfileEntry({ name: "Test Group", description: "" }),
+        adminPolicyEntry([adminPubkey]),
+        nostrRoutingEntry({
+          nostrGroupId,
+          relays: ["wss://relay.example.com"],
+        }),
+      ],
       ciphersuiteImpl: impl,
     });
 
-    const extracted = extractMarmotGroupData(clientState);
-    expect(extracted).toBeTruthy();
-    expect(extracted?.nostrGroupId).toEqual(marmotGroupData.nostrGroupId);
-    expect(extracted?.adminPubkeys).toEqual([adminPubkey]);
-    expect(extracted?.relays).toEqual(["wss://relay.example.com"]);
+    const view = getMarmotGroupView(clientState);
+    expect(view).toBeTruthy();
+    expect(view?.name).toBe("Test Group");
+    expect(view?.nostrGroupId).toEqual(nostrGroupId);
+    expect(view?.adminPubkeys).toEqual([adminPubkey]);
+    expect(view?.relays).toEqual(["wss://relay.example.com"]);
 
-    // MIP-01 privacy: MLS group_id must be distinct from the public nostr_group_id.
-    expect(clientState.groupContext.groupId).not.toEqual(
-      marmotGroupData.nostrGroupId,
-    );
+    // The app_components (0x0001) advertising entry lists the provided ids.
+    expect(getAppComponents(clientState.groupContext.extensions)).toEqual([
+      0x8001, 0x8003, 0x8004,
+    ]);
+
+    // MLS group_id must be distinct from the public nostr_group_id.
+    expect(clientState.groupContext.groupId).not.toEqual(nostrGroupId);
   });
 });

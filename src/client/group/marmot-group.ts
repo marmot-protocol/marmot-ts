@@ -33,7 +33,8 @@ import { sha256 } from "@noble/hashes/sha2.js";
 
 import { marmotAuthService } from "../../core/auth-service.js";
 import {
-  getMarmotGroupData,
+  getMarmotGroupView,
+  type MarmotGroupView,
   serializeClientState,
 } from "../../core/client-state.js";
 import { getCredentialPubkey } from "../../core/credential.js";
@@ -56,7 +57,6 @@ import {
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   KEY_PACKAGE_KIND,
-  MarmotGroupData,
 } from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
 import { logger } from "../../utils/debug.js";
@@ -186,7 +186,7 @@ export type GroupMediaFactory<
 export type ProposalContext = {
   state: ClientState;
   ciphersuite: CiphersuiteImpl;
-  groupData: MarmotGroupData;
+  groupData: MarmotGroupView;
 };
 
 /** A function that builds an MLS Proposal from group context */
@@ -338,7 +338,7 @@ export class MarmotGroup<
 
   /** Internal ClientState */
   #state: ClientState;
-  #groupData: MarmotGroupData | null = null;
+  #groupData: MarmotGroupView | null = null;
 
   /**
    * Event IDs of application messages we sent ourselves, used to skip self-echoes in ingest()
@@ -362,7 +362,7 @@ export class MarmotGroup<
   }
   get groupData() {
     // If not cached, extract the group data from the state
-    if (!this.#groupData) this.#groupData = getMarmotGroupData(this.state);
+    if (!this.#groupData) this.#groupData = getMarmotGroupView(this.state);
     return this.#groupData;
   }
   get unappliedProposals() {
@@ -375,7 +375,7 @@ export class MarmotGroup<
    */
   set state(newState: ClientState) {
     // Read new group data from the state
-    this.#groupData = getMarmotGroupData(newState);
+    this.#groupData = getMarmotGroupView(newState);
 
     // Set new state and mark as dirty
     this.#state = newState;

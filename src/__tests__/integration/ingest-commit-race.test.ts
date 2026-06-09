@@ -41,7 +41,7 @@ async function createTestGroupState(
     kp,
     ciphersuiteImpl,
     "Test Group",
-    { adminPubkeys: [adminPubkey], relays: [] },
+    { adminPubkeys: [adminPubkey], relays: ["wss://mock-relay.test"] },
   );
   return { clientState, kp };
 }

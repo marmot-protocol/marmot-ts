@@ -3,19 +3,36 @@ import { randomBytes } from "@noble/hashes/utils.js";
 import {
   CiphersuiteImpl,
   ClientState,
+  ComponentData,
   createGroup as MLSCreateGroup,
   GroupContextExtension,
 } from "ts-mls";
 import { marmotAuthService } from "./auth-service.js";
+import {
+  adminPolicyEntry,
+  AppComponentId,
+  appComponentsEntry,
+  groupProfileEntry,
+  makeAppComponentsExtension,
+  nostrRoutingEntry,
+} from "./components/index.js";
+import { getCredentialPubkey } from "./credential.js";
 import { CompleteKeyPackage } from "./key-package.js";
-import { marmotGroupDataToExtension } from "./marmot-group-data.js";
-import { MarmotGroupData } from "./protocol.js";
 
 export interface CreateGroupParams {
   /** Creator's complete key package (public + private) */
   creatorKeyPackage: CompleteKeyPackage;
-  /** Marmot Group Data configuration */
-  marmotGroupData: MarmotGroupData;
+  /**
+   * Initial app components seeded into the group's `app_data_dictionary`
+   * GroupContext extension. The `app_components` (`0x0001`) advertising entry is
+   * added automatically from {@link requiredComponentIds}.
+   */
+  components: ComponentData[];
+  /**
+   * Component ids advertised in the `app_components` (`0x0001`) entry. Defaults
+   * to the ids present in {@link components}.
+   */
+  requiredComponentIds?: AppComponentId[];
   /** Additional group context extensions (optional) */
   extensions?: GroupContextExtension[];
   /** Cipher suite implementation for cryptographic operations */
@@ -32,20 +49,27 @@ export async function createGroup(
 ): Promise<CreateGroupResult> {
   const {
     creatorKeyPackage,
-    marmotGroupData,
+    components,
+    requiredComponentIds,
     extensions = [],
     ciphersuiteImpl,
   } = params;
-  // MIP-01: MLS group_id MUST be private and distinct from the public
-  // nostr_group_id stored in the Marmot Group Data extension.
+
+  // The MLS group_id MUST be private and distinct from the public
+  // nostr_group_id carried by the transport.nostr.routing component.
   const groupId = randomBytes(32);
-  // Always include Marmot Group Data as a GroupContext extension.
-  const marmotExtension = marmotGroupDataToExtension(marmotGroupData);
 
-  // Combine all extensions (Marmot extension + any additional extensions)
-  const groupExtensions = [marmotExtension, ...extensions];
+  // Advertise the required component ids (defaults to whatever was provided),
+  // then seed each component's state into the app_data_dictionary extension.
+  const requiredIds =
+    requiredComponentIds ?? components.map((c) => c.componentId);
+  const appDataExtension = makeAppComponentsExtension([
+    appComponentsEntry(requiredIds),
+    ...components,
+  ]);
 
-  // ts-mls v2: createGroup takes a single params object with `context`.
+  const groupExtensions = [appDataExtension, ...extensions];
+
   const clientState = await MLSCreateGroup({
     context: {
       cipherSuite: ciphersuiteImpl,
@@ -57,9 +81,7 @@ export async function createGroup(
     extensions: groupExtensions,
   });
 
-  return {
-    clientState,
-  };
+  return { clientState };
 }
 
 export type SimpleGroupOptions = {
@@ -68,28 +90,44 @@ export type SimpleGroupOptions = {
   relays?: string[];
 };
 
+/**
+ * Creates a Marmot v2 group seeded with the default group components: a
+ * `group.profile.v1` (name + description), an `admin-policy.v1` (the creator
+ * plus any extra admins), and — when relays are supplied — a
+ * `transport.nostr.routing.v1` carrying a fresh nostr group id and the relays.
+ */
 export async function createSimpleGroup(
   creatorKeyPackage: CompleteKeyPackage,
   ciphersuiteImpl: CiphersuiteImpl,
   groupName: string = "New Group",
   options?: SimpleGroupOptions,
 ): Promise<CreateGroupResult> {
-  const marmotGroupData: MarmotGroupData = {
-    version: 2,
-    nostrGroupId: randomBytes(32),
-    name: groupName,
-    description: options?.description || "",
-    adminPubkeys: [...new Set(options?.adminPubkeys || [])],
-    relays: options?.relays || [],
-    imageHash: new Uint8Array(0),
-    imageKey: new Uint8Array(0),
-    imageNonce: new Uint8Array(0),
-    imageUploadKey: new Uint8Array(0),
-  };
+  // The creator is always an admin (matches darkmatter's create flow).
+  const creatorPubkey = getCredentialPubkey(
+    creatorKeyPackage.publicPackage.leafNode.credential,
+  );
+  const adminPubkeys = [
+    ...new Set([creatorPubkey, ...(options?.adminPubkeys ?? [])]),
+  ];
+
+  const components: ComponentData[] = [
+    groupProfileEntry({
+      name: groupName,
+      description: options?.description ?? "",
+    }),
+    adminPolicyEntry(adminPubkeys),
+  ];
+
+  const relays = options?.relays ?? [];
+  if (relays.length > 0) {
+    components.push(
+      nostrRoutingEntry({ nostrGroupId: randomBytes(32), relays }),
+    );
+  }
 
   return createGroup({
     creatorKeyPackage,
-    marmotGroupData,
+    components,
     ciphersuiteImpl,
   });
 }

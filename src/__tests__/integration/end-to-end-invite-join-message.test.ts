@@ -10,7 +10,7 @@ import {
 import { beforeEach, describe, expect, it } from "vitest";
 import { MarmotClient } from "../../client/marmot-client.js";
 import {
-  extractMarmotGroupData,
+  getNostrGroupIdHex,
   SerializedClientState,
 } from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
@@ -155,11 +155,7 @@ describe("End-to-end: invite, join, first message", () => {
 
     // Step 5: Invitee ingests group events to catch up
     // Extract nostr group ID from extensions
-    const marmotGroupData = extractMarmotGroupData(adminGroup.state);
-    if (!marmotGroupData) {
-      throw new Error("Marmot Group Data extension not found");
-    }
-    const nostrGroupIdHex = bytesToHex(marmotGroupData.nostrGroupId);
+    const nostrGroupIdHex = getNostrGroupIdHex(adminGroup.state);
     const groupEvents = await mockNetwork.request(["wss://mock-relay.test"], {
       kinds: [GROUP_EVENT_KIND],
       "#h": [nostrGroupIdHex],

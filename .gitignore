@@ -9,3 +9,4 @@ models
 mcp.json
 plans
 .vitepress/cache
+graphify-out

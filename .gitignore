@@ -9,4 +9,5 @@ models
 mcp.json
 plans
 .vitepress/cache
-graphify-out
+graphify-out/
+.cursor/rules/graphify.mdc

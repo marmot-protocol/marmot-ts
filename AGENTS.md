@@ -41,6 +41,12 @@
 - When adding a docs page under `docs/`, also add it to `.vitepress/config.ts`; VitePress uses `srcDir: "docs"`.
 - TypeDoc reference is generated from `src/index.ts` into `.vitepress/dist/reference` using `typedoc.json` and `typedocs/cascade-category.mjs`.
 
+## Git Workflow
+
+- Commit after finishing a feature, once it builds and its tests pass; keep each feature in its own commit rather than batching unrelated work.
+- Include any matching changeset (see below) in the same commit as the feature it describes.
+- Do not commit on the `master` branch; branch first when needed.
+
 ## Changesets
 
 - Add a changeset for user-facing library changes while the PR context is fresh; skip for docs-only, tests-only, and internal refactors with no package behavior/API impact.

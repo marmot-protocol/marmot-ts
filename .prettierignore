@@ -3,3 +3,10 @@ references/
 node_modules/
 examples/node_modules/
 examples/dist/
+
+# Vendored ts-mls fork and bundled darkmatter reference repo (not our source)
+ts-mls/
+darkmatter/
+
+# Auto-generated lockfile
+pnpm-lock.yaml

@@ -150,7 +150,7 @@ What ts-mls now provides (verified importable from `ts-mls`):
 - `getAppDataDictionary(extensions)` — **read** components from a `ClientState`'s GroupContext extensions.
 - `appDataUpdateProposalType = 8` (our `0x0008`) and a first-class `ProposalAppDataUpdate`
   (`{ proposalType, appDataUpdate }`), with `AppDataUpdate = {componentId, operation:"update", update}
-  | {componentId, operation:"remove"}`. Built and passed via `createCommit({ extraProposals: [...] })`.
+| {componentId, operation:"remove"}`. Built and passed via `createCommit({ extraProposals: [...] })`.
 - Full **commit integration**, draft-compliant: AppDataUpdate proposals are validated (must follow any
   GroupContextExtensions proposal; a component gets either one `remove` — only if state exists — or one or
   more `update`s; a type-7 GCE proposal may not touch the dictionary when required-capabilities include
@@ -165,7 +165,7 @@ What ts-mls now provides (verified importable from `ts-mls`):
 
 - **Probe 3 is superseded.** Injecting `ProposalCustom { proposalType: 0x0008 }` (the old opaque carry) now
   throws instead of silently no-op'ing — that is the intended behavior change. The spike's PROBE 3
-  assertion is expected to flip; it documents the *pre-resolution* state and should be read as historical.
+  assertion is expected to flip; it documents the _pre-resolution_ state and should be read as historical.
 - **No type-7 scaffold.** The temporary `group_context_extensions` substitution discussed under Option B is
   no longer needed at any stage; the public-API work wires straight onto native AppData.
 - **The generic core is no longer hand-rolled/provisional.** marmot-ts must **not** ship its own dictionary

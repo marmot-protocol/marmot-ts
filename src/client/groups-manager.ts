@@ -14,6 +14,7 @@ import {
   deserializeClientState,
   SerializedClientState,
 } from "../core/client-state.js";
+import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import { createCredential } from "../core/credential.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
@@ -42,6 +43,12 @@ export type GroupsManagerOptions<
   store: GenericKeyValueStore<SerializedClientState>;
   /** The signer used for the clients identity */
   signer: EventSigner;
+  /**
+   * Signs the account identity proof carried on the group creator's own leaf.
+   * Required for the creator to be addable to spec-conformant groups, which
+   * validate the proof on every leaf.
+   */
+  accountProofSigner?: AccountIdentityProofSigner;
   /** The nostr relay pool to use for the client */
   network: NostrNetworkInterface;
   /** The crypto provider to use for cryptographic operations */
@@ -87,6 +94,8 @@ export class GroupsManager<
   readonly store: GenericKeyValueStore<SerializedClientState>;
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
+  /** Signs the account identity proof on the group creator's own leaf */
+  readonly accountProofSigner?: AccountIdentityProofSigner;
   /** The nostr relay pool to use for the client */
   readonly network: NostrNetworkInterface;
 
@@ -120,6 +129,7 @@ export class GroupsManager<
     super();
     this.store = options.store;
     this.signer = options.signer;
+    this.accountProofSigner = options.accountProofSigner;
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.historyFactory =
@@ -377,6 +387,7 @@ export class GroupsManager<
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      accountProofSigner: this.accountProofSigner,
     });
 
     const { clientState } = await createSimpleGroup(

@@ -2,7 +2,10 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import {
+  type ClientState,
   type CustomExtension,
+  defaultCredentialTypes,
+  getGroupMembers,
   makeCustomExtension,
   type LeafNode,
 } from "ts-mls";
@@ -236,6 +239,32 @@ export function verifyLeafAccountIdentityProof(
   const digest = accountIdentityProofSigningDigest(proof.request);
   if (!schnorr.verify(proof.signature, digest, accountIdentityBytes))
     throw new Error("proof signature does not verify for credential identity");
+}
+
+/**
+ * Verifies the Marmot account identity proof on every member leaf in the group.
+ *
+ * The spec requires a valid proof on every member leaf and KeyPackage — "there
+ * is no legacy fallback" (foundation/account-identity-proof-v1.md §Validation).
+ * Throws on the first leaf whose proof is missing or invalid, naming the member.
+ */
+export function verifyAllLeafAccountIdentityProofs(
+  state: ClientState,
+  ciphersuite: number,
+): void {
+  for (const leaf of getGroupMembers(state)) {
+    try {
+      verifyLeafAccountIdentityProof(leaf, ciphersuite);
+    } catch (err) {
+      const member =
+        leaf.credential.credentialType === defaultCredentialTypes.basic
+          ? getCredentialPubkey(leaf.credential)
+          : "<non-basic credential>";
+      throw new Error(
+        `account identity proof invalid for member ${member}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 }
 
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {

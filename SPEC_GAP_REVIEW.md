@@ -84,7 +84,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 
 ### B4 — Account identity proof not enforced as mandatory
 
-- **Status:** DIVERGENT
+- **Status:** FIXED — invite now always verifies the invitee leaf proof (no `hasProof` escape); join verifies every member leaf via `verifyAllLeafAccountIdentityProofs`; group creation signs the creator's own leaf proof (`accountProofSigner` threaded through `GroupsManager`).
 - **Spec:** `foundation/identity.md` + `foundation/account-identity-proof-v1.md` §Validation — clients MUST
   reject a member leaf or KeyPackage whose proof is missing/invalid. "There is no legacy fallback."
 - **Code:** `src/client/group/proposals/invite-user.ts:23-29` verifies only `if (hasProof)`, with comment

@@ -20,6 +20,7 @@ import {
 } from "../welcome.js";
 import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
+import { accountProofSignerFor } from "../../__tests__/helpers/account-proof.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 
 // ---------------------------------------------------------------------------
@@ -129,6 +130,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
       groupStateStore: new InMemoryKeyValueStore(),
       keyPackageStore: new InMemoryKeyValueStore(),
       signer: adminAccount.signer,
+      accountProofSigner: accountProofSignerFor(adminAccount),
       network: mockNetwork,
     });
   });
@@ -137,10 +139,11 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
     const adminPubkey = await adminAccount.signer.getPublicKey();
     const inviteePubkey = await inviteeAccount.signer.getPublicKey();
 
-    // Invitee generates a key package
+    // Invitee generates a key package carrying its account identity proof
     const inviteeKeyPackage = await generateKeyPackage({
       credential: createCredential(inviteePubkey),
       ciphersuiteImpl: ciphersuite,
+      accountProofSigner: accountProofSignerFor(inviteeAccount),
     });
 
     // Publish invitee key package event to the mock network

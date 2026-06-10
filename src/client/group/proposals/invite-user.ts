@@ -2,10 +2,7 @@
 import { isEvent, NostrEvent } from "applesauce-core/helpers/event";
 
 import { defaultProposalTypes, ProposalAdd, type KeyPackage } from "ts-mls";
-import {
-  ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-  verifyLeafAccountIdentityProof,
-} from "../../../core/account-identity-proof.js";
+import { verifyLeafAccountIdentityProof } from "../../../core/account-identity-proof.js";
 import { getKeyPackage } from "../../../core/key-package-event.js";
 import { ProposalAction } from "../marmot-group.js";
 
@@ -18,15 +15,11 @@ export function proposeInviteUser(
       ? getKeyPackage(keyPackageEvent)
       : keyPackageEvent;
 
-    // When the invitee's LeafNode carries a Marmot account identity proof,
-    // verify it before adding them (darkmatter validates this on every leaf).
-    // Leaves without the proof are still allowed for backwards compatibility.
-    const hasProof = keyPackage.leafNode.extensions.some(
-      (e) => e.extensionType === ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-    );
-    if (hasProof) {
-      verifyLeafAccountIdentityProof(keyPackage.leafNode, ciphersuite.id);
-    }
+    // The invitee's LeafNode MUST carry a valid Marmot account identity proof;
+    // the spec validates this on every leaf with no legacy fallback
+    // (foundation/account-identity-proof-v1.md §Validation). Throws if missing
+    // or invalid.
+    verifyLeafAccountIdentityProof(keyPackage.leafNode, ciphersuite.id);
 
     return {
       proposalType: defaultProposalTypes.add,

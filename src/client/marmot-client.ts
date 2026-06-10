@@ -12,7 +12,10 @@ import {
   PrivateKeyPackage,
   Welcome,
 } from "ts-mls";
-import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
+import {
+  type AccountIdentityProofSigner,
+  verifyAllLeafAccountIdentityProofs,
+} from "../core/account-identity-proof.js";
 import { marmotAuthService } from "../core/auth-service.js";
 import { SerializedClientState } from "../core/client-state.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
@@ -127,6 +130,7 @@ export class MarmotClient<
     this.groups = new GroupsManager<THistory, TMedia>({
       store: options.groupStateStore,
       signer: this.signer,
+      accountProofSigner: options.accountProofSigner,
       network: this.network,
       cryptoProvider: this.cryptoProvider,
       historyFactory,
@@ -300,6 +304,11 @@ export class MarmotClient<
         : "Failed to join group with any matching key package";
       throw new Error(errorMessage);
     }
+
+    // The spec requires every member leaf to carry a valid account identity
+    // proof, with no legacy fallback; reject joining a group that contains any
+    // proof-less or invalid leaf (foundation/account-identity-proof-v1.md).
+    verifyAllLeafAccountIdentityProofs(clientState, ciphersuiteImpl.id);
 
     // Mark the consumed key package as used. Callers can later list used packages
     // with (await client.keyPackages.list()).filter(p => p.used) and rotate them

@@ -68,7 +68,7 @@ describe("proposeInviteUser account identity proof verification", () => {
     ).rejects.toThrow();
   });
 
-  it("allows a legacy invitee with no proof extension", async () => {
+  it("rejects an invitee whose leaf carries no proof extension", async () => {
     const impl = await getCiphersuiteImpl(SUITE, defaultCryptoProvider);
     const credential = createCredential("a".repeat(64));
     const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
@@ -79,9 +79,10 @@ describe("proposeInviteUser account identity proof verification", () => {
       ),
     ).toBe(false);
 
+    // The spec mandates a proof on every leaf with no legacy fallback.
     const action = proposeInviteUser(kp.publicPackage);
     await expect(
       action({ ciphersuite: impl } as ProposalContext),
-    ).resolves.toBeDefined();
+    ).rejects.toThrow(/account-identity-proof/i);
   });
 });

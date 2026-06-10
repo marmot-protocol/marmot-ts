@@ -230,6 +230,7 @@ describe("exports", () => {
         "unixNow",
         "validateConvergencePolicy",
         "varintSize",
+        "verifyAllLeafAccountIdentityProofs",
         "verifyLeafAccountIdentityProof",
       ]
     `);

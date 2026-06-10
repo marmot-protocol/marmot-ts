@@ -3,6 +3,7 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { unlockGiftWrap } from "applesauce-common/helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
+import { accountProofSignerFor } from "../../__tests__/helpers/account-proof.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   GROUP_EVENT_KIND,
@@ -21,6 +22,7 @@ async function makeClient(network: MockNetwork): Promise<MarmotClient> {
     groupStateStore: new InMemoryKeyValueStore(),
     keyPackageStore: new InMemoryKeyValueStore(),
     signer: account.signer,
+    accountProofSigner: accountProofSignerFor(account),
     network,
     clientId: "test-client",
   });
@@ -36,6 +38,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
     groupStateStore: new InMemoryKeyValueStore(),
     keyPackageStore: new InMemoryKeyValueStore(),
     signer: adminAccount.signer,
+    accountProofSigner: accountProofSignerFor(adminAccount),
     network: mockNetwork,
     clientId: "test-admin",
   });
@@ -44,6 +47,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
     groupStateStore: new InMemoryKeyValueStore(),
     keyPackageStore: new InMemoryKeyValueStore(),
     signer: memberAccount.signer,
+    accountProofSigner: accountProofSignerFor(memberAccount),
     network: mockNetwork,
     clientId: "test-member",
   });

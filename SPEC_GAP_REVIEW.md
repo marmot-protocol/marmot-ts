@@ -61,7 +61,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 
 ### B2 — KeyPackage relay discovery on kind 10051 (spec uses NIP-65 kind 10002)
 
-- **Status:** DIVERGENT
+- **Status:** FIXED — retired the 10051 `key-package-relay-list` module; added NIP-65 (kind 10002, `r` tags) helpers for KeyPackage discovery and inbox (kind 10050, `relay` tags) helpers for welcomes; transport binding now carries `nip65RelayListKind`/`inboxRelayListKind`.
 - **Spec:** `transports/nostr.md:171,191,206`, `foundation/registries.md:69` — KeyPackage relay discovery
   uses the account's **kind 10002** NIP-65 relay list; "There is no dedicated KeyPackage relay list."
 - **Code:** centers discovery on **kind 10051** — `src/core/protocol.ts:8` (`KEY_PACKAGE_RELAY_LIST_KIND=10051`),

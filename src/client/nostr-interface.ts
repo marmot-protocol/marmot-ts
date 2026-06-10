@@ -71,8 +71,9 @@ export interface NostrNetworkInterface {
 
   /**
    * Request a user's inbox relays.
-   * This method should fetch the relays where a user receives their messages
-   * (e.g., from a kind 10051 key package relay list event).
+   * This method should fetch the relays where a user receives gift-wrapped
+   * welcomes, from their kind 10050 inbox relay list event
+   * (transports/nostr.md "Publish targets and acknowledgements").
    *
    * @param pubkey - The public key (hex string) of the user whose inbox relays to load
    * @returns Promise resolving to an array of relay URLs for the user's inbox

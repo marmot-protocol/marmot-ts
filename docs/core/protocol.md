@@ -17,7 +17,8 @@ import {
   ADDRESSABLE_KEY_PACKAGE_KIND, // 30443
   WELCOME_EVENT_KIND, // 444
   GROUP_EVENT_KIND, // 445
-  KEY_PACKAGE_RELAY_LIST_KIND, // 10051
+  NIP65_RELAY_LIST_KIND, // 10002
+  INBOX_RELAY_LIST_KIND, // 10050
 } from "@internet-privacy/marmot-ts";
 ```
 
@@ -25,7 +26,8 @@ import {
 - **30443 (ADDRESSABLE_KEY_PACKAGE_KIND):** Addressable key package advertisement events published by current clients
 - **444 (WELCOME_EVENT_KIND):** Welcome messages for new members (wrapped in NIP-59 gift wraps)
 - **445 (GROUP_EVENT_KIND):** Group messages (commits, proposals, application messages)
-- **10051 (KEY_PACKAGE_RELAY_LIST_KIND):** Relay lists for key package discovery
+- **10002 (NIP65_RELAY_LIST_KIND):** NIP-65 relay list; Marmot discovers an account's key-package relays here (there is no dedicated key-package relay list)
+- **10050 (INBOX_RELAY_LIST_KIND):** Inbox relay list; welcomes are gift-wrapped to a recipient's inbox relays
 
 ### Extension Types
 

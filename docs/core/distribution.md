@@ -66,16 +66,18 @@ const signedDeleteEvent = await signer.signEvent(deleteEvent);
 await network.publish(relays, signedDeleteEvent);
 ```
 
-## Relay List Events (Kind 10051)
+## Relay List Events (NIP-65, Kind 10002)
 
-Tell others where to find your key packages.
+Marmot discovers where to publish and fetch an account's key packages from its
+NIP-65 relay list. There is no dedicated key-package relay list, and kind 30443
+key-package events do not repeat their relays.
 
 ### Creating Relay Lists
 
 ```typescript
-import { createKeyPackageRelayListEvent } from "@internet-privacy/marmot-ts";
+import { createNip65RelayListEvent } from "@internet-privacy/marmot-ts";
 
-const eventTemplate = createKeyPackageRelayListEvent({
+const eventTemplate = createNip65RelayListEvent({
   pubkey: myPubkey,
   relays: ["wss://relay.damus.io", "wss://relay.snort.social", "wss://nos.lol"],
 });
@@ -88,28 +90,31 @@ await network.publish(relays, signed);
 
 ```typescript
 import {
-  getKeyPackageRelayList,
-  isValidKeyPackageRelayListEvent,
+  getNip65Relays,
+  isValidNip65RelayListEvent,
 } from "@internet-privacy/marmot-ts";
 
-// Fetch user's relay list
+// Fetch the account's NIP-65 relay list
 const events = await fetchEvents(relays, {
-  kinds: [10051],
+  kinds: [10002],
   authors: [targetPubkey],
   limit: 1,
 });
 
-if (isValidKeyPackageRelayListEvent(events[0])) {
-  const relays = getKeyPackageRelayList(events[0]);
+if (isValidNip65RelayListEvent(events[0])) {
+  const relays = getNip65Relays(events[0]);
   // Fetch key packages from these relays
 }
 ```
 
+> Welcomes are delivered separately, to a recipient's **inbox** relay list
+> (kind 10050). Use `getInboxRelays` / `createInboxRelayListEvent` for that set.
+
 ## Discovery Flow
 
-1. **Publish Relay List:** User publishes kind 10051 to well-known relays
-2. **Discover Relays:** Others fetch the relay list
-3. **Publish Key Packages:** User publishes kind 30443 to their relay list
+1. **Publish Relay List:** User publishes a NIP-65 (kind 10002) relay list
+2. **Discover Relays:** Others fetch the account's NIP-65 list
+3. **Publish Key Packages:** User publishes kind 30443 to their NIP-65 relays
 4. **Fetch Key Packages:** Others fetch from the discovered relays
 5. **Add to Group:** Use key package to create add proposal
 

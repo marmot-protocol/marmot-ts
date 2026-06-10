@@ -4,11 +4,24 @@ import { defaultExtensionTypes } from "ts-mls";
 /** The extension id for the last_resort extension for key packages */
 export const LAST_RESORT_EXTENSION_TYPE = 0x000a;
 
-/** Event kind for key package relay list events */
-export const KEY_PACKAGE_RELAY_LIST_KIND = 10051;
+/**
+ * NIP-65 relay list event kind. Marmot uses an account's NIP-65 list to
+ * discover where it publishes and fetches KeyPackages; there is no dedicated
+ * KeyPackage relay list (transports/nostr.md "KeyPackage publication").
+ */
+export const NIP65_RELAY_LIST_KIND = 10002;
 
-/** The name of the tag that contains relay URLs */
-export const KEY_PACKAGE_RELAY_LIST_RELAY_TAG = "relay";
+/** The NIP-65 relay tag (`r`), optionally followed by a read/write marker. */
+export const NIP65_RELAY_TAG = "r";
+
+/**
+ * Marmot inbox relay list event kind (kind 10050). Welcomes are gift-wrapped to
+ * the recipient's inbox relay set (transports/nostr.md "Publish targets").
+ */
+export const INBOX_RELAY_LIST_KIND = 10050;
+
+/** The inbox relay-list tag (`relay`) carrying a single relay URL. */
+export const INBOX_RELAY_TAG = "relay";
 
 /** Event kind for key package events (legacy, read/delete only — do not publish new events of this kind) */
 export const KEY_PACKAGE_KIND = 443;

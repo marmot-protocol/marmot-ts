@@ -2,8 +2,9 @@
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   GROUP_EVENT_KIND,
+  INBOX_RELAY_LIST_KIND,
   KEY_PACKAGE_KIND,
-  KEY_PACKAGE_RELAY_LIST_KIND,
+  NIP65_RELAY_LIST_KIND,
   WELCOME_EVENT_KIND,
 } from "./protocol.js";
 
@@ -30,8 +31,13 @@ export interface TransportBinding {
   readonly keyPackageKind: number;
   /** Event kind for an addressable KeyPackage. */
   readonly addressableKeyPackageKind: number;
-  /** Event kind for a member's KeyPackage relay list. */
-  readonly keyPackageRelayListKind: number;
+  /**
+   * Event kind for the NIP-65 relay list used to discover an account's
+   * KeyPackage relays (there is no dedicated KeyPackage relay list).
+   */
+  readonly nip65RelayListKind: number;
+  /** Event kind for the inbox relay list welcomes are delivered to. */
+  readonly inboxRelayListKind: number;
   /** Event kind for the privacy-preserving outer wrap of a Welcome. */
   readonly giftWrapKind: number;
   /** Single-letter event tag naming the (public) group a message routes to. */
@@ -55,7 +61,8 @@ export const nostrTransportBinding: TransportBinding = {
   welcomeKind: WELCOME_EVENT_KIND,
   keyPackageKind: KEY_PACKAGE_KIND,
   addressableKeyPackageKind: ADDRESSABLE_KEY_PACKAGE_KIND,
-  keyPackageRelayListKind: KEY_PACKAGE_RELAY_LIST_KIND,
+  nip65RelayListKind: NIP65_RELAY_LIST_KIND,
+  inboxRelayListKind: INBOX_RELAY_LIST_KIND,
   giftWrapKind: GIFT_WRAP_KIND,
   groupIdTag: NOSTR_GROUP_ID_TAG,
 };

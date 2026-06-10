@@ -30,7 +30,7 @@ interface NostrNetworkInterface {
 
 - **`subscription`** — Live updates; emit one event per `next`. Not required for core MLS flows inside the library; handy for background sync next to the client.
 
-- **`getUserInboxRelays`** — Where `pubkey` receives wrapped welcomes (`kind` 1059). `MarmotGroup` uses this when adding members; on failure or empty list it falls back to group relays. Typical inputs: NIP-65 (`kind` 10002) read/inbox markers, or your policy for Marmot `kind` 10051 relay lists.
+- **`getUserInboxRelays`** — Where `pubkey` receives wrapped welcomes (`kind` 1059). `MarmotGroup` uses this when adding members; on failure or empty list it falls back to group relays. Typical input: the recipient's inbox relay list (`kind` 10050).
 
 ## Wiring `nostr-tools`
 

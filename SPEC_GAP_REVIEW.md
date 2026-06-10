@@ -19,8 +19,8 @@ Severity is about interop/correctness, not effort.
 
 ## Context: why this contradicts the prior "done" record
 
-`MIGRATION_PLAN.md` and the project memory recorded phases 0–10 as complete and "byte-matched to Rust."
-That was accurate at the time against the _then_ spec. Two things changed:
+The prior migration plan and the project memory recorded phases 0–10 as complete and "byte-matched to
+Rust." That was accurate at the time against the _then_ spec. Two things changed:
 
 1. **The spec is a living draft and moved.** Several blockers below (the `encoding`-tag prohibition,
    KeyPackage relay discovery on kind 10002, the required KeyPackage tag set) look like spec decisions
@@ -227,7 +227,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 - **Code:** `src/core/media.ts:27,38,142` uses `mip04-v2` scheme/version and NIP-92 `url`/`x` attachments; key
   derivation reads only the live `clientState` (no source-epoch selection). The group-policy component
   `marmot.group.encrypted-media.v1` (0x8008) codec IS done (`src/core/components/encrypted-media.ts`); the
-  message/imeta layer is not migrated. Flagged pending in `MIGRATION_PLAN.md` Phase 10.
+  message/imeta layer is not migrated. Flagged pending during the migration (Phase 10).
 - **Fix:** migrate the imeta/message layer to `encrypted-media-v1`; add source-epoch media-secret selection and
   blob-endpoint fallback.
 

@@ -3,7 +3,6 @@ import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   GROUP_EVENT_KIND,
   INBOX_RELAY_LIST_KIND,
-  KEY_PACKAGE_KIND,
   NIP65_RELAY_LIST_KIND,
   WELCOME_EVENT_KIND,
 } from "./protocol.js";
@@ -27,8 +26,6 @@ export interface TransportBinding {
   readonly groupMessageKind: number;
   /** Event kind carrying a Welcome. */
   readonly welcomeKind: number;
-  /** Event kind for a published KeyPackage (legacy, read/delete only). */
-  readonly keyPackageKind: number;
   /** Event kind for an addressable KeyPackage. */
   readonly addressableKeyPackageKind: number;
   /**
@@ -59,7 +56,6 @@ export const nostrTransportBinding: TransportBinding = {
   name: "nostr",
   groupMessageKind: GROUP_EVENT_KIND,
   welcomeKind: WELCOME_EVENT_KIND,
-  keyPackageKind: KEY_PACKAGE_KIND,
   addressableKeyPackageKind: ADDRESSABLE_KEY_PACKAGE_KIND,
   nip65RelayListKind: NIP65_RELAY_LIST_KIND,
   inboxRelayListKind: INBOX_RELAY_LIST_KIND,

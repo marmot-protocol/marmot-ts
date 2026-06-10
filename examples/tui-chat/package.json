@@ -1,0 +1,24 @@
+{
+  "name": "marmot-tui-chat",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal terminal chat demo for marmot-ts. Speaks the darkmatter Marmot v2 wire format and interops with Rust-crate peers on the happy path.",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@internet-privacy/marmot-ts": "workspace:*",
+    "applesauce-accounts": "^5.2.0",
+    "applesauce-common": "^5.2.0",
+    "applesauce-core": "^5.2.0",
+    "applesauce-relay": "^6.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.4",
+    "tsx": "^4.20.0",
+    "typescript": "~6.0.3"
+  }
+}

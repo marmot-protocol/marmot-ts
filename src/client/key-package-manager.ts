@@ -25,10 +25,7 @@ import {
   calculateKeyPackageRef,
   generateKeyPackage,
 } from "../core/key-package.js";
-import {
-  ADDRESSABLE_KEY_PACKAGE_KIND,
-  KEY_PACKAGE_KIND,
-} from "../core/protocol.js";
+import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../core/protocol.js";
 import { logger } from "../utils/debug.js";
 import { GenericKeyValueStore } from "../utils/key-value.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
@@ -53,7 +50,7 @@ export type LocalKeyPackage = {
   privatePackage: PrivateKeyPackage;
   /** Nostr kind-30443 addressable slot identifier (`d` tag value) */
   identifier?: string;
-  /** Nostr kind-443 or kind-30443 events this key package has been published under */
+  /** Nostr kind-30443 events this key package has been published under */
   published?: NostrEvent[];
   /** Whether this key package has been consumed (e.g. used to join a group). Undefined means unused. */
   used?: boolean;
@@ -62,7 +59,7 @@ export type LocalKeyPackage = {
 /**
  * A key package observed on relays for which no private material is held locally.
  *
- * Created when tracking a kind-443 or kind-30443 event from another device.
+ * Created when tracking a kind-30443 event from another device.
  * Enables cross-device deletion without requiring the private keys to be
  * present. The public key package is always present — events that cannot be
  * decoded are rejected as invalid.
@@ -72,13 +69,13 @@ export type LocalKeyPackage = {
 export type TrackedKeyPackage = {
   /** The calculated key package reference */
   keyPackageRef: Uint8Array;
-  /** The public key package, decoded from the kind-443 or kind-30443 event body */
+  /** The public key package, decoded from the kind-30443 event body */
   publicPackage: KeyPackage;
   /** Always undefined — the discriminant that identifies this as a tracked entry */
   privatePackage?: undefined;
   /** Nostr kind-30443 addressable slot identifier (`d` tag value) */
   identifier?: string;
-  /** Nostr kind-443 or kind-30443 events this key package has been published under */
+  /** Nostr kind-30443 events this key package has been published under */
   published?: NostrEvent[];
   /** Whether this key package has been consumed (e.g. used to join a group). Undefined means unused. */
   used?: boolean;
@@ -229,8 +226,7 @@ export type RotateKeyPackageOptions = {
   /**
    * Addressable slot identifier (`d` tag value) for the replacement event.
    * If omitted, the `d` from the stored entry is reused (preferred). If the
-   * stored entry has no `d` (legacy kind 443 package), a fresh random value
-   * is generated.
+   * stored entry has no `d`, a fresh random value is generated.
    */
   d?: string;
   /** Ciphersuite to use for the new key package */
@@ -280,9 +276,6 @@ export type KeyPackageManagerOptions = {
 /**
  * Manages the full lifecycle of MLS key packages — local private material and
  * the Nostr kind-30443 events that advertise this client to potential inviters.
- *
- * Legacy kind-443 events are supported for reading and deletion only; new
- * events are always published as kind 30443.
  */
 export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   /**
@@ -361,7 +354,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   }
 
   /**
-   * Appends a kind-443 or kind-30443 Nostr event to the `published` list of
+   * Appends a kind-30443 Nostr event to the `published` list of
    * the key package identified by `ref`. If no entry exists yet, a
    * {@link TrackedKeyPackage} is created by decoding the public key package
    * from the event body.
@@ -564,9 +557,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * `d` slot so relays replace the old event automatically), then removes the
    * old private key material.
    *
-   * For legacy kind-443 published events on the entry, a NIP-09 deletion is
-   * sent before publishing the replacement. Kind-30443 published events do not
-   * need explicit deletion — the new event supersedes them on relays.
+   * Kind-30443 published events do not need explicit deletion — the new event
+   * supersedes them on relays.
    *
    * @param ref - The key package reference of the key package to rotate
    * @param options - Options for the new key package
@@ -604,18 +596,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     const newD =
       options?.d ?? existing.identifier ?? bytesToHex(randomBytes(32));
 
-    // Publish NIP-09 deletion only for legacy kind-443 published events.
-    // Kind-30443 events are superseded automatically by the new event on relays.
-    const legacyEvents = oldEvents.filter((e) => e.kind === KEY_PACKAGE_KIND);
-    if (legacyEvents.length > 0) {
-      const eventIds = legacyEvents.map((e) => e.id);
-      const deleteTemplate = createDeleteKeyPackageEvent({ events: eventIds });
-      const signedDelete = await this.signer.signEvent(deleteTemplate);
-      const allOldRelays = [
-        ...new Set(legacyEvents.flatMap((e) => getKeyPackageRelays(e) ?? [])),
-      ];
-      await this.network.publish(allOldRelays, signedDelete);
-    }
+    // Kind-30443 events are superseded automatically by the new event on the
+    // relays (same `d` slot), so no explicit NIP-09 deletion is needed.
 
     // Create and publish the new key package under the resolved slot
     const newPkg = await this.create({
@@ -703,17 +685,14 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   // ---------------------------------------------------------------------------
 
   /**
-   * Observes a Nostr event and, if it is a kind 443 or kind 30443 key package
-   * event with a valid `i` tag (MIP-00 keyPackageRef), records it in the store.
+   * Observes a Nostr event and, if it is a kind 30443 key package event with a
+   * valid `i` tag (MIP-00 keyPackageRef), records it in the store.
    *
    * @param event - Any Nostr event; non-key-package events are silently ignored
    * @returns `true` if the event was recorded, `false` if ignored
    */
   async track(event: NostrEvent): Promise<boolean> {
-    if (
-      event.kind !== KEY_PACKAGE_KIND &&
-      event.kind !== ADDRESSABLE_KEY_PACKAGE_KIND
-    ) {
+    if (event.kind !== ADDRESSABLE_KEY_PACKAGE_KIND) {
       return false;
     }
 

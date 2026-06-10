@@ -18,7 +18,7 @@ import {
   getKeyPackage,
   getKeyPackageIdentifier,
 } from "../key-package-event.js";
-import { ADDRESSABLE_KEY_PACKAGE_KIND, KEY_PACKAGE_KIND } from "../protocol.js";
+import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../protocol.js";
 
 const mockPubkey =
   "02a1633cafe37eeebe2b39b4ec5f3d74c35e61fa7e7e6b7b8c5f7c4f3b2a1b2c3d";
@@ -38,10 +38,9 @@ describe("createDeleteKeyPackageEvent", () => {
     expect(deleteEvent.content).toBe("");
     expect(deleteEvent.created_at).toBeGreaterThan(0);
 
-    // Both k tags included when only string ids are provided (no kind info)
+    // Only the kind 30443 k tag is included.
     const kTags = deleteEvent.tags.filter((t) => t[0] === "k");
-    expect(kTags).toContainEqual(["k", "443"]);
-    expect(kTags).toContainEqual(["k", "30443"]);
+    expect(kTags).toEqual([["k", "30443"]]);
 
     // Check for e tags
     const eTags = deleteEvent.tags.filter((t) => t[0] === "e");
@@ -51,50 +50,6 @@ describe("createDeleteKeyPackageEvent", () => {
       ["e", "789ghi012jkl"],
       ["e", "345mno678pqr"],
     ]);
-  });
-
-  it("should create a valid kind 5 delete event with full kind 443 NostrEvent objects", () => {
-    const keyPackageEvents: NostrEvent[] = [
-      {
-        kind: KEY_PACKAGE_KIND,
-        id: "event1id",
-        pubkey: mockPubkey,
-        created_at: 1693876543,
-        tags: [],
-        content: "aabbccdd",
-        sig: mockSig,
-      },
-      {
-        kind: KEY_PACKAGE_KIND,
-        id: "event2id",
-        pubkey: mockPubkey,
-        created_at: 1693876544,
-        tags: [],
-        content: "eeffgghh",
-        sig: mockSig,
-      },
-    ];
-
-    const deleteEvent = createDeleteKeyPackageEvent({
-      events: keyPackageEvents,
-    });
-
-    expect(deleteEvent.kind).toBe(5);
-
-    // Only kind 443 k tag (no 30443 events in input)
-    const kTags = deleteEvent.tags.filter((t) => t[0] === "k");
-    expect(kTags).toEqual([["k", "443"]]);
-
-    // Check for e tags only (no a tags for kind 443)
-    const eTags = deleteEvent.tags.filter((t) => t[0] === "e");
-    expect(eTags).toHaveLength(2);
-    expect(eTags).toEqual([
-      ["e", "event1id"],
-      ["e", "event2id"],
-    ]);
-
-    // No a tags for kind 443
-    expect(deleteEvent.tags.filter((t) => t[0] === "a")).toHaveLength(0);
   });
 
   it("should create a valid kind 5 delete event with kind 30443 events, including a tags", () => {
@@ -131,48 +86,6 @@ describe("createDeleteKeyPackageEvent", () => {
     ]);
   });
 
-  it("should handle mixed kind 443 and kind 30443 events", () => {
-    const legacyEvent: NostrEvent = {
-      kind: KEY_PACKAGE_KIND,
-      id: "legacyId",
-      pubkey: mockPubkey,
-      created_at: 1693876543,
-      tags: [],
-      content: "aabbccdd",
-      sig: mockSig,
-    };
-    const addressableEvent: NostrEvent = {
-      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
-      id: "addrId",
-      pubkey: mockPubkey,
-      created_at: 1693876544,
-      tags: [["d", mockD]],
-      content: "eeffgghh",
-      sig: mockSig,
-    };
-
-    const deleteEvent = createDeleteKeyPackageEvent({
-      events: [legacyEvent, addressableEvent],
-    });
-
-    // Both k tags present
-    const kTags = deleteEvent.tags.filter((t) => t[0] === "k");
-    expect(kTags).toContainEqual(["k", "443"]);
-    expect(kTags).toContainEqual(["k", "30443"]);
-
-    // Both e tags present
-    const eTags = deleteEvent.tags.filter((t) => t[0] === "e");
-    expect(eTags).toContainEqual(["e", "legacyId"]);
-    expect(eTags).toContainEqual(["e", "addrId"]);
-
-    // a tag only for the addressable event
-    const aTags = deleteEvent.tags.filter((t) => t[0] === "a");
-    expect(aTags).toHaveLength(1);
-    expect(aTags[0][1]).toBe(
-      `${ADDRESSABLE_KEY_PACKAGE_KIND}:${mockPubkey}:${mockD}`,
-    );
-  });
-
   it("should throw an error when no events are provided", () => {
     expect(() => {
       createDeleteKeyPackageEvent({
@@ -181,7 +94,7 @@ describe("createDeleteKeyPackageEvent", () => {
     }).toThrow("At least one event must be provided for deletion");
   });
 
-  it("should throw an error when a full event is not kind 443 or 30443", () => {
+  it("should throw an error when a full event is not kind 30443", () => {
     const wrongKindEvent: NostrEvent = {
       kind: 1,
       id: "wrongeventid",
@@ -197,13 +110,13 @@ describe("createDeleteKeyPackageEvent", () => {
         events: [wrongKindEvent],
       });
     }).toThrow(
-      `Event wrongeventid is not a key package event (kind 1 instead of ${KEY_PACKAGE_KIND} or ${ADDRESSABLE_KEY_PACKAGE_KIND})`,
+      `Event wrongeventid is not a key package event (kind 1 instead of ${ADDRESSABLE_KEY_PACKAGE_KIND})`,
     );
   });
 
   it("should handle mixed event IDs and full events", () => {
     const keyPackageEvent: NostrEvent = {
-      kind: KEY_PACKAGE_KIND,
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
       id: "fulleventid",
       pubkey: mockPubkey,
       created_at: 1693876543,
@@ -436,7 +349,7 @@ describe("createKeyPackageEvent", () => {
       ciphersuiteImpl,
     });
 
-    // Build a kind 443 event from the canonical (base64) content with no
+    // Build a kind 30443 event from the canonical (base64) content with no
     // encoding tag — exactly what a spec-conformant peer publishes.
     const template = await createKeyPackageEvent({
       keyPackage: keyPackage.publicPackage,
@@ -444,7 +357,7 @@ describe("createKeyPackageEvent", () => {
     });
     const event: NostrEvent = {
       ...template,
-      kind: KEY_PACKAGE_KIND,
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
       pubkey: validPubkey,
       id: "decode-id",
       sig: "decode-sig",
@@ -471,7 +384,7 @@ describe("createKeyPackageEvent", () => {
     // and rejected. (hex alphabet has odd byte boundaries → base64 error)
     const encodedBytes = encode(keyPackageEncoder, keyPackage.publicPackage);
     const hexEvent: NostrEvent = {
-      kind: KEY_PACKAGE_KIND,
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
       pubkey: validPubkey,
       created_at: unixNow(),
       content: bytesToHex(encodedBytes),
@@ -503,14 +416,14 @@ describe("getKeyPackageIdentifier", () => {
     expect(getKeyPackageIdentifier(event)).toBe(mockD);
   });
 
-  it("should return undefined for a kind 443 event (no d tag)", () => {
+  it("should return undefined for a non-30443 event", () => {
     const event: NostrEvent = {
-      kind: KEY_PACKAGE_KIND,
+      kind: 1,
       id: "testid",
       pubkey: mockPubkey,
       created_at: 0,
       content: "",
-      tags: [],
+      tags: [["d", mockD]],
       sig: mockSig,
     };
     expect(getKeyPackageIdentifier(event)).toBeUndefined();

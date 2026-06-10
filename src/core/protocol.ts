@@ -23,9 +23,6 @@ export const INBOX_RELAY_LIST_KIND = 10050;
 /** The inbox relay-list tag (`relay`) carrying a single relay URL. */
 export const INBOX_RELAY_TAG = "relay";
 
-/** Event kind for key package events (legacy, read/delete only — do not publish new events of this kind) */
-export const KEY_PACKAGE_KIND = 443;
-
 /** Event kind for addressable key package events */
 export const ADDRESSABLE_KEY_PACKAGE_KIND = 30443;
 
@@ -53,7 +50,7 @@ export const KEY_PACKAGE_CLIENT_TAG = "client";
 /** The possible MLS protocol versions */
 export type MLS_VERSIONS = "1.0";
 
-/** Parsed client tag from a kind 443 event */
+/** Parsed client tag from a kind 30443 event */
 export type KeyPackageClient = {
   name: string;
   // TODO: this is probably a NIP-89 client tag, so it should probably have the rest of the fields

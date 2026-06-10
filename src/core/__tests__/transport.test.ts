@@ -4,7 +4,6 @@ import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   GROUP_EVENT_KIND,
   INBOX_RELAY_LIST_KIND,
-  KEY_PACKAGE_KIND,
   NIP65_RELAY_LIST_KIND,
   WELCOME_EVENT_KIND,
 } from "../protocol.js";
@@ -20,7 +19,6 @@ describe("nostrTransportBinding", () => {
       name: "nostr",
       groupMessageKind: GROUP_EVENT_KIND,
       welcomeKind: WELCOME_EVENT_KIND,
-      keyPackageKind: KEY_PACKAGE_KIND,
       addressableKeyPackageKind: ADDRESSABLE_KEY_PACKAGE_KIND,
       nip65RelayListKind: NIP65_RELAY_LIST_KIND,
       inboxRelayListKind: INBOX_RELAY_LIST_KIND,

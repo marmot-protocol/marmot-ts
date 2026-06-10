@@ -11,10 +11,7 @@ import {
   getKeyPackageIdentifier,
   getKeyPackageRelays,
 } from "../../core/key-package-event.js";
-import {
-  ADDRESSABLE_KEY_PACKAGE_KIND,
-  KEY_PACKAGE_KIND,
-} from "../../core/protocol.js";
+import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
 import { generateKeyPackage } from "../../core/key-package.js";
@@ -128,11 +125,11 @@ describe("KeyPackageManager", () => {
       expect(published).toHaveLength(1);
     });
 
-    it("does not publish any kind 443 events", async () => {
+    it("does not publish any legacy kind 443 events", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       await manager.create({ relays: ["wss://relay.test"] });
 
-      const legacy = network.events.filter((e) => e.kind === KEY_PACKAGE_KIND);
+      const legacy = network.events.filter((e) => e.kind === 443);
       expect(legacy).toHaveLength(0);
     });
 
@@ -258,10 +255,10 @@ describe("KeyPackageManager", () => {
       expect(getKeyPackageIdentifier(newEvent)).toBe(TEST_CLIENT_ID);
     });
 
-    it("generates a random d when old entry has no d (legacy 443 upgrade)", async () => {
+    it("generates a random d when old entry has no d", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
 
-      // Inject a stored entry without a d to simulate a legacy 443 package
+      // Inject a stored entry without a d slot.
       // Uses top-level imports for generateKeyPackage, createCredential, etc.
       const ciphersuite = await getCiphersuiteImpl(
         "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -295,48 +292,6 @@ describe("KeyPackageManager", () => {
       // No kind 5 deletion should have been published
       const deleteEvents = network.events.filter((e) => e.kind === 5);
       expect(deleteEvents).toHaveLength(0);
-    });
-
-    it("sends NIP-09 deletion only for kind 443 published events on the entry", async () => {
-      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
-
-      // Inject a stored entry with a legacy kind 443 published event
-      // Uses top-level imports for generateKeyPackage, createCredential, etc.
-      const ciphersuite = await getCiphersuiteImpl(
-        "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-        defaultCryptoProvider,
-      );
-      const pubkey = await account.signer.getPublicKey();
-      const kp = await generateKeyPackage({
-        credential: createCredential(pubkey),
-        ciphersuiteImpl: ciphersuite,
-      });
-
-      const fakeRelayUrl = "wss://relay.test/";
-      const fakeLegacyEvent = {
-        kind: KEY_PACKAGE_KIND,
-        id: "legacy443event",
-        pubkey,
-        created_at: 1000,
-        content: "",
-        tags: [
-          ["relays", fakeRelayUrl],
-          ["i", "a".repeat(64)],
-        ],
-        sig: "sig",
-      };
-      await manager.add({ ...kp, published: [fakeLegacyEvent] });
-
-      const listed = await manager.list();
-      await manager.rotate(listed[0].keyPackageRef, {
-        relays: ["wss://relay.test"],
-      });
-
-      // A kind 5 deletion should have been sent for the legacy event
-      const deleteEvents = network.events.filter((e) => e.kind === 5);
-      expect(deleteEvents).toHaveLength(1);
-      const eTags = deleteEvents[0].tags.filter((t) => t[0] === "e");
-      expect(eTags).toContainEqual(["e", "legacy443event"]);
     });
 
     it("creates and publishes a new kind 30443 event", async () => {
@@ -630,18 +585,19 @@ describe("KeyPackageManager", () => {
       expect(await manager.list()).toHaveLength(0);
     });
 
-    it("returns false if the kind 443 event has no `i` tag", async () => {
+    it("rejects a legacy kind 443 event", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const result = await manager.track({
         id: "aa",
-        kind: KEY_PACKAGE_KIND,
+        kind: 443,
         pubkey: "bb",
         created_at: 0,
         content: "",
-        tags: [],
+        tags: [["i", "a".repeat(64)]],
         sig: "cc",
       });
       expect(result).toBe(false);
+      expect(await manager.list()).toHaveLength(0);
     });
 
     it("returns false if the event body cannot be decoded as a KeyPackage", async () => {
@@ -709,36 +665,6 @@ describe("KeyPackageManager", () => {
       const iTag = realEvent.tags.find((t) => t[0] === "i")!;
       const stored = await manager.get(iTag[1]);
       expect(stored?.identifier).toBe(TEST_CLIENT_ID);
-    });
-
-    it("accepts a legacy kind 443 event and records it", async () => {
-      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
-
-      // Create a foreign key package from another account to get a real event,
-      // then simulate it as kind 443 by patching the kind
-      const otherNetwork = new MockNetwork(["wss://relay.test"]);
-      const otherAccount = PrivateKeyAccount.generateNew();
-      const { manager: otherManager } = makeManager(
-        otherNetwork,
-        otherAccount,
-        "other-client",
-      );
-      await otherManager.create({ relays: ["wss://relay.test"] });
-
-      const foreignAddressableEvent = otherNetwork.events.find(
-        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
-      )!;
-
-      // Simulate the same package as a legacy kind 443 event
-      const legacyEvent = {
-        ...foreignAddressableEvent,
-        kind: KEY_PACKAGE_KIND,
-        id: "f".repeat(64),
-        tags: foreignAddressableEvent.tags.filter((t) => t[0] !== "d"),
-      };
-
-      const result = await manager.track(legacyEvent);
-      expect(result).toBe(true);
     });
 
     it("records relay URLs from the event's relays tag", async () => {
@@ -821,36 +747,6 @@ describe("KeyPackageManager", () => {
 
       const events = await getPublished(manager, pkg.keyPackageRef);
       expect(events).toHaveLength(1);
-    });
-
-    it("keeps distinct legacy kind 443 published events", async () => {
-      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
-
-      const otherNetwork = new MockNetwork(["wss://relay.test"]);
-      const otherAccount = PrivateKeyAccount.generateNew();
-      const { manager: otherManager } = makeManager(
-        otherNetwork,
-        otherAccount,
-        "other-device",
-      );
-      await otherManager.create({ relays: ["wss://relay.test"] });
-
-      const foreignEvent = otherNetwork.events.find(
-        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
-      )!;
-      const legacyEvent = {
-        ...foreignEvent,
-        kind: KEY_PACKAGE_KIND,
-        id: "f".repeat(64),
-        tags: foreignEvent.tags.filter((t) => t[0] !== "d"),
-      };
-
-      await manager.track(legacyEvent);
-      await manager.track({ ...legacyEvent, id: "e".repeat(64) });
-
-      const refHex = foreignEvent.tags.find((t) => t[0] === "i")![1];
-      const events = await getPublished(manager, refHex);
-      expect(events).toHaveLength(2);
     });
   });
 

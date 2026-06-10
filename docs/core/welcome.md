@@ -25,8 +25,8 @@ const { welcome } = commitResult;
 
 const welcomeRumor = createWelcomeRumor({
   welcome, // Welcome from MLS commit
-  relays: groupRelays, // Array of relay URLs
-  keyPackageEventId, // Optional: the key package event ID used
+  groupRelays, // Non-empty relay URLs for group message fetch
+  keyPackageEventId, // Required: 32-byte hex KeyPackage event id (e tag)
   author: myEphemeralPubkey, // Nostr pubkey for this rumor
 });
 
@@ -35,18 +35,21 @@ const welcomeRumor = createWelcomeRumor({
 
 ### Event Structure
 
+Per the Marmot v2 Nostr transport spec (`transports/nostr.md` "Welcome delivery"):
+
 ```
 kind: 444
-content: base64-encoded Welcome message
+content: base64-encoded MLSMessage (wireformat mls_welcome)
 tags:
-  - ["relays", ...groupRelays]
-  - ["e", keyPackageEventId] (optional)
-  - ["encoding", "base64"]
+  - ["relays", ...groupRelays]   (required, non-empty)
+  - ["e", keyPackageEventId]     (required, 32-byte hex Nostr event id)
 ```
+
+The rumor MUST NOT include an `encoding` tag. Content is always standard base64.
 
 ## Distributing Welcome Messages
 
-Welcome messages are wrapped in NIP-59 gift wraps for privacy (MIP-00):
+Welcome messages are wrapped in NIP-59 gift wraps (kind 1059 → kind 13 seal → kind 444 rumor) and published to the invitee's inbox relay set:
 
 ```typescript
 import { createWelcomeRumor } from "@internet-privacy/marmot-ts";
@@ -55,23 +58,21 @@ import { createGiftWrap } from "applesauce-core/nip59";
 // 1. Create welcome rumor
 const welcomeRumor = createWelcomeRumor({
   welcome,
-  relays,
+  groupRelays,
   keyPackageEventId: kpEventId,
   author: myEphemeralPubkey,
 });
 
-// 2. Wrap in gift wrap
-const giftWrap = await createGiftWrap(
-  welcomeRumor,
-  recipientPubkey,
-  senderPrivateKey,
-);
+// 2. Wrap in gift wrap addressed to the invitee
+const giftWrap = await createGiftWrap({
+  rumor: welcomeRumor,
+  recipient: recipientPubkey,
+  signer: senderSigner,
+});
 
-// 3. Send to recipient's relay list
-await network.publish(recipientRelays, giftWrap);
+// 3. Publish to the recipient's inbox relays (kind 10050 relay list)
+await network.publish(recipientInboxRelays, giftWrap);
 ```
-
-See [MIP-00](https://github.com/parres-hq/marmot/blob/main/00.md) for gift wrap specifications.
 
 ## Extracting Welcome Messages
 
@@ -79,51 +80,67 @@ When you receive a gift wrap with a Welcome:
 
 ```typescript
 import { getWelcome } from "@internet-privacy/marmot-ts";
-import { unwrapGiftWrap } from "applesauce-core/nip59";
+import { unlockGiftWrap } from "applesauce-common/helpers/gift-wrap";
 
-// 1. Unwrap gift wrap
-const rumor = unwrapGiftWrap(giftWrapEvent, myPrivateKey);
+// 1. Unwrap gift wrap (validates recipient binding)
+const rumor = await unlockGiftWrap(giftWrapEvent, mySigner);
 
-// 2. Extract Welcome
+// 2. Extract and validate the Welcome (e tag, relays tag, MLS decode)
 const welcome = getWelcome(rumor);
 
-// 3. Use Welcome to join group (with matching private key package)
+// 3. Join the group or preview metadata before joining
+```
+
+## Previewing Group Metadata
+
+Before joining, you can decrypt group info or the Marmot app-component view from a Welcome:
+
+```typescript
+import {
+  getWelcome,
+  readWelcomeGroupInfo,
+  readWelcomeMarmotGroupView,
+} from "@internet-privacy/marmot-ts";
+
+const welcome = getWelcome(welcomeRumor);
+const keyPackage = await keyPackageStore.get(keyPackageRef);
+
+const groupInfo = await readWelcomeGroupInfo({
+  welcome,
+  keyPackage,
+  ciphersuiteImpl,
+});
+
+const groupView = await readWelcomeMarmotGroupView({
+  welcome,
+  keyPackage,
+  ciphersuiteImpl,
+});
+// groupView?.name, groupView?.relays, groupView?.adminPubkeys, etc.
 ```
 
 ## Joining from Welcome
 
+Use the client API to join from an unwrapped kind 444 rumor:
+
 ```typescript
-import { getWelcome } from "@internet-privacy/marmot-ts";
-import { joinGroup } from "ts-mls";
-
-// Get Welcome from rumor
-const welcome = getWelcome(welcomeRumor);
-
-// Get matching private key package from storage
-const keyPackage = await keyPackageStore.get(keyPackageRef);
-
-// Join the group
-const clientState = joinGroup(
-  welcome,
-  keyPackage.privatePackage,
-  ciphersuiteImpl,
-);
-
-// You're now a member!
+const { group } = await client.joinGroupFromWelcome({ welcomeRumor });
 ```
+
+The client finds the matching local KeyPackage, validates member identity proofs, and persists the resulting group state.
 
 ## Welcome Ordering
 
-Per [MIP-02](https://github.com/parres-hq/marmot/blob/main/02.md), commits MUST be published and acknowledged BEFORE sending Welcome messages.
+Per `protocol-core/joining.md`, commits MUST be published and acknowledged **before** sending Welcome messages (except initial one-member group creation).
 
 **Why?** The Welcome references the commit that added the member. If the Welcome arrives first, the new member can't fetch the commit and will fail to join.
 
-**Correct Order:**
+**Correct order:**
 
 1. Create commit with add proposal
 2. Publish commit event (kind 445)
 3. Wait for relay acknowledgment
-4. Send Welcome messages
+4. Send Welcome messages (kind 1059 gift wrap)
 
 ## Related
 

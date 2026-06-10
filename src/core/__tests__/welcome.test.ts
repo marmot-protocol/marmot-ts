@@ -16,7 +16,7 @@ import {
 import {
   getWelcome,
   readWelcomeGroupInfo,
-  readWelcomeMarmotGroupData,
+  readWelcomeMarmotGroupView,
 } from "../welcome.js";
 import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
@@ -24,7 +24,7 @@ import { accountProofSignerFor } from "../../__tests__/helpers/account-proof.js"
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 
 // ---------------------------------------------------------------------------
-// spec compliance (MIP-02)
+// spec compliance (welcome delivery)
 // ---------------------------------------------------------------------------
 
 describe("spec compliance (welcome delivery)", () => {
@@ -105,10 +105,10 @@ describe("spec compliance (welcome delivery)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// readWelcomeGroupInfo / readWelcomeMarmotGroupData
+// readWelcomeGroupInfo / readWelcomeMarmotGroupView
 // ---------------------------------------------------------------------------
 
-describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
+describe("readWelcomeGroupInfo / readWelcomeMarmotGroupView", () => {
   let adminAccount: PrivateKeyAccount<any>;
   let inviteeAccount: PrivateKeyAccount<any>;
   let ciphersuite: CiphersuiteImpl;
@@ -208,7 +208,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
     expect(groupInfo.groupContext.extensions.length).toBeGreaterThan(0);
   });
 
-  it("reads MarmotGroupData from a welcome rumor without joining the group", async () => {
+  it("reads MarmotGroupView from a welcome rumor without joining the group", async () => {
     const adminPubkey = await adminAccount.signer.getPublicKey();
     const groupRelays = ["wss://mock-relay.test"];
     const groupName = "Read-Before-Join Group";
@@ -218,18 +218,18 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
       groupRelays,
     );
 
-    const groupData = await readWelcomeMarmotGroupData({
+    const groupView = await readWelcomeMarmotGroupView({
       welcome: welcomeRumor,
       keyPackage: inviteeKeyPackage,
       ciphersuiteImpl: ciphersuite,
     });
 
-    expect(groupData).not.toBeNull();
-    expect(groupData!.name).toBe(groupName);
-    expect(groupData!.relays).toEqual(groupRelays);
-    expect(groupData!.adminPubkeys).toContain(adminPubkey);
+    expect(groupView).not.toBeNull();
+    expect(groupView!.name).toBe(groupName);
+    expect(groupView!.relays).toEqual(groupRelays);
+    expect(groupView!.adminPubkeys).toContain(adminPubkey);
     // nostrGroupId is a 32-byte array
-    expect(groupData!.nostrGroupId.length).toBe(32);
+    expect(groupView!.nostrGroupId!.length).toBe(32);
   });
 
   it("accepts a decoded Welcome object in addition to a Rumor", async () => {
@@ -242,14 +242,14 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupData", () => {
     // Pass the decoded Welcome directly instead of the Rumor
     const decodedWelcome = getWelcome(welcomeRumor);
 
-    const groupData = await readWelcomeMarmotGroupData({
+    const groupView = await readWelcomeMarmotGroupView({
       welcome: decodedWelcome,
       keyPackage: inviteeKeyPackage,
       ciphersuiteImpl: ciphersuite,
     });
 
-    expect(groupData).not.toBeNull();
-    expect(groupData!.name).toBe("Decoded Welcome Test");
+    expect(groupView).not.toBeNull();
+    expect(groupView!.name).toBe("Decoded Welcome Test");
   });
 
   it("throws when the key package does not match the welcome", async () => {

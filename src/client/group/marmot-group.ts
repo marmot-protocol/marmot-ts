@@ -81,10 +81,7 @@ import {
   type MediaAttachment,
   MIP04_VERSION,
 } from "../../core/media.js";
-import {
-  ADDRESSABLE_KEY_PACKAGE_KIND,
-  KEY_PACKAGE_KIND,
-} from "../../core/protocol.js";
+import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { createWelcomeRumor } from "../../core/welcome.js";
 import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
@@ -306,9 +303,9 @@ export type MarmotGroupOptions<
 export type WelcomeRecipient = {
   /** The recipient's Nostr public key */
   pubkey: string;
-  /** The ID of KeyPackage event (kind 443) used for add operation */
+  /** The ID of KeyPackage event (kind 30443) used for add operation */
   keyPackageEventId: string;
-  /** The KeyPackage event (kind 443) used for add operation */
+  /** The KeyPackage event (kind 30443) used for add operation */
   keyPackageEvent: NostrEvent;
 };
 
@@ -1400,7 +1397,6 @@ export class MarmotGroup<
             author: actorPubkey,
             groupRelays: groupData.relays,
             keyPackageEventId: recipient.keyPackageEventId,
-            keyPackageEvent: recipient.keyPackageEvent,
           });
 
           // Gift wrap the welcome event to the newly added user
@@ -1490,29 +1486,26 @@ export class MarmotGroup<
   }
 
   /**
-   * Invites a user to the group using their KeyPackage event (kind 443).
+   * Invites a user to the group using their KeyPackage event (kind 30443).
    *
    * This method:
-   * 1. Validates the KeyPackage event (kind 443)
+   * 1. Validates the KeyPackage event (kind 30443)
    * 2. Validates that the credential identity matches the event pubkey
    * 3. Builds an Add proposal using the KeyPackage
    * 4. Commits the proposal
    * 5. After commit ack, sends a Welcome message to the invitee via NIP-59 gift wrap
    *
-   * @param keyPackageEvent - The KeyPackage event (kind 443 or kind 30443) for the user to invite
+   * @param keyPackageEvent - The KeyPackage event (kind 30443) for the user to invite
    * @returns Promise resolving to the publish response from the relays
    * @throws Error if the event is not a key package kind or if the credential identity doesn't match
    */
   async inviteByKeyPackageEvent(
     keyPackageEvent: NostrEvent,
   ): Promise<Record<string, PublishResponse>> {
-    // Validate the event is a KeyPackage event (kind 443 or kind 30443)
-    if (
-      keyPackageEvent.kind !== KEY_PACKAGE_KIND &&
-      keyPackageEvent.kind !== ADDRESSABLE_KEY_PACKAGE_KIND
-    ) {
+    // Validate the event is a KeyPackage event (kind 30443)
+    if (keyPackageEvent.kind !== ADDRESSABLE_KEY_PACKAGE_KIND) {
       throw new Error(
-        `inviteByKeyPackageEvent: Expected KeyPackage event kind ${KEY_PACKAGE_KIND} or ${ADDRESSABLE_KEY_PACKAGE_KIND}, got ${keyPackageEvent.kind}`,
+        `inviteByKeyPackageEvent: Expected KeyPackage event kind ${ADDRESSABLE_KEY_PACKAGE_KIND}, got ${keyPackageEvent.kind}`,
       );
     }
 

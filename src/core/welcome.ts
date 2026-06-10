@@ -1,10 +1,6 @@
 /** @module @category Core - Welcome */
 import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
-import {
-  getEventHash,
-  getTagValue,
-  NostrEvent,
-} from "applesauce-core/helpers/event";
+import { getEventHash, getTagValue } from "applesauce-core/helpers/event";
 import {
   CiphersuiteImpl,
   decode,
@@ -52,7 +48,6 @@ export function createWelcomeRumor({
    * (transports/nostr.md "Welcome delivery").
    */
   keyPackageEventId: string;
-  keyPackageEvent?: NostrEvent;
   /** Array of relay URLs for the group (becomes the non-empty `relays` tag) */
   groupRelays: string[];
 }): Rumor {
@@ -104,7 +99,7 @@ export function getWelcomeKeyPackageEventId(event: Rumor): string | undefined {
 /** Returns the group relays from a welcome rumor */
 export function getWelcomeGroupRelays(event: Rumor): string[] {
   // NOTE: The "relays" tag is a normal Nostr tag vector: ["relays", ...urls]
-  // (see MIP-02 and createWelcomeRumor()).
+  // (see transports/nostr.md "Welcome delivery" and createWelcomeRumor()).
   const tag = event.tags.find((t) => t[0] === "relays");
   if (!tag) return [];
   return tag.slice(1);
@@ -232,7 +227,7 @@ export async function readWelcomeGroupInfo({
  *
  * @returns The group view, or null if no app components are present
  */
-export async function readWelcomeMarmotGroupData({
+export async function readWelcomeMarmotGroupView({
   welcome,
   keyPackage,
   ciphersuiteImpl,

@@ -70,7 +70,6 @@ function createMockWelcomeRumor(
     tags: [
       ["relays", "wss://relay1.test", "wss://relay2.test"],
       ["e", keyPackageEventId],
-      ["encoding", "base64"],
     ],
     content: "base64-encoded-welcome-message",
   };

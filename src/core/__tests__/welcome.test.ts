@@ -26,33 +26,80 @@ import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js"
 // spec compliance (MIP-02)
 // ---------------------------------------------------------------------------
 
-describe("spec compliance (MIP-02)", () => {
-  it("should reject decoding kind 444 events that are missing an encoding=base64 tag", () => {
+describe("spec compliance (welcome delivery)", () => {
+  const validRelays = ["relays", "wss://relay.example.com"];
+  const validE = ["e", "a".repeat(64)];
+
+  it("rejects a kind 444 rumor missing the e tag", () => {
     const event: NostrEvent = {
       kind: WELCOME_EVENT_KIND,
       pubkey: "0".repeat(64),
       created_at: 1,
-      content: "00",
-      tags: [],
+      content: "AAAA",
+      tags: [validRelays],
       id: "0".repeat(64),
       sig: "0".repeat(128),
     };
 
-    expect(() => getWelcome(event)).toThrow(/encoding=base64 tag/i);
+    expect(() => getWelcome(event)).toThrow(/e tag/i);
   });
 
-  it("should reject decoding kind 444 events with encoding=hex", () => {
+  it("rejects a kind 444 rumor whose e tag is not a 32-byte hex id", () => {
     const event: NostrEvent = {
       kind: WELCOME_EVENT_KIND,
       pubkey: "0".repeat(64),
       created_at: 1,
-      content: "00",
-      tags: [["encoding", "hex"]],
+      content: "AAAA",
+      tags: [validRelays, ["e", "abc123"]],
       id: "0".repeat(64),
       sig: "0".repeat(128),
     };
 
-    expect(() => getWelcome(event)).toThrow(/encoding=base64 tag/i);
+    expect(() => getWelcome(event)).toThrow(/e tag/i);
+  });
+
+  it("rejects a kind 444 rumor missing the relays tag", () => {
+    const event: NostrEvent = {
+      kind: WELCOME_EVENT_KIND,
+      pubkey: "0".repeat(64),
+      created_at: 1,
+      content: "AAAA",
+      tags: [validE],
+      id: "0".repeat(64),
+      sig: "0".repeat(128),
+    };
+
+    expect(() => getWelcome(event)).toThrow(/relays/i);
+  });
+
+  it("rejects a kind 444 rumor whose relays tag is empty", () => {
+    const event: NostrEvent = {
+      kind: WELCOME_EVENT_KIND,
+      pubkey: "0".repeat(64),
+      created_at: 1,
+      content: "AAAA",
+      tags: [["relays"], validE],
+      id: "0".repeat(64),
+      sig: "0".repeat(128),
+    };
+
+    expect(() => getWelcome(event)).toThrow(/relays/i);
+  });
+
+  it("does not require an encoding tag (spec forbids it)", () => {
+    // A well-formed envelope with no encoding tag passes transport validation
+    // and fails only later, on MLS decode of the (here garbage) content.
+    const event: NostrEvent = {
+      kind: WELCOME_EVENT_KIND,
+      pubkey: "0".repeat(64),
+      created_at: 1,
+      content: "AAAA",
+      tags: [validRelays, validE],
+      id: "0".repeat(64),
+      sig: "0".repeat(128),
+    };
+
+    expect(() => getWelcome(event)).not.toThrow(/encoding|e tag|relays/i);
   });
 });
 

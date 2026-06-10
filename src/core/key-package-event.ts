@@ -13,11 +13,7 @@ import {
   keyPackageEncoder,
   protocolVersions,
 } from "ts-mls";
-import {
-  decodeContent,
-  encodeContent,
-  getEncodingTag,
-} from "../utils/encoding.js";
+import { decodeContent, encodeContent } from "../utils/encoding.js";
 import { getTagValue, unixNow } from "../utils/nostr.js";
 import { isValidRelayUrl, normalizeRelayUrl } from "../utils/relay-url.js";
 import { getCredentialPubkey } from "./credential.js";
@@ -25,15 +21,18 @@ import { isGreaseValue } from "./grease.js";
 import { calculateKeyPackageRef } from "./key-package.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
+  KEY_PACKAGE_APP_COMPONENTS_TAG,
   KEY_PACKAGE_CIPHER_SUITE_TAG,
   KEY_PACKAGE_CLIENT_TAG,
   KEY_PACKAGE_EXTENSIONS_TAG,
   KEY_PACKAGE_KIND,
   KEY_PACKAGE_MLS_VERSION_TAG,
+  KEY_PACKAGE_PROPOSALS_TAG,
   KEY_PACKAGE_RELAYS_TAG,
   KeyPackageClient,
   MLS_VERSIONS,
 } from "./protocol.js";
+import { SUPPORTED_APP_COMPONENT_IDS } from "./components/ids.js";
 
 export type DeleteKeyPackageEventInput = string | NostrEvent;
 
@@ -111,13 +110,10 @@ export function createDeleteKeyPackageEvent(
 
 /** Get the KeyPackage from a kind 443 or kind 30443 event */
 export function getKeyPackage(event: NostrEvent): KeyPackage {
-  const encodingFormat = getEncodingTag(event);
-  if (encodingFormat !== "base64") {
-    throw new Error(
-      "KeyPackage event must include encoding=base64 tag (hex and missing tags are rejected)",
-    );
-  }
-  const content = decodeContent(event.content, encodingFormat);
+  // Transport byte encoding is always standard base64; the spec forbids an
+  // `encoding` tag and forbids switching decoders based on one
+  // (transports/nostr.md "Transport byte encoding").
+  const content = decodeContent(event.content, "base64");
   const decoded = decode(keyPackageDecoder, content);
   if (!decoded) throw new Error("Failed to decode key package");
 
@@ -284,11 +280,25 @@ async function createKeyPackageEventInternal(
   // Addressable identifier (required for kind 30443)
   tags.push(["d", options.identifier]);
 
+  // Supported MLS proposal ids advertised by this leaf (e.g. app_data_update
+  // 0x0008), formatted as lowercase 0x-prefixed hex; GREASE values dropped.
+  const proposalTypes = (keyPackage.leafNode.capabilities?.proposals ?? [])
+    .filter((p) => !isGreaseValue(p))
+    .map((p) => `0x${p.toString(16).padStart(4, "0")}`);
+
+  // Supported Marmot app-component ids this implementation can encode/decode.
+  const appComponentIds = SUPPORTED_APP_COMPONENT_IDS.map(
+    (id) => `0x${id.toString(16).padStart(4, "0")}`,
+  );
+
+  // The spec forbids an `encoding` tag (transports/nostr.md "Transport byte
+  // encoding"); content is always standard base64.
   tags.push(
     [KEY_PACKAGE_MLS_VERSION_TAG, version],
     [KEY_PACKAGE_CIPHER_SUITE_TAG, ciphersuiteHex],
     [KEY_PACKAGE_EXTENSIONS_TAG, ...filteredExtensionTypes],
-    ["encoding", "base64"],
+    [KEY_PACKAGE_PROPOSALS_TAG, ...proposalTypes],
+    [KEY_PACKAGE_APP_COMPONENTS_TAG, ...appComponentIds],
   );
 
   // MIP-00: required KeyPackageRef tag ("i")

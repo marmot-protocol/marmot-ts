@@ -25,6 +25,12 @@ export const KEY_PACKAGE_CIPHER_SUITE_TAG = "mls_ciphersuite";
 /** The name of the tag that contains the MLS extensions */
 export const KEY_PACKAGE_EXTENSIONS_TAG = "mls_extensions";
 
+/** The name of the tag that contains the supported MLS proposal ids */
+export const KEY_PACKAGE_PROPOSALS_TAG = "mls_proposals";
+
+/** The name of the tag that contains the supported Marmot app-component ids */
+export const KEY_PACKAGE_APP_COMPONENTS_TAG = "app_components";
+
 /** The name of the tag that contains the relays */
 export const KEY_PACKAGE_RELAYS_TAG = "relays";
 

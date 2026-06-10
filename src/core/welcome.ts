@@ -21,14 +21,15 @@ import {
   wireformats,
 } from "ts-mls";
 import { marmotAuthService } from "./auth-service.js";
-import {
-  decodeContent,
-  encodeContent,
-  getEncodingTag,
-} from "../utils/encoding.js";
+import { decodeContent, encodeContent } from "../utils/encoding.js";
 import { unixNow } from "../utils/nostr.js";
 import { type MarmotGroupView, getMarmotGroupView } from "./client-state.js";
 import { WELCOME_EVENT_KIND } from "./protocol.js";
+
+/** True when `value` is a 32-byte (64-char) lowercase-or-uppercase hex string. */
+function isEventId(value: string | undefined): value is string {
+  return typeof value === "string" && /^[0-9a-fA-F]{64}$/.test(value);
+}
 
 /**
  * Creates a welcome rumor (kind 444) for a welcome message.
@@ -45,12 +46,24 @@ export function createWelcomeRumor({
   welcome: Welcome;
   /** The author's public key (hex string) */
   author: string;
-  /** The ID of the key package event used for the add operation */
-  keyPackageEventId?: string;
+  /**
+   * The ID of the KeyPackage event consumed for this add. Required: the spec
+   * mandates a 32-byte-hex `e` tag on every welcome rumor
+   * (transports/nostr.md "Welcome delivery").
+   */
+  keyPackageEventId: string;
   keyPackageEvent?: NostrEvent;
-  /** Array of relay URLs for the group */
+  /** Array of relay URLs for the group (becomes the non-empty `relays` tag) */
   groupRelays: string[];
 }): Rumor {
+  if (!isEventId(keyPackageEventId))
+    throw new Error(
+      "Welcome rumor requires a 32-byte hex KeyPackage event id (e tag)",
+    );
+  if (groupRelays.length === 0 || groupRelays.some((r) => r.length === 0))
+    throw new Error(
+      "Welcome rumor requires a non-empty relays tag with no empty relay URLs",
+    );
   // Serialize the welcome message as a full MLSMessage (RFC 9420)
   const mlsMessage: MlsWelcomeMessage = {
     version: protocolVersions.mls10,
@@ -60,6 +73,9 @@ export function createWelcomeRumor({
   const serializedWelcome = encode(mlsMessageEncoder, mlsMessage);
   const content = encodeContent(serializedWelcome, "base64");
 
+  // No `encoding` tag: the spec forbids it and content is always standard
+  // base64 (transports/nostr.md "Transport byte encoding"). The `e` tag is
+  // mandatory and validated above.
   const draft = {
     kind: WELCOME_EVENT_KIND,
     pubkey: author,
@@ -67,12 +83,9 @@ export function createWelcomeRumor({
     content,
     tags: [
       ["relays", ...groupRelays],
-      ["encoding", "base64"],
+      ["e", keyPackageEventId],
     ],
   };
-
-  // Add the key package event ID if known
-  if (keyPackageEventId) draft.tags.push(["e", keyPackageEventId]);
 
   // Calculate the event ID for the rumor
   const id = getEventHash(draft);
@@ -129,11 +142,22 @@ export function getWelcome(event: Rumor): Welcome {
       `Expected welcome event kind ${WELCOME_EVENT_KIND}, got ${event.kind}`,
     );
 
-  const encodingFormat = getEncodingTag(event);
-  if (encodingFormat !== "base64")
-    throw new Error("Invalid welcome event: missing encoding=base64 tag");
+  // Validate the transport-level rumor shape the spec mandates before decoding
+  // (transports/nostr.md "Welcome delivery"): a 32-byte-hex `e` tag and a
+  // non-empty `relays` tag with no empty relay URLs.
+  const keyPackageEventId = getTagValue(event, "e");
+  if (!isEventId(keyPackageEventId))
+    throw new Error(
+      "Invalid welcome event: missing or malformed e tag (expected 32-byte hex KeyPackage event id)",
+    );
+  const relays = getWelcomeGroupRelays(event);
+  if (relays.length === 0 || relays.some((r) => r.length === 0))
+    throw new Error(
+      "Invalid welcome event: relays tag must contain at least one non-empty relay URL",
+    );
 
-  const content = decodeContent(event.content, encodingFormat);
+  // Content is always standard base64; the spec forbids an `encoding` tag.
+  const content = decodeContent(event.content, "base64");
   const mlsMessage = decode(mlsMessageDecoder, content);
   if (!mlsMessage) throw new Error("Failed to decode welcome message");
   if (mlsMessage.wireformat !== wireformats.mls_welcome)

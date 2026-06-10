@@ -20,7 +20,7 @@ Severity is about interop/correctness, not effort.
 ## Context: why this contradicts the prior "done" record
 
 `MIGRATION_PLAN.md` and the project memory recorded phases 0–10 as complete and "byte-matched to Rust."
-That was accurate at the time against the *then* spec. Two things changed:
+That was accurate at the time against the _then_ spec. Two things changed:
 
 1. **The spec is a living draft and moved.** Several blockers below (the `encoding`-tag prohibition,
    KeyPackage relay discovery on kind 10002, the required KeyPackage tag set) look like spec decisions
@@ -48,7 +48,8 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 # BLOCKERS
 
 ### B1 — `encoding` tag emitted and required (spec forbids both)
-- **Status:** DIVERGENT
+
+- **Status:** FIXED — no longer emitted on KeyPackage/welcome; receive always decodes standard base64.
 - **Spec:** `transports/nostr.md:39-40` — "A sender MUST NOT add an `encoding` tag for any event shape …
   A receiver MUST NOT switch decoders based on an `encoding` tag."
 - **Code:** emits `["encoding","base64"]` on KeyPackage (`src/core/key-package-event.ts:291`) and welcome
@@ -59,6 +60,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 - **Fix:** stop emitting the tag; stop requiring it on receive; always decode content as standard base64.
 
 ### B2 — KeyPackage relay discovery on kind 10051 (spec uses NIP-65 kind 10002)
+
 - **Status:** DIVERGENT
 - **Spec:** `transports/nostr.md:171,191,206`, `foundation/registries.md:69` — KeyPackage relay discovery
   uses the account's **kind 10002** NIP-65 relay list; "There is no dedicated KeyPackage relay list."
@@ -70,7 +72,8 @@ Net: the library does **not** currently interop with a spec-conformant peer.
   repurpose to read NIP-65. Also re-point `getUserInboxRelays` (push inbox is kind 10050, separate).
 
 ### B3 — KeyPackage event missing required `mls_proposals` and `app_components` tags
-- **Status:** DIVERGENT
+
+- **Status:** FIXED — emit derives `mls_proposals` from the leaf's advertised proposals and `app_components` from `SUPPORTED_APP_COMPONENT_IDS`.
 - **Spec:** `transports/nostr.md:159-161` — KeyPackage event (kind 30443) MUST carry `mls_extensions`,
   `mls_proposals`, and `app_components` tags.
 - **Code:** `src/core/key-package-event.ts:285-307` emits `d`, `mls_protocol_version`, `mls_ciphersuite`,
@@ -80,6 +83,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 - **Fix:** add both tags, sourced from the leaf's advertised proposal ids and supported app-component ids.
 
 ### B4 — Account identity proof not enforced as mandatory
+
 - **Status:** DIVERGENT
 - **Spec:** `foundation/identity.md` + `foundation/account-identity-proof-v1.md` §Validation — clients MUST
   reject a member leaf or KeyPackage whose proof is missing/invalid. "There is no legacy fallback."
@@ -93,6 +97,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
   remove the backwards-compat escape.
 
 ### B5 — Convergence status / quiescence-settlement model entirely missing
+
 - **Status:** MISSING
 - **Spec:** `protocol-core/group-state.md` §Convergence status — `Syncing`/`Resolving`/`Settled`/`Blocked`
   derived from a `settlement_quiescence_ms` window; outbound app payloads held while unresolved.
@@ -106,6 +111,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
   app payloads on `Settled`.
 
 ### B6 — Member departure: plain `Remove` instead of MLS `SelfRemove`; no deterministic auto-committer
+
 - **Status:** DIVERGENT (SelfRemove) + MISSING (auto-committer)
 - **Spec:** `protocol-core/member-departure.md:11-13` (MLS SelfRemove proposal type), `:33-44` (deterministic
   committer = eligible members minus leaver minus not-allowed-to-commit, lowest leaf index), `:49-57`
@@ -119,6 +125,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
   the departure validation rules. Largest single subsystem gap alongside B5.
 
 ### B7 — `deferred` disposition declared but never emitted
+
 - **Status:** DIVERGENT
 - **Spec:** `protocol-core/inbound-processing.md:51-63` — future-epoch / missing-parent / group-busy inputs are
   `deferred` (with reason) and retried when state becomes available; not terminal.
@@ -134,6 +141,8 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 # MAJOR
 
 ### M1 — Welcome rumor validation missing (`e` / `relays`)
+
+- **Status:** FIXED — `e` is unconditional on send; receive rejects missing/non-32-byte-hex `e` and missing/empty `relays`.
 - **Spec:** `transports/nostr.md` §Welcome delivery — rumor MUST carry an `e` tag (32-byte hex KeyPackage event
   id) and a non-empty `relays` tag; reject otherwise. Rust peeler rejects all three failures
   (`transport-nostr-peeler` `peeler.rs:185-191`).
@@ -142,6 +151,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 - **Fix:** make `e` unconditional on send; validate `e` (32-byte hex) and non-empty `relays` on receive.
 
 ### M2 — KeyPackage `i` ref not verified against decoded KeyPackage
+
 - **Spec:** `transports/nostr.md` §KeyPackage publication — receivers MUST verify the `i` tag (hex KeyPackageRef)
   against the decoded KeyPackage.
 - **Code:** `src/client/key-package-manager.ts:712-733` reads `i` and decodes the body but never recomputes/
@@ -149,6 +159,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 - **Fix:** recompute KeyPackageRef from the decoded package and compare to the `i` tag; reject on mismatch.
 
 ### M3 — Inner app-event `id`/`pubkey` not validated against MLS sender
+
 - **Spec:** `foundation/application-messages.md` §Encoding (reject `id` ≠ canonical Nostr event id) +
   `foundation/identity.md` §Application content (inner `pubkey` validated against the authenticated MLS sender).
 - **Code:** `src/core/group-message.ts:226-256` round-trips via JSON, checks only field presence, never recomputes
@@ -159,6 +170,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
   before delivering/saving.
 
 ### M4 — Credential identity not curve-validated
+
 - **Spec:** `foundation/identity.md` / `key-packages.md` — reject credentials whose identity is not a valid
   x-only secp256k1 public key. Rust: `identity.rs::validate_credential_identity` (`lift_x` on-curve).
 - **Code:** `src/core/auth-service.ts:14-22` checks only `length === 32`; `src/core/credential.ts:21-37` checks
@@ -166,6 +178,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 - **Fix:** add an x-only secp256k1 `lift_x` / on-curve check in `marmotAuthService` (and/or `getCredentialPubkey`).
 
 ### M5 — nostr-routing relay-URL validation too loose
+
 - **Spec:** `transports/nostr.md:43-51` relay-URL profile — host present; username/password/fragment absent;
   ≤512 bytes; ws/wss. Rust: `validate_nostr_relay_url` (`crates/traits/src/app_components.rs:737-758`) rejects
   `wss://user@relay`, `wss://relay#frag`, `wss://` (no host).
@@ -177,6 +190,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
   for general relay handling.
 
 ### M6 — ConvergencePolicy missing 3 fields + app-payload retention window unenforced
+
 - **Spec:** `protocol-core/convergence.md:24-35` (policy fields incl. `policy_version`,
   `app_payload_past_epoch_limit`, `settlement_quiescence_ms`); `:104` + `retained-history.md:41-49` (app messages
   older than the window expire and MUST NOT count as witnesses).
@@ -189,6 +203,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
   gathering and app-message acceptance.
 
 ### M7 — `invalidated` disposition not emitted on rewind
+
 - **Spec:** `protocol-core/inbound-processing.md:102-110` + `convergence.md:189-190` — app payloads that decrypted
   only on an abandoned branch MUST be reported `invalidated` (+ a state notification). Rust:
   `distributed_convergence.rs:328-344` (`AppMessageInvalidated`).
@@ -197,6 +212,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 - **Fix:** track app payloads applied on the losing branch and emit `invalidated` on rewind.
 
 ### M8 — Non-admin outbound commits fully blocked
+
 - **Spec:** `protocol-core/group-messaging.md:50-56` — non-admins may commit a self-update-only commit and a
   SelfRemove-only commit.
 - **Code:** `src/client/group/marmot-group.ts:1245-1247` hard-rejects every non-admin in `commit()`. (Inbound
@@ -204,6 +220,7 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 - **Fix:** allow non-admin `commit()` for self-update-only and SelfRemove-only commit shapes.
 
 ### M9 — Encrypted media still on MIP-04 wire, not `encrypted-media-v1`
+
 - **Spec:** `features/encrypted-media.md` — version/scheme label `encrypted-media-v1` (MUST-reject legacy);
   attachments use `locator <kind> <value>` + `ciphertext_sha256` + `plaintext_sha256`; `default_blob_endpoints`
   fallback; source-epoch exporter-secret selection.
@@ -219,45 +236,54 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 # MINOR
 
 ### m1 — Legacy group-message fallback decryption still present
+
 - `src/core/group-message.ts:83-95` falls back to `decryptLegacyGroupMessageEventContent`
   (`src/core/group-message-legacy.ts`) on failure. Receive-only leniency; harmless for interop but off-spec
   surface to retire for a clean v2 cut.
 
 ### m2 — `self_remove` (0x000a) proposal capability not advertised
+
 - `src/core/capabilities.ts:23-50` doesn't advertise `self_remove`. `key-packages.md` lists it; but the Rust
   engine baseline (`capabilities.rs`) also omits it, so this is spec-vs-both-impls, low interop risk. Related to B6.
 
 ### m3 — blossom-image (0x8002) has no codec
+
 - No `blossom-image.ts`; excluded from `SUPPORTED_APP_COMPONENT_IDS` (`src/core/components/ids.ts:69-77`). The
   spec (`app-components/group-blossom-image-v1.md`) DOES specify its bytes, but Rust also omits the codec and
-  points groups at `avatar-url` (0x8007, implemented). Consequence: a group that *requires* 0x8002 is unjoinable.
+  points groups at `avatar-url` (0x8007, implemented). Consequence: a group that _requires_ 0x8002 is unjoinable.
   Decide: implement, or formally document as unsupported.
 
 ### m4 — Retained-history pruning ignores pin rule
+
 - `requiredRetainedEpochs`/`prunableRetainedEpochs` (`src/core/retained-history.ts:85-113`) are correct but unused;
   live pruning is an inline floor loop (`src/client/group/marmot-group.ts:544-548`) that doesn't honor "MUST NOT
   remove state needed by an active PendingPublish/Merging/Recovering/Unrecoverable" (`retained-history.md:53-58`).
   Low real-world risk.
 
 ### m5 — Eligibility predicate doesn't enforce "older than retained anchor"
+
 - `isBranchEligible` (`src/core/convergence.ts:190-198`) enforces only the rollback-horizon delta; the
   "older than retained anchor" guard (`convergence.md:102`) is enforced operationally in `#resolveFork` but not in
   the reusable predicate.
 
 ### m6 — Cross-source dedup keyed on transport id, not content
+
 - Self-echo dedup uses Nostr event id (`#sentEventIds`, `src/client/group/marmot-group.ts:469,1789`) and only
   covers own sends; no general content-derived dedup gate (`inbound-processing.md:24-34`; Rust `seen_message_ids`).
   Duplicate commits from two relays are deduped only incidentally by epoch checks.
 
 ### m7 — URL normalization cross-impl parity unproven (avatar-url 0x8007, encrypted-media 0x8008)
+
 - Codecs rely on WHATWG-URL (TS) vs the Rust `url` crate producing identical normalized output. No defect found,
   but no conformance vectors cover exotic percent-encoding/IDNA URLs. Add tricky-URL round-trip vectors.
 
 ### m8 — Welcome recipient binding not explicit
+
 - No "reject welcome not addressed to my account" check in `src/core/welcome.ts`; the KeyPackageRef match in
   `src/client/marmot-client.ts:230-308` is a stronger binding, but the explicit recipient check is absent.
 
 ### m9 — kind 445 receive: no event-sig-before-decrypt, single-state decrypt
+
 - `decryptGroupMessageEvent` (`src/core/group-message.ts:66-95`) decrypts against one `clientState` and does not
   verify the Nostr event id/signature before decrypting (spec asks for sig-check first). May be enforced at the
   pool/convergence layer — cross-check with the inbound-processing path before acting.

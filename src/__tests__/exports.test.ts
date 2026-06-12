@@ -57,6 +57,7 @@ describe("exports", () => {
         "MIP04_VERSION",
         "MarmotClient",
         "MarmotGroup",
+        "MarmotGroupEngine",
         "MissingRelayError",
         "MissingSlotIdentifierError",
         "NIP65_RELAY_LIST_KIND",

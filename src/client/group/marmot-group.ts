@@ -9,70 +9,33 @@ import {
 import { Debugger } from "debug";
 import { EventEmitter } from "eventemitter3";
 import {
-  acceptAll,
   CiphersuiteImpl,
   ClientState,
-  contentTypes,
-  createApplicationMessage,
-  createCommit,
-  CreateCommitOptions,
-  createProposal,
   CryptoProvider,
   defaultCryptoProvider,
-  defaultProposalTypes,
-  encode,
-  getCredentialFromLeafIndex,
-  type IncomingMessageCallback,
-  type LeafIndex,
-  mlsMessageEncoder,
   MlsMessage,
-  processMessage,
   type ProcessMessageResult,
   Proposal,
-  wireformats,
 } from "ts-mls";
 import { sha256 } from "@noble/hashes/sha2.js";
 
-import { marmotAuthService } from "../../core/auth-service.js";
 import {
   getMarmotGroupView,
   type MarmotGroupView,
   serializeClientState,
 } from "../../core/client-state.js";
-import { getCredentialPubkey } from "../../core/credential.js";
-import {
-  ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-  verifyLeafAccountIdentityProof,
-} from "../../core/account-identity-proof.js";
-import { hexToBytes } from "@noble/hashes/utils.js";
-import {
-  type AppWitness,
-  type BranchCandidate,
-  commitDigest,
-  DEFAULT_CONVERGENCE_POLICY,
-  selectCanonicalBranch,
-} from "../../core/convergence.js";
-import {
-  canTransitionLifecycle,
-  type GroupLifecycleState,
-  groupLifecycleStates,
-  mayPrepareLocalCommit,
-  transitionLifecycle,
-} from "../../core/group-lifecycle.js";
-import {
-  type Disposition,
-  disposition,
-  inputCategories,
-} from "../../core/inbound.js";
-import { classifyLateCommit } from "../../core/retained-history.js";
-import {
-  createGroupEvent,
-  decryptGroupMessages,
-  GroupMessagePair,
-  serializeApplicationRumor,
-  sortGroupCommits,
-} from "../../core/group-message.js";
+import type { Disposition } from "../../core/inbound.js";
+import { MarmotGroupEngine } from "../../core/engine/group-engine.js";
+import { ingestResultDisposition as engineIngestResultDisposition } from "../../core/engine/ingest-disposition.js";
+import type {
+  DispositionedIngestResult as EngineDispositionedIngestResult,
+  IngestResult as EngineIngestResult,
+  ProposalAction,
+  ProposalContext,
+} from "../../core/engine/types.js";
+import { serializeApplicationRumor } from "../../core/group-message.js";
 import { getKeyPackage } from "../../core/key-package-event.js";
+import { getCredentialPubkey } from "../../core/credential.js";
 import {
   canonicalizeMimeType,
   decryptMediaFile,
@@ -91,6 +54,10 @@ import { unixNow } from "../../utils/nostr.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 import { proposeLeaveGroup } from "./proposals/leave-group.js";
+import { NostrGroupPeeler } from "./nostr-peeler.js";
+
+export { createAdminCommitPolicyCallback } from "../../core/engine/admin-policy.js";
+export type { ProposalAction, ProposalContext } from "../../core/engine/types.js";
 
 /** An error that is thrown when a group has no relays available to send messages. */
 export class NoGroupRelaysError extends Error {
@@ -104,10 +71,6 @@ export class NoMarmotGroupDataError extends Error {
   constructor() {
     super("MarmotGroupData not found in ClientState.");
   }
-}
-
-function toLeafIndex(index: number): LeafIndex {
-  return index as LeafIndex;
 }
 
 /** An event whose MLS message was successfully processed */
@@ -186,35 +149,15 @@ export type DispositionedIngestResult = IngestResult & {
 };
 
 /**
- * Maps an {@link IngestResult} to its protocol-visible {@link Disposition}
- * (`protocol-core/inbound-processing.md`). `processed` accepts; `rejected` is a
- * stale `authorization_failed`; `skipped` maps by reason; `unreadable` is a
- * terminal stale `invalid_encoding` after retries are exhausted.
+ * Maps a client-facing {@link IngestResult} (`event` field) to its protocol-visible
+ * {@link Disposition} via the transport-agnostic engine helper.
  */
 export function ingestResultDisposition(result: IngestResult): Disposition {
-  switch (result.kind) {
-    case "processed":
-      return disposition.accepted();
-    case "rejected":
-      return disposition.stale(inputCategories.authorizationFailed);
-    case "skipped":
-      switch (result.reason) {
-        case "past-epoch":
-          return disposition.stale(inputCategories.alreadyApplied);
-        case "self-echo":
-          return disposition.stale(inputCategories.ownEcho);
-        case "wrong-wireformat":
-          return disposition.stale(inputCategories.invalidEncoding);
-        case "beyond-anchor":
-        case "missing-retained-anchor":
-          // Both convergence outcomes need history we no longer hold
-          // (convergenceOutcomeToCategory in inbound.ts).
-          return disposition.stale(inputCategories.missingHistory);
-      }
-    // eslint-disable-next-line no-fallthrough
-    case "unreadable":
-      return disposition.stale(inputCategories.invalidEncoding);
-  }
+  const { event, ...rest } = result;
+  return engineIngestResultDisposition({
+    ...rest,
+    envelope: event,
+  } as EngineIngestResult<NostrEvent>);
 }
 
 /**
@@ -260,17 +203,6 @@ export type GroupMediaFactory<
   TMedia extends BaseGroupMedia | undefined = undefined,
 > = (groupId: Uint8Array) => TMedia;
 
-export type ProposalContext = {
-  state: ClientState;
-  ciphersuite: CiphersuiteImpl;
-  groupData: MarmotGroupView;
-};
-
-/** A function that builds an MLS Proposal from group context */
-export type ProposalAction<T extends Proposal | Proposal[]> = (
-  context: ProposalContext,
-) => Promise<T>;
-
 /** A method that creates a {@link ProposalAction} from a set of arguments */
 export type ProposalBuilder<
   Args extends unknown[],
@@ -309,90 +241,6 @@ export type WelcomeRecipient = {
   keyPackageEvent: NostrEvent;
 };
 
-/**
- * Build an incoming-message callback that enforces MIP-03 "admin-only commits".
- *
- * Kept as a pure helper for test ergonomics and clearer policy control.
- */
-export function createAdminCommitPolicyCallback(args: {
-  ratchetTree: ClientState["ratchetTree"];
-  adminPubkeys: string[];
-  ciphersuiteId: number;
-  onUnverifiableCommit?: "reject" | "retry";
-}): IncomingMessageCallback {
-  const {
-    ratchetTree,
-    adminPubkeys,
-    ciphersuiteId,
-    onUnverifiableCommit = "retry",
-  } = args;
-
-  return (incoming) => {
-    if (incoming.kind === "proposal") return "accept";
-
-    // Reject the whole commit if any added leaf carries a Marmot account
-    // identity proof that does not verify (darkmatter validates the proof on
-    // every leaf). Checked before the admin short-circuit so an admin cannot
-    // splice in a forged account binding. Leaves without a proof are still
-    // allowed for backwards compatibility (verify-if-present).
-    for (const { proposal } of incoming.proposals) {
-      if (proposal.proposalType !== defaultProposalTypes.add) continue;
-      if (!("add" in proposal)) continue;
-      const leaf = proposal.add.keyPackage.leafNode;
-      const hasProof = leaf.extensions.some(
-        (e) => e.extensionType === ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-      );
-      if (!hasProof) continue;
-      try {
-        verifyLeafAccountIdentityProof(leaf, ciphersuiteId);
-      } catch {
-        return "reject";
-      }
-    }
-
-    // Commit must be attributable to a concrete member leaf.
-    const senderLeafIndexUnknown = incoming.senderLeafIndex;
-    if (senderLeafIndexUnknown === undefined) return "reject";
-
-    const senderLeafIndex: LeafIndex =
-      typeof senderLeafIndexUnknown === "number"
-        ? toLeafIndex(senderLeafIndexUnknown)
-        : senderLeafIndexUnknown;
-
-    try {
-      const senderCredential = getCredentialFromLeafIndex(
-        ratchetTree,
-        senderLeafIndex,
-      );
-      const senderPubkey = getCredentialPubkey(senderCredential);
-
-      // Admins may commit any proposal set.
-      if (adminPubkeys.includes(senderPubkey)) return "accept";
-
-      // Non-admin compatibility path:
-      // - accept no-proposal commits (current ts-mls self-update shape), OR
-      // - accept commits whose proposals are ONLY update proposals authored by sender.
-      if (incoming.proposals.length === 0) return "accept";
-
-      const isSelfUpdateOnly = incoming.proposals.every(
-        (p) =>
-          p.proposal.proposalType === defaultProposalTypes.update &&
-          p.senderLeafIndex !== undefined &&
-          Number(p.senderLeafIndex) === Number(senderLeafIndex),
-      );
-
-      return isSelfUpdateOnly ? "accept" : "reject";
-    } catch {
-      // "retry" here means we don't want to permanently reject the commit;
-      // MarmotGroup.ingest() will treat processing errors as unreadable/retryable.
-      if (onUnverifiableCommit === "retry") {
-        throw new Error("unverifiable commit sender");
-      }
-      return "reject";
-    }
-  };
-}
-
 /** Map of events that can be emitted by a MarmotGroup */
 export type MarmotGroupEvents<
   THistory extends BaseGroupHistory | undefined = any,
@@ -409,6 +257,13 @@ export type MarmotGroupEvents<
   /** Emitted when history persistence fails (best-effort, non-blocking) */
   historyError: (error: Error) => void;
 };
+
+function mapEngineIngestResult(
+  result: EngineDispositionedIngestResult<NostrEvent>,
+): DispositionedIngestResult {
+  const { envelope, disposition, ...rest } = result;
+  return { ...rest, event: envelope, disposition };
+}
 
 /**
  * The main class for interacting with a MLS group
@@ -439,25 +294,9 @@ export class MarmotGroup<
   /** Whether group state has been modified */
   dirty = false;
 
-  /** Internal ClientState */
-  #state: ClientState;
+  readonly #engine: MarmotGroupEngine<NostrEvent>;
+  readonly #peeler: NostrGroupPeeler;
   #groupData: MarmotGroupView | null = null;
-  /** Group lifecycle state (group-state.md); only `Stable` may prepare a commit. */
-  #lifecycle: GroupLifecycleState = groupLifecycleStates.stable;
-
-  /**
-   * Retained canonical states keyed by epoch number, used to rebuild candidate
-   * branches for fork recovery (retained-history.md). Bounded to the rollback
-   * horizon. Holds the state *at* each epoch (its parent for the next commit).
-   */
-  readonly #retainedStates = new Map<number, ClientState>();
-  /**
-   * The commit message applied to advance *from* each source epoch on our
-   * current canonical branch, retained (within the rollback horizon) so the
-   * branch can be rebuilt and re-scored against competing commits during
-   * convergence fork resolution (convergence.md "Candidate branches").
-   */
-  readonly #appliedCommitMessages = new Map<number, MlsMessage>();
 
   /**
    * Event IDs of application messages we sent ourselves, used to skip self-echoes in ingest()
@@ -468,6 +307,8 @@ export class MarmotGroup<
   /** In-flight media decrypts keyed by plaintext SHA-256 hex. */
   readonly #decryptingMedia = new Map<string, Promise<StoredMedia>>();
 
+  private log: Debugger;
+
   get id() {
     return this.state.groupContext.groupId;
   }
@@ -477,7 +318,7 @@ export class MarmotGroup<
 
   /** Read the current group state */
   get state() {
-    return this.#state;
+    return this.#engine.state;
   }
 
   /**
@@ -486,16 +327,17 @@ export class MarmotGroup<
    * (commit prepared, publish unconfirmed) and `Merging` (publish acked, staged
    * commit applying) and back to `Stable`.
    */
-  get lifecycle(): GroupLifecycleState {
-    return this.#lifecycle;
+  get lifecycle() {
+    return this.#engine.lifecycle;
   }
+
   get groupData() {
-    // If not cached, extract the group data from the state
     if (!this.#groupData) this.#groupData = getMarmotGroupView(this.state);
     return this.#groupData;
   }
+
   get unappliedProposals() {
-    return this.state.unappliedProposals;
+    return this.#engine.state.unappliedProposals;
   }
 
   /**
@@ -503,338 +345,35 @@ export class MarmotGroup<
    * @warning It is not recommended to use this
    */
   set state(newState: ClientState) {
-    // Read new group data from the state
-    this.#groupData = getMarmotGroupView(newState);
-
-    // Set new state and mark as dirty
-    this.#state = newState;
-    this.dirty = true;
-    this.emit("stateChanged", newState);
+    this.#engine.state = newState;
   }
 
-  // Common accessors for marmot group data
   get relays() {
     return this.groupData?.relays;
   }
-
-  /** The `commit_digest` (SHA-256 of the MLS message bytes) for a commit. */
-  #commitDigestOf(message: MlsMessage): Uint8Array {
-    return commitDigest(encode(mlsMessageEncoder, message));
-  }
-
-  /**
-   * Records the retained parent state and the applied commit message after
-   * advancing an epoch, then prunes retained material beyond the rollback
-   * horizon (retained-history.md).
-   */
-  #retainAppliedCommit(
-    parentState: ClientState,
-    appliedMessage: MlsMessage,
-    newState: ClientState,
-  ): void {
-    const parentEpoch = Number(parentState.groupContext.epoch);
-    const newEpoch = Number(newState.groupContext.epoch);
-    this.#retainedStates.set(parentEpoch, parentState);
-    this.#retainedStates.set(newEpoch, newState);
-    this.#appliedCommitMessages.set(parentEpoch, appliedMessage);
-
-    const floor = newEpoch - DEFAULT_CONVERGENCE_POLICY.maxRewindCommits;
-    for (const epoch of this.#retainedStates.keys())
-      if (epoch < floor) this.#retainedStates.delete(epoch);
-    for (const epoch of this.#appliedCommitMessages.keys())
-      if (epoch < floor) this.#appliedCommitMessages.delete(epoch);
-  }
-
-  /**
-   * Drives the lifecycle to the terminal `Unrecoverable` state, routing through
-   * `Recovering` when needed (the only legal predecessor per group-state.md).
-   * Idempotent: a no-op once already `Unrecoverable`.
-   */
-  #toUnrecoverable(): void {
-    if (this.#lifecycle === groupLifecycleStates.unrecoverable) return;
-    if (this.#lifecycle === groupLifecycleStates.stable)
-      this.#lifecycle = transitionLifecycle(
-        this.#lifecycle,
-        groupLifecycleStates.recovering,
-      );
-    if (
-      canTransitionLifecycle(
-        this.#lifecycle,
-        groupLifecycleStates.unrecoverable,
-      )
-    )
-      this.#lifecycle = transitionLifecycle(
-        this.#lifecycle,
-        groupLifecycleStates.unrecoverable,
-      );
-  }
-
-  /** The reached tip state for a candidate branch. */
-  #branchTip = new WeakMap<BranchCandidate, ClientState>();
-  /** The applied (parent, message, child) chain for a candidate branch. */
-  #branchChain = new WeakMap<
-    BranchCandidate,
-    { parent: ClientState; message: MlsMessage; child: ClientState }[]
-  >();
-
-  /**
-   * Builds every candidate branch reachable by replaying the commit `pool` from
-   * the retained `root` state (convergence.md "Candidate branches"): parentage is
-   * derived by replay, not transport metadata. Returns one {@link BranchCandidate}
-   * per maximal chain, with the reached tip state recorded for application.
-   *
-   * Bounded by the pool size and the rollback horizon; intended for the small
-   * commit sets a real fork produces.
-   */
-  async #buildBranches(
-    root: ClientState,
-    pool: MlsMessage[],
-    encrypted: NostrEvent[] = [],
-    witnessEvents: NostrEvent[] = [],
-  ): Promise<BranchCandidate[]> {
-    const forkEpoch = Number(root.groupContext.epoch);
-    const branches: BranchCandidate[] = [];
-    const callback = this.createAdminVerificationCallback();
-    let counter = 0;
-
-    // App-payload witnesses on this branch epoch: application messages that
-    // decrypt against `state` (convergence.md). The sender is the account
-    // identity authenticated by the MLS leaf credential, not a transport id.
-    const witnessesAt = async (state: ClientState): Promise<AppWitness[]> => {
-      const epoch = Number(state.groupContext.epoch);
-      const out: AppWitness[] = [];
-      for (const ev of witnessEvents) {
-        try {
-          const decrypted = await decryptGroupMessages(
-            [ev],
-            state,
-            this.ciphersuite,
-          );
-          for (const pair of decrypted.read) {
-            if (pair.message.wireformat !== wireformats.mls_private_message)
-              continue;
-            const r = await processMessage({
-              context: {
-                cipherSuite: this.ciphersuite,
-                authService: marmotAuthService,
-                externalPsks: {},
-              },
-              state,
-              message: pair.message,
-              callback,
-            });
-            if (
-              r.kind === "applicationMessage" &&
-              r.senderLeafIndex !== undefined
-            ) {
-              const credential = getCredentialFromLeafIndex(
-                state.ratchetTree,
-                r.senderLeafIndex as LeafIndex,
-              );
-              out.push({
-                epoch,
-                sender: hexToBytes(getCredentialPubkey(credential)),
-              });
-            }
-          }
-        } catch {
-          /* not a witness on this state */
-        }
-      }
-      return out;
-    };
-
-    // Gathers the commit messages that apply to `state`'s epoch: decrypted pool
-    // entries plus any still-encrypted candidates that decrypt under this state.
-    // A competing branch's child commits are encrypted under an epoch we never
-    // reached, so they only become decryptable once replay reaches that state.
-    const candidatesAt = async (state: ClientState): Promise<MlsMessage[]> => {
-      const epoch = Number(state.groupContext.epoch);
-      const out: MlsMessage[] = [];
-      const seenDigests = new Set<string>();
-      const add = (m: MlsMessage) => {
-        if (
-          m.wireformat !== wireformats.mls_private_message ||
-          Number(m.privateMessage.epoch) !== epoch
-        )
-          return;
-        const d = bytesToHex(this.#commitDigestOf(m));
-        if (!seenDigests.has(d)) {
-          seenDigests.add(d);
-          out.push(m);
-        }
-      };
-      for (const m of pool) add(m);
-      for (const ev of encrypted) {
-        try {
-          const r = await decryptGroupMessages([ev], state, this.ciphersuite);
-          for (const pair of r.read) add(pair.message);
-        } catch {
-          /* not decryptable under this state */
-        }
-      }
-      return out;
-    };
-
-    type ChainLink = {
-      parent: ClientState;
-      message: MlsMessage;
-      child: ClientState;
-    };
-    const explore = async (
-      state: ClientState,
-      tipMessage: MlsMessage | undefined,
-      seen: ReadonlySet<string>,
-      chain: ChainLink[],
-      witnesses: AppWitness[],
-    ): Promise<void> => {
-      // App-payload witnesses observed on this branch epoch.
-      const accumulated = [...witnesses, ...(await witnessesAt(state))];
-      let extended = false;
-      for (const message of await candidatesAt(state)) {
-        if (message.wireformat !== wireformats.mls_private_message) continue;
-        let next: ProcessMessageResult;
-        try {
-          next = await processMessage({
-            context: {
-              cipherSuite: this.ciphersuite,
-              authService: marmotAuthService,
-              externalPsks: {},
-            },
-            state,
-            message,
-            callback,
-          });
-        } catch {
-          continue;
-        }
-        if (next.kind !== "newState" || next.actionTaken === "reject") continue;
-        const tag = bytesToHex(next.newState.confirmationTag);
-        if (seen.has(tag)) continue; // cycle / already explored this state
-        extended = true;
-        await explore(
-          next.newState,
-          message,
-          new Set([...seen, tag]),
-          [...chain, { parent: state, message, child: next.newState }],
-          accumulated,
-        );
-      }
-      if (!extended && tipMessage !== undefined) {
-        const branch: BranchCandidate = {
-          id: `branch-${counter++}`,
-          forkEpoch,
-          tipEpoch: Number(state.groupContext.epoch),
-          tipDigest: this.#commitDigestOf(tipMessage),
-          appWitnesses: accumulated,
-        };
-        this.#branchTip.set(branch, state);
-        this.#branchChain.set(branch, chain);
-        branches.push(branch);
-      }
-    };
-
-    await explore(
-      root,
-      undefined,
-      new Set([bytesToHex(root.confirmationTag)]),
-      [],
-      [],
-    );
-    return branches;
-  }
-
-  /**
-   * Resolves a fork at `forkEpoch` (convergence.md): rebuilds candidate branches
-   * by replaying our retained applied commits plus the competing `pool` from the
-   * retained fork-point state, selects the canonical branch, and — if it differs
-   * from our current tip — rewinds and applies the winner (Stable → Recovering →
-   * Stable). Returns the applied result on a rewind, else an outcome marker.
-   */
-  async #resolveFork(
-    forkEpoch: number,
-    pool: MlsMessage[],
-    encrypted: NostrEvent[] = [],
-    witnessEvents: NostrEvent[] = [],
-  ): Promise<
-    | { outcome: "recovered"; result: ProcessMessageResult }
-    | { outcome: "superseded" | "skip" }
-  > {
-    const root = this.#retainedStates.get(forkEpoch);
-    if (!root) return { outcome: "skip" };
-
-    // Our current branch from the fork point: the retained applied commits.
-    const currentTipEpoch = Number(this.state.groupContext.epoch);
-    const ours: MlsMessage[] = [];
-    for (let e = forkEpoch; e < currentTipEpoch; e++) {
-      const msg = this.#appliedCommitMessages.get(e);
-      if (msg) ours.push(msg);
-    }
-    if (ours.length === 0) return { outcome: "skip" };
-
-    const branches = await this.#buildBranches(
-      root,
-      [...ours, ...pool],
-      encrypted,
-      witnessEvents,
-    );
-    if (branches.length === 0) return { outcome: "skip" };
-
-    const winner = selectCanonicalBranch(
-      currentTipEpoch,
-      branches,
-      DEFAULT_CONVERGENCE_POLICY,
-    );
-    const winnerTip = winner ? this.#branchTip.get(winner) : undefined;
-    if (!winner || !winnerTip) return { outcome: "superseded" };
-
-    // If the winner is our current branch, nothing to do.
-    if (
-      bytesToHex(winnerTip.confirmationTag) ===
-      bytesToHex(this.state.confirmationTag)
-    )
-      return { outcome: "superseded" };
-
-    // The competing branch is canonical: rewind to it (Stable -> Recovering)
-    // and re-anchor retained applied commits along the winning chain.
-    this.#lifecycle = transitionLifecycle(
-      this.#lifecycle,
-      groupLifecycleStates.recovering,
-    );
-    this.state = winnerTip;
-    for (const link of this.#branchChain.get(winner) ?? []) {
-      this.#retainAppliedCommit(link.parent, link.message, link.child);
-    }
-    this.#lifecycle = transitionLifecycle(
-      this.#lifecycle,
-      groupLifecycleStates.stable,
-    );
-    return {
-      outcome: "recovered",
-      result: {
-        kind: "newState",
-        newState: winnerTip,
-        actionTaken: "accept",
-        consumed: [],
-        aad: new Uint8Array(),
-      },
-    };
-  }
-
-  private log: Debugger;
 
   constructor(
     state: ClientState,
     options: MarmotGroupOptions<THistory, TMedia>,
   ) {
     super();
-    this.#state = state;
     this.store = options.store;
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
     this.network = options.network;
 
-    // Create the history store (optional)
+    this.#peeler = new NostrGroupPeeler(this.ciphersuite);
+    this.#engine = new MarmotGroupEngine({
+      state,
+      ciphersuite: this.ciphersuite,
+      peeler: this.#peeler,
+      onStateChanged: (newState) => {
+        this.dirty = true;
+        this.#groupData = null;
+        this.emit("stateChanged", newState);
+      },
+    });
+
     if (options.history) {
       if (typeof options.history === "function") {
         this.history = options.history(this.id);
@@ -845,7 +384,6 @@ export class MarmotGroup<
       this.history = undefined as THistory;
     }
 
-    // Create the media store
     if (options.media) {
       if (typeof options.media === "function") {
         this.media = options.media(this.id);
@@ -856,12 +394,7 @@ export class MarmotGroup<
       this.media = undefined as TMedia;
     }
 
-    // Set useful fields
     this.idStr = bytesToHex(this.id);
-
-    // Retain the initial canonical state as a fork-recovery anchor.
-    this.#retainedStates.set(Number(state.groupContext.epoch), state);
-
     this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
   }
 
@@ -875,8 +408,6 @@ export class MarmotGroup<
       cryptoProvider?: CryptoProvider;
     },
   ): Promise<MarmotGroup<THistory, TMedia>> {
-    // Get the group's ciphersuite implementation
-    // In v2, getCiphersuiteImpl is available on the cryptoProvider and takes a CiphersuiteName directly
     const cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     const cipherSuite = await cryptoProvider.getCiphersuiteImpl(
       state.groupContext.cipherSuite,
@@ -917,32 +448,17 @@ export class MarmotGroup<
     const relays = this.relays;
     if (!relays) throw new NoGroupRelaysError();
 
-    // Create a commit with explicitly empty proposals. In ts-mls, this results in
-    // a self-update commit that includes an UpdatePath (rotating leaf secrets).
-    const { commit, newState } = await createCommit({
-      context: {
-        cipherSuite: this.ciphersuite,
-        authService: marmotAuthService,
-      },
-      state: this.state,
-      wireAsPublicMessage: false,
-      ratchetTreeExtension: true,
-      extraProposals: [],
-    });
+    const sendResult = await this.#engine.send({ kind: "selfUpdate" });
+    if (sendResult.kind !== "selfUpdate") {
+      throw new Error("Expected selfUpdate result from selfUpdate send");
+    }
 
-    const commitEvent = await createGroupEvent({
-      message: commit,
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-    });
-
-    const response = await this.network.publish(relays, commitEvent);
+    const response = await this.network.publish(relays, sendResult.envelope);
     if (!hasAck(response)) {
       throw new Error("Failed to publish commit event: no relay acknowledged");
     }
 
-    // Advance local state after publish.
-    this.state = newState;
+    this.#engine.confirmPublished(sendResult.pending);
     await this.save();
 
     return response;
@@ -971,7 +487,6 @@ export class MarmotGroup<
     const relays = this.relays;
     if (!relays) throw new NoGroupRelaysError();
 
-    // Resolve own pubkey and build self-remove proposals via the shared action.
     const ownPubkey = await this.signer.getPublicKey();
     const removeProposals = await proposeLeaveGroup(ownPubkey)({
       state: this.state,
@@ -979,9 +494,6 @@ export class MarmotGroup<
       groupData,
     });
 
-    // Publish one proposal event per leaf index (handles multi-device members).
-    // RFC 9420 §12.4 forbids committing a Remove targeting own leaf, so we
-    // send proposals and let the next admin commit pick them up.
     const responses: Record<string, PublishResponse> = {};
     for (const proposal of removeProposals) {
       const response = await this.sendProposal(proposal);
@@ -994,7 +506,6 @@ export class MarmotGroup<
       );
     }
 
-    // Purge all local group data (history, media, state store).
     await this.destroy();
 
     return responses;
@@ -1034,14 +545,11 @@ export class MarmotGroup<
       throw new Error("Proposal is undefined. This should not happen.");
     }
 
-    // Handle both single proposals and arrays of proposals
     const proposalArray = Array.isArray(proposals) ? proposals : [proposals];
 
-    // Send all proposals and collect responses
     const responses: Record<string, PublishResponse> = {};
     for (const proposal of proposalArray) {
       const response = await this.sendProposal(proposal as Proposal);
-      // Merge responses (later responses override earlier ones for the same relay)
       Object.assign(responses, response);
     }
 
@@ -1052,37 +560,22 @@ export class MarmotGroup<
   async sendProposal(
     proposal: Proposal,
   ): Promise<Record<string, PublishResponse>> {
-    const { message, newState } = await createProposal({
-      context: {
-        cipherSuite: this.ciphersuite,
-        authService: marmotAuthService,
-        externalPsks: {},
-      },
-      state: this.state,
-      proposal,
-      wireAsPublicMessage: false,
-    });
+    const sendResult = await this.#engine.send({ kind: "proposal", proposal });
+    if (sendResult.kind !== "proposal") {
+      throw new Error("Expected proposal result from proposal send");
+    }
 
-    // Wrap the message in a group event
-    const proposalEvent = await createGroupEvent({
-      message,
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-    });
-
-    // Publish to the group's relays
     const relays = this.relays;
     if (!relays) throw new NoGroupRelaysError();
 
-    const response = await this.network.publish(relays, proposalEvent);
+    const response = await this.network.publish(relays, sendResult.envelope);
     if (!hasAck(response)) {
       throw new Error(
         "Failed to publish proposal event: no relay acknowledged",
       );
     }
 
-    // Advance local state only after at least one relay acknowledges the event.
-    this.state = newState;
+    this.#engine.confirmPublished(sendResult.pending);
     await this.save();
 
     return response;
@@ -1102,36 +595,15 @@ export class MarmotGroup<
     rumor: Rumor,
   ): Promise<Record<string, PublishResponse>> {
     this.log("sending application rumor kind:%d", rumor.kind);
-    // Serialize the Nostr event (rumor) to application data according to the Marmot spec
     const applicationData = serializeApplicationRumor(rumor);
 
-    // Create the application message using ts-mls
-    // In v2, createApplicationMessage takes a single params object with context
-    const { newState, message } = await createApplicationMessage({
-      context: {
-        cipherSuite: this.ciphersuite,
-        authService: marmotAuthService,
-        externalPsks: {},
-      },
-      state: this.state,
-      message: applicationData,
+    const sendResult = await this.#engine.send({
+      kind: "applicationMessage",
+      payload: applicationData,
     });
 
-    // Wrap the message in a group event
-    // Use this.state (not newState) to get the exporter_secret for the current epoch
-    const applicationEvent = await createGroupEvent({
-      message,
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-    });
+    this.#sentEventIds.add(sendResult.envelope.id);
 
-    // Track this event ID so ingest() can skip the self-echo without re-running
-    // processMessage against an already-advanced ratchet (which would throw
-    // "desired gen in the past").
-    this.#sentEventIds.add(applicationEvent.id);
-
-    // Save to history immediately so the sender sees their own message without
-    // waiting for the relay echo to arrive and be ingested.
     if (this.history) {
       try {
         await this.history.saveMessage(applicationData);
@@ -1140,14 +612,9 @@ export class MarmotGroup<
       }
     }
 
-    // Update the group state after successful publish
-    // Application messages update state for forward secrecy (key schedule rotation)
-    this.state = newState;
-
-    // Publish to the group's relays
     const relays = this.relays;
     if (!relays) throw new NoGroupRelaysError();
-    const response = await this.network.publish(relays, applicationEvent);
+    const response = await this.network.publish(relays, sendResult.envelope);
     if (!hasAck(response)) {
       const errors = Object.values(response)
         .filter((r) => !r.ok && r.message)
@@ -1239,101 +706,22 @@ export class MarmotGroup<
     if (!groupData) throw new NoMarmotGroupDataError();
 
     const actorPubkey = await this.signer.getPublicKey();
-    if (!groupData.adminPubkeys.includes(actorPubkey)) {
-      throw new Error("Not a group admin. Cannot commit proposals.");
-    }
-
-    // group-state.md: a local group-state commit may only be prepared in Stable.
-    if (!mayPrepareLocalCommit(this.#lifecycle)) {
-      throw new Error(
-        `Cannot prepare a commit while the group is ${this.#lifecycle}`,
-      );
-    }
-
-    const context: ProposalContext = {
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-      groupData: this.groupData,
-    };
-
-    // Build new proposals from extraProposals
-    const newProposals: Proposal[] = [];
-    if (options?.extraProposals && options.extraProposals.length > 0) {
-      for (const item of options.extraProposals.flat()) {
-        if (typeof item === "function") {
-          newProposals.push(await item(context));
-        } else {
-          newProposals.push(item);
-        }
-      }
-    }
-
-    // Extract proposals from unappliedProposals using the provided references
-    const selectedProposals: Proposal[] = [];
-    if (options?.proposalRefs) {
-      for (const ref of options.proposalRefs) {
-        const proposalWithSender = this.state.unappliedProposals[ref];
-        if (!proposalWithSender) {
-          throw new Error(
-            `Proposal reference not found in unappliedProposals: ${ref}`,
-          );
-        }
-        selectedProposals.push(proposalWithSender.proposal);
-      }
-    }
-
-    // Combine new proposals with selected proposals from unappliedProposals
-    const allProposals = [...newProposals, ...selectedProposals];
-
-    // Build options for createCommit
-    const commitOptions: CreateCommitOptions = {
-      // All messages should be private
-      wireAsPublicMessage: false,
-      ratchetTreeExtension: true,
-    };
-
-    // If the caller explicitly provided extraProposals or proposalRefs, use
-    // exactly those (even if empty — that means "self-update, no proposals").
-    // Only fall through to the "commit all unapplied" default when neither is set.
-    if (options?.extraProposals || options?.proposalRefs) {
-      commitOptions.extraProposals = allProposals;
-    }
-
-    // Create the commit
-    // In v2, createCommit takes a single params object with context
-    const { commit, newState, welcome } = await createCommit({
-      context: {
-        cipherSuite: this.ciphersuite,
-        authService: marmotAuthService,
-      },
-      state: this.state,
-      ...commitOptions,
+    const sendResult = await this.#engine.send({
+      kind: "commit",
+      actorPubkey,
+      extraProposals: options?.extraProposals,
+      proposalRefs: options?.proposalRefs,
     });
 
-    // group-state.md: the staged commit is prepared but not yet published.
-    this.#lifecycle = transitionLifecycle(
-      this.#lifecycle,
-      groupLifecycleStates.pendingPublish,
-    );
+    if (sendResult.kind !== "groupEvolution") {
+      throw new Error("Expected groupEvolution result from commit send");
+    }
 
     let response: Record<string, PublishResponse>;
     try {
-      // Wrap the commit in a group event
-      // Use this.state (not newState) to get the exporter_secret for the current epoch
-      // This ensures all members at the current epoch can decrypt the commit
-      const commitEvent = await createGroupEvent({
-        message: commit,
-        state: this.state,
-        ciphersuite: this.ciphersuite,
-      });
-
-      // Publish to the group's relays.
-      // MIP-02 REQUIRES: Commit MUST be published and acknowledged by relays BEFORE sending Welcome messages.
-      // This ordering is critical for protocol correctness - new members must be able to fetch the commit
-      // that added them before processing their Welcome.
       const relays = this.relays;
       if (!relays) throw new NoGroupRelaysError();
-      response = await this.network.publish(relays, commitEvent);
+      response = await this.network.publish(relays, sendResult.envelope);
       if (!hasAck(response)) {
         const errors = Object.values(response)
           .filter((r) => !r.ok && r.message)
@@ -1344,37 +732,14 @@ export class MarmotGroup<
         );
       }
     } catch (err) {
-      // Publish obligation failed or was abandoned: PendingPublish -> Stable.
-      this.#lifecycle = transitionLifecycle(
-        this.#lifecycle,
-        groupLifecycleStates.stable,
-      );
+      this.#engine.publishFailed(sendResult.pending);
       throw err;
     }
 
-    // Publish confirmed: apply the staged commit (PendingPublish -> Merging).
-    this.#lifecycle = transitionLifecycle(
-      this.#lifecycle,
-      groupLifecycleStates.merging,
-    );
-
-    // Update the group state after successful publish.
-    // Retain the parent state + applied commit message for fork recovery.
-    const parentState = this.state;
-    this.state = newState;
-    this.#retainAppliedCommit(parentState, commit, newState);
-
-    // Persist local-authoritative epoch transition immediately.
+    this.#engine.confirmPublished(sendResult.pending);
     await this.save();
 
-    // Staged commit applied: Merging -> Stable.
-    this.#lifecycle = transitionLifecycle(
-      this.#lifecycle,
-      groupLifecycleStates.stable,
-    );
-
-    // If new users were added, send welcome events
-    // The commit has been published and acked, so it's safe to send Welcomes now (MIP-02 compliance)
+    const { welcome } = sendResult;
     if (
       welcome &&
       options?.welcomeRecipients &&
@@ -1385,8 +750,6 @@ export class MarmotGroup<
         options.welcomeRecipients.length,
       );
 
-      // Send all welcome events in parallel
-      // In v2, welcome is wrapped in MlsWelcomeMessage, need to access welcome.welcome
       const innerWelcome = welcome?.welcome;
       if (!innerWelcome) return response;
 
@@ -1399,15 +762,12 @@ export class MarmotGroup<
             keyPackageEventId: recipient.keyPackageEventId,
           });
 
-          // Gift wrap the welcome event to the newly added user
           const giftWrapEvent = await createGiftWrap({
             rumor: welcomeRumor,
             recipient: recipient.pubkey,
             signer: this.signer,
           });
 
-          // Get the newly added user's inbox relays using the GroupNostrInterface
-          // Fallback to group relays if inbox relays are not available
           let inboxRelays: string[];
           try {
             inboxRelays = await this.network.getUserInboxRelays(
@@ -1420,7 +780,6 @@ export class MarmotGroup<
               recipient.pubkey.slice(0, 16),
               error,
             );
-            // Fallback to group relays
             inboxRelays = groupData.relays || [];
           }
 
@@ -1433,7 +792,6 @@ export class MarmotGroup<
             );
           }
 
-          // Welcome is the most critical delivery — new members can't join without it.
           const publishResult = await this.network.publish(
             inboxRelays,
             giftWrapEvent,
@@ -1445,7 +803,6 @@ export class MarmotGroup<
         }),
       );
 
-      // Surface welcome delivery failures so callers can detect and retry
       const failureDetails = welcomeResults
         .map((r, i) => ({
           result: r,
@@ -1502,14 +859,12 @@ export class MarmotGroup<
   async inviteByKeyPackageEvent(
     keyPackageEvent: NostrEvent,
   ): Promise<Record<string, PublishResponse>> {
-    // Validate the event is a KeyPackage event (kind 30443)
     if (keyPackageEvent.kind !== ADDRESSABLE_KEY_PACKAGE_KIND) {
       throw new Error(
         `inviteByKeyPackageEvent: Expected KeyPackage event kind ${ADDRESSABLE_KEY_PACKAGE_KIND}, got ${keyPackageEvent.kind}`,
       );
     }
 
-    // Validate that the credential identity matches the event pubkey
     const keyPackage = getKeyPackage(keyPackageEvent);
     const credentialIdentity = getCredentialPubkey(
       keyPackage.leafNode.credential,
@@ -1520,10 +875,8 @@ export class MarmotGroup<
       );
     }
 
-    // Build the Add proposal using the existing proposeInviteUser function
     const proposalAction = proposeInviteUser(keyPackageEvent);
 
-    // Commit with the proposal and explicit welcome recipient
     return await this.commit({
       extraProposals: [proposalAction],
       welcomeRecipients: [
@@ -1533,31 +886,6 @@ export class MarmotGroup<
           keyPackageEvent,
         },
       ],
-    });
-  }
-
-  /**
-   * Creates an incoming message callback that enforces admin-only commits.
-   *
-   * Per MIP-03, only admins can send commits. This callback:
-   * - Accepts all proposals (they don't require admin privileges)
-   * - For commits, verifies that the sender is in the group's admin list
-   * - Rejects commits from non-admin senders
-   *
-   * @returns An IncomingMessageCallback that enforces admin verification
-   */
-  private createAdminVerificationCallback(): IncomingMessageCallback {
-    const groupData = this.groupData;
-    if (!groupData) {
-      // If no group data, we can't verify - accept all (shouldn't happen in normal flow)
-      return acceptAll;
-    }
-
-    return createAdminCommitPolicyCallback({
-      ratchetTree: this.state.ratchetTree,
-      adminPubkeys: groupData.adminPubkeys,
-      ciphersuiteId: this.ciphersuite.id,
-      onUnverifiableCommit: "retry",
     });
   }
 
@@ -1581,552 +909,55 @@ export class MarmotGroup<
     events: NostrEvent[],
     options?: { maxRetries?: number },
   ): AsyncGenerator<DispositionedIngestResult> {
-    // Attach the protocol-visible disposition to every raw result
-    // (inbound-processing.md classification) so callers don't re-derive it.
-    for await (const result of this.#ingestRaw(events, options)) {
-      yield {
-        ...result,
-        disposition: ingestResultDisposition(result),
-      } as DispositionedIngestResult;
-    }
-  }
+    const selfEcho: NostrEvent[] = [];
+    const rest: NostrEvent[] = [];
 
-  /**
-   * The raw ingest pipeline (see {@link ingest}). Yields un-classified
-   * {@link IngestResult}s and owns the recursive unreadable-retry loop; the
-   * public {@link ingest} wraps each result with its {@link Disposition}.
-   */
-  async *#ingestRaw(
-    events: NostrEvent[],
-    options?: {
-      /** Current retry attempt count (internal use) */
-      retryCount?: number;
-      /** Maximum number of retry attempts (default: 5) */
-      maxRetries?: number;
-      /**
-       * @internal Flat list of `{ eventId, error }` entries accumulated across
-       * all retry rounds.  Passed by reference so every recursive call appends
-       * to the same array, giving the final unreadable yield the full history.
-       */
-      _errors?: Array<{ eventId: string; error: unknown }>;
-    },
-  ): AsyncGenerator<IngestResult> {
-    // Each ingest call gets its own sub-namespace so concurrent or sequential
-    // batches can be distinguished at a glance in debug output.
-    const log = this.log.extend(`ingest:${Date.now().toString(36).slice(-5)}`);
-
-    // Set default retry options
-    const retryCount = options?.retryCount ?? 0;
-    const maxRetries = options?.maxRetries ?? 5;
-    const errorList: Array<{ eventId: string; error: unknown }> =
-      options?._errors ?? [];
-
-    if (retryCount === 0) {
-      log("start – %d event(s), maxRetries=%d", events.length, maxRetries);
-    } else {
-      log(
-        "retry %d/%d – %d event(s) remaining",
-        retryCount,
-        maxRetries,
-        events.length,
-      );
-    }
-
-    // Check if we've exceeded the maximum retry attempts.
-    //
-    // IMPORTANT: ingest() processes untrusted network input. If we throw here,
-    // a single permanently-unreadable message (e.g. encrypted under an epoch we
-    // can never decrypt, malformed ciphertext, spam) can DoS consumers.
-    // Instead, stop retrying and yield the remaining events as unreadable.
-    if (retryCount > maxRetries) {
-      log(
-        "max retries exceeded – yielding %d event(s) as unreadable",
-        events.length,
-      );
-      for (const event of events) {
-        yield {
-          kind: "unreadable",
-          event,
-          errors: errorList
-            .filter((e) => e.eventId === event.id)
-            .map((e) => e.error),
-        };
-      }
-      return;
-    }
-    // Early return if no events to process
-    if (events.length === 0) return;
-
-    // ============================================================================
-    // STEP 1: Decrypt NIP-44 layer to get MLSMessages
-    // ============================================================================
-    // Each Nostr event contains an MLSMessage encrypted with NIP-44 using the
-    // group's exporter_secret. We decrypt this first layer to get the actual
-    // MLS message structure.
-
-    let { read, unreadable: decryptFailed } = await decryptGroupMessages(
-      events,
-      this.state,
-      this.ciphersuite,
-    );
-
-    // A late fork competitor is encrypted under its source epoch's exporter
-    // secret, which is no longer current once we have advanced. Retry decrypt
-    // failures against retained past-epoch states so they can reach fork
-    // recovery (convergence.md) instead of being dropped as unreadable.
-    if (decryptFailed.length > 0 && this.#retainedStates.size > 0) {
-      const stillFailed: typeof decryptFailed = [];
-      for (const event of decryptFailed) {
-        let recovered = false;
-        for (const retained of this.#retainedStates.values()) {
-          if (retained === this.state) continue;
-          const retry = await decryptGroupMessages(
-            [event],
-            retained,
-            this.ciphersuite,
-          );
-          if (retry.read.length > 0) {
-            read = [...read, ...retry.read];
-            recovered = true;
-            break;
-          }
-        }
-        if (!recovered) stillFailed.push(event);
-      }
-      decryptFailed = stillFailed;
-    }
-
-    log(
-      "decryption: %d/%d readable, %d failed",
-      read.length,
-      events.length,
-      decryptFailed.length,
-    );
-
-    // Record a decryption error for each event that failed the NIP-44 layer.
-    for (const event of decryptFailed) {
-      log("decrypt failed event:%s", event.id.slice(0, 8));
-      errorList.push({
-        eventId: event.id,
-        error: new Error("Failed to decrypt group message"),
-      });
-    }
-
-    // If nothing was readable the exporter_secret cannot change this round, so
-    // retrying would always fail the same way.  Yield decrypt failures now.
-    if (read.length === 0) {
-      log(
-        "nothing readable – yielding %d decrypt failure(s) as unreadable",
-        decryptFailed.length,
-      );
-      for (const event of decryptFailed) {
-        yield {
-          kind: "unreadable",
-          event,
-          errors: errorList
-            .filter((e) => e.eventId === event.id)
-            .map((e) => e.error),
-        };
-      }
-      return;
-    }
-
-    // Collect events that need a retry after state advances (e.g. after a commit
-    // rotates the exporter_secret so we can decrypt previously opaque events).
-    const unreadable: NostrEvent[] = [...decryptFailed];
-
-    // ============================================================================
-    // STEP 2: Separate commits from non-commit messages
-    // ============================================================================
-    // We process non-commit messages first (proposals, application messages),
-    // then process commits. This ensures proposals are in unappliedProposals
-    // before commits try to reference them.
-
-    let commits: Array<GroupMessagePair> = [];
-    const nonCommits: Array<GroupMessagePair> = [];
-
-    for (const pair of read) {
-      if (
-        pair.message.wireformat === wireformats.mls_private_message &&
-        pair.message.privateMessage.contentType === contentTypes.commit
-      ) {
-        commits.push(pair);
+    for (const event of events) {
+      if (this.#sentEventIds.delete(event.id)) {
+        selfEcho.push(event);
       } else {
-        nonCommits.push(pair);
+        rest.push(event);
       }
     }
 
-    log(
-      "split: %d commit(s), %d non-commit(s)",
-      commits.length,
-      nonCommits.length,
-    );
-
-    // ============================================================================
-    // STEP 3: Process all non-commit messages
-    // ============================================================================
-    // Process all proposals and application messages. If a message fails to process
-    // (wrong epoch, invalid, etc.), add it to unreadable for retry later.
-    //
-    // Proposals are added to state.unappliedProposals when processed, making them
-    // available for commits to reference via ProposalRef.
-
-    for (const { event, message } of nonCommits) {
-      try {
-        // Skip application messages that we sent ourselves.  When we sent the
-        // message we already advanced this.state via the newState returned by
-        // createApplicationMessage.  If we ran processMessage again against that
-        // advanced ratchet the generation counter would be in the past and
-        // ts-mls would throw "desired gen in the past".  History was already
-        // saved at send time, so nothing is lost by skipping here.
-        if (this.#sentEventIds.delete(event.id)) {
-          log("skip event:%s reason:self-echo", event.id.slice(0, 8));
-          yield { kind: "skipped", event, message, reason: "self-echo" };
-          continue;
-        }
-
-        // Yield unexpected wireformats as skipped rather than silently ignoring them.
-        if (
-          message.wireformat !== wireformats.mls_private_message &&
-          message.wireformat !== wireformats.mls_public_message
-        ) {
-          log("skip event:%s reason:wrong-wireformat", event.id.slice(0, 8));
-          yield { kind: "skipped", event, message, reason: "wrong-wireformat" };
-          continue;
-        }
-
-        // processMessage handles:
-        // - Proposals: Adds them to state.unappliedProposals (keyed by proposal reference)
-        // - Application messages: Decrypts content and returns it
-        // - Both update state as needed (for forward secrecy)
-        // In v2, processMessage takes a single params object with context
-        const result = await processMessage({
-          context: {
-            cipherSuite: this.ciphersuite,
-            authService: marmotAuthService,
-            externalPsks: {},
-          },
-          state: this.state,
+    for (const event of selfEcho) {
+      const peeled = await this.#peeler.peelGroupMessages(
+        [event],
+        this.state,
+      );
+      const message = peeled.read[0]?.message;
+      if (message) {
+        const skipped: SkippedIngestResult = {
+          kind: "skipped",
+          event,
           message,
-          callback: acceptAll, // Accept all proposals (adds them to unappliedProposals)
-        });
-
-        // Update state if message changed it
-        if (result.kind === "newState") {
-          log(
-            "proposal accepted event:%s epoch:%d",
-            event.id.slice(0, 8),
-            this.state.groupContext.epoch,
-          );
-          this.state = result.newState;
-          yield { kind: "processed", result, event, message };
-        } else if (result.kind === "applicationMessage") {
-          log("application message event:%s", event.id.slice(0, 8));
-          // Application messages also update state (for forward secrecy)
-          this.state = result.newState;
-
-          // Save application message to history (best-effort)
-          if (this.history) {
-            try {
-              await this.history.saveMessage(result.message);
-            } catch (err) {
-              this.emit("historyError", err as Error);
-            }
-          }
-
-          yield { kind: "processed", result, event, message };
-          this.emit("applicationMessage", result.message);
-        }
-      } catch (error) {
-        // Message processing failed - might be invalid or from wrong epoch
-        // Add to unreadable for retry later (might become readable after state updates)
-        log(
-          "non-commit failed event:%s – queued for retry: %O",
-          event.id.slice(0, 8),
-          error,
-        );
-        errorList.push({ eventId: event.id, error });
-        unreadable.push(event);
+          reason: "self-echo",
+        };
+        yield { ...skipped, disposition: ingestResultDisposition(skipped) };
       }
     }
 
-    // ============================================================================
-    // STEP 4: Order commits by the content-derived convergence key
-    // ============================================================================
-    // Same-epoch races resolve by commit_digest (SHA-256 of the MLS bytes), not
-    // transport time/order — see convergence.md. The lowest-digest commit for an
-    // epoch wins; later same-epoch commits are skipped as past-epoch below.
-    commits = sortGroupCommits(commits);
+    for await (const result of this.#engine.ingest(rest, options)) {
+      const mapped = mapEngineIngestResult(result);
 
-    // ============================================================================
-    // STEP 5: Process commits sequentially
-    // ============================================================================
-    // Commits advance the epoch and update the group state. We process them in
-    // sorted order. Each commit changes the epoch and rotates keys, so later
-    // commits depend on earlier ones.
-
-    // Create admin verification callback for commit processing
-    const adminCallback = this.createAdminVerificationCallback();
-
-    // Commits that fork from a past epoch (or land ahead of the tip as a deeper
-    // competing branch's children) are gathered here for holistic convergence
-    // resolution after the linear forward pass.
-    const forkPool: {
-      event: NostrEvent;
-      message: MlsMessage;
-      epoch: number;
-    }[] = [];
-
-    for (const { event, message } of commits) {
-      if (message.wireformat !== wireformats.mls_private_message) {
-        log(
-          "skip commit event:%s reason:wrong-wireformat",
-          event.id.slice(0, 8),
-        );
-        yield { kind: "skipped", event, message, reason: "wrong-wireformat" };
-        continue;
-      }
-
-      const commitEpoch =
-        typeof message.privateMessage.epoch === "bigint"
-          ? message.privateMessage.epoch
-          : BigInt(message.privateMessage.epoch);
-      const currentEpoch = this.state.groupContext.epoch;
-
-      // A commit for a past epoch may be a fork competitor that arrived after we
-      // already advanced. Collect it into the fork pool for holistic convergence
-      // resolution after the linear forward pass (convergence.md).
-      if (commitEpoch < currentEpoch) {
-        forkPool.push({ event, message, epoch: Number(commitEpoch) });
-        continue;
-      }
-
-      // Commits too far in the future can't be applied yet. Defer for retry, and
-      // also feed them into the fork pool so a deeper competing branch (whose
-      // child commits land here) can be assembled and scored at full depth.
-      if (commitEpoch > currentEpoch + 1n) {
-        log(
-          "defer commit event:%s epoch:%d too far ahead (current=%d)",
-          event.id.slice(0, 8),
-          commitEpoch,
-          currentEpoch,
-        );
-        forkPool.push({ event, message, epoch: Number(commitEpoch) });
-        errorList.push({
-          eventId: event.id,
-          error: new Error(
-            `Commit epoch ${commitEpoch} is too far ahead of current epoch ${currentEpoch}`,
-          ),
-        });
-        unreadable.push(event);
-        continue;
-      }
-
-      log(
-        "processing commit event:%s epoch:%d->%d",
-        event.id.slice(0, 8),
-        currentEpoch,
-        commitEpoch,
-      );
-
-      try {
-        // processMessage handles:
-        // - Decrypts the private message using group secrets from the current state
-        // - Verifies message authenticity and sender
-        // - Resolves proposal references from state.unappliedProposals (if needed)
-        // - Applies the commit (updates ratchet tree, advances epoch, rotates keys)
-        // In v2, processMessage takes a single params object with context
-        const result = await processMessage({
-          context: {
-            cipherSuite: this.ciphersuite,
-            authService: marmotAuthService,
-            externalPsks: {},
-          },
-          state: this.state,
-          message,
-          callback: adminCallback, // Use admin verification callback for commits
-        });
-
-        if (result.kind === "newState") {
-          // If the commit was rejected by the callback (admin verification),
-          // do not advance state and do not retry — yield it so callers can observe it.
-          if (result.actionTaken === "reject") {
-            log(
-              "commit event:%s rejected by admin policy",
-              event.id.slice(0, 8),
-            );
-            yield { kind: "rejected", result, event, message };
-            continue;
+      if (
+        mapped.kind === "processed" &&
+        mapped.result.kind === "applicationMessage"
+      ) {
+        if (this.history) {
+          try {
+            await this.history.saveMessage(mapped.result.message);
+          } catch (err) {
+            this.emit("historyError", err as Error);
           }
-
-          // Successfully processed the commit - update our state
-          // After each commit, the epoch advances and keys rotate.
-          // Retain the parent state + applied commit digest for fork recovery.
-          const parentState = this.state;
-          this.state = result.newState;
-          this.#retainAppliedCommit(parentState, message, result.newState);
-          log(
-            "commit event:%s applied – new epoch:%d",
-            event.id.slice(0, 8),
-            this.state.groupContext.epoch,
-          );
-          yield { kind: "processed", result, event, message };
         }
-      } catch (error) {
-        // Commit processing failed - add to unreadable for retry
-        // It might become valid after processing more proposals or state updates
-        log(
-          "commit failed event:%s – queued for retry: %O",
-          event.id.slice(0, 8),
-          error,
-        );
-        errorList.push({ eventId: event.id, error });
-        unreadable.push(event);
+        this.emit("applicationMessage", mapped.result.message);
       }
+
+      yield mapped;
     }
 
-    // ============================================================================
-    // STEP 5b: Holistic convergence fork resolution
-    // ============================================================================
-    // Rebuild candidate branches from the earliest retained fork point over our
-    // applied commits plus the pooled competitors, select the canonical branch
-    // (convergence.md), and rewind to it if it differs from our current tip.
-    if (forkPool.length > 0) {
-      // Competitors whose fork point we still retain can be rebuilt and scored;
-      // those whose fork point is no longer retained are classified against the
-      // retained anchor (retained-history.md "Late commits").
-      const retainedPool = forkPool.filter((p) =>
-        this.#retainedStates.has(p.epoch),
-      );
-      const orphanPool = forkPool.filter(
-        (p) => !this.#retainedStates.has(p.epoch),
-      );
-
-      if (retainedPool.length > 0) {
-        const minForkEpoch = Math.min(...retainedPool.map((p) => p.epoch));
-        const resolution = await this.#resolveFork(
-          minForkEpoch,
-          retainedPool.map((p) => p.message),
-          // Still-encrypted events may be a deeper competing branch's children,
-          // decryptable only once replay reaches their (never-applied) epoch.
-          decryptFailed,
-          // All batch events are candidate app-payload witnesses; only those that
-          // decrypt as application messages on a branch state count toward quorum.
-          events,
-        );
-        if (resolution.outcome === "recovered") {
-          log(
-            "convergence rewound to canonical branch – epoch:%d",
-            this.state.groupContext.epoch,
-          );
-          const rep = retainedPool[0];
-          yield {
-            kind: "processed",
-            result: resolution.result,
-            event: rep.event,
-            message: rep.message,
-          };
-          for (let i = 1; i < retainedPool.length; i++)
-            yield {
-              kind: "skipped",
-              event: retainedPool[i].event,
-              message: retainedPool[i].message,
-              reason: "past-epoch",
-            };
-        } else {
-          for (const p of retainedPool)
-            yield {
-              kind: "skipped",
-              event: p.event,
-              message: p.message,
-              reason: "past-epoch",
-            };
-        }
-      }
-
-      // Classify competitors whose retained anchor is gone (retained-history.md).
-      if (orphanPool.length > 0) {
-        const currentTipEpoch = Number(this.state.groupContext.epoch);
-        const anchorEpoch =
-          this.#retainedStates.size > 0
-            ? Math.min(...this.#retainedStates.keys())
-            : currentTipEpoch;
-        for (const p of orphanPool) {
-          // The retained-anchor model classifies *late* (past-epoch) commits.
-          // Ahead-of-tip entries are future branches still being deferred for
-          // retry (added to `unreadable` in STEP 5), not anchor losses.
-          if (p.epoch >= currentTipEpoch) {
-            yield {
-              kind: "skipped",
-              event: p.event,
-              message: p.message,
-              reason: "past-epoch",
-            };
-            continue;
-          }
-          const outcome = classifyLateCommit({
-            sourceEpoch: p.epoch,
-            anchorEpoch,
-            currentTipEpoch,
-            maxRewindCommits: DEFAULT_CONVERGENCE_POLICY.maxRewindCommits,
-            parentArrived: true,
-            retainedParentStateAvailable: false,
-          });
-          if (outcome.kind === "missing_retained_anchor") {
-            // Inside the rollback horizon but the anchor state was lost: the
-            // group can no longer converge → Unrecoverable (via Recovering).
-            this.#toUnrecoverable();
-            log("convergence lost retained anchor – group is Unrecoverable");
-            yield {
-              kind: "skipped",
-              event: p.event,
-              message: p.message,
-              reason: "missing-retained-anchor",
-            };
-          } else if (outcome.kind === "beyond_anchor") {
-            yield {
-              kind: "skipped",
-              event: p.event,
-              message: p.message,
-              reason: "beyond-anchor",
-            };
-          } else {
-            yield {
-              kind: "skipped",
-              event: p.event,
-              message: p.message,
-              reason: "past-epoch",
-            };
-          }
-        }
-      }
-    }
-
-    // Save the group state after processing all messages
     await this.save();
-    log("state saved – epoch:%d", this.state.groupContext.epoch);
-
-    // ============================================================================
-    // STEP 6: Recursively retry unreadable events
-    // ============================================================================
-    // After processing commits and updating the state, some events that were
-    // unreadable might now be readable. For example:
-    // - An event from epoch N+1 might have been unreadable when we were at epoch N
-    // - After processing a commit that advances us to epoch N+1, we can now read it
-    //
-    // We recursively call ingest on unreadable events to retry them.
-    // This continues until no more events can be read.
-
-    if (unreadable.length > 0) {
-      log("scheduling retry for %d unreadable event(s)", unreadable.length);
-      yield* this.#ingestRaw(unreadable, {
-        retryCount: retryCount + 1,
-        maxRetries: maxRetries,
-        _errors: errorList,
-      });
-    } else {
-      log("done – no unreadable events remain");
-    }
   }
 
   /**
@@ -2168,7 +999,7 @@ export class MarmotGroup<
       sha256: plaintextHash,
       type: canonicalizeMimeType(mimeType),
       filename: metadata.filename,
-      nonce: "", // filled by encryptMediaFile
+      nonce: "",
       version: MIP04_VERSION,
       size: metadata.size ?? blob.size,
       ...(metadata.dimensions !== undefined
@@ -2205,7 +1036,6 @@ export class MarmotGroup<
       throw new Error("decryptMedia: attachment.sha256 is required");
     }
 
-    // Cache hit — return immediately without re-deriving the key
     const cached = await this.media?.getMedia(attachment.sha256);
     if (cached) return cached;
 
@@ -2250,7 +1080,6 @@ export class MarmotGroup<
     this.log("removing group from store");
     await this.store.removeItem(bytesToHex(this.id));
 
-    // Emit the destroyed event
     this.emit("destroyed", this);
   }
 }

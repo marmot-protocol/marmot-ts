@@ -90,6 +90,8 @@ describe("exports", () => {
         "componentEntry",
         "convergenceOutcomeToCategory",
         "createAdminCommitPolicyCallback",
+        "createApplicationMessageIntent",
+        "createChatRumor",
         "createCommitEvent",
         "createCredential",
         "createDeleteKeyPackageEvent",

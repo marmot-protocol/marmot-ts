@@ -88,6 +88,8 @@ For fine-grained control or protocol research, use the [Core module](/core/) dir
 ```typescript
 import {
   MarmotClient,
+  createApplicationMessageIntent,
+  createChatRumor,
   deserializeApplicationData,
 } from "@internet-privacy/marmot-ts";
 
@@ -106,14 +108,8 @@ const group = await client.groups.create("My Group", {
 });
 
 // Send message
-await group.sendApplicationRumor({
-  kind: 1,
-  content: "Hello, Marmot!",
-  tags: [],
-  created_at: Math.floor(Date.now() / 1000),
-  pubkey: myPubkey,
-  id: rumorId,
-});
+const rumor = createChatRumor({ pubkey: myPubkey, content: "Hello, Marmot!" });
+await client.groups.send(group.id, createApplicationMessageIntent(rumor));
 
 // Listen for messages
 group.on("applicationMessage", (message) => {

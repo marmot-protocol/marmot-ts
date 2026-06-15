@@ -6,9 +6,11 @@ import {
 import { relaySet } from "applesauce-core/helpers/relays";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 
-import type {
-  MarmotClient,
-  MarmotGroup,
+import {
+  createApplicationMessageIntent,
+  createChatRumor,
+  type MarmotClient,
+  type MarmotGroup,
 } from "@internet-privacy/marmot-ts/client";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
@@ -207,7 +209,11 @@ export class ChatApp {
 
   async sendText(text: string): Promise<void> {
     const group = this.#requireActive();
-    await group.sendChatMessage(text);
+    const pubkey = await group.signer.getPublicKey();
+    const intent = createApplicationMessageIntent(
+      createChatRumor({ pubkey, content: text }),
+    );
+    await this.#deps.client.groups.send(group.id, intent);
     this.#deps.log(`[${nameOf(group)}] you: ${text}`);
   }
 

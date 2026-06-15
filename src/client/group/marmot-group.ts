@@ -1,11 +1,6 @@
 /** @module @category Client - Group */
-import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { EventSigner } from "applesauce-core/event-factory";
-import {
-  bytesToHex,
-  getEventHash,
-  type NostrEvent,
-} from "applesauce-core/helpers/event";
+import { bytesToHex, type NostrEvent } from "applesauce-core/helpers/event";
 import { Debugger } from "debug";
 import { EventEmitter } from "eventemitter3";
 import {
@@ -17,7 +12,6 @@ import {
 } from "ts-mls";
 
 import type { ProposalAction, ProposalContext } from "../../engine/types.js";
-import { serializeApplicationRumor } from "../../core/group-message.js";
 import { getKeyPackage } from "../../core/key-package-event.js";
 import { getCredentialPubkey } from "../../core/credential.js";
 import type { MediaAttachment } from "../../core/media.js";
@@ -26,7 +20,6 @@ import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import type { SerializedClientState } from "../../core/client-state.js";
 import { hasAck } from "../../utils/index.js";
-import { unixNow } from "../../utils/nostr.js";
 import { GroupRuntime } from "../runtime/group-runtime.js";
 import {
   GroupSession,
@@ -442,59 +435,6 @@ export class MarmotGroup<
     const effects = await this.session.send({ kind: "proposal", proposal });
     const [result] = await this.runtime.publishEffects(effects);
     return result.response;
-  }
-
-  /**
-   * Creates and sends an application message to the group.
-   *
-   * Application messages contain actual content shared within the group (e.g., chat messages,
-   * reactions, etc.). The inner Nostr event (rumor) must be unsigned and will be serialized
-   * according to the Marmot spec.
-   *
-   * @param rumor - The unsigned Nostr event (rumor) to send as an application message
-   * @returns Promise resolving to the publish response from the relays
-   */
-  async sendApplicationRumor(
-    rumor: Rumor,
-  ): Promise<Record<string, PublishResponse>> {
-    this.log("sending application rumor kind:%d", rumor.kind);
-    const applicationData = serializeApplicationRumor(rumor);
-
-    const effects = await this.session.send({
-      kind: "applicationMessage",
-      payload: applicationData,
-    });
-
-    const [result] = await this.runtime.publishEffects(effects);
-    return result.response;
-  }
-
-  /**
-   * Creates and sends a kind 9 chat message to the group.
-   *
-   * This is a convenience wrapper around {@link sendApplicationRumor} that constructs
-   * the rumor for you. The message is encrypted via MLS and published as a kind 445
-   * group event to the group's relays.
-   *
-   * @param content - The text content of the chat message
-   * @param tags - Optional Nostr tags to include on the rumor
-   * @returns Promise resolving to the publish response from the relays
-   */
-  async sendChatMessage(
-    content: string,
-    tags: string[][] = [],
-  ): Promise<Record<string, PublishResponse>> {
-    const pubkey = await this.signer.getPublicKey();
-    const rumor: Rumor = {
-      id: "",
-      kind: 9,
-      pubkey,
-      created_at: unixNow(),
-      content,
-      tags,
-    };
-    rumor.id = getEventHash(rumor);
-    return this.sendApplicationRumor(rumor);
   }
 
   /**

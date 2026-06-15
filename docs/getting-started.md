@@ -184,20 +184,22 @@ if (keyPackageEvent) {
 
 ## Send a Message
 
+Build the chat rumor at the app level, turn it into an application-message
+intent, then drive it through the group's session/runtime seam (here via the
+manager's `send` helper):
+
 ```typescript
-import { getEventHash } from "applesauce-core/helpers";
+import {
+  createApplicationMessageIntent,
+  createChatRumor,
+} from "@internet-privacy/marmot-ts/client";
 
-const rumor = {
-  kind: 9, // Chat message
+const rumor = createChatRumor({
   pubkey: myPubkey,
-  created_at: Math.floor(Date.now() / 1000),
   content: "Hello team!",
-  tags: [],
-  id: "",
-};
-rumor.id = getEventHash(rumor);
+});
 
-await group.sendApplicationRumor(rumor);
+await client.groups.send(group.id, createApplicationMessageIntent(rumor));
 ```
 
 ## Receive Messages

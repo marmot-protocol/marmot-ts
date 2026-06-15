@@ -9,6 +9,7 @@ import {
 } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
 import { accountProofSignerFor } from "../helpers/account-proof.js";
+import { createApplicationMessageIntent } from "../../client/group/application-message.js";
 import { MarmotClient } from "../../client/marmot-client.js";
 import {
   getNostrGroupIdHex,
@@ -191,7 +192,10 @@ describe("End-to-end: invite, join, first message", () => {
     };
     messageRumor.id = getEventHash(messageRumor);
 
-    await inviteeGroup.sendApplicationRumor(messageRumor);
+    await inviteeClient.groups.send(
+      inviteeGroup.id,
+      createApplicationMessageIntent(messageRumor),
+    );
 
     // Step 7: Admin receives and decrypts the message
     // Fetch new group events (the application message)

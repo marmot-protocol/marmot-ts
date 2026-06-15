@@ -10,6 +10,10 @@ import {
 } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import {
+  createApplicationMessageIntent,
+  createChatRumor,
+} from "../../client/group/application-message.js";
 import type {
   BaseGroupHistory,
   MarmotGroup,
@@ -39,6 +43,24 @@ class TestHistory implements BaseGroupHistory {
   async purgeMessages(): Promise<void> {
     this.messages.length = 0;
   }
+}
+
+/**
+ * Helper: build a kind-9 chat rumor and drive it through the group's
+ * session/runtime seam (the replacement for the old `group.sendChatMessage`).
+ */
+async function sendChat(
+  group: MarmotGroup<any, any>,
+  signer: { getPublicKey(): Promise<string> | string },
+  content: string,
+  tags: string[][] = [],
+) {
+  const pubkey = await signer.getPublicKey();
+  const intent = createApplicationMessageIntent(
+    createChatRumor({ pubkey, content, tags }),
+  );
+  const effects = await group.session.send(intent);
+  return group.runtime.publishEffects(effects);
 }
 
 /** Helper: set up two-member group and return the groups */
@@ -108,7 +130,7 @@ async function collectApplicationRumors(
   return rumors;
 }
 
-describe("MarmotGroup.sendChatMessage", () => {
+describe("chat messages via session/runtime", () => {
   let adminAccount: PrivateKeyAccount<any>;
   let inviteeAccount: PrivateKeyAccount<any>;
   let _ciphersuite: CiphersuiteImpl;
@@ -156,8 +178,8 @@ describe("MarmotGroup.sendChatMessage", () => {
         "Chat Test Group",
       );
 
-    const content = "Hello via sendChatMessage!";
-    await inviteeGroup.sendChatMessage(content);
+    const content = "Hello via the application-message intent!";
+    await sendChat(inviteeGroup, inviteeAccount.signer, content);
 
     const nostrGroupIdHex = getNostrGroupIdHex(adminGroup.state);
 
@@ -188,7 +210,12 @@ describe("MarmotGroup.sendChatMessage", () => {
     );
 
     const replyTag = ["e", "deadbeef".repeat(8), "", "reply"];
-    await inviteeGroup.sendChatMessage("Replying to something", [replyTag]);
+    await sendChat(
+      inviteeGroup,
+      inviteeAccount.signer,
+      "Replying to something",
+      [replyTag],
+    );
 
     const nostrGroupIdHex = getNostrGroupIdHex(adminGroup.state);
 
@@ -213,7 +240,7 @@ describe("MarmotGroup.sendChatMessage", () => {
         "Chat Test Group 3",
       );
 
-    await inviteeGroup.sendChatMessage("Message from invitee");
+    await sendChat(inviteeGroup, inviteeAccount.signer, "Message from invitee");
 
     const nostrGroupIdHex = getNostrGroupIdHex(adminGroup.state);
 
@@ -239,7 +266,7 @@ describe("MarmotGroup.sendChatMessage", () => {
       "Self-echo Test Group",
     );
 
-    await inviteeGroup.sendChatMessage("Hello from invitee");
+    await sendChat(inviteeGroup, inviteeAccount.signer, "Hello from invitee");
 
     const nostrGroupIdHex = getNostrGroupIdHex(inviteeGroup.state);
 
@@ -275,9 +302,9 @@ describe("MarmotGroup.sendChatMessage", () => {
       );
 
     // Send three messages in sequence — each advances the sender's ratchet
-    await inviteeGroup.sendChatMessage("Message 1");
-    await inviteeGroup.sendChatMessage("Message 2");
-    await inviteeGroup.sendChatMessage("Message 3");
+    await sendChat(inviteeGroup, inviteeAccount.signer, "Message 1");
+    await sendChat(inviteeGroup, inviteeAccount.signer, "Message 2");
+    await sendChat(inviteeGroup, inviteeAccount.signer, "Message 3");
 
     const nostrGroupIdHex = getNostrGroupIdHex(adminGroup.state);
 
@@ -341,7 +368,7 @@ describe("MarmotGroup.sendChatMessage", () => {
 
     expect(history.messages.length).toBe(0);
 
-    await inviteeGroup.sendChatMessage("Saved immediately");
+    await sendChat(inviteeGroup, inviteeAccount.signer, "Saved immediately");
 
     // History should be populated before any ingest() call
     expect(history.messages.length).toBe(1);
@@ -349,7 +376,7 @@ describe("MarmotGroup.sendChatMessage", () => {
     expect(savedRumor.content).toBe("Saved immediately");
 
     // Sending a second message should not double-save the first
-    await inviteeGroup.sendChatMessage("Second message");
+    await sendChat(inviteeGroup, inviteeAccount.signer, "Second message");
     expect(history.messages.length).toBe(2);
     const secondRumor = deserializeApplicationData(history.messages[1]);
     expect(secondRumor.content).toBe("Second message");
@@ -392,7 +419,7 @@ describe("MarmotGroup.sendChatMessage", () => {
       "Restart Self Echo Group",
     );
 
-    await inviteeGroup.sendChatMessage("before restart");
+    await sendChat(inviteeGroup, inviteeAccount.signer, "before restart");
     const groupIdHex = bytesToHex(inviteeGroup.id);
 
     // Simulate a restart: new client instance, same persisted group backend

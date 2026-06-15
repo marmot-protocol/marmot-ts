@@ -76,11 +76,15 @@ await runtime.publishEffects(effects);
 
 Expected removals or replacements:
 
-- replace `group.sendChatMessage(...)` with app-level rumor construction plus a session intent;
-- replace `group.sendApplicationRumor(...)` with app-message intent helpers;
+- replace `group.sendChatMessage(...)` with app-level rumor construction plus a session intent; (done — `createChatRumor` + `createApplicationMessageIntent` in `src/client/group/application-message.ts`, driven through `session.send`/`groups.send`)
+- replace `group.sendApplicationRumor(...)` with app-message intent helpers; (done — `createApplicationMessageIntent`)
 - replace `group.commit(...)` with commit intent plus runtime effect publishing;
 - replace `group.inviteByKeyPackageEvent(...)` with a higher-level invite/account runtime helper;
 - replace `group.leave()` with a leave intent or account runtime method.
+
+The application-message path is the first removed convenience surface; `commit`,
+`inviteByKeyPackageEvent`, and `leave` remain on `MarmotGroup` for follow-up
+increments.
 
 ### Stage 4: extract media service
 

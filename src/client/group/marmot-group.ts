@@ -185,8 +185,10 @@ export class MarmotGroup<
   /** The storage interface for the groups media */
   readonly media: TMedia;
 
-  readonly #session: GroupSession<THistory>;
-  readonly #runtime: GroupRuntime;
+  /** Protocol state owner for this group. Prefer this over convenience methods. */
+  readonly session: GroupSession<THistory>;
+  /** Runtime publisher for driving session effects through transport. */
+  readonly runtime: GroupRuntime;
 
   /** In-flight media decrypts keyed by plaintext SHA-256 hex. */
   readonly #decryptingMedia = new Map<string, Promise<StoredMedia>>();
@@ -194,7 +196,7 @@ export class MarmotGroup<
   private log: Debugger;
 
   get id() {
-    return this.#session.id;
+    return this.session.id;
   }
 
   /** The group id as a hex string */
@@ -202,7 +204,7 @@ export class MarmotGroup<
 
   /** Read the current group state */
   get state() {
-    return this.#session.state;
+    return this.session.state;
   }
 
   /**
@@ -212,19 +214,19 @@ export class MarmotGroup<
    * commit applying) and back to `Stable`.
    */
   get lifecycle() {
-    return this.#session.lifecycle;
+    return this.session.lifecycle;
   }
 
   get groupData() {
-    return this.#session.groupData;
+    return this.session.groupData;
   }
 
   get unappliedProposals() {
-    return this.#session.unappliedProposals;
+    return this.session.unappliedProposals;
   }
 
   get dirty() {
-    return this.#session.dirty;
+    return this.session.dirty;
   }
 
   /**
@@ -232,7 +234,7 @@ export class MarmotGroup<
    * @warning It is not recommended to use this
    */
   set state(newState: ClientState) {
-    this.#session.state = newState;
+    this.session.state = newState;
   }
 
   get relays() {
@@ -259,7 +261,7 @@ export class MarmotGroup<
       this.history = undefined as THistory;
     }
 
-    this.#session = new GroupSession({
+    this.session = new GroupSession({
       state,
       ciphersuite: this.ciphersuite,
       store: this.store,
@@ -283,7 +285,7 @@ export class MarmotGroup<
 
     this.idStr = bytesToHex(this.id);
     this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
-    this.#runtime = new GroupRuntime({
+    this.runtime = new GroupRuntime({
       welcomeDelivery: new NostrWelcomeDelivery({
         signer: this.signer,
         network: this.network,
@@ -291,8 +293,8 @@ export class MarmotGroup<
       getNetwork: () => this.network,
       getRelays: () => this.relays,
       getGroupData: () => this.groupData,
-      confirmPublished: (pending) => this.#session.confirmPublished(pending),
-      publishFailed: (pending) => this.#session.publishFailed(pending),
+      confirmPublished: (pending) => this.session.confirmPublished(pending),
+      publishFailed: (pending) => this.session.publishFailed(pending),
       save: () => this.save(),
       log: this.log,
     });
@@ -325,7 +327,7 @@ export class MarmotGroup<
    *   having to mutate `dirty` externally.
    */
   async save(force = false) {
-    await this.#session.save(force);
+    await this.session.save(force);
   }
 
   /**
@@ -340,8 +342,8 @@ export class MarmotGroup<
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
-    const effects = await this.#session.send({ kind: "selfUpdate" });
-    const [result] = await this.#runtime.publishEffects(effects);
+    const effects = await this.session.send({ kind: "selfUpdate" });
+    const [result] = await this.runtime.publishEffects(effects);
     return result.response;
   }
 
@@ -409,7 +411,7 @@ export class MarmotGroup<
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
-    const context: ProposalContext = this.#session.proposalContext();
+    const context: ProposalContext = this.session.proposalContext();
 
     let proposals: T;
     if (args.length === 1) {
@@ -437,8 +439,8 @@ export class MarmotGroup<
   async sendProposal(
     proposal: Proposal,
   ): Promise<Record<string, PublishResponse>> {
-    const effects = await this.#session.send({ kind: "proposal", proposal });
-    const [result] = await this.#runtime.publishEffects(effects);
+    const effects = await this.session.send({ kind: "proposal", proposal });
+    const [result] = await this.runtime.publishEffects(effects);
     return result.response;
   }
 
@@ -458,12 +460,12 @@ export class MarmotGroup<
     this.log("sending application rumor kind:%d", rumor.kind);
     const applicationData = serializeApplicationRumor(rumor);
 
-    const effects = await this.#session.send({
+    const effects = await this.session.send({
       kind: "applicationMessage",
       payload: applicationData,
     });
 
-    const [result] = await this.#runtime.publishEffects(effects);
+    const [result] = await this.runtime.publishEffects(effects);
     return result.response;
   }
 
@@ -543,7 +545,7 @@ export class MarmotGroup<
     if (!groupData) throw new NoMarmotGroupDataError();
 
     const actorPubkey = await this.signer.getPublicKey();
-    const effects = await this.#session.send({
+    const effects = await this.session.send({
       kind: "commit",
       actorPubkey,
       extraProposals: options?.extraProposals,
@@ -551,7 +553,7 @@ export class MarmotGroup<
       welcomeRecipients: options?.welcomeRecipients,
     });
 
-    const [result] = await this.#runtime.publishEffects(effects);
+    const [result] = await this.runtime.publishEffects(effects);
     return result.response;
   }
 
@@ -622,7 +624,7 @@ export class MarmotGroup<
     events: NostrEvent[],
     options?: { maxRetries?: number },
   ): AsyncGenerator<DispositionedIngestResult> {
-    yield* this.#session.ingest(events, options);
+    yield* this.session.ingest(events, options);
   }
 
   /**
@@ -740,7 +742,7 @@ export class MarmotGroup<
     if (this.media) await this.media.clearMedia();
 
     this.log("removing group from store");
-    await this.#session.destroyLocalState();
+    await this.session.destroyLocalState();
 
     this.emit("destroyed", this);
   }

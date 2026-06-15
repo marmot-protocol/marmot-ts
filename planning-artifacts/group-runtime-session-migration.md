@@ -59,7 +59,7 @@ After this stage, `MarmotGroup` should hold a `GroupSession` and a `GroupRuntime
 
 ### Stage 3: replace `MarmotGroup` as the primary API
 
-Status: next breaking change.
+Status: complete for public session/runtime exposure; transitional convenience methods remain until account manager cleanup.
 
 Expose session/runtime flows directly and stop treating `MarmotGroup` convenience methods as the canonical API.
 
@@ -84,7 +84,7 @@ Expected removals or replacements:
 
 ### Stage 4: extract media service
 
-Status: planned.
+Status: next.
 
 Create `src/client/group/group-media-service.ts` and move:
 

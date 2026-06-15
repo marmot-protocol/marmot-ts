@@ -102,6 +102,55 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
       clientState.groupContext.epoch + 1n,
     );
   });
+
+  it("publishes session effects through the group runtime", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const credential = createCredential(adminPubkey);
+    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
+      adminPubkeys: [adminPubkey],
+      relays: ["wss://relay.test"],
+    });
+    const network: NostrNetworkInterface = {
+      request: async () => [],
+      subscription: () => {
+        throw new Error("not used");
+      },
+      getUserInboxRelays: async () => {
+        throw new Error("not used");
+      },
+      publish: async () => ({
+        "wss://relay.test": { from: "wss://relay.test", ok: true },
+      }),
+    };
+    const signer = { getPublicKey: async () => adminPubkey } as EventSigner;
+    const group = new MarmotGroup(clientState, {
+      store: new InMemoryKeyValueStore(),
+      signer,
+      ciphersuite: impl,
+      network,
+    });
+
+    const effects = await group.session.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    expect(effects.publish).toHaveLength(1);
+    expect(effects.publish[0].kind).toBe("groupEvolution");
+
+    const results = await group.runtime.publishEffects(effects);
+
+    expect(results).toHaveLength(1);
+    expect(group.lifecycle).toBe("Stable");
+    expect(group.state.groupContext.epoch).toBe(
+      clientState.groupContext.epoch + 1n,
+    );
+  });
 });
 
 describe("MarmotGroup admin verification (MIP-03)", () => {

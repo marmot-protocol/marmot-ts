@@ -20,10 +20,7 @@ import {
 } from "../../account-identity-proof.js";
 import { createCredential } from "../../credential.js";
 import { createSimpleGroup } from "../../group.js";
-import {
-  createGroupEvent,
-  decryptGroupMessages,
-} from "../../group-message.js";
+import { createGroupEvent, decryptGroupMessages } from "../../group-message.js";
 import { generateKeyPackage } from "../../key-package.js";
 import { createAdminCommitPolicyCallback } from "../admin-policy.js";
 import { MarmotGroupEngine } from "../group-engine.js";
@@ -91,7 +88,8 @@ describe("MarmotGroupEngine lifecycle (group-state.md)", () => {
       extraProposals: [],
     });
     expect(failed.kind).toBe("groupEvolution");
-    if (failed.kind !== "groupEvolution") throw new Error("expected groupEvolution");
+    if (failed.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
     expect(engine.lifecycle).toBe("PendingPublish");
     engine.publishFailed(failed.pending);
     expect(engine.lifecycle).toBe("Stable");
@@ -105,7 +103,8 @@ describe("MarmotGroupEngine lifecycle (group-state.md)", () => {
       extraProposals: [],
     });
     expect(ok.kind).toBe("groupEvolution");
-    if (ok.kind !== "groupEvolution") throw new Error("expected groupEvolution");
+    if (ok.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
     expect(engine.lifecycle).toBe("PendingPublish");
     engine.confirmPublished(ok.pending);
     expect(engine.lifecycle).toBe("Stable");

@@ -249,10 +249,7 @@ export class MarmotGroupEngine<TEnvelope> {
           groupLifecycleStates.pendingPublish,
         );
 
-        const envelope = await this.peeler.wrapGroupMessage(
-          commit,
-          this.state,
-        );
+        const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
 
         return {
           kind: "groupEvolution",
@@ -279,10 +276,7 @@ export class MarmotGroupEngine<TEnvelope> {
           extraProposals: [],
         });
 
-        const envelope = await this.peeler.wrapGroupMessage(
-          commit,
-          this.state,
-        );
+        const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
 
         return {
           kind: "selfUpdate",
@@ -689,7 +683,11 @@ export class MarmotGroupEngine<TEnvelope> {
       options?._errors ?? [];
 
     if (retryCount === 0) {
-      log("start – %d envelope(s), maxRetries=%d", envelopes.length, maxRetries);
+      log(
+        "start – %d envelope(s), maxRetries=%d",
+        envelopes.length,
+        maxRetries,
+      );
     } else {
       log(
         "retry %d/%d – %d envelope(s) remaining",
@@ -835,10 +833,7 @@ export class MarmotGroupEngine<TEnvelope> {
           this.#setState(result.newState);
           yield { kind: "processed", result, envelope, message };
         } else if (result.kind === "applicationMessage") {
-          log(
-            "application message envelope:%s",
-            this.#envelopeLabel(envelope),
-          );
+          log("application message envelope:%s", this.#envelopeLabel(envelope));
           this.#setState(result.newState);
           yield { kind: "processed", result, envelope, message };
         }

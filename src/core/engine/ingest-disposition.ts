@@ -1,9 +1,5 @@
 /** @module @category Core - Engine */
-import {
-  disposition,
-  inputCategories,
-  type Disposition,
-} from "../inbound.js";
+import { disposition, inputCategories, type Disposition } from "../inbound.js";
 import type { IngestResult } from "./types.js";
 
 /** Maps an {@link IngestResult} to its protocol-visible {@link Disposition}. */

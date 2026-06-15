@@ -57,7 +57,10 @@ import { proposeLeaveGroup } from "./proposals/leave-group.js";
 import { NostrGroupPeeler } from "./nostr-peeler.js";
 
 export { createAdminCommitPolicyCallback } from "../../core/engine/admin-policy.js";
-export type { ProposalAction, ProposalContext } from "../../core/engine/types.js";
+export type {
+  ProposalAction,
+  ProposalContext,
+} from "../../core/engine/types.js";
 
 /** An error that is thrown when a group has no relays available to send messages. */
 export class NoGroupRelaysError extends Error {
@@ -921,10 +924,7 @@ export class MarmotGroup<
     }
 
     for (const event of selfEcho) {
-      const peeled = await this.#peeler.peelGroupMessages(
-        [event],
-        this.state,
-      );
+      const peeled = await this.#peeler.peelGroupMessages([event], this.state);
       const message = peeled.read[0]?.message;
       if (message) {
         const skipped: SkippedIngestResult = {

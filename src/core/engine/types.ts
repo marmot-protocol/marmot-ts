@@ -27,10 +27,7 @@ export interface GroupPeeler<TEnvelope> {
     unreadable: TEnvelope[];
   }>;
 
-  wrapGroupMessage(
-    message: MlsMessage,
-    state: ClientState,
-  ): Promise<TEnvelope>;
+  wrapGroupMessage(message: MlsMessage, state: ClientState): Promise<TEnvelope>;
 }
 
 /** Staged state awaiting publish confirmation (publish-before-apply). */

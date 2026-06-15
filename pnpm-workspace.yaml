@@ -2,6 +2,9 @@ packages:
   - .
   - examples/*
 
+allowBuilds:
+  esbuild: true
+
 ignoredBuiltDependencies:
   - msw
 

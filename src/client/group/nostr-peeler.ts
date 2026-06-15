@@ -2,10 +2,7 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { ClientState, MlsMessage } from "ts-mls";
 
-import type {
-  GroupPeeler,
-  PeeledMessagePair,
-} from "../../core/engine/types.js";
+import type { GroupPeeler, PeeledMessagePair } from "../../engine/types.js";
 import {
   createGroupEvent,
   decryptGroupMessages,

@@ -20,17 +20,3 @@ export * from "./protocol.js";
 export * from "./transport.js";
 export * from "./retained-history.js";
 export * from "./welcome.js";
-export { createAdminCommitPolicyCallback } from "./engine/admin-policy.js";
-export {
-  MarmotGroupEngine,
-  type MarmotGroupEngineOptions,
-} from "./engine/group-engine.js";
-export type {
-  GroupPeeler,
-  PendingState,
-  PeeledMessagePair,
-  ProposalAction,
-  ProposalContext,
-  SendIntent,
-  SendResult,
-} from "./engine/types.js";

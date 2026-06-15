@@ -1,4 +1,4 @@
-/** @module @category Core - Engine */
+/** @module @category Engine */
 import {
   defaultProposalTypes,
   getCredentialFromLeafIndex,
@@ -10,8 +10,8 @@ import {
 import {
   ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
   verifyLeafAccountIdentityProof,
-} from "../account-identity-proof.js";
-import { getCredentialPubkey } from "../credential.js";
+} from "../core/account-identity-proof.js";
+import { getCredentialPubkey } from "../core/credential.js";
 
 function toLeafIndex(index: number): LeafIndex {
   return index as LeafIndex;

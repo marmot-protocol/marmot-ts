@@ -17,11 +17,14 @@ import {
   makeAccountIdentityProofExtension,
   mlsSignatureScheme,
   signAccountIdentityProof,
-} from "../../account-identity-proof.js";
-import { createCredential } from "../../credential.js";
-import { createSimpleGroup } from "../../group.js";
-import { createGroupEvent, decryptGroupMessages } from "../../group-message.js";
-import { generateKeyPackage } from "../../key-package.js";
+} from "../../core/account-identity-proof.js";
+import { createCredential } from "../../core/credential.js";
+import { createSimpleGroup } from "../../core/group.js";
+import {
+  createGroupEvent,
+  decryptGroupMessages,
+} from "../../core/group-message.js";
+import { generateKeyPackage } from "../../core/key-package.js";
 import { createAdminCommitPolicyCallback } from "../admin-policy.js";
 import { MarmotGroupEngine } from "../group-engine.js";
 import type { GroupPeeler } from "../types.js";

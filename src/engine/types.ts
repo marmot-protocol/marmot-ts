@@ -1,4 +1,4 @@
-/** @module @category Core - Engine */
+/** @module @category Engine */
 import type {
   CiphersuiteImpl,
   ClientState,
@@ -8,8 +8,8 @@ import type {
   Proposal,
 } from "ts-mls";
 
-import type { MarmotGroupView } from "../client-state.js";
-import type { Disposition } from "../inbound.js";
+import type { MarmotGroupView } from "../core/client-state.js";
+import type { Disposition } from "../core/inbound.js";
 
 /** A decrypted transport envelope paired with its MLS message. */
 export type PeeledMessagePair<TEnvelope> = {

@@ -25,14 +25,14 @@ import {
   serializeClientState,
 } from "../../core/client-state.js";
 import type { Disposition } from "../../core/inbound.js";
-import { MarmotGroupEngine } from "../../core/engine/group-engine.js";
-import { ingestResultDisposition as engineIngestResultDisposition } from "../../core/engine/ingest-disposition.js";
+import { MarmotGroupEngine } from "../../engine/group-engine.js";
+import { ingestResultDisposition as engineIngestResultDisposition } from "../../engine/ingest-disposition.js";
 import type {
   DispositionedIngestResult as EngineDispositionedIngestResult,
   IngestResult as EngineIngestResult,
   ProposalAction,
   ProposalContext,
-} from "../../core/engine/types.js";
+} from "../../engine/types.js";
 import { serializeApplicationRumor } from "../../core/group-message.js";
 import { getKeyPackage } from "../../core/key-package-event.js";
 import { getCredentialPubkey } from "../../core/credential.js";
@@ -56,11 +56,8 @@ import { proposeInviteUser } from "./proposals/invite-user.js";
 import { proposeLeaveGroup } from "./proposals/leave-group.js";
 import { NostrGroupPeeler } from "./nostr-peeler.js";
 
-export { createAdminCommitPolicyCallback } from "../../core/engine/admin-policy.js";
-export type {
-  ProposalAction,
-  ProposalContext,
-} from "../../core/engine/types.js";
+export { createAdminCommitPolicyCallback } from "../../engine/admin-policy.js";
+export type { ProposalAction, ProposalContext } from "../../engine/types.js";
 
 /** An error that is thrown when a group has no relays available to send messages. */
 export class NoGroupRelaysError extends Error {

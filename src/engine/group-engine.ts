@@ -1,4 +1,4 @@
-/** @module @category Core - Engine */
+/** @module @category Engine */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { Debugger } from "debug";
 import {
@@ -22,9 +22,9 @@ import {
   wireformats,
 } from "ts-mls";
 
-import { marmotAuthService } from "../auth-service.js";
-import { getMarmotGroupView } from "../client-state.js";
-import { getCredentialPubkey } from "../credential.js";
+import { marmotAuthService } from "../core/auth-service.js";
+import { getMarmotGroupView } from "../core/client-state.js";
+import { getCredentialPubkey } from "../core/credential.js";
 import {
   type AppWitness,
   type BranchCandidate,
@@ -33,16 +33,16 @@ import {
   DEFAULT_CONVERGENCE_POLICY,
   selectCanonicalBranch,
   type CommitOrderingKey,
-} from "../convergence.js";
+} from "../core/convergence.js";
 import {
   canTransitionLifecycle,
   type GroupLifecycleState,
   groupLifecycleStates,
   mayPrepareLocalCommit,
   transitionLifecycle,
-} from "../group-lifecycle.js";
-import { classifyLateCommit } from "../retained-history.js";
-import { logger } from "../../utils/debug.js";
+} from "../core/group-lifecycle.js";
+import { classifyLateCommit } from "../core/retained-history.js";
+import { logger } from "../utils/debug.js";
 import { createAdminCommitPolicyCallback } from "./admin-policy.js";
 import { ingestResultDisposition } from "./ingest-disposition.js";
 import type {

@@ -97,7 +97,7 @@ The media service should depend only on current group state access, ciphersuite 
 
 ### Stage 5: account-level runtime and manager cleanup
 
-Status: next.
+Status: complete for manager-level session/runtime entry points; deeper account runtime extraction can build on these APIs.
 
 Move closer to darkmatter's account/session/runtime split:
 
@@ -105,6 +105,8 @@ Move closer to darkmatter's account/session/runtime split:
 - `GroupsManager` manages group session loading/adoption/caching.
 - Account/runtime helpers own high-level flows like group creation, invite, join, leave, key-package publication, and transport activation.
 - Nostr-specific relay and delivery policy moves behind transport/runtime seams.
+
+This stage adds `GroupsManager.session`, `GroupsManager.runtime`, `GroupsManager.send`, and `GroupsManager.ingest` so callers can drive persisted groups through session/runtime seams without calling `MarmotGroup` convenience methods directly.
 
 ## Public API direction
 

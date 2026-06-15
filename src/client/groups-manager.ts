@@ -1,7 +1,7 @@
 /** @module @category Client - Group Manager */
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventSigner } from "applesauce-core";
-import { hexToBytes } from "applesauce-core/helpers";
+import { hexToBytes, type NostrEvent } from "applesauce-core/helpers";
 import { EventEmitter } from "eventemitter3";
 import {
   CiphersuiteName,
@@ -27,6 +27,15 @@ import {
   GroupMediaFactory,
   MarmotGroup,
 } from "./group/marmot-group.js";
+import type { GroupRuntime } from "./runtime/group-runtime.js";
+import type {
+  GroupPublishResult,
+  GroupSessionSendIntent,
+} from "./session/group-effects.js";
+import type {
+  DispositionedIngestResult,
+  GroupSession,
+} from "./session/group-session.js";
 import type {
   NostrNetworkInterface,
   PublishResponse,
@@ -256,6 +265,36 @@ export class GroupsManager<
     }
 
     return group;
+  }
+
+  /** Returns the protocol session for a loaded or persisted group. */
+  async session(groupId: Uint8Array | string): Promise<GroupSession<THistory>> {
+    return (await this.get(groupId)).session;
+  }
+
+  /** Returns the runtime publisher for a loaded or persisted group. */
+  async runtime(groupId: Uint8Array | string): Promise<GroupRuntime> {
+    return (await this.get(groupId)).runtime;
+  }
+
+  /** Sends a session intent and publishes the resulting effects through the group runtime. */
+  async send(
+    groupId: Uint8Array | string,
+    intent: GroupSessionSendIntent,
+  ): Promise<GroupPublishResult[]> {
+    const group = await this.get(groupId);
+    const effects = await group.session.send(intent);
+    return group.runtime.publishEffects(effects);
+  }
+
+  /** Ingests group transport events through the group's protocol session. */
+  async *ingest(
+    groupId: Uint8Array | string,
+    events: NostrEvent[],
+    options?: { maxRetries?: number },
+  ): AsyncGenerator<DispositionedIngestResult> {
+    const group = await this.get(groupId);
+    yield* group.session.ingest(events, options);
   }
 
   /** Loads all groups from the store and returns them */

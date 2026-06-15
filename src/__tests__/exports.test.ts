@@ -39,6 +39,7 @@ describe("exports", () => {
         "GroupMediaStore",
         "GroupRumorHistory",
         "GroupRuntime",
+        "GroupSession",
         "GroupsManager",
         "INBOX_RELAY_LIST_KIND",
         "INBOX_RELAY_TAG",

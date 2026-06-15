@@ -1,8 +1,8 @@
 /** @module @category Client - Session */
 import type { NostrEvent } from "applesauce-core/helpers/event";
-import type { MlsWelcomeMessage } from "ts-mls";
+import type { MlsWelcomeMessage, Proposal } from "ts-mls";
 
-import type { PendingState } from "../../engine/types.js";
+import type { PendingState, ProposalAction } from "../../engine/types.js";
 import type { PublishResponse } from "../nostr-interface.js";
 import type { WelcomeRecipient } from "../transport/nostr/welcome-delivery.js";
 
@@ -30,3 +30,20 @@ export type GroupPublishResult = {
   work: GroupPublishWork;
   response: Record<string, PublishResponse>;
 };
+
+/** Local protocol intent accepted by {@link GroupSession}. */
+export type GroupSessionSendIntent =
+  | { kind: "applicationMessage"; payload: Uint8Array }
+  | { kind: "proposal"; proposal: Proposal }
+  | { kind: "selfUpdate" }
+  | {
+      kind: "commit";
+      actorPubkey: string;
+      extraProposals?: (
+        | Proposal
+        | ProposalAction<Proposal>
+        | (Proposal | ProposalAction<Proposal>)[]
+      )[];
+      proposalRefs?: string[];
+      welcomeRecipients?: WelcomeRecipient[];
+    };

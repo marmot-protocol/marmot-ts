@@ -13,26 +13,11 @@ import {
   ClientState,
   CryptoProvider,
   defaultCryptoProvider,
-  MlsMessage,
-  type ProcessMessageResult,
   Proposal,
 } from "ts-mls";
 import { sha256 } from "@noble/hashes/sha2.js";
 
-import {
-  getMarmotGroupView,
-  type MarmotGroupView,
-  serializeClientState,
-} from "../../core/client-state.js";
-import type { Disposition } from "../../core/inbound.js";
-import { MarmotGroupEngine } from "../../engine/group-engine.js";
-import { ingestResultDisposition as engineIngestResultDisposition } from "../../engine/ingest-disposition.js";
-import type {
-  DispositionedIngestResult as EngineDispositionedIngestResult,
-  IngestResult as EngineIngestResult,
-  ProposalAction,
-  ProposalContext,
-} from "../../engine/types.js";
+import type { ProposalAction, ProposalContext } from "../../engine/types.js";
 import { serializeApplicationRumor } from "../../core/group-message.js";
 import { getKeyPackage } from "../../core/key-package-event.js";
 import { getCredentialPubkey } from "../../core/credential.js";
@@ -51,6 +36,12 @@ import type { SerializedClientState } from "../../core/client-state.js";
 import { hasAck } from "../../utils/index.js";
 import { unixNow } from "../../utils/nostr.js";
 import { GroupRuntime } from "../runtime/group-runtime.js";
+import {
+  GroupSession,
+  type DispositionedIngestResult,
+  type GroupSessionHistory,
+  type ProposalBuilder,
+} from "../session/group-session.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import {
   NostrWelcomeDelivery,
@@ -58,7 +49,6 @@ import {
 } from "../transport/nostr/welcome-delivery.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 import { proposeLeaveGroup } from "./proposals/leave-group.js";
-import { NostrGroupPeeler } from "./nostr-peeler.js";
 
 export { createAdminCommitPolicyCallback } from "../../engine/admin-policy.js";
 export type { ProposalAction, ProposalContext } from "../../engine/types.js";
@@ -77,98 +67,21 @@ export class NoMarmotGroupDataError extends Error {
   }
 }
 
-/** An event whose MLS message was successfully processed */
-export type ProcessedIngestResult = {
-  kind: "processed";
-  /** The result of processing the event */
-  result: ProcessMessageResult;
-  /** The event that was processed */
-  event: NostrEvent;
-  /** The MLS message that was processed */
-  message: MlsMessage;
-};
-
-/** A commit that was rejected by the admin-verification callback */
-export type RejectedIngestResult = {
-  kind: "rejected";
-  /** The result returned by processMessage (actionTaken === "reject") */
-  result: ProcessMessageResult;
-  /** The event that was rejected */
-  event: NostrEvent;
-  /** The MLS message that was rejected */
-  message: MlsMessage;
-};
-
-/** An event that was skipped without processing */
-export type SkippedIngestResult = {
-  kind: "skipped";
-  /** The event that was skipped */
-  event: NostrEvent;
-  /** The decoded MLS message */
-  message: MlsMessage;
-  /**
-   * Why the event was skipped:
-   * - `"past-epoch"` – commit belongs to an epoch we have already advanced past
-   * - `"wrong-wireformat"` – the MLS wireformat is unexpected for a group message
-   * - `"self-echo"` – this event was sent by us; state was already advanced at send time
-   * - `"beyond-anchor"` – competing commit forks from before our retained anchor;
-   *   the history needed to evaluate it was already pruned (retained-history.md)
-   * - `"missing-retained-anchor"` – competing commit forks inside the rollback
-   *   horizon but its retained anchor state was lost; the group can no longer
-   *   converge and transitions to `Unrecoverable`
-   */
-  reason:
-    | "past-epoch"
-    | "wrong-wireformat"
-    | "self-echo"
-    | "beyond-anchor"
-    | "missing-retained-anchor";
-};
-
-/** An event that could not be decrypted or processed after all retry attempts */
-export type UnreadableIngestResult = {
-  kind: "unreadable";
-  /** The event that could not be processed */
-  event: NostrEvent;
-  /** All errors captured across every retry attempt, in chronological order */
-  errors: unknown[];
-};
-
-/** Result from ingesting a group event */
-export type IngestResult =
-  | ProcessedIngestResult
-  | RejectedIngestResult
-  | SkippedIngestResult
-  | UnreadableIngestResult;
-
-/**
- * An {@link IngestResult} carrying its protocol-visible inbound-processing
- * {@link Disposition} (`protocol-core/inbound-processing.md`). This is what
- * {@link MarmotGroup.ingest} yields, so consumers can act on the classification
- * (accepted / stale / deferred / invalidated) without re-deriving it.
- */
-export type DispositionedIngestResult = IngestResult & {
-  /** The protocol-visible disposition classifying this result. */
-  disposition: Disposition;
-};
-
-/**
- * Maps a client-facing {@link IngestResult} (`event` field) to its protocol-visible
- * {@link Disposition} via the transport-agnostic engine helper.
- */
-export function ingestResultDisposition(result: IngestResult): Disposition {
-  const { event, ...rest } = result;
-  return engineIngestResultDisposition({
-    ...rest,
-    envelope: event,
-  } as EngineIngestResult<NostrEvent>);
-}
+export type {
+  DispositionedIngestResult,
+  IngestResult,
+  ProcessedIngestResult,
+  RejectedIngestResult,
+  SkippedIngestResult,
+  UnreadableIngestResult,
+} from "../session/group-session.js";
+export { ingestResultDisposition } from "../session/group-session.js";
 
 /**
  * The minimum interface for a group to store them MLS messages
  * Implementations should extend this with methods for querying and loading stored messages
  */
-export interface BaseGroupHistory {
+export interface BaseGroupHistory extends GroupSessionHistory {
   /** Saves a new application message to the group history */
   saveMessage(message: Uint8Array): Promise<void>;
   /** Purge the group history, called when group is destroyed */
@@ -206,12 +119,6 @@ export interface BaseGroupMedia {
 export type GroupMediaFactory<
   TMedia extends BaseGroupMedia | undefined = undefined,
 > = (groupId: Uint8Array) => TMedia;
-
-/** A method that creates a {@link ProposalAction} from a set of arguments */
-export type ProposalBuilder<
-  Args extends unknown[],
-  T extends Proposal | Proposal[],
-> = (...args: Args) => ProposalAction<T>;
 
 export type MarmotGroupOptions<
   THistory extends BaseGroupHistory | undefined = undefined,
@@ -252,13 +159,6 @@ export type MarmotGroupEvents<
   historyError: (error: Error) => void;
 };
 
-function mapEngineIngestResult(
-  result: EngineDispositionedIngestResult<NostrEvent>,
-): DispositionedIngestResult {
-  const { envelope, disposition, ...rest } = result;
-  return { ...rest, event: envelope, disposition };
-}
-
 /**
  * The main class for interacting with a MLS group
  * @template THistory - The type of the history store to use for the group, must implement the {@link BaseGroupHistory} interface. (Default is no history store)
@@ -285,19 +185,8 @@ export class MarmotGroup<
   /** The storage interface for the groups media */
   readonly media: TMedia;
 
-  /** Whether group state has been modified */
-  dirty = false;
-
-  readonly #engine: MarmotGroupEngine<NostrEvent>;
-  readonly #peeler: NostrGroupPeeler;
+  readonly #session: GroupSession<THistory>;
   readonly #runtime: GroupRuntime;
-  #groupData: MarmotGroupView | null = null;
-
-  /**
-   * Event IDs of application messages we sent ourselves, used to skip self-echoes in ingest()
-   * NOTE: this is not persisted at the moment, its only in memory and used to skip self-echoes in ingest()
-   */
-  readonly #sentEventIds = new Set<string>();
 
   /** In-flight media decrypts keyed by plaintext SHA-256 hex. */
   readonly #decryptingMedia = new Map<string, Promise<StoredMedia>>();
@@ -305,7 +194,7 @@ export class MarmotGroup<
   private log: Debugger;
 
   get id() {
-    return this.state.groupContext.groupId;
+    return this.#session.id;
   }
 
   /** The group id as a hex string */
@@ -313,7 +202,7 @@ export class MarmotGroup<
 
   /** Read the current group state */
   get state() {
-    return this.#engine.state;
+    return this.#session.state;
   }
 
   /**
@@ -323,16 +212,19 @@ export class MarmotGroup<
    * commit applying) and back to `Stable`.
    */
   get lifecycle() {
-    return this.#engine.lifecycle;
+    return this.#session.lifecycle;
   }
 
   get groupData() {
-    if (!this.#groupData) this.#groupData = getMarmotGroupView(this.state);
-    return this.#groupData;
+    return this.#session.groupData;
   }
 
   get unappliedProposals() {
-    return this.#engine.state.unappliedProposals;
+    return this.#session.unappliedProposals;
+  }
+
+  get dirty() {
+    return this.#session.dirty;
   }
 
   /**
@@ -340,7 +232,7 @@ export class MarmotGroup<
    * @warning It is not recommended to use this
    */
   set state(newState: ClientState) {
-    this.#engine.state = newState;
+    this.#session.state = newState;
   }
 
   get relays() {
@@ -357,27 +249,27 @@ export class MarmotGroup<
     this.ciphersuite = options.ciphersuite;
     this.network = options.network;
 
-    this.#peeler = new NostrGroupPeeler(this.ciphersuite);
-    this.#engine = new MarmotGroupEngine({
-      state,
-      ciphersuite: this.ciphersuite,
-      peeler: this.#peeler,
-      onStateChanged: (newState) => {
-        this.dirty = true;
-        this.#groupData = null;
-        this.emit("stateChanged", newState);
-      },
-    });
-
     if (options.history) {
       if (typeof options.history === "function") {
-        this.history = options.history(this.id);
+        this.history = options.history(state.groupContext.groupId);
       } else {
         this.history = options.history;
       }
     } else {
       this.history = undefined as THistory;
     }
+
+    this.#session = new GroupSession({
+      state,
+      ciphersuite: this.ciphersuite,
+      store: this.store,
+      history: this.history,
+      onStateChanged: (newState) => this.emit("stateChanged", newState),
+      onStateSaved: () => this.emit("stateSaved", this),
+      onApplicationMessage: (message) =>
+        this.emit("applicationMessage", message),
+      onHistoryError: (error) => this.emit("historyError", error),
+    });
 
     if (options.media) {
       if (typeof options.media === "function") {
@@ -399,8 +291,8 @@ export class MarmotGroup<
       getNetwork: () => this.network,
       getRelays: () => this.relays,
       getGroupData: () => this.groupData,
-      confirmPublished: (pending) => this.#engine.confirmPublished(pending),
-      publishFailed: (pending) => this.#engine.publishFailed(pending),
+      confirmPublished: (pending) => this.#session.confirmPublished(pending),
+      publishFailed: (pending) => this.#session.publishFailed(pending),
       save: () => this.save(),
       log: this.log,
     });
@@ -433,12 +325,7 @@ export class MarmotGroup<
    *   having to mutate `dirty` externally.
    */
   async save(force = false) {
-    if (!force && !this.dirty) return;
-
-    const stateBytes = serializeClientState(this.state);
-    await this.store.setItem(bytesToHex(this.id), stateBytes);
-    this.dirty = false;
-    this.emit("stateSaved", this);
+    await this.#session.save(force);
   }
 
   /**
@@ -453,15 +340,9 @@ export class MarmotGroup<
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
-    const sendResult = await this.#engine.send({ kind: "selfUpdate" });
-    if (sendResult.kind !== "selfUpdate") {
-      throw new Error("Expected selfUpdate result from selfUpdate send");
-    }
-
-    return this.#runtime.publishSelfUpdate(
-      sendResult.envelope,
-      sendResult.pending,
-    );
+    const effects = await this.#session.send({ kind: "selfUpdate" });
+    const [result] = await this.#runtime.publishEffects(effects);
+    return result.response;
   }
 
   /**
@@ -528,11 +409,7 @@ export class MarmotGroup<
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
-    const context: ProposalContext = {
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-      groupData: this.groupData,
-    };
+    const context: ProposalContext = this.#session.proposalContext();
 
     let proposals: T;
     if (args.length === 1) {
@@ -560,15 +437,9 @@ export class MarmotGroup<
   async sendProposal(
     proposal: Proposal,
   ): Promise<Record<string, PublishResponse>> {
-    const sendResult = await this.#engine.send({ kind: "proposal", proposal });
-    if (sendResult.kind !== "proposal") {
-      throw new Error("Expected proposal result from proposal send");
-    }
-
-    return this.#runtime.publishProposal(
-      sendResult.envelope,
-      sendResult.pending,
-    );
+    const effects = await this.#session.send({ kind: "proposal", proposal });
+    const [result] = await this.#runtime.publishEffects(effects);
+    return result.response;
   }
 
   /**
@@ -587,22 +458,13 @@ export class MarmotGroup<
     this.log("sending application rumor kind:%d", rumor.kind);
     const applicationData = serializeApplicationRumor(rumor);
 
-    const sendResult = await this.#engine.send({
+    const effects = await this.#session.send({
       kind: "applicationMessage",
       payload: applicationData,
     });
 
-    this.#sentEventIds.add(sendResult.envelope.id);
-
-    if (this.history) {
-      try {
-        await this.history.saveMessage(applicationData);
-      } catch (err) {
-        this.emit("historyError", err as Error);
-      }
-    }
-
-    return this.#runtime.publishApplication(sendResult.envelope);
+    const [result] = await this.#runtime.publishEffects(effects);
+    return result.response;
   }
 
   /**
@@ -681,24 +543,16 @@ export class MarmotGroup<
     if (!groupData) throw new NoMarmotGroupDataError();
 
     const actorPubkey = await this.signer.getPublicKey();
-    const sendResult = await this.#engine.send({
+    const effects = await this.#session.send({
       kind: "commit",
       actorPubkey,
       extraProposals: options?.extraProposals,
       proposalRefs: options?.proposalRefs,
-    });
-
-    if (sendResult.kind !== "groupEvolution") {
-      throw new Error("Expected groupEvolution result from commit send");
-    }
-
-    return this.#runtime.publishCommit({
-      envelope: sendResult.envelope,
-      pending: sendResult.pending,
-      actorPubkey,
-      welcome: sendResult.welcome,
       welcomeRecipients: options?.welcomeRecipients,
     });
+
+    const [result] = await this.#runtime.publishEffects(effects);
+    return result.response;
   }
 
   /**
@@ -768,52 +622,7 @@ export class MarmotGroup<
     events: NostrEvent[],
     options?: { maxRetries?: number },
   ): AsyncGenerator<DispositionedIngestResult> {
-    const selfEcho: NostrEvent[] = [];
-    const rest: NostrEvent[] = [];
-
-    for (const event of events) {
-      if (this.#sentEventIds.delete(event.id)) {
-        selfEcho.push(event);
-      } else {
-        rest.push(event);
-      }
-    }
-
-    for (const event of selfEcho) {
-      const peeled = await this.#peeler.peelGroupMessages([event], this.state);
-      const message = peeled.read[0]?.message;
-      if (message) {
-        const skipped: SkippedIngestResult = {
-          kind: "skipped",
-          event,
-          message,
-          reason: "self-echo",
-        };
-        yield { ...skipped, disposition: ingestResultDisposition(skipped) };
-      }
-    }
-
-    for await (const result of this.#engine.ingest(rest, options)) {
-      const mapped = mapEngineIngestResult(result);
-
-      if (
-        mapped.kind === "processed" &&
-        mapped.result.kind === "applicationMessage"
-      ) {
-        if (this.history) {
-          try {
-            await this.history.saveMessage(mapped.result.message);
-          } catch (err) {
-            this.emit("historyError", err as Error);
-          }
-        }
-        this.emit("applicationMessage", mapped.result.message);
-      }
-
-      yield mapped;
-    }
-
-    await this.save();
+    yield* this.#session.ingest(events, options);
   }
 
   /**
@@ -927,14 +736,11 @@ export class MarmotGroup<
   async destroy() {
     this.log("destroying group");
 
-    this.log("clearing group history");
-    if (this.history) await this.history.purgeMessages();
-
     this.log("clearing group media");
     if (this.media) await this.media.clearMedia();
 
     this.log("removing group from store");
-    await this.store.removeItem(bytesToHex(this.id));
+    await this.#session.destroyLocalState();
 
     this.emit("destroyed", this);
   }

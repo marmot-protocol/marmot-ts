@@ -6,6 +6,11 @@ import type { MarmotGroupView } from "../../core/client-state.js";
 import type { PendingState } from "../../engine/types.js";
 import { hasAck } from "../../utils/index.js";
 import type {
+  GroupEffects,
+  GroupPublishResult,
+  GroupPublishWork,
+} from "../session/group-effects.js";
+import type {
   NostrNetworkInterface,
   PublishResponse,
 } from "../nostr-interface.js";
@@ -54,6 +59,35 @@ export class GroupRuntime {
     this.#publishFailed = options.publishFailed;
     this.#save = options.save;
     this.#log = options.log;
+  }
+
+  async publishEffects(effects: GroupEffects): Promise<GroupPublishResult[]> {
+    const results: GroupPublishResult[] = [];
+    for (const work of effects.publish) {
+      results.push({ work, response: await this.publishWork(work) });
+    }
+    return results;
+  }
+
+  async publishWork(
+    work: GroupPublishWork,
+  ): Promise<Record<string, PublishResponse>> {
+    switch (work.kind) {
+      case "applicationMessage":
+        return this.publishApplication(work.envelope);
+      case "proposal":
+        return this.publishProposal(work.envelope, work.pending);
+      case "selfUpdate":
+        return this.publishSelfUpdate(work.envelope, work.pending);
+      case "groupEvolution":
+        return this.publishCommit({
+          envelope: work.envelope,
+          pending: work.pending,
+          actorPubkey: work.actorPubkey,
+          welcome: work.welcome,
+          welcomeRecipients: work.welcomeRecipients,
+        });
+    }
   }
 
   async publishApplication(

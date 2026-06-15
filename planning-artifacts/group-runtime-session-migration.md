@@ -40,7 +40,7 @@ Status: complete.
 
 ### Stage 2: extract `GroupSession`
 
-Status: next.
+Status: complete.
 
 Create `src/client/session/group-session.ts` and move session-owned behavior out of `MarmotGroup`:
 
@@ -59,7 +59,7 @@ After this stage, `MarmotGroup` should hold a `GroupSession` and a `GroupRuntime
 
 ### Stage 3: replace `MarmotGroup` as the primary API
 
-Status: planned breaking change.
+Status: next breaking change.
 
 Expose session/runtime flows directly and stop treating `MarmotGroup` convenience methods as the canonical API.
 

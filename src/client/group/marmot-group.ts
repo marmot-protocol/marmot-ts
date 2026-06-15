@@ -45,13 +45,17 @@ import {
   MIP04_VERSION,
 } from "../../core/media.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
-import { createWelcomeRumor } from "../../core/welcome.js";
 import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import type { SerializedClientState } from "../../core/client-state.js";
-import { createGiftWrap, hasAck } from "../../utils/index.js";
+import { hasAck } from "../../utils/index.js";
 import { unixNow } from "../../utils/nostr.js";
+import { GroupRuntime } from "../runtime/group-runtime.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
+import {
+  NostrWelcomeDelivery,
+  type WelcomeRecipient,
+} from "../transport/nostr/welcome-delivery.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 import { proposeLeaveGroup } from "./proposals/leave-group.js";
 import { NostrGroupPeeler } from "./nostr-peeler.js";
@@ -231,16 +235,6 @@ export type MarmotGroupOptions<
   media?: TMedia | GroupMediaFactory<TMedia>;
 };
 
-/** Information about a welcome recipient */
-export type WelcomeRecipient = {
-  /** The recipient's Nostr public key */
-  pubkey: string;
-  /** The ID of KeyPackage event (kind 30443) used for add operation */
-  keyPackageEventId: string;
-  /** The KeyPackage event (kind 30443) used for add operation */
-  keyPackageEvent: NostrEvent;
-};
-
 /** Map of events that can be emitted by a MarmotGroup */
 export type MarmotGroupEvents<
   THistory extends BaseGroupHistory | undefined = any,
@@ -296,6 +290,7 @@ export class MarmotGroup<
 
   readonly #engine: MarmotGroupEngine<NostrEvent>;
   readonly #peeler: NostrGroupPeeler;
+  readonly #runtime: GroupRuntime;
   #groupData: MarmotGroupView | null = null;
 
   /**
@@ -396,6 +391,19 @@ export class MarmotGroup<
 
     this.idStr = bytesToHex(this.id);
     this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
+    this.#runtime = new GroupRuntime({
+      welcomeDelivery: new NostrWelcomeDelivery({
+        signer: this.signer,
+        network: this.network,
+      }),
+      getNetwork: () => this.network,
+      getRelays: () => this.relays,
+      getGroupData: () => this.groupData,
+      confirmPublished: (pending) => this.#engine.confirmPublished(pending),
+      publishFailed: (pending) => this.#engine.publishFailed(pending),
+      save: () => this.save(),
+      log: this.log,
+    });
   }
 
   /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
@@ -445,23 +453,15 @@ export class MarmotGroup<
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
-
     const sendResult = await this.#engine.send({ kind: "selfUpdate" });
     if (sendResult.kind !== "selfUpdate") {
       throw new Error("Expected selfUpdate result from selfUpdate send");
     }
 
-    const response = await this.network.publish(relays, sendResult.envelope);
-    if (!hasAck(response)) {
-      throw new Error("Failed to publish commit event: no relay acknowledged");
-    }
-
-    this.#engine.confirmPublished(sendResult.pending);
-    await this.save();
-
-    return response;
+    return this.#runtime.publishSelfUpdate(
+      sendResult.envelope,
+      sendResult.pending,
+    );
   }
 
   /**
@@ -565,20 +565,10 @@ export class MarmotGroup<
       throw new Error("Expected proposal result from proposal send");
     }
 
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
-
-    const response = await this.network.publish(relays, sendResult.envelope);
-    if (!hasAck(response)) {
-      throw new Error(
-        "Failed to publish proposal event: no relay acknowledged",
-      );
-    }
-
-    this.#engine.confirmPublished(sendResult.pending);
-    await this.save();
-
-    return response;
+    return this.#runtime.publishProposal(
+      sendResult.envelope,
+      sendResult.pending,
+    );
   }
 
   /**
@@ -612,22 +602,7 @@ export class MarmotGroup<
       }
     }
 
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
-    const response = await this.network.publish(relays, sendResult.envelope);
-    if (!hasAck(response)) {
-      const errors = Object.values(response)
-        .filter((r) => !r.ok && r.message)
-        .map((r) => r.message)
-        .join("; ");
-      throw new Error(
-        `Failed to publish application message: ${
-          errors || "no relay acknowledged"
-        }`,
-      );
-    }
-
-    return response;
+    return this.#runtime.publishApplication(sendResult.envelope);
   }
 
   /**
@@ -717,129 +692,13 @@ export class MarmotGroup<
       throw new Error("Expected groupEvolution result from commit send");
     }
 
-    let response: Record<string, PublishResponse>;
-    try {
-      const relays = this.relays;
-      if (!relays) throw new NoGroupRelaysError();
-      response = await this.network.publish(relays, sendResult.envelope);
-      if (!hasAck(response)) {
-        const errors = Object.values(response)
-          .filter((r) => !r.ok && r.message)
-          .map((r) => r.message)
-          .join("; ");
-        throw new Error(
-          `Failed to publish commit: ${errors || "no relay acknowledged"}`,
-        );
-      }
-    } catch (err) {
-      this.#engine.publishFailed(sendResult.pending);
-      throw err;
-    }
-
-    this.#engine.confirmPublished(sendResult.pending);
-    await this.save();
-
-    const { welcome } = sendResult;
-    if (
-      welcome &&
-      options?.welcomeRecipients &&
-      options.welcomeRecipients.length > 0
-    ) {
-      this.log(
-        "Sending Welcome messages to %d recipient(s)",
-        options.welcomeRecipients.length,
-      );
-
-      const innerWelcome = welcome?.welcome;
-      if (!innerWelcome) return response;
-
-      const welcomeResults = await Promise.allSettled(
-        options.welcomeRecipients.map(async (recipient) => {
-          const welcomeRumor = createWelcomeRumor({
-            welcome: innerWelcome,
-            author: actorPubkey,
-            groupRelays: groupData.relays,
-            keyPackageEventId: recipient.keyPackageEventId,
-          });
-
-          const giftWrapEvent = await createGiftWrap({
-            rumor: welcomeRumor,
-            recipient: recipient.pubkey,
-            signer: this.signer,
-          });
-
-          let inboxRelays: string[];
-          try {
-            inboxRelays = await this.network.getUserInboxRelays(
-              recipient.pubkey,
-            );
-            this.log("Retrieved inbox relays for recipient: %O", inboxRelays);
-          } catch (error) {
-            this.log(
-              "Failed to get inbox relays for recipient %s...: %O",
-              recipient.pubkey.slice(0, 16),
-              error,
-            );
-            inboxRelays = groupData.relays || [];
-          }
-
-          if (inboxRelays.length === 0) {
-            throw new Error(
-              `No relays available to send Welcome to recipient ${recipient.pubkey.slice(
-                0,
-                16,
-              )}...`,
-            );
-          }
-
-          const publishResult = await this.network.publish(
-            inboxRelays,
-            giftWrapEvent,
-          );
-
-          this.log("Gift wrap publish result: %O", publishResult);
-
-          return publishResult;
-        }),
-      );
-
-      const failureDetails = welcomeResults
-        .map((r, i) => ({
-          result: r,
-          recipient: options.welcomeRecipients![i],
-        }))
-        .filter(
-          (
-            x,
-          ): x is {
-            result: PromiseRejectedResult;
-            recipient: WelcomeRecipient;
-          } => x.result.status === "rejected",
-        )
-        .map((x) => {
-          const msg =
-            x.result.reason instanceof Error
-              ? x.result.reason.message
-              : String(x.result.reason);
-          return `${x.recipient.pubkey.slice(0, 16)}…: ${msg}`;
-        });
-
-      if (failureDetails.length > 0) {
-        this.log(
-          "%d/%d Welcome(s) failed to deliver: %O",
-          failureDetails.length,
-          options.welcomeRecipients.length,
-          failureDetails,
-        );
-        throw new Error(
-          `Failed to deliver ${failureDetails.length}/${options.welcomeRecipients.length} Welcome message(s): ${failureDetails.join(
-            "; ",
-          )}`,
-        );
-      }
-    }
-
-    return response;
+    return this.#runtime.publishCommit({
+      envelope: sendResult.envelope,
+      pending: sendResult.pending,
+      actorPubkey,
+      welcome: sendResult.welcome,
+      welcomeRecipients: options?.welcomeRecipients,
+    });
   }
 
   /**

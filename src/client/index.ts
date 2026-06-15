@@ -4,3 +4,6 @@ export * from "./key-package-manager.js";
 export * from "./groups-manager.js";
 export * from "./group/index.js";
 export * from "./invite-manager.js";
+export * from "./runtime/group-runtime.js";
+export * from "./session/group-effects.js";
+export * from "./transport/nostr/welcome-delivery.js";

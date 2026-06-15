@@ -18,12 +18,12 @@ Normative Marmot protocol bytes are defined in the Marmot v2 draft [`account-ide
 
 ### Two keys on every MLS leaf
 
-| Key | Role | Typical algorithm |
-| --- | --- | --- |
-| **Account identity** | Marmot / Nostr account (32-byte x-only secp256k1 pubkey in the MLS `BasicCredential`) | BIP-340 public key |
-| **MLS signature key** | Per-device leaf key used for MLS protocol messages | Often Ed25519 (depends on MLS ciphersuite) |
+| Key                   | Role                                                                                  | Typical algorithm                          |
+| --------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------ |
+| **Account identity**  | Marmot / Nostr account (32-byte x-only secp256k1 pubkey in the MLS `BasicCredential`) | BIP-340 public key                         |
+| **MLS signature key** | Per-device leaf key used for MLS protocol messages                                    | Often Ed25519 (depends on MLS ciphersuite) |
 
-The credential alone only *claims* an account pubkey. The identity proof proves the account owner authorized **this** MLS signature public key for **this** ciphersuite.
+The credential alone only _claims_ an account pubkey. The identity proof proves the account owner authorized **this** MLS signature public key for **this** ciphersuite.
 
 ### What is being signed
 
@@ -58,46 +58,46 @@ When Marmot defines a v2 proof, it may also change the domain string, extension 
 
 ### Required caller fields
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `version` | number | Account identity proof version. **Must be `1` today** (see Marmot spec). Future values select v2+ encodings when defined. |
-| `mls_ciphersuite` | number | MLS ciphersuite id (unsigned 16-bit). Marmot currently uses **`1` (`0x0001`, Ed25519)**. |
-| `mls_signature_public_key` | hex string | Exact serialized MLS leaf signature public key bytes from the LeafNode being authorized. |
+| Field                      | Type       | Description                                                                                                               |
+| -------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `version`                  | number     | Account identity proof version. **Must be `1` today** (see Marmot spec). Future values select v2+ encodings when defined. |
+| `mls_ciphersuite`          | number     | MLS ciphersuite id (unsigned 16-bit). Marmot currently uses **`1` (`0x0001`, Ed25519)**.                                  |
+| `mls_signature_public_key` | hex string | Exact serialized MLS leaf signature public key bytes from the LeafNode being authorized.                                  |
 
 ### Signer-supplied constants (never passed by callers)
 
 The signer **must** resolve these from `version` and local key material when building the signing input:
 
-| Value | Source |
-| --- | --- |
-| `domain` | From proof version — v1: `"marmot.account-identity-proof.v1"` |
-| `extension_type` | From proof version — v1: `62193` (`0xF2F1`) |
-| `account_identity` | Signer's own 32-byte x-only pubkey from `getPublicKey()` (normalized to x-only bytes) |
+| Value                  | Source                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| `domain`               | From proof version — v1: `"marmot.account-identity-proof.v1"`                                             |
+| `extension_type`       | From proof version — v1: `62193` (`0xF2F1`)                                                               |
+| `account_identity`     | Signer's own 32-byte x-only pubkey from `getPublicKey()` (normalized to x-only bytes)                     |
 | `mls_signature_scheme` | Derived from `mls_ciphersuite` using the [mapping table](#mls-ciphersuite--signature-scheme-mapping) (v1) |
 
 Callers **must not** pass `domain`, `extension_type`, `account_identity`, or `mls_signature_scheme`. Signers **must ignore or reject** requests that include them.
 
 ### Version dispatch (signer implementation)
 
-| `version` | Status | Signer behavior |
-| --- | --- | --- |
-| `1` | Defined | Use v1 domain, extension type, and canonical message layout in this document; BIP-340 signature |
-| other | Future / unknown | **Reject** with an explicit unsupported-version error until the signer implements that version |
+| `version` | Status           | Signer behavior                                                                                 |
+| --------- | ---------------- | ----------------------------------------------------------------------------------------------- |
+| `1`       | Defined          | Use v1 domain, extension type, and canonical message layout in this document; BIP-340 signature |
+| other     | Future / unknown | **Reject** with an explicit unsupported-version error until the signer implements that version  |
 
 When a new Marmot proof version is published, signer authors update their dispatch table (and approval UI copy) to match the new spec. Clients pass the `version` byte they embed in the MLS extension payload.
 
 ### Fields signers must reject
 
-| Condition | Error |
-| --- | --- |
-| `version` missing | reject |
-| `version` not implemented by this signer (only `1` today) | reject |
-| `mls_ciphersuite` missing or unknown (not in mapping table) | reject |
-| `mls_signature_public_key` missing or invalid hex | reject |
-| `mls_signature_public_key` length inconsistent with ciphersuite (e.g. ≠ 32 bytes for ciphersuite `1`) | reject |
-| Request contains **only** a `digest` / `hash` field | reject |
-| Request asks signer to sign a precomputed digest without `version`, `mls_ciphersuite`, and `mls_signature_public_key` | reject |
-| Extra fields such as `account_identity`, `extension_type`, or `domain` | reject (recommended) or ignore |
+| Condition                                                                                                             | Error                          |
+| --------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `version` missing                                                                                                     | reject                         |
+| `version` not implemented by this signer (only `1` today)                                                             | reject                         |
+| `mls_ciphersuite` missing or unknown (not in mapping table)                                                           | reject                         |
+| `mls_signature_public_key` missing or invalid hex                                                                     | reject                         |
+| `mls_signature_public_key` length inconsistent with ciphersuite (e.g. ≠ 32 bytes for ciphersuite `1`)                 | reject                         |
+| Request contains **only** a `digest` / `hash` field                                                                   | reject                         |
+| Request asks signer to sign a precomputed digest without `version`, `mls_ciphersuite`, and `mls_signature_public_key` | reject                         |
+| Extra fields such as `account_identity`, `extension_type`, or `domain`                                                | reject (recommended) or ignore |
 
 Signers **may** accept an optional `digest` field for cross-checking only: if present, it **must** equal the digest the signer recomputes from the caller fields plus signer-supplied constants. If it differs, reject.
 
@@ -105,15 +105,15 @@ Signers **may** accept an optional `digest` field for cross-checking only: if pr
 
 Signers **must** look up `mls_signature_scheme` from `mls_ciphersuite` before signing:
 
-| `mls_ciphersuite` | Name (informative) | `mls_signature_scheme` | Name (informative) |
-| --- | --- | --- | --- |
-| `1` | MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 | `0x0807` (2055) | Ed25519 |
-| `2` | MLS_256_DHKEMP256_AES128GCM_SHA256_P256 | `0x0403` (1027) | ecdsa_secp256r1_sha256 |
-| `3` | MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 | `0x0807` (2055) | Ed25519 |
-| `4` | MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448 | `0x0808` (2056) | Ed448 |
-| `5` | MLS_256_DHKEMP521_AES256GCM_SHA512_P521 | `0x0603` (1539) | ecdsa_secp521r1_sha512 |
-| `6` | MLS_256_DHKEMX448_AES256GCM_SHA512_Ed448 | `0x0808` (2056) | Ed448 |
-| `7` | MLS_256_DHKEMP384_AES256GCM_SHA384_P384 | `0x0503` (1283) | ecdsa_secp384r1_sha384 |
+| `mls_ciphersuite` | Name (informative)                                  | `mls_signature_scheme` | Name (informative)     |
+| ----------------- | --------------------------------------------------- | ---------------------- | ---------------------- |
+| `1`               | MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 | `0x0807` (2055)        | Ed25519                |
+| `2`               | MLS_256_DHKEMP256_AES128GCM_SHA256_P256             | `0x0403` (1027)        | ecdsa_secp256r1_sha256 |
+| `3`               | MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519        | `0x0807` (2055)        | Ed25519                |
+| `4`               | MLS_256_DHKEMX448_CHACHA20POLY1305_SHA512_Ed448     | `0x0808` (2056)        | Ed448                  |
+| `5`               | MLS_256_DHKEMP521_AES256GCM_SHA512_P521             | `0x0603` (1539)        | ecdsa_secp521r1_sha512 |
+| `6`               | MLS_256_DHKEMX448_AES256GCM_SHA512_Ed448            | `0x0808` (2056)        | Ed448                  |
+| `7`               | MLS_256_DHKEMP384_AES256GCM_SHA384_P384             | `0x0503` (1283)        | ecdsa_secp384r1_sha384 |
 
 For ciphersuite `1`, `mls_signature_public_key` must be **32 bytes** after hex decode.
 
@@ -252,26 +252,26 @@ async function signMlsIdentityProof(secretKey, callerParams) {
 
 **Caller params:**
 
-| Field | Value |
-| --- | --- |
-| `version` | `1` |
-| `mls_ciphersuite` | `1` |
+| Field                      | Value                                                            |
+| -------------------------- | ---------------------------------------------------------------- |
+| `version`                  | `1`                                                              |
+| `mls_ciphersuite`          | `1`                                                              |
 | `mls_signature_public_key` | `ababababababababababababababababababababababababababababababab` |
 
 **Signer-resolved values for v1** (not passed by caller):
 
-| Value | Source |
-| --- | --- |
-| `domain` | `"marmot.account-identity-proof.v1"` |
-| `extension_type` | `62193` (`0xF2F1`) |
-| `mls_signature_scheme` | `2055` (`0x0807`) — derived from ciphersuite `1` |
-| `account_identity` | `9d948d4dbd92fe2b7c3ace1cdf99f7f79cbb23f0ac10edf323b8bae36c58ea91` (x-only pubkey of test secret key `0x01…01` last byte `0x07`) |
+| Value                  | Source                                                                                                                           |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `domain`               | `"marmot.account-identity-proof.v1"`                                                                                             |
+| `extension_type`       | `62193` (`0xF2F1`)                                                                                                               |
+| `mls_signature_scheme` | `2055` (`0x0807`) — derived from ciphersuite `1`                                                                                 |
+| `account_identity`     | `9d948d4dbd92fe2b7c3ace1cdf99f7f79cbb23f0ac10edf323b8bae36c58ea91` (x-only pubkey of test secret key `0x01…01` last byte `0x07`) |
 
 **Expected outputs:**
 
-| Output | Value |
-| --- | --- |
-| `digest` | `9035a57a3156c220cefc0318762cdbed8adbf155f54455151bc779d2a31c021e` |
+| Output      | Value                                                                                                                              |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `digest`    | `9035a57a3156c220cefc0318762cdbed8adbf155f54455151bc779d2a31c021e`                                                                 |
 | `signature` | `3fd87ca37ddf056521dfcfe4749ef2169c5b423ac472a9af92abdc7aa532e94a01a1294d7bcc2abfba626efbfc0d08787893560b21b3ecd31b7d84e6d6c81496` |
 
 Implementers should verify `schnorr.verify(signature, digest, account_identity)` succeeds for the test vector before shipping.
@@ -335,8 +335,8 @@ Same JSON-RPC envelope as other NIP-46 methods (kind `24133`, NIP-44 encrypted c
   "id": "<random_string>",
   "method": "sign_mls_identity_proof",
   "params": [
-    "{\"version\":1,\"mls_ciphersuite\":1,\"mls_signature_public_key\":\"ababababababababababababababababababababababababababababababab\"}"
-  ]
+    "{\"version\":1,\"mls_ciphersuite\":1,\"mls_signature_public_key\":\"ababababababababababababababababababababababababababababababab\"}",
+  ],
 }
 ```
 
@@ -401,13 +401,13 @@ const signatureHex = await window.nostr.signMlsIdentityProof({
 
 ## Related specifications
 
-| Document | Content |
-| --- | --- |
+| Document                                                                                          | Content                             |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | [Marmot account-identity-proof-v1](../../darkmatter/spec/foundation/account-identity-proof-v1.md) | Extension payload, validation rules |
-| [Marmot identity](../../darkmatter/spec/foundation/identity.md) | Account vs MLS leaf keys |
-| [NIP-07](https://github.com/nostr-protocol/nips/blob/master/07.md) | `window.nostr` |
-| [NIP-46](https://github.com/nostr-protocol/nips/blob/master/46.md) | Nostr Connect JSON-RPC |
-| [BIP-340](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki) | Schnorr signatures for secp256k1 |
+| [Marmot identity](../../darkmatter/spec/foundation/identity.md)                                   | Account vs MLS leaf keys            |
+| [NIP-07](https://github.com/nostr-protocol/nips/blob/master/07.md)                                | `window.nostr`                      |
+| [NIP-46](https://github.com/nostr-protocol/nips/blob/master/46.md)                                | Nostr Connect JSON-RPC              |
+| [BIP-340](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki)                         | Schnorr signatures for secp256k1    |
 
 ---
 

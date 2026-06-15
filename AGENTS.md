@@ -44,24 +44,4 @@
 ## Git Workflow
 
 - Commit after finishing a feature, once it builds and its tests pass; keep each feature in its own commit rather than batching unrelated work.
-- Include any matching changeset (see below) in the same commit as the feature it describes.
 - Do not commit on the `master` branch; branch first when needed.
-
-## Changesets
-
-- Add a changeset for user-facing library changes while the PR context is fresh; skip for docs-only, tests-only, and internal refactors with no package behavior/API impact.
-- Create one with `pnpm changeset` or add `.changeset/<unique-name>.md` manually; this repo publishes only `@internet-privacy/marmot-ts`.
-- Use `patch` for fixes/internal behavior changes, `minor` for new backward-compatible APIs/features, and `major` for breaking API or behavior changes.
-- Each changeset body must be one sentence describing one user-facing change; if a PR has multiple user-facing changes, add multiple changesets.
-- Do not use markdown lists or tables in changeset bodies.
-- Manual changeset shape:
-
-```md
----
-"@internet-privacy/marmot-ts": patch
----
-
-Describe the user-facing change in one sentence.
-```
-
-- Never publish packages locally; all package releases must happen from the GitHub Changesets workflow on `master`.

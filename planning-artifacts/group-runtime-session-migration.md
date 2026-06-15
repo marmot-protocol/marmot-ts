@@ -122,9 +122,11 @@ The package should expose explicit seams instead of a monolithic group object:
 
 ## Test migration plan
 
-- Keep existing `MarmotGroup` tests passing while it delegates to new layers.
-- Add focused `GroupRuntime` tests around ack success, no-ack failure, commit rollback, and Welcome delivery failure aggregation.
-- Add focused `GroupSession` tests after Stage 2 for send intent effects, confirm/rollback, self-echo ingest, and history persistence.
+- Keep existing `MarmotGroup` tests passing while it delegates to new layers. (done)
+- Add focused `GroupRuntime` tests around ack success, no-ack failure, commit rollback, and Welcome delivery failure aggregation. (done — `src/client/runtime/__tests__/group-runtime.test.ts`)
+- Add focused `GroupSession` tests after Stage 2 for send intent effects, confirm/rollback, self-echo ingest, and history persistence. (done — `src/client/session/__tests__/group-session.test.ts`)
+- Add focused `GroupMediaService` tests for round-trip, cache hit, and in-flight decrypt dedup. (done — `src/client/group/__tests__/group-media-service.test.ts`)
+- Add focused `GroupsManager` session/runtime helper tests for `session`, `runtime`, `send`, and `ingest`. (done — `src/__tests__/groups-manager.test.ts`)
 - Update integration tests to use session/runtime directly after Stage 3.
 - Keep export snapshot tests updated for intentional public API changes.
 

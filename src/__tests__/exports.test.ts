@@ -36,6 +36,7 @@ describe("exports", () => {
         "GROUP_NAME_MAX_BYTES",
         "GROUP_PROFILE_COMPONENT",
         "GROUP_PROFILE_COMPONENT_ID",
+        "GroupMediaService",
         "GroupMediaStore",
         "GroupRumorHistory",
         "GroupRuntime",

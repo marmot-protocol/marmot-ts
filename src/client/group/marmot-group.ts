@@ -15,20 +15,12 @@ import {
   defaultCryptoProvider,
   Proposal,
 } from "ts-mls";
-import { sha256 } from "@noble/hashes/sha2.js";
 
 import type { ProposalAction, ProposalContext } from "../../engine/types.js";
 import { serializeApplicationRumor } from "../../core/group-message.js";
 import { getKeyPackage } from "../../core/key-package-event.js";
 import { getCredentialPubkey } from "../../core/credential.js";
-import {
-  canonicalizeMimeType,
-  decryptMediaFile,
-  deriveMediaEncryptionKey,
-  encryptMediaFile,
-  type MediaAttachment,
-  MIP04_VERSION,
-} from "../../core/media.js";
+import type { MediaAttachment } from "../../core/media.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
@@ -49,6 +41,10 @@ import {
 } from "../transport/nostr/welcome-delivery.js";
 import { proposeInviteUser } from "./proposals/invite-user.js";
 import { proposeLeaveGroup } from "./proposals/leave-group.js";
+import {
+  GroupMediaService,
+  type EncryptMediaMetadata,
+} from "./group-media-service.js";
 
 export { createAdminCommitPolicyCallback } from "../../engine/admin-policy.js";
 export type { ProposalAction, ProposalContext } from "../../engine/types.js";
@@ -189,9 +185,8 @@ export class MarmotGroup<
   readonly session: GroupSession<THistory>;
   /** Runtime publisher for driving session effects through transport. */
   readonly runtime: GroupRuntime;
-
-  /** In-flight media decrypts keyed by plaintext SHA-256 hex. */
-  readonly #decryptingMedia = new Map<string, Promise<StoredMedia>>();
+  /** Optional media helper for group encrypted attachments. */
+  readonly mediaService: GroupMediaService<TMedia>;
 
   private log: Debugger;
 
@@ -297,6 +292,11 @@ export class MarmotGroup<
       publishFailed: (pending) => this.session.publishFailed(pending),
       save: () => this.save(),
       log: this.log,
+    });
+    this.mediaService = new GroupMediaService({
+      media: this.media,
+      getState: () => this.state,
+      getCiphersuite: () => this.ciphersuite,
     });
   }
 
@@ -643,48 +643,9 @@ export class MarmotGroup<
    */
   async encryptMedia(
     blob: Blob,
-    metadata: {
-      filename: string;
-      type?: string;
-      dimensions?: string;
-      blurhash?: string;
-      alt?: string;
-      size?: number;
-    },
+    metadata: EncryptMediaMetadata,
   ): Promise<{ encrypted: Uint8Array; attachment: MediaAttachment }> {
-    const mimeType = metadata.type ?? blob.type;
-    if (!mimeType) {
-      throw new Error(
-        "encryptMedia: MIME type is required — pass metadata.type or ensure blob.type is set",
-      );
-    }
-
-    const plaintext = new Uint8Array(await blob.arrayBuffer());
-    const plaintextHash = bytesToHex(sha256(plaintext));
-
-    const skeleton: MediaAttachment = {
-      sha256: plaintextHash,
-      type: canonicalizeMimeType(mimeType),
-      filename: metadata.filename,
-      nonce: "",
-      version: MIP04_VERSION,
-      size: metadata.size ?? blob.size,
-      ...(metadata.dimensions !== undefined
-        ? { dimensions: metadata.dimensions }
-        : {}),
-      ...(metadata.blurhash !== undefined
-        ? { blurhash: metadata.blurhash }
-        : {}),
-      ...(metadata.alt !== undefined ? { alt: metadata.alt } : {}),
-    };
-
-    const fileKey = await deriveMediaEncryptionKey(
-      this.state,
-      this.ciphersuite,
-      skeleton,
-    );
-
-    return encryptMediaFile(plaintext, fileKey, skeleton);
+    return this.mediaService.encryptMedia(blob, metadata);
   }
 
   /**
@@ -699,39 +660,7 @@ export class MarmotGroup<
     encrypted: Uint8Array,
     attachment: MediaAttachment,
   ): Promise<StoredMedia> {
-    if (!attachment.sha256) {
-      throw new Error("decryptMedia: attachment.sha256 is required");
-    }
-
-    const cached = await this.media?.getMedia(attachment.sha256);
-    if (cached) return cached;
-
-    const inFlight = this.#decryptingMedia.get(attachment.sha256);
-    if (inFlight) return inFlight;
-
-    const decryptPromise = (async () => {
-      const fileKey = await deriveMediaEncryptionKey(
-        this.state,
-        this.ciphersuite,
-        attachment,
-      );
-      const plaintext = decryptMediaFile(encrypted, fileKey, attachment);
-
-      await this.media?.addMedia(attachment.sha256, {
-        data: plaintext,
-        attachment,
-      });
-
-      return { data: plaintext, attachment };
-    })();
-
-    this.#decryptingMedia.set(attachment.sha256, decryptPromise);
-
-    try {
-      return await decryptPromise;
-    } finally {
-      this.#decryptingMedia.delete(attachment.sha256);
-    }
+    return this.mediaService.decryptMedia(encrypted, attachment);
   }
 
   /** Destroys the group and purges the group history */

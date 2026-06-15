@@ -84,7 +84,7 @@ Expected removals or replacements:
 
 ### Stage 4: extract media service
 
-Status: next.
+Status: complete.
 
 Create `src/client/group/group-media-service.ts` and move:
 
@@ -97,7 +97,7 @@ The media service should depend only on current group state access, ciphersuite 
 
 ### Stage 5: account-level runtime and manager cleanup
 
-Status: planned.
+Status: next.
 
 Move closer to darkmatter's account/session/runtime split:
 

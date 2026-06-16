@@ -117,6 +117,60 @@ describe("MarmotGroupEngine lifecycle (group-state.md)", () => {
   });
 });
 
+describe("MarmotGroupEngine ingest – permanent decrypt failures", () => {
+  it("drops an own application message as unreadable on the first pass without retrying", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const credential = createCredential(adminPubkey);
+    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
+      adminPubkeys: [adminPubkey],
+      relays: ["wss://relay.test"],
+    });
+
+    // Wrap the peeler to count decrypt passes over the ingest batch.
+    const base = testPeeler(impl);
+    let peelCalls = 0;
+    const peeler: GroupPeeler<NostrEvent> = {
+      peelGroupMessages(envelopes, state) {
+        peelCalls++;
+        return base.peelGroupMessages(envelopes, state);
+      },
+      wrapGroupMessage: (message, state) =>
+        base.wrapGroupMessage(message, state),
+    };
+
+    const engine = new MarmotGroupEngine({
+      state: clientState,
+      ciphersuite: impl,
+      peeler,
+    });
+
+    // Sending advances our own sender ratchet; MLS forward secrecy means we can
+    // never decrypt this message again (relays replay it to us, e.g. on
+    // restart). ts-mls reports this as ValidationError "Desired gen in the
+    // past" — a permanent failure that retrying cannot recover.
+    const sent = await engine.send({
+      kind: "applicationMessage",
+      payload: new TextEncoder().encode("hello"),
+    });
+    if (sent.kind !== "applicationMessage")
+      throw new Error("expected applicationMessage send result");
+
+    peelCalls = 0; // count only the ingest pass below
+    const kinds: string[] = [];
+    for await (const r of engine.ingest([sent.envelope])) kinds.push(r.kind);
+
+    expect(kinds).toEqual(["unreadable"]);
+    // Permanent failure ⇒ classified on the first pass, not queued for retry.
+    // Previously this spun the whole batch maxRetries (5) extra times.
+    expect(peelCalls).toBe(1);
+  });
+});
+
 describe("MarmotGroupEngine admin verification (MIP-03)", () => {
   it("rejects commit send from non-admin members", async () => {
     const adminPubkey = "a".repeat(64);

@@ -133,7 +133,7 @@ export class ChatApp {
     }
     this.#deps.log(`  found ${kps.length} KeyPackage event(s); inviting…`);
 
-    await group.inviteByKeyPackageEvent(this.#newest(kps));
+    await this.#deps.client.groups.invite(group.id, this.#newest(kps));
     this.#deps.log(
       `invited ${shortNpub(pubkeyHex)} to "${nameOf(group)}" — welcome delivered`,
     );

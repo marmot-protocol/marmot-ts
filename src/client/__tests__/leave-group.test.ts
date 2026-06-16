@@ -92,7 +92,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
 // Tests
 // ============================================================================
 
-describe("MarmotGroup.leave()", () => {
+describe("groups.leave() proposal + destroy semantics", () => {
   let mockNetwork: MockNetwork;
 
   beforeEach(() => {
@@ -100,13 +100,14 @@ describe("MarmotGroup.leave()", () => {
   });
 
   it("publishes a leave proposal event to group relays", async () => {
-    const { memberGroup } = await setupTwoMemberGroup(mockNetwork);
+    const { memberClient, memberGroup } =
+      await setupTwoMemberGroup(mockNetwork);
 
     const proposalCountBefore = mockNetwork.events.filter(
       (e) => e.kind === GROUP_EVENT_KIND,
     ).length;
 
-    await memberGroup.leave();
+    await memberClient.groups.leave(memberGroup.id);
 
     const proposalCountAfter = mockNetwork.events.filter(
       (e) => e.kind === GROUP_EVENT_KIND,
@@ -125,7 +126,7 @@ describe("MarmotGroup.leave()", () => {
     const groupsBefore = await memberClient.groups.listIds();
     expect(groupsBefore.some((id) => bytesToHex(id) === groupIdHex)).toBe(true);
 
-    await memberGroup.leave();
+    await memberClient.groups.leave(memberGroup.id);
 
     // Group should be removed from store after leaving
     const groupsAfter = await memberClient.groups.listIds();
@@ -133,20 +134,22 @@ describe("MarmotGroup.leave()", () => {
   });
 
   it("emits the 'destroyed' event", async () => {
-    const { memberGroup } = await setupTwoMemberGroup(mockNetwork);
+    const { memberClient, memberGroup } =
+      await setupTwoMemberGroup(mockNetwork);
 
     const destroyedHandler = vi.fn();
     memberGroup.on("destroyed", destroyedHandler);
 
-    await memberGroup.leave();
+    await memberClient.groups.leave(memberGroup.id);
 
     expect(destroyedHandler).toHaveBeenCalledOnce();
   });
 
   it("returns the relay publish response", async () => {
-    const { memberGroup } = await setupTwoMemberGroup(mockNetwork);
+    const { memberClient, memberGroup } =
+      await setupTwoMemberGroup(mockNetwork);
 
-    const response = await memberGroup.leave();
+    const response = await memberClient.groups.leave(memberGroup.id);
 
     expect(response).toBeDefined();
     // MockNetwork always acks with ok: true
@@ -174,7 +177,9 @@ describe("MarmotGroup.leave()", () => {
 
     const groupIdHex = bytesToHex(memberGroup.id);
 
-    await expect(memberGroup.leave()).rejects.toThrow("no relay acknowledged");
+    await expect(memberClient.groups.leave(memberGroup.id)).rejects.toThrow(
+      "no relay acknowledged",
+    );
 
     // Local state must still exist after the failed leave attempt
     const groupsAfter = await memberClient.groups.listIds();
@@ -182,14 +187,15 @@ describe("MarmotGroup.leave()", () => {
   });
 
   it("throws when relays are missing", async () => {
-    const { memberGroup } = await setupTwoMemberGroup(mockNetwork);
+    const { memberClient, memberGroup } =
+      await setupTwoMemberGroup(mockNetwork);
 
     // Monkeypatch relays to simulate missing relay config
     Object.defineProperty(memberGroup, "relays", {
       get: () => null,
     });
 
-    await expect(memberGroup.leave()).rejects.toThrow();
+    await expect(memberClient.groups.leave(memberGroup.id)).rejects.toThrow();
   });
 });
 

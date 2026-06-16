@@ -16,7 +16,6 @@ import type { MediaAttachment } from "../../core/media.js";
 import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import type { SerializedClientState } from "../../core/client-state.js";
-import { hasAck } from "../../utils/index.js";
 import { GroupRuntime } from "../runtime/group-runtime.js";
 import {
   GroupSession,
@@ -25,11 +24,7 @@ import {
   type ProposalBuilder,
 } from "../session/group-session.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
-import {
-  NostrWelcomeDelivery,
-  type WelcomeRecipient,
-} from "../transport/nostr/welcome-delivery.js";
-import { proposeLeaveGroup } from "./proposals/leave-group.js";
+import { NostrWelcomeDelivery } from "../transport/nostr/welcome-delivery.js";
 import {
   GroupMediaService,
   type EncryptMediaMetadata,
@@ -324,7 +319,8 @@ export class MarmotGroup<
    *
    * This is required by MIP-02 for forward secrecy after joining from a Welcome.
    *
-   * Unlike {@link commit}, this operation is allowed for non-admin members.
+   * Unlike admin commits (see {@link GroupsManager.commit}), this operation is
+   * allowed for non-admin members.
    */
   async selfUpdate(): Promise<Record<string, PublishResponse>> {
     this.log("self-update commit");
@@ -334,53 +330,6 @@ export class MarmotGroup<
     const effects = await this.session.send({ kind: "selfUpdate" });
     const [result] = await this.runtime.publishEffects(effects);
     return result.response;
-  }
-
-  /**
-   * Leaves the group by publishing a self-remove proposal for each of the
-   * caller's leaf nodes, then purging all local group data from storage.
-   *
-   * Per RFC 9420 §12.4 a member cannot commit a Remove targeting their own
-   * leaf. Instead, a Remove *proposal* is sent so that the next committer
-   * (e.g. an admin calling {@link commit}) can include it and finalise the
-   * departure. At least one relay must acknowledge the proposals before local
-   * state is destroyed; if no relay acks, an error is thrown and local state
-   * is preserved so the caller can retry.
-   *
-   * Unlike {@link commit}, this operation is allowed for non-admin members.
-   *
-   * @returns The relay publish responses for the leave proposal event(s).
-   */
-  async leave(): Promise<Record<string, PublishResponse>> {
-    this.log("leave group");
-    const groupData = this.groupData;
-    if (!groupData) throw new NoMarmotGroupDataError();
-
-    const relays = this.relays;
-    if (!relays) throw new NoGroupRelaysError();
-
-    const ownPubkey = await this.signer.getPublicKey();
-    const removeProposals = await proposeLeaveGroup(ownPubkey)({
-      state: this.state,
-      ciphersuite: this.ciphersuite,
-      groupData,
-    });
-
-    const responses: Record<string, PublishResponse> = {};
-    for (const proposal of removeProposals) {
-      const response = await this.sendProposal(proposal);
-      Object.assign(responses, response);
-    }
-
-    if (!hasAck(responses)) {
-      throw new Error(
-        "Failed to publish leave proposals: no relay acknowledged. Local state preserved — retry leave() to try again.",
-      );
-    }
-
-    await this.destroy();
-
-    return responses;
   }
 
   /**
@@ -429,66 +378,6 @@ export class MarmotGroup<
     proposal: Proposal,
   ): Promise<Record<string, PublishResponse>> {
     const effects = await this.session.send({ kind: "proposal", proposal });
-    const [result] = await this.runtime.publishEffects(effects);
-    return result.response;
-  }
-
-  /**
-   * Creates a commit from proposals and sends it to the group.
-   *
-   * Proposal sources (can be combined):
-   * - **`extraProposals`** — inline {@link Proposal} values and/or {@link ProposalAction}
-   *   factories (each factory receives {@link ProposalContext}).
-   * - **`proposalRefs`** — keys into `state.unappliedProposals` for proposals already
-   *   held in state.
-   *
-   * If **`extraProposals`** or **`proposalRefs`** is present on `options` (including as
-   * an empty array), the commit uses exactly the merged, resolved list in array order
-   * (`extraProposals` first, then each ref in `proposalRefs`). Two empty arrays means a
-   * no-proposal commit. If neither property is set, the MLS layer commits every proposal
-   * currently in `state.unappliedProposals`.
-   *
-   * Requires a group admin. Publishes the commit to group relays and updates local state
-   * after an ACK. When MLS returns a welcome and **`welcomeRecipients`** is non-empty,
-   * sends gift-wrapped Welcome rumors (only after the commit ACK, per MIP-02).
-   *
-   * @returns Per-relay publish responses for the commit group event
-   */
-  async commit(options?: {
-    /**
-     * Flattened in order; function entries are async factories;
-     * resolved proposals are ordered before any from `proposalRefs`.
-     */
-    extraProposals?: (
-      | Proposal
-      | ProposalAction<Proposal>
-      | (Proposal | ProposalAction<Proposal>)[]
-    )[];
-    /** Lookup keys on `state.unappliedProposals`; an unknown key throws. */
-    proposalRefs?: string[];
-    /**
-     * Per-recipient key-package metadata for MLS Welcome delivery after
-     * adds; see {@link WelcomeRecipient}.
-     */
-    welcomeRecipients?: WelcomeRecipient[];
-  }): Promise<Record<string, PublishResponse>> {
-    this.log(
-      "committing (%d extra proposals, %d recipients)",
-      options?.extraProposals?.length ?? 0,
-      options?.welcomeRecipients?.length ?? 0,
-    );
-    const groupData = this.groupData;
-    if (!groupData) throw new NoMarmotGroupDataError();
-
-    const actorPubkey = await this.signer.getPublicKey();
-    const effects = await this.session.send({
-      kind: "commit",
-      actorPubkey,
-      extraProposals: options?.extraProposals,
-      proposalRefs: options?.proposalRefs,
-      welcomeRecipients: options?.welcomeRecipients,
-    });
-
     const [result] = await this.runtime.publishEffects(effects);
     return result.response;
   }

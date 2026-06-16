@@ -59,7 +59,11 @@ After this stage, `MarmotGroup` should hold a `GroupSession` and a `GroupRuntime
 
 ### Stage 3: replace `MarmotGroup` as the primary API
 
-Status: complete for public session/runtime exposure; transitional convenience methods remain until account manager cleanup.
+Status: complete. The send-intent convenience methods (`sendChatMessage`,
+`sendApplicationRumor`, `commit`, `inviteByKeyPackageEvent`, `leave`) have been
+removed from `MarmotGroup`; callers drive session intents directly or through
+`GroupsManager` entry points. `selfUpdate`, `propose`, and `sendProposal` remain
+as thin session/runtime wrappers.
 
 Expose session/runtime flows directly and stop treating `MarmotGroup` convenience methods as the canonical API.
 
@@ -78,12 +82,12 @@ Expected removals or replacements:
 
 - replace `group.sendChatMessage(...)` with app-level rumor construction plus a session intent; (done — `createChatRumor` + `createApplicationMessageIntent` in `src/client/group/application-message.ts`, driven through `session.send`/`groups.send`)
 - replace `group.sendApplicationRumor(...)` with app-message intent helpers; (done — `createApplicationMessageIntent`)
-- replace `group.commit(...)` with commit intent plus runtime effect publishing;
-- replace `group.inviteByKeyPackageEvent(...)` with a higher-level invite/account runtime helper; (done — `createInviteIntent` in `src/client/group/invite.ts` builds a `commit` intent with the Add proposal + Welcome recipient; `GroupsManager.invite(groupId, keyPackageEvent)` resolves the signer pubkey and drives it through `session.send`/`runtime.publishEffects`)
-- replace `group.leave()` with a leave intent or account runtime method.
+- replace `group.commit(...)` with commit intent plus runtime effect publishing; (done — `GroupsManager.commit(groupId, options)` resolves the signer pubkey and drives the `commit` intent through `session.send`/`runtime.publishEffects`)
+- replace `group.inviteByKeyPackageEvent(...)` with a higher-level invite/account runtime helper; (done — `createInviteIntent` in `src/client/group/invite.ts` builds a `commit` intent with the Add proposal + Welcome recipient; `GroupsManager.invite(groupId, keyPackageEvent)` wraps it)
+- replace `group.leave()` with a leave intent or account runtime method. (done — `GroupsManager.leave(groupId)` builds self-remove proposals via `proposeLeaveGroup`, drives them through the group session/runtime, requires a relay ack, then purges local state)
 
-The application-message and invite paths are the removed convenience surfaces so
-far; `commit` and `leave` remain on `MarmotGroup` for follow-up increments.
+All five convenience surfaces have been removed from `MarmotGroup`; the
+account-level entry points live on `GroupsManager`.
 
 ### Stage 4: extract media service
 

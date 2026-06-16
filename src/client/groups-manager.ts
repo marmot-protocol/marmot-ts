@@ -19,6 +19,7 @@ import { createCredential } from "../core/credential.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
 import { logger } from "../utils/debug.js";
+import { hasAck } from "../utils/index.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
 import {
   BaseGroupHistory,
@@ -28,6 +29,7 @@ import {
   MarmotGroup,
 } from "./group/marmot-group.js";
 import { createInviteIntent } from "./group/invite.js";
+import { proposeLeaveGroup } from "./group/proposals/leave-group.js";
 import type { GroupRuntime } from "./runtime/group-runtime.js";
 import type {
   GroupPublishResult,
@@ -312,6 +314,34 @@ export class GroupsManager<
     return result.response;
   }
 
+  /**
+   * Creates a commit from proposals and publishes it to the group.
+   *
+   * Resolves the committing member from the manager's signer, builds a `commit`
+   * intent, and drives it through the group session/runtime. See
+   * {@link GroupSessionSendIntent} for how `extraProposals`, `proposalRefs`, and
+   * `welcomeRecipients` are interpreted. Requires a group admin.
+   *
+   * @returns Per-relay publish responses for the commit group event.
+   */
+  async commit(
+    groupId: Uint8Array | string,
+    options?: Omit<
+      Extract<GroupSessionSendIntent, { kind: "commit" }>,
+      "kind" | "actorPubkey"
+    >,
+  ): Promise<Record<string, PublishResponse>> {
+    const actorPubkey = await this.signer.getPublicKey();
+    const [result] = await this.send(groupId, {
+      kind: "commit",
+      actorPubkey,
+      extraProposals: options?.extraProposals,
+      proposalRefs: options?.proposalRefs,
+      welcomeRecipients: options?.welcomeRecipients,
+    });
+    return result.response;
+  }
+
   /** Ingests group transport events through the group's protocol session. */
   async *ingest(
     groupId: Uint8Array | string,
@@ -425,9 +455,33 @@ export class GroupsManager<
     const groupIdBytes =
       typeof groupId === "string" ? hexToBytes(groupId) : groupId;
 
-    // MarmotGroup.leave() purges local state via destroy(), which emits
-    // `destroyed` — our listener clears the cache and emits `updated`.
-    const response = await group.leave();
+    // Per RFC 9420 §12.4 a member cannot commit a Remove targeting their own
+    // leaf, so we publish self-remove proposals for the next committer (e.g. an
+    // admin) to apply, then purge local state.
+    const ownPubkey = await this.signer.getPublicKey();
+    const removeProposals = await proposeLeaveGroup(ownPubkey)(
+      group.session.proposalContext(),
+    );
+
+    const response: Record<string, PublishResponse> = {};
+    for (const proposal of removeProposals) {
+      const effects = await group.session.send({ kind: "proposal", proposal });
+      for (const result of await group.runtime.publishEffects(effects))
+        Object.assign(response, result.response);
+    }
+
+    // publishEffects already throws on no-ack, but guard local destruction
+    // behind an explicit ack check so state is preserved on failure and the
+    // caller can retry.
+    if (!hasAck(response)) {
+      throw new Error(
+        "Failed to publish leave proposals: no relay acknowledged. Local state preserved — retry leave() to try again.",
+      );
+    }
+
+    // group.destroy() purges local state and emits `destroyed`; our listener
+    // clears the in-memory cache and emits `updated`.
+    await group.destroy();
 
     this.emit("left", groupIdBytes);
 

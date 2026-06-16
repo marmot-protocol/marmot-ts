@@ -90,13 +90,27 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     expect(group.lifecycle).toBe("Stable");
 
     // Publish fails (no ack) → PendingPublish is abandoned back to Stable.
-    await expect(group.commit({ extraProposals: [] })).rejects.toThrow();
+    await expect(
+      group.runtime.publishEffects(
+        await group.session.send({
+          kind: "commit",
+          actorPubkey: adminPubkey,
+          extraProposals: [],
+        }),
+      ),
+    ).rejects.toThrow();
     expect(group.lifecycle).toBe("Stable");
     expect(group.state.groupContext.epoch).toBe(clientState.groupContext.epoch);
 
     // Publish succeeds → Merging → apply → Stable, epoch advanced.
     failPublish = false;
-    await group.commit({ extraProposals: [] });
+    await group.runtime.publishEffects(
+      await group.session.send({
+        kind: "commit",
+        actorPubkey: adminPubkey,
+        extraProposals: [],
+      }),
+    );
     expect(group.lifecycle).toBe("Stable");
     expect(group.state.groupContext.epoch).toBe(
       clientState.groupContext.epoch + 1n,

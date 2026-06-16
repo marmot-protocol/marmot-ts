@@ -96,6 +96,21 @@ describe("GroupsManager session/runtime helpers", () => {
     expect(network.events[0].kind).toBe(445);
   });
 
+  it("commits through the manager and advances the group epoch", async () => {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const manager = makeManager(network);
+    const group = await manager.create("Test Group", {
+      relays: ["wss://relay.test"],
+    });
+
+    const epochBefore = group.state.groupContext.epoch;
+    const response = await manager.commit(group.id, { extraProposals: [] });
+
+    expect(Object.values(response).every((r) => r.ok)).toBe(true);
+    expect(group.lifecycle).toBe("Stable");
+    expect(group.state.groupContext.epoch).toBe(epochBefore + 1n);
+  });
+
   it("ingests transport events through the group session (self-echo)", async () => {
     const network = new MockNetwork(["wss://relay.test"]);
     const manager = makeManager(network);

@@ -1,12 +1,18 @@
 import { NostrEvent, unixNow } from "applesauce-core/helpers";
 import { bytesToHex } from "@noble/ciphers/utils.js";
 import {
+  base64ToBytes,
+  bytesToBase64,
+  decode,
   defaultCryptoProvider,
   encode,
   getCiphersuiteImpl,
   greaseValues,
+  keyPackageDecoder,
   keyPackageEncoder,
   makeCustomExtension,
+  mlsMessageEncoder,
+  wireformats,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
@@ -17,6 +23,7 @@ import {
   createKeyPackageEvent,
   getKeyPackage,
   getKeyPackageIdentifier,
+  getKeyPackageNostrPubkey,
 } from "../key-package-event.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../protocol.js";
 
@@ -368,6 +375,68 @@ describe("createKeyPackageEvent", () => {
     expect(decoded.leafNode.credential).toEqual(credential);
   });
 
+  it("publishes a bare KeyPackage (no MLSMessage frame)", async () => {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+    });
+
+    const event = await createKeyPackageEvent({
+      keyPackage: keyPackage.publicPackage,
+      identifier: testD,
+    });
+
+    // Spec-correct content is a bare RFC 9420 KeyPackage: ProtocolVersion mls10
+    // (00 01) followed directly by CipherSuite 0x0001 — NOT an MLSMessage frame,
+    // whose byte 2-3 would be WireFormat mls_key_package (00 05).
+    const bytes = base64ToBytes(event.content);
+    expect(Array.from(bytes.subarray(0, 4))).toEqual([0x00, 0x01, 0x00, 0x01]);
+  });
+
+  it("decodes MLSMessage-framed content (White Noise / darkmatter compat)", async () => {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+    });
+
+    // Simulate a peer (White Noise / darkmatter reference engine) that wraps the
+    // KeyPackage in an MLSMessage with wire_format mls_key_package. getKeyPackage
+    // must transparently unwrap it. See docs/upstream-issues/keypackage-mlsmessage-framing.md.
+    const framedBytes = encode(mlsMessageEncoder, {
+      version: keyPackage.publicPackage.version,
+      wireformat: wireformats.mls_key_package,
+      keyPackage: keyPackage.publicPackage,
+    });
+    expect(Array.from(framedBytes.subarray(0, 4))).toEqual([
+      0x00, 0x01, 0x00, 0x05,
+    ]);
+
+    const event: NostrEvent = {
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      pubkey: validPubkey,
+      created_at: unixNow(),
+      content: bytesToBase64(framedBytes),
+      tags: [["d", testD]],
+      id: "framed-id",
+      sig: "framed-sig",
+    };
+
+    const decoded = getKeyPackage(event);
+    expect(decoded.leafNode.credential).toEqual(credential);
+  });
+
   it("rejects a KeyPackage event whose content is not valid base64", async () => {
     const credential = createCredential(validPubkey);
     const ciphersuiteImpl = await getCiphersuiteImpl(
@@ -399,6 +468,50 @@ describe("createKeyPackageEvent", () => {
     };
 
     expect(() => getKeyPackage(hexEvent)).toThrow();
+  });
+});
+
+describe("MLSMessage-framing compat (temporary upstream hack)", () => {
+  // A real kind-30443 KeyPackage event captured from White Noise on
+  // wss://relay.us.whitenoise.chat/. Author pubkey
+  // 3cee7c372372c11f9c62d7e839da08969b9f5178ae5b6acc715bc12c066c37e6
+  // (npub18nh8cderwtq3l8rz6l5rnksgj6de75tc4edk4nr3t0qjcpnvxlnqwmu2sv).
+  // Its content is an MLSMessage(wire_format = mls_key_package), not a bare
+  // KeyPackage. See docs/upstream-issues/keypackage-mlsmessage-framing.md.
+  const whiteNoiseEvent: NostrEvent = {
+    kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+    pubkey: "3cee7c372372c11f9c62d7e839da08969b9f5178ae5b6acc715bc12c066c37e6",
+    id: "7cbc3bd30b97931d2d2f3986bec9d2de0a80cacfde664a26fdd81e5dcf17f27d",
+    sig: "real-sig",
+    created_at: 1_700_000_000,
+    content:
+      "AAEABQABAAEgTHnrxFCrCgLhhnlrD65dq44jCBpkm4eiJ278n1bs0w0gt+ugqj8/dRo4iv5pmOvtZ/PwI7/F+8Gjyf63EQeBOXsgcakmWm315Txj2Fk8bHjWV+ctYt9qTjNh2pqCq5YEIjQAASA87nw3I3LBH5xi1+g52giWm59ReK5basxxW8EsBmw35gIAAQIAAQ4AAwAKAAby0fLS8tTy8QQACgAIAgABAQAAAABqMVG+AAAAAGqgHc5AnQAGDw4AAQsKgAGAA4AEgAaACPLxQIcBAAEIBzzufDcjcsEfnGLX6DnaCJabn1F4rltqzHFbwSwGbDfmACBxqSZabfXlPGPYWTxseNZX5y1i32pOM2HamoKrlgQiNGhsDn/w891Gb+KLEdMcujd3LDGW3N3na/Png77u2pqFVDOPpWqm9PL1Fkram8jeaurMfJz/Dx+kqqVOMckSRBFAQFNfm0uWq1/QfLSTQpeeLGU51lutQYR8BftgWAP6F1IFaK18us9T3nJF0P0v+JMy/oDOV2PcxnlktdnWX+kGvAEDAAoAQEDYt2I7buPfWVDJRBlRx8aWBSOuEOeyHmziM6nxj91xESWhEuYR89JzbB8bufXjcArSJKRdxxY/G/yhFn4gHqUM",
+    tags: [["mls_ciphersuite", "0x0001"]],
+  };
+
+  it("the content is MLSMessage-framed, not a bare KeyPackage", () => {
+    const bytes = base64ToBytes(whiteNoiseEvent.content);
+    // 00 01 (ProtocolVersion mls10) 00 05 (WireFormat mls_key_package)
+    expect(Array.from(bytes.subarray(0, 4))).toEqual([0x00, 0x01, 0x00, 0x05]);
+  });
+
+  it("a bare KeyPackage decode of the same bytes fails (the original bug)", () => {
+    const bytes = base64ToBytes(whiteNoiseEvent.content);
+    // This is exactly what getKeyPackage used to do — it desyncs on the 4-byte
+    // MLSMessage header and throws "8-byte length not supported".
+    expect(() => decode(keyPackageDecoder, bytes)).toThrow();
+  });
+
+  it("getKeyPackage unwraps the MLSMessage frame and decodes it", () => {
+    const keyPackage = getKeyPackage(whiteNoiseEvent);
+    expect(keyPackage).toBeDefined();
+    expect(keyPackage.cipherSuite).toBe(0x0001);
+  });
+
+  it("the unwrapped credential carries the event author's nostr pubkey", () => {
+    expect(getKeyPackageNostrPubkey(whiteNoiseEvent)).toBe(
+      whiteNoiseEvent.pubkey,
+    );
   });
 });
 

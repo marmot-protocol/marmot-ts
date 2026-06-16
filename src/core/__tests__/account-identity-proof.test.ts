@@ -60,6 +60,41 @@ describe("account identity proof — signing digest", () => {
   });
 });
 
+describe("account identity proof — published spec test vector", () => {
+  // Locks the cross-implementation conformance vector published in
+  // planning-artifacts/mls-account-identity-proof-signing.md so the code and
+  // the implementer guide cannot silently drift. Inputs: secret key 0x01…07,
+  // mls key 0xab×32, ciphersuite 1.
+  const PUBLISHED_ACCOUNT_IDENTITY =
+    "9d948d4dbd92fe2b7c3ace1cdf99f7f79cbb23f0ac10edf323b8bae36c58ea91";
+  const PUBLISHED_DIGEST =
+    "9035a57a3156c220cefc0318762cdbed8adbf155f54455151bc779d2a31c021e";
+  const PUBLISHED_SIGNATURE =
+    "3fd87ca37ddf056521dfcfe4749ef2169c5b423ac472a9af92abdc7aa532e94a01a1294d7bcc2abfba626efbfc0d08787893560b21b3ecd31b7d84e6d6c81496";
+
+  it("derives the published x-only account identity from the test secret key", () => {
+    expect(bytesToHex(accountIdentity)).toBe(PUBLISHED_ACCOUNT_IDENTITY);
+  });
+
+  it("produces the published signing digest", () => {
+    expect(bytesToHex(accountIdentityProofSigningDigest(request()))).toBe(
+      PUBLISHED_DIGEST,
+    );
+  });
+
+  it("verifies the published BIP-340 signature over the digest", () => {
+    // schnorr.sign uses aux randomness, so signatures are not byte-stable; the
+    // conformance check is that the published signature verifies (per the guide).
+    expect(
+      schnorr.verify(
+        hexToBytes(PUBLISHED_SIGNATURE),
+        accountIdentityProofSigningDigest(request()),
+        accountIdentity,
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("account identity proof — sign / verify", () => {
   it("produces a BIP-340 signature that verifies over the digest", () => {
     const req = request();

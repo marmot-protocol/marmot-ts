@@ -89,7 +89,7 @@ async function setupTwoMemberGroup(
       authors: [inviteePubkey],
     },
   );
-  await adminGroup.inviteByKeyPackageEvent(keyPackageEvents[0]);
+  await adminClient.groups.invite(adminGroup.id, keyPackageEvents[0]);
 
   const giftWraps = await mockNetwork.request(["wss://mock-inbox.test"], {
     kinds: [1059],

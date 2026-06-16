@@ -66,7 +66,7 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
     ["wss://mock-relay.test"],
     { kinds: [ADDRESSABLE_KEY_PACKAGE_KIND], authors: [memberPubkey] },
   );
-  await adminGroup.inviteByKeyPackageEvent(keyPackageEvents[0]);
+  await adminClient.groups.invite(adminGroup.id, keyPackageEvents[0]);
 
   // Member joins from the welcome
   const giftWraps = await mockNetwork.request(["wss://mock-inbox.test"], {

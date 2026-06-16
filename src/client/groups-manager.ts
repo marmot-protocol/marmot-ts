@@ -27,6 +27,7 @@ import {
   GroupMediaFactory,
   MarmotGroup,
 } from "./group/marmot-group.js";
+import { createInviteIntent } from "./group/invite.js";
 import type { GroupRuntime } from "./runtime/group-runtime.js";
 import type {
   GroupPublishResult,
@@ -285,6 +286,30 @@ export class GroupsManager<
     const group = await this.get(groupId);
     const effects = await group.session.send(intent);
     return group.runtime.publishEffects(effects);
+  }
+
+  /**
+   * Invites a user to a group from their KeyPackage event (kind 30443).
+   *
+   * Resolves the committing member from the manager's signer, builds an Add
+   * commit intent via {@link createInviteIntent}, and drives it through the
+   * group session/runtime. After the commit acks, the runtime delivers a
+   * Welcome to the invitee via NIP-59 gift wrap.
+   *
+   * @returns Per-relay publish responses for the commit group event.
+   * @throws Error if the event is not a KeyPackage kind or the credential
+   *   identity does not match the event author.
+   */
+  async invite(
+    groupId: Uint8Array | string,
+    keyPackageEvent: NostrEvent,
+  ): Promise<Record<string, PublishResponse>> {
+    const actorPubkey = await this.signer.getPublicKey();
+    const [result] = await this.send(
+      groupId,
+      createInviteIntent({ keyPackageEvent, actorPubkey }),
+    );
+    return result.response;
   }
 
   /** Ingests group transport events through the group's protocol session. */

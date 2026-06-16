@@ -104,7 +104,7 @@ describe("End-to-end: invite, join, first message", () => {
     expect(keyPackageEvents.length).toBe(1);
 
     // Invite using the KeyPackage event
-    await adminGroup.inviteByKeyPackageEvent(keyPackageEvents[0]);
+    await adminClient.groups.invite(adminGroup.id, keyPackageEvents[0]);
 
     // Verify invite produced BOTH:
     // - group commit event (kind 445) published to group relays

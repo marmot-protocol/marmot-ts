@@ -167,7 +167,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupView", () => {
       kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
       authors: [inviteePubkey],
     });
-    await adminGroup.inviteByKeyPackageEvent(keyPackageNostrEvent);
+    await adminClient.groups.invite(adminGroup.id, keyPackageNostrEvent);
 
     // Fetch and unwrap the gift wrap sent to the invitee
     const giftWraps = await mockNetwork.request(["wss://mock-inbox.test"], {

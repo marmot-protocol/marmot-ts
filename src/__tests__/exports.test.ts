@@ -100,6 +100,7 @@ describe("exports", () => {
         "createGroup",
         "createGroupEvent",
         "createInboxRelayListEvent",
+        "createInviteIntent",
         "createKeyPackageEvent",
         "createNip65RelayListEvent",
         "createProposalEvent",

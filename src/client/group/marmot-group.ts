@@ -12,10 +12,7 @@ import {
 } from "ts-mls";
 
 import type { ProposalAction, ProposalContext } from "../../engine/types.js";
-import { getKeyPackage } from "../../core/key-package-event.js";
-import { getCredentialPubkey } from "../../core/credential.js";
 import type { MediaAttachment } from "../../core/media.js";
-import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import type { SerializedClientState } from "../../core/client-state.js";
@@ -32,7 +29,6 @@ import {
   NostrWelcomeDelivery,
   type WelcomeRecipient,
 } from "../transport/nostr/welcome-delivery.js";
-import { proposeInviteUser } from "./proposals/invite-user.js";
 import { proposeLeaveGroup } from "./proposals/leave-group.js";
 import {
   GroupMediaService,
@@ -495,53 +491,6 @@ export class MarmotGroup<
 
     const [result] = await this.runtime.publishEffects(effects);
     return result.response;
-  }
-
-  /**
-   * Invites a user to the group using their KeyPackage event (kind 30443).
-   *
-   * This method:
-   * 1. Validates the KeyPackage event (kind 30443)
-   * 2. Validates that the credential identity matches the event pubkey
-   * 3. Builds an Add proposal using the KeyPackage
-   * 4. Commits the proposal
-   * 5. After commit ack, sends a Welcome message to the invitee via NIP-59 gift wrap
-   *
-   * @param keyPackageEvent - The KeyPackage event (kind 30443) for the user to invite
-   * @returns Promise resolving to the publish response from the relays
-   * @throws Error if the event is not a key package kind or if the credential identity doesn't match
-   */
-  async inviteByKeyPackageEvent(
-    keyPackageEvent: NostrEvent,
-  ): Promise<Record<string, PublishResponse>> {
-    if (keyPackageEvent.kind !== ADDRESSABLE_KEY_PACKAGE_KIND) {
-      throw new Error(
-        `inviteByKeyPackageEvent: Expected KeyPackage event kind ${ADDRESSABLE_KEY_PACKAGE_KIND}, got ${keyPackageEvent.kind}`,
-      );
-    }
-
-    const keyPackage = getKeyPackage(keyPackageEvent);
-    const credentialIdentity = getCredentialPubkey(
-      keyPackage.leafNode.credential,
-    );
-    if (credentialIdentity !== keyPackageEvent.pubkey) {
-      throw new Error(
-        `inviteByKeyPackageEvent: Credential identity ${credentialIdentity} does not match event pubkey ${keyPackageEvent.pubkey}`,
-      );
-    }
-
-    const proposalAction = proposeInviteUser(keyPackageEvent);
-
-    return await this.commit({
-      extraProposals: [proposalAction],
-      welcomeRecipients: [
-        {
-          pubkey: keyPackageEvent.pubkey,
-          keyPackageEventId: keyPackageEvent.id,
-          keyPackageEvent,
-        },
-      ],
-    });
   }
 
   /**

@@ -49,7 +49,15 @@ pnpm --filter marmot-tui-chat start -- --name bob
 | `--relay <url>`  | `wss://relay.damus.io`, `wss://nos.lol` | Repeatable. Point all peers at the **same** relay(s).           |
 | `--sec <hex>`    | (generated)                             | Use a specific 32-byte hex Nostr secret key.                    |
 | `--ephemeral`    | off                                     | Keep all state in memory (nothing written to disk).             |
-| `--debug`        | off                                     | Print full stack traces (and `cause` chains) on errors.         |
+| `--debug`        | off                                     | Print full stack traces on errors **and** write the library's `debug` logs to a file. |
+| `--log-file <path>` | `./logs.txt`                         | Where `--debug` writes the library's `debug` output (only used with `--debug`). |
+
+> The marmot-ts library logs through the [`debug`](https://www.npmjs.com/package/debug)
+> package under the `marmot-ts*` namespace. Letting those lines reach stderr
+> would scramble the live prompt, so `--debug` redirects them to a file
+> (`./logs.txt` by default). Tail it in another terminal with `tail -f logs.txt`.
+> To narrow what's captured, set `DEBUG` before launching
+> (e.g. `DEBUG=marmot-ts:group-engine:* … --debug`).
 
 > Many public relays reject MLS event kinds (443/30443/444/445/1059). For
 > reliable testing, run a permissive local relay (e.g. `strfry`,

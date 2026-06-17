@@ -1,0 +1,3 @@
+# Debug output written by `--debug` (default --log-file path)
+logs.txt
+*.log

@@ -17,6 +17,7 @@ import { relaySet } from "applesauce-core/helpers/relays";
 import { accountProofSignerFor } from "./account-proof.js";
 import { ChatApp, formatError } from "./chat.js";
 import { FileKeyValueStore } from "./file-store.js";
+import { type LogFile, redirectDebugToFile } from "./logging.js";
 import { RelayPool } from "./relay-pool.js";
 
 const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
@@ -71,6 +72,7 @@ async function main(): Promise<void> {
   const label = readOption("--name", "default");
   const ephemeral = readFlag("--ephemeral");
   const debug = readFlag("--debug");
+  const logFilePath = readOption("--log-file", join(process.cwd(), "logs.txt"));
   const explicitRelays = relaySet(readExplicitRelays());
   const bootstrapRelays = explicitRelays.length
     ? explicitRelays
@@ -106,9 +108,14 @@ async function main(): Promise<void> {
     rl.prompt(true);
   };
 
+  // When debugging, route the library's `debug` output to a file so it never
+  // corrupts the live prompt; stack traces in errors stay on too.
+  let logFile: LogFile | undefined;
+  if (debug) logFile = redirectDebugToFile(logFilePath);
+
   log(
     `marmot-tui-chat — profile "${label}"${ephemeral ? " (ephemeral)" : ""}` +
-      (debug ? " (debug: stack traces on)" : ""),
+      (logFile ? ` (debug: stack traces on, logs → ${logFile.path})` : ""),
   );
 
   // For a returning identity, adopt the relays the user already advertised in
@@ -175,6 +182,7 @@ async function main(): Promise<void> {
 
   rl.on("close", () => {
     app.stop();
+    logFile?.close();
     process.exit(0);
   });
 }

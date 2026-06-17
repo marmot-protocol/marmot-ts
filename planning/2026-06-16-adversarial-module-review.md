@@ -23,13 +23,17 @@ fuses two or three into one large class or file.
 
 Every proposed split lands on **already-injected dependencies**
 (`GenericKeyValueStore`, `NostrNetworkInterface`, `CryptoProvider`,
-`EventSigner`), so none introduces browser/native risk — most *reduce* it by
+`EventSigner`), so none introduces browser/native risk — most _reduce_ it by
 collapsing each native-sensitive concern (signing, `randomBytes`, relay publish,
 media crypto) into one auditable module.
 
 ## Ranked refactor opportunities
 
-### 1. `src/engine/group-engine.ts` — 1130-line `MarmotGroupEngine` (highest payoff) — IN PROGRESS
+### 1. `src/engine/group-engine.ts` — 1130-line `MarmotGroupEngine` (highest payoff) — DONE
+
+_Completed: `group-engine.ts` now 425 lines; extracted `engine/retained-store.ts`
+(`RetainedHistoryStore`), `engine/fork-recovery.ts` (`ForkRecovery`), and
+`engine/ingest.ts` (`ingestEnvelopes`). Compile + engine tests pass._
 
 One class does seven jobs: send-intents (`send`, 155–306), publish lifecycle
 (`confirmPublished`/`publishFailed`, 308–345), retained-state store
@@ -40,9 +44,10 @@ recursive ingest generator** (`#ingestRaw`, 688–1129).
 
 darkmatter splits exactly this into `message_processor/{ingest,send,store}.rs`,
 `fork_recovery.rs`, `epoch_manager.rs`. The pure scoring (`convergence.ts`) is
-*already* separated correctly — this extends that seam to the stateful half.
+_already_ separated correctly — this extends that seam to the stateful half.
 
 **Plan:**
+
 - `engine/retained-store.ts` — `RetainedHistoryStore`: owns the epoch→state and
   epoch→commit maps + pruning (darkmatter `epoch_manager.rs` / `message_processor/store.rs`).
 - `engine/fork-recovery.ts` — `ForkRecovery`: `buildBranches` + `resolveFork`,
@@ -53,7 +58,7 @@ darkmatter splits exactly this into `message_processor/{ingest,send,store}.rs`,
   (darkmatter `message_processor/ingest.rs`).
 - `MarmotGroupEngine` shrinks to a coordinator over send + lifecycle + the three units.
 
-### 2. `src/client/key-package-manager.ts` — 857 lines, three fused darkmatter seams
+### 2. `src/client/key-package-manager.ts` — 857 lines, three fused darkmatter seams — DONE
 
 Header admits "Storage helpers (inlined from KeyPackageStore)." Fuses storage
 (`store*` CRUD, 307–473), Nostr publish/sign transport (`create`/`rotate`/`purge`,
@@ -63,6 +68,17 @@ Header admits "Storage helpers (inlined from KeyPackageStore)." Fuses storage
 `KeyPackagePublisher` (the native-sensitive sign/`randomBytes`/publish boundary),
 leave a thin manager. Mirrors darkmatter's `AccountSecretStore` /
 `KeyPackagePublisher`. _Gap: transport is publish-only — no relay fetch side._
+
+_Completed: extracted `client/key-package-errors.ts` (4 error classes),
+`client/key-package-events.ts` (pure event dedup), `client/key-package-store.ts`
+(`KeyPackageStore` — owns entries + stored-entry types, emits added/removed/updated),
+and `client/key-package-publisher.ts` (`KeyPackagePublisher` — the only
+`signer.signEvent`/`network.publish`/`randomBytes` site). `KeyPackageManager` is now
+a ~470-line coordinator that re-emits store events and re-exports the moved types/errors
+for source compatibility. Also fixed a latent bug: the publisher now honours the
+injected `cryptoProvider` for ciphersuite resolution instead of always using the
+default. Public API unchanged; all 480 tests pass (exports snapshot gains
+`KeyPackageStore` + `KeyPackagePublisher`)._
 
 ### 3. `src/core/group-message.ts` — 371 lines, the adapter/peeler conflation
 
@@ -89,7 +105,7 @@ GREASE/extension/version munging) sits beside all read-side tag accessors + the
 MLSMessage-frame compat decode (97–203), plus an unrelated kind-5 delete builder
 (53–95). Split encode/decode/delete; matches darkmatter adapter-builds /
 engine-reads. (Relevant to the KeyPackage MLSMessage-framing work — the compat
-hack belongs with the *read* accessors.)
+hack belongs with the _read_ accessors.)
 
 ### 6. `src/client/groups-manager.ts` — 573 lines, registry + factory + RPC facade
 
@@ -123,7 +139,7 @@ group-secret decryption (`readWelcomeGroupInfo`, 177–219). Split
 
 ## Non-structural flags surfaced (separate follow-up)
 
-- **`encrypted-media.ts:178`** — `decodeEncryptedMediaPolicyV1` *re-runs*
+- **`encrypted-media.ts:178`** — `decodeEncryptedMediaPolicyV1` _re-runs_
   producer normalization instead of strict validate, so it silently repairs
   non-canonical stored bytes where darkmatter rejects them → risk of
   **cross-implementation commit-acceptance forks**.
@@ -135,7 +151,7 @@ group-secret decryption (`readWelcomeGroupInfo`, 177–219). Split
 - No `TransportMessage`/envelope intermediate and no "route-then-peel" stage;
   `GroupPeeler` lacks welcome methods, so welcome wrap/peel lives as free
   functions. darkmatter's `TransportPeeler` carries both group and welcome.
-- Key-package and welcome transport are **publish-only** — no relay *fetch* side.
+- Key-package and welcome transport are **publish-only** — no relay _fetch_ side.
 - `dictionary.ts` (293) — don't split; collapse its 16 hand-written
   accessor/builder wrappers into a `{id, decode, encode}` descriptor table
   (darkmatter's `codec.rs` idea).

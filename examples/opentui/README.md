@@ -88,6 +88,19 @@ into this directory and run `bun run src/index.tsx --name alice`.)
 > reliable testing, run a permissive local relay (e.g. `strfry`,
 > `nostr-rs-relay`) and pass it with `--relay ws://localhost:<port>`.
 
+## Compile a standalone binary
+
+```bash
+pnpm --filter marmot-opentui compile        # or: cd here && bun run compile
+./dist/marmot-opentui --name alice
+```
+
+`compile` runs `bun build --compile` (see `scripts/compile.ts`) and produces a
+single, self-contained executable in `dist/` — no Bun or `node_modules` needed
+to run it. OpenTUI's native renderer (`libopentui.so`) is embedded into the
+binary, so the artifact is **platform-specific**: it targets the OS/arch you
+build on. The same runtime flags apply (`--name`, `--relay`, …).
+
 ## Using it
 
 There are no slash-commands — the UI is keyboard- and mouse-driven.
@@ -106,10 +119,12 @@ has a gold border.
   are also clickable with the mouse.
 - **Ctrl+C** — exit.
 
-**Action buttons:** `New group`, `Invite`, `Leave`, `Profile`, `Relays`,
-`KeyPkg`, `Quit`. `New group` and `Invite` open a small modal prompt (Enter
-confirms, Esc cancels); `Profile` opens a kind-0 metadata editor; `Relays` opens
-the relay-list editor (below); `KeyPkg` opens a publish/rotate chooser.
+**Action buttons:** `New group`, `Invite`, `Leave`, `My QR`, `Profile`,
+`Relays`, `KeyPkg`, `Quit`. `New group` and `Invite` open a small modal prompt
+(Enter confirms, Esc cancels); `My QR` shows your npub as a scannable QR code
+(also opened by clicking your npub in the header); `Profile` opens a kind-0
+metadata editor; `Relays` opens the relay-list editor (below); `KeyPkg` opens a
+publish/rotate chooser.
 
 **Managing your relays.** `Relays` edits the two relay lists this account
 advertises on Nostr, each a whitespace/comma-separated list of `wss://` URLs:
@@ -126,9 +141,10 @@ list has never been published. Pressing Enter re-signs and republishes both
 lists; the values are normalised, de-duplicated, and stripped of invalid URLs
 before publishing.
 
-A two-party session: copy each peer's npub from the header, click **New group**
-on one side and name it, click **Invite** and paste the other's npub, then on
-the other side select the invite in the sidebar and press **Enter** to join.
+A two-party session: copy each peer's npub from the header (or click it / press
+**My QR** to show a scannable QR code), click **New group** on one side and name
+it, click **Invite** and paste the other's npub, then on the other side select
+the invite in the sidebar and press **Enter** to join.
 
 > The mouse works (clicks on buttons and pane focus), but the keyboard path is
 > the most reliable across terminals.

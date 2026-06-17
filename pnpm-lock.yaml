@@ -81,6 +81,9 @@ importers:
       '@internet-privacy/marmot-ts':
         specifier: workspace:*
         version: link:../..
+      '@libs/qrcode':
+        specifier: npm:@jsr/libs__qrcode@^3.0.1
+        version: '@jsr/libs__qrcode@3.0.1'
       '@opentui/core':
         specifier: ^0.4.1
         version: 0.4.1(typescript@6.0.3)(web-tree-sitter@0.25.10)
@@ -817,6 +820,9 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@jsr/libs__qrcode@3.0.1':
+    resolution: {integrity: sha512-kmB/aAUr55cB4h5+UHmig9Cx8UWEckpEBYdgmKIP1qaEZU3EpLQZHs4GL/78c+WVAdC9H6Gx+JwjX3g6GvsB2Q==, tarball: https://npm.jsr.io/~/11/@jsr/libs__qrcode/3.0.1.tgz}
 
   '@manypkg/find-root@1.1.0':
     resolution: {integrity: sha512-mki5uBvhHzO8kYYix/WRy2WX8S3B5wdVSc9D6KcU5lQNglP2yt58/VfLuAK49glRXChosY8ap2oJ1qgma3GUVA==}
@@ -4637,6 +4643,8 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@jsr/libs__qrcode@3.0.1': {}
 
   '@manypkg/find-root@1.1.0':
     dependencies:

@@ -14,6 +14,7 @@ import { ChatView } from "./ChatView.js";
 import { ChoicePrompt } from "./ChoicePrompt.js";
 import { Header } from "./Header.js";
 import { ProfileModal } from "./ProfileModal.js";
+import { QrModal } from "./QrModal.js";
 import { RelaysModal } from "./RelaysModal.js";
 import { Sidebar } from "./Sidebar.js";
 import { TextPrompt } from "./TextPrompt.js";
@@ -25,6 +26,7 @@ type Modal =
   | { kind: "keypkg" }
   | { kind: "profile" }
   | { kind: "relays" }
+  | { kind: "myqr" }
   | null;
 
 /**
@@ -34,7 +36,7 @@ type Modal =
  */
 export function App(props: { onQuit: () => void }) {
   const controller = useController();
-  const { activeGroupId, profile, outboxRelays, inboxRelays } = useChat();
+  const { me, activeGroupId, profile, outboxRelays, inboxRelays } = useChat();
   const groups = useWatchedGroups();
   const invites = useWatchedInvites();
 
@@ -53,6 +55,7 @@ export function App(props: { onQuit: () => void }) {
     { label: "New group", run: () => setModal({ kind: "new" }) },
     { label: "Invite", run: () => setModal({ kind: "invite" }) },
     { label: "Leave", run: () => void controller.leave() },
+    { label: "My QR", run: () => setModal({ kind: "myqr" }) },
     { label: "Profile", run: () => setModal({ kind: "profile" }) },
     { label: "Relays", run: () => setModal({ kind: "relays" }) },
     { label: "KeyPkg", run: () => setModal({ kind: "keypkg" }) },
@@ -90,7 +93,11 @@ export function App(props: { onQuit: () => void }) {
       height="100%"
       backgroundColor="#0e0e16"
     >
-      <Header groupCount={groups.length} inviteCount={invites.length} />
+      <Header
+        groupCount={groups.length}
+        inviteCount={invites.length}
+        onShowQr={() => setModal({ kind: "myqr" })}
+      />
 
       <box flexGrow={1} flexDirection="row">
         <Sidebar
@@ -176,6 +183,9 @@ export function App(props: { onQuit: () => void }) {
           }}
           onCancel={() => setModal(null)}
         />
+      )}
+      {modal?.kind === "myqr" && (
+        <QrModal npub={me.npub} onClose={() => setModal(null)} />
       )}
       {modal?.kind === "relays" && (
         <RelaysModal

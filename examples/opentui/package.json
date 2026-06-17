@@ -7,10 +7,12 @@
   "scripts": {
     "start": "bun run src/index.tsx",
     "dev": "bun --hot src/index.tsx",
+    "compile": "bun run scripts/compile.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@internet-privacy/marmot-ts": "workspace:*",
+    "@libs/qrcode": "npm:@jsr/libs__qrcode@^3.0.1",
     "@opentui/core": "^0.4.1",
     "@opentui/react": "^0.4.1",
     "applesauce-accounts": "^6.0.0",

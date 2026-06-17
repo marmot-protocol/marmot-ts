@@ -17,12 +17,11 @@ import {
   createInboxRelayListEvent,
   createNip65RelayListEvent,
   deserializeApplicationData,
-  getNip65Relays,
   getNostrGroupIdHex,
   GROUP_EVENT_KIND,
-  NIP65_RELAY_LIST_KIND,
 } from "@internet-privacy/marmot-ts";
 
+import type { Directory } from "./discovery.js";
 import type { RelayPool } from "./relay-pool.js";
 
 const GIFT_WRAP_KIND = 1059;
@@ -36,6 +35,7 @@ type Signer = {
 export interface ChatDeps {
   client: MarmotClient;
   pool: RelayPool;
+  directory: Directory;
   signer: Signer;
   pubkey: string;
   relays: string[];
@@ -103,17 +103,19 @@ export class ChatApp {
     const pubkeyHex = normalizeToPubkey(input);
     if (!pubkeyHex) throw new Error(`invalid pubkey or npub: ${input}`);
 
-    // 1) Discover the invitee's KeyPackage relays from their NIP-65 (kind 10002).
+    // 1) Discover the invitee's NIP-65 (kind 10002) outbox relays — where they
+    //    publish their KeyPackage. The Directory's address loader also falls
+    //    back to public NIP-65 indexers, so this works even for peers we've
+    //    never shared a relay with.
     this.#deps.log(`discovering KeyPackage for ${shortNpub(pubkeyHex)}…`);
-    const lists = await this.#deps.pool.request(this.#deps.relays, {
-      kinds: [NIP65_RELAY_LIST_KIND],
-      authors: [pubkeyHex],
-    });
-    const discovered = lists.length ? getNip65Relays(this.#newest(lists)) : [];
+    const discovered = await this.#deps.directory.outboxes(
+      pubkeyHex,
+      this.#deps.relays,
+    );
     this.#deps.log(
       discovered.length
-        ? `  NIP-65: ${discovered.join(", ")}`
-        : `  no NIP-65 relays found; using session relays`,
+        ? `  NIP-65 outbox: ${discovered.join(", ")}`
+        : `  no NIP-65 outbox relays found; using session relays`,
     );
 
     // 2) Fetch the KeyPackage (kind 30443) from the union of the discovered

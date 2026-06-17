@@ -41,7 +41,8 @@ detached. That hook is the thing this example is really here to exercise.
   `Sidebar` + `ChatView` + `InputBar` + `Header` + `ActivityLog`, plus the
   interactive `ActionBar`/`Button` and the `TextPrompt`/`ChoicePrompt` modals).
   `focus.ts` defines the pane cycle.
-- **`src/helpers/`** — `RelayPool`, `FileKeyValueStore`, and the account-proof
+- **`src/helpers/`** — `RelayPool`, `Directory` (relay-list/profile discovery
+  via applesauce's address loader), `FileKeyValueStore`, and the account-proof
   signer, carried over verbatim from `tui-chat` (they are UI-agnostic).
 
 ## Runtime
@@ -105,9 +106,25 @@ has a gold border.
   are also clickable with the mouse.
 - **Ctrl+C** — exit.
 
-**Action buttons:** `New group`, `Invite`, `Leave`, `KeyPkg`, `Quit`. `New
-group` and `Invite` open a small modal prompt (Enter confirms, Esc cancels);
-`KeyPkg` opens a publish/rotate chooser.
+**Action buttons:** `New group`, `Invite`, `Leave`, `Profile`, `Relays`,
+`KeyPkg`, `Quit`. `New group` and `Invite` open a small modal prompt (Enter
+confirms, Esc cancels); `Profile` opens a kind-0 metadata editor; `Relays` opens
+the relay-list editor (below); `KeyPkg` opens a publish/rotate chooser.
+
+**Managing your relays.** `Relays` edits the two relay lists this account
+advertises on Nostr, each a whitespace/comma-separated list of `wss://` URLs:
+
+- **Outbox** — your **NIP-65** list (kind 10002). Marmot reads it to discover
+  where you publish your KeyPackages, so peers fetch them from here when they
+  invite you.
+- **Inbox** — your **kind 10050** list. This is where gift-wrapped welcomes are
+  delivered to you.
+
+On startup the app loads whatever you've already published (so your edits
+survive restarts) and only publishes defaults — the operating relays — when a
+list has never been published. Pressing Enter re-signs and republishes both
+lists; the values are normalised, de-duplicated, and stripped of invalid URLs
+before publishing.
 
 A two-party session: copy each peer's npub from the header, click **New group**
 on one side and name it, click **Invite** and paste the other's npub, then on

@@ -3,17 +3,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
-import type { NostrEvent } from "applesauce-core/helpers/event";
 import { relaySet } from "applesauce-core/helpers/relays";
+import { RelayPool as AsRelayPool } from "applesauce-relay/pool";
 
-import {
-  getNip65Relays,
-  MarmotClient,
-  NIP65_RELAY_LIST_KIND,
-} from "@internet-privacy/marmot-ts";
+import { MarmotClient } from "@internet-privacy/marmot-ts";
 import { InMemoryKeyValueStore } from "@internet-privacy/marmot-ts/extra";
 
 import { accountProofSignerFor } from "../helpers/account-proof.js";
+import { Directory } from "../helpers/discovery.js";
 import { FileKeyValueStore } from "../helpers/file-store.js";
 import { RelayPool } from "../helpers/relay-pool.js";
 import { MarmotController } from "./controller.js";
@@ -59,10 +56,6 @@ function loadOrCreateSecret(keyPath: string, override: string): string {
   return hex;
 }
 
-function newest(events: NostrEvent[]): NostrEvent | undefined {
-  return events.slice().sort((a, b) => b.created_at - a.created_at)[0];
-}
-
 function makeStore<T>(ephemeral: boolean, path: string) {
   return ephemeral
     ? new InMemoryKeyValueStore<T>()
@@ -93,21 +86,19 @@ export async function createController(
   const account = PrivateKeyAccount.fromKey(secretHex);
   const pubkey = await account.signer.getPublicKey();
 
-  const pool = new RelayPool(bootstrapRelays);
+  const nostr = new AsRelayPool();
+  const directory = new Directory(nostr);
+  const pool = new RelayPool(nostr, bootstrapRelays, directory);
 
-  // For a returning identity, adopt the relays advertised in its NIP-65 list.
+  // For a returning identity, adopt the outbox relays advertised in its NIP-65
+  // (kind 10002) list.
   let relays = bootstrapRelays;
   if (!created) {
     onProgress("looking up your NIP-65 relay list…");
-    const lists = await pool.request(bootstrapRelays, {
-      kinds: [NIP65_RELAY_LIST_KIND],
-      authors: [pubkey],
-    });
-    const latest = newest(lists);
-    const discovered = latest ? getNip65Relays(latest) : [];
+    const discovered = await directory.outboxes(pubkey, bootstrapRelays);
     if (discovered.length) {
       relays = relaySet(discovered, explicitRelays);
-      onProgress(`using your NIP-65 relays: ${relays.join(", ")}`);
+      onProgress(`using your NIP-65 outbox relays: ${relays.join(", ")}`);
     } else {
       onProgress("no NIP-65 list found — using bootstrap relays");
     }
@@ -136,6 +127,7 @@ export async function createController(
   return new MarmotController({
     client,
     pool,
+    directory,
     signer: account.signer,
     pubkey,
     relays,

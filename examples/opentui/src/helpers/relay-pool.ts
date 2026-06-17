@@ -1,20 +1,14 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Filter } from "applesauce-core/helpers/filter";
-import { RelayPool as AsRelayPool } from "applesauce-relay/pool";
+import type { RelayPool as AsRelayPool } from "applesauce-relay/pool";
 
-import {
-  getInboxRelays,
-  INBOX_RELAY_LIST_KIND,
-} from "@internet-privacy/marmot-ts";
 import type {
   NostrNetworkInterface,
   PublishResponse,
   Subscribable,
 } from "@internet-privacy/marmot-ts/client";
 
-function newest(events: NostrEvent[]): NostrEvent | undefined {
-  return events.slice().sort((a, b) => b.created_at - a.created_at)[0];
-}
+import type { Directory } from "./discovery.js";
 
 function resolveRelays(relays: string[], fallback: string[]): string[] {
   return relays.length ? relays : fallback;
@@ -22,17 +16,26 @@ function resolveRelays(relays: string[], fallback: string[]): string[] {
 
 /**
  * Thin adapter over `applesauce-relay`'s {@link AsRelayPool} that implements
- * marmot-ts's {@link NostrNetworkInterface} for the TUI demo.
+ * marmot-ts's {@link NostrNetworkInterface} for the TUI demo. The pool is shared
+ * with the {@link Directory} so relay-list/profile discovery reuses the same
+ * connections, and `getUserInboxRelays` delegates to the Directory's loader.
  */
 export class RelayPool implements NostrNetworkInterface {
   /** Relays used when a call passes an empty relay list. Mutable: startup may
    * adopt the user's published NIP-65 relays after construction. */
   defaultRelays: string[];
 
-  readonly #pool = new AsRelayPool();
+  readonly #pool: AsRelayPool;
+  readonly #directory: Directory;
 
-  constructor(defaultRelays: string[]) {
+  constructor(
+    pool: AsRelayPool,
+    defaultRelays: string[],
+    directory: Directory,
+  ) {
+    this.#pool = pool;
     this.defaultRelays = defaultRelays;
+    this.#directory = directory;
   }
 
   async publish(
@@ -73,12 +76,10 @@ export class RelayPool implements NostrNetworkInterface {
   }
 
   async getUserInboxRelays(pubkey: string): Promise<string[]> {
-    const events = await this.request(this.defaultRelays, {
-      kinds: [INBOX_RELAY_LIST_KIND],
-      authors: [pubkey],
-    });
-    const latest = newest(events);
-    const relays = latest ? getInboxRelays(latest) : [];
+    const relays = await this.#directory.welcomeInboxes(
+      pubkey,
+      this.defaultRelays,
+    );
     return relays.length ? relays : this.defaultRelays;
   }
 

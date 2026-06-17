@@ -43,14 +43,14 @@ pnpm --filter marmot-tui-chat start -- --name bob
 
 ### Flags
 
-| Flag             | Default                                 | Meaning                                                         |
-| ---------------- | --------------------------------------- | --------------------------------------------------------------- |
-| `--name <label>` | `default`                               | Profile name; data + identity live in `~/.marmot-tui/<label>/`. |
-| `--relay <url>`  | `wss://relay.damus.io`, `wss://nos.lol` | Repeatable. Point all peers at the **same** relay(s).           |
-| `--sec <hex>`    | (generated)                             | Use a specific 32-byte hex Nostr secret key.                    |
-| `--ephemeral`    | off                                     | Keep all state in memory (nothing written to disk).             |
-| `--debug`        | off                                     | Print full stack traces on errors **and** write the library's `debug` logs to a file. |
-| `--log-file <path>` | `./logs.txt`                         | Where `--debug` writes the library's `debug` output (only used with `--debug`). |
+| Flag                | Default                                 | Meaning                                                                               |
+| ------------------- | --------------------------------------- | ------------------------------------------------------------------------------------- |
+| `--name <label>`    | `default`                               | Profile name; data + identity live in `~/.marmot-tui/<label>/`.                       |
+| `--relay <url>`     | `wss://relay.damus.io`, `wss://nos.lol` | Repeatable. Point all peers at the **same** relay(s).                                 |
+| `--sec <hex>`       | (generated)                             | Use a specific 32-byte hex Nostr secret key.                                          |
+| `--ephemeral`       | off                                     | Keep all state in memory (nothing written to disk).                                   |
+| `--debug`           | off                                     | Print full stack traces on errors **and** write the library's `debug` logs to a file. |
+| `--log-file <path>` | `./logs.txt`                            | Where `--debug` writes the library's `debug` output (only used with `--debug`).       |
 
 > The marmot-ts library logs through the [`debug`](https://www.npmjs.com/package/debug)
 > package under the `marmot-ts*` namespace. Letting those lines reach stderr
@@ -65,10 +65,16 @@ pnpm --filter marmot-tui-chat start -- --name bob
 > Rust peer at the same relay.
 
 On startup with an **existing** identity, the app looks up your published NIP-65
-(kind 10002) relay list on the bootstrap relays and adopts those relays for the
-session (unioned with any `--relay` you pass), so a returning user doesn't have
-to re-specify them. A brand-new identity just uses the bootstrap relays and
-publishes a fresh NIP-65 list to them.
+(kind 10002) outbox relays and adopts them for the session (unioned with any
+`--relay` you pass), so a returning user doesn't have to re-specify them. A
+brand-new identity just uses the bootstrap relays and publishes a fresh NIP-65
+list to them.
+
+Relay-list and profile discovery go through applesauce's address loader
+(`src/discovery.ts`), which batches and de-duplicates lookups via a shared
+`EventStore` and falls back to public NIP-65 indexers (purplepag.es,
+index.hzrd149.com) and the White Noise relays — so you can invite a peer you've
+never shared a relay with.
 
 ## A two-party session
 
@@ -136,5 +142,6 @@ non-issues.
 | `src/index.ts`         | CLI args, identity, stores, readline loop, commands.                            |
 | `src/chat.ts`          | `ChatApp` — the marmot-ts lifecycle (publish / invite / join / send / receive). |
 | `src/relay-pool.ts`    | `RelayPool` — `NostrNetworkInterface` adapter over `applesauce-relay`.          |
+| `src/discovery.ts`     | `Directory` — relay-list/profile lookups via applesauce's address loader.       |
 | `src/file-store.ts`    | `FileKeyValueStore` — JSON persistence with `Uint8Array`/`bigint` tagging.      |
 | `src/account-proof.ts` | Builds the mandatory account-identity-proof signer from the local key.          |

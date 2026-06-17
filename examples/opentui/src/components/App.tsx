@@ -14,6 +14,7 @@ import { ChatView } from "./ChatView.js";
 import { ChoicePrompt } from "./ChoicePrompt.js";
 import { Header } from "./Header.js";
 import { ProfileModal } from "./ProfileModal.js";
+import { RelaysModal } from "./RelaysModal.js";
 import { Sidebar } from "./Sidebar.js";
 import { TextPrompt } from "./TextPrompt.js";
 import { nextPane, type Pane, prevPane } from "./focus.js";
@@ -23,6 +24,7 @@ type Modal =
   | { kind: "invite" }
   | { kind: "keypkg" }
   | { kind: "profile" }
+  | { kind: "relays" }
   | null;
 
 /**
@@ -32,7 +34,7 @@ type Modal =
  */
 export function App(props: { onQuit: () => void }) {
   const controller = useController();
-  const { activeGroupId, profile } = useChat();
+  const { activeGroupId, profile, outboxRelays, inboxRelays } = useChat();
   const groups = useWatchedGroups();
   const invites = useWatchedInvites();
 
@@ -52,6 +54,7 @@ export function App(props: { onQuit: () => void }) {
     { label: "Invite", run: () => setModal({ kind: "invite" }) },
     { label: "Leave", run: () => void controller.leave() },
     { label: "Profile", run: () => setModal({ kind: "profile" }) },
+    { label: "Relays", run: () => setModal({ kind: "relays" }) },
     { label: "KeyPkg", run: () => setModal({ kind: "keypkg" }) },
     { label: "Quit", run: props.onQuit },
   ];
@@ -170,6 +173,17 @@ export function App(props: { onQuit: () => void }) {
           onSave={(fields) => {
             setModal(null);
             void controller.saveProfile(fields);
+          }}
+          onCancel={() => setModal(null)}
+        />
+      )}
+      {modal?.kind === "relays" && (
+        <RelaysModal
+          outbox={outboxRelays}
+          inbox={inboxRelays}
+          onSave={(outbox, inbox) => {
+            setModal(null);
+            void controller.saveRelayLists(outbox, inbox);
           }}
           onCancel={() => setModal(null)}
         />

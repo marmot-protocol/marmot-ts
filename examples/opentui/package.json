@@ -13,9 +13,10 @@
     "@internet-privacy/marmot-ts": "workspace:*",
     "@opentui/core": "^0.4.1",
     "@opentui/react": "^0.4.1",
-    "applesauce-accounts": "^5.2.0",
-    "applesauce-common": "^5.2.0",
-    "applesauce-core": "^5.2.0",
+    "applesauce-accounts": "^6.0.0",
+    "applesauce-common": "^6.1.0",
+    "applesauce-core": "^6.1.0",
+    "applesauce-loaders": "^6.1.0",
     "applesauce-relay": "^6.0.3",
     "react": "^19.2.0"
   },

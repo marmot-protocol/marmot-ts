@@ -3,10 +3,7 @@ import {
   normalizeToPubkey,
   npubEncode,
 } from "applesauce-core/helpers/pointers";
-import {
-  getProfileContent,
-  type ProfileContent,
-} from "applesauce-core/helpers/profile";
+import type { ProfileContent } from "applesauce-core/helpers/profile";
 import { relaySet } from "applesauce-core/helpers/relays";
 
 import {
@@ -20,12 +17,11 @@ import {
   createInboxRelayListEvent,
   createNip65RelayListEvent,
   deserializeApplicationData,
-  getNip65Relays,
   getNostrGroupIdHex,
   GROUP_EVENT_KIND,
-  NIP65_RELAY_LIST_KIND,
 } from "@internet-privacy/marmot-ts";
 
+import type { Directory } from "../helpers/discovery.js";
 import type { RelayPool } from "../helpers/relay-pool.js";
 import { groupName, hexShort, npubShort, short } from "./format.js";
 
@@ -40,6 +36,7 @@ type Signer = {
 export interface ControllerDeps {
   client: MarmotClient;
   pool: RelayPool;
+  directory: Directory;
   signer: Signer;
   pubkey: string;
   relays: string[];
@@ -81,6 +78,10 @@ export interface ChatSnapshot {
   /** The user's own kind 0 profile metadata, once loaded (null if none). */
   profile: ProfileContent | null;
   relays: string[];
+  /** The account's advertised NIP-65 outbox relays (kind 10002). */
+  outboxRelays: string[];
+  /** The account's advertised inbox relays for welcomes (kind 10050). */
+  inboxRelays: string[];
   clientId: string;
   activeGroupId: string | null;
   /** Messages keyed by group id (hex). */
@@ -119,6 +120,10 @@ export class MarmotController {
   #status: StatusLine[] = [];
   #activeId: string | null = null;
   #profile: ProfileContent | null = null;
+  /** Advertised NIP-65 outbox list (kind 10002); seeded with operating relays. */
+  #outboxRelays: string[];
+  /** Advertised inbox list for welcomes (kind 10050); seeded with operating relays. */
+  #inboxRelays: string[];
   #busy = false;
   #statusSeq = 0;
 
@@ -130,6 +135,8 @@ export class MarmotController {
 
   constructor(deps: ControllerDeps) {
     this.#deps = deps;
+    this.#outboxRelays = deps.relays;
+    this.#inboxRelays = deps.relays;
     this.#snapshot = this.#buildSnapshot();
   }
 
@@ -149,7 +156,7 @@ export class MarmotController {
   // --- lifecycle -------------------------------------------------------------
 
   async start(): Promise<void> {
-    await this.#publishIdentity();
+    await this.#loadOrPublishRelayLists();
     await this.#ensureKeyPackage();
     await this.#loadProfile();
     await this.#restoreGroups();
@@ -191,16 +198,22 @@ export class MarmotController {
       const pubkeyHex = normalizeToPubkey(input);
       if (!pubkeyHex) throw new Error(`invalid pubkey or npub: ${input}`);
 
+      // Discover the invitee's NIP-65 (kind 10002) outbox relays — where they
+      // publish their KeyPackage. The Directory's address loader also falls
+      // back to public NIP-65 indexers, so this works even for peers we've
+      // never shared a relay with.
       this.log(`discovering KeyPackage for ${npubShort(pubkeyHex)}…`);
-      const lists = await this.#deps.pool.request(this.#deps.relays, {
-        kinds: [NIP65_RELAY_LIST_KIND],
-        authors: [pubkeyHex],
-      });
-      const discovered = lists.length
-        ? getNip65Relays(this.#newest(lists))
-        : [];
+      const discovered = await this.#deps.directory.outboxes(
+        pubkeyHex,
+        this.#deps.relays,
+      );
+      this.log(
+        discovered.length
+          ? `NIP-65 outbox: ${discovered.join(", ")}`
+          : `no NIP-65 outbox relays found; using session relays`,
+      );
       const searchRelays = relaySet(discovered, this.#deps.relays);
-      this.log(`fetching KeyPackage from ${searchRelays.length} relay(s)…`);
+      this.log(`fetching KeyPackage from ${searchRelays.join(", ")}`);
       const kps = await this.#deps.pool.request(searchRelays, {
         kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
         authors: [pubkeyHex],
@@ -286,6 +299,34 @@ export class MarmotController {
   }
 
   /**
+   * Republish the account's advertised relay lists. `outbox` becomes the NIP-65
+   * (kind 10002) list used for KeyPackage discovery; `inbox` becomes the kind
+   * 10050 list used for welcome delivery. Each list is normalised and
+   * de-duplicated (`relaySet`); invalid URLs are dropped by the event builders.
+   */
+  async saveRelayLists(outbox: string[], inbox: string[]): Promise<void> {
+    await this.#withBusy(async () => {
+      const nextOutbox = relaySet(outbox);
+      const nextInbox = relaySet(inbox);
+      if (!nextOutbox.length) {
+        throw new Error("outbox (NIP-65) list needs at least one valid relay");
+      }
+      if (!nextInbox.length) {
+        throw new Error(
+          "inbox (kind 10050) list needs at least one valid relay",
+        );
+      }
+      await this.#publishOutboxList(nextOutbox);
+      await this.#publishInboxList(nextInbox);
+      this.#outboxRelays = nextOutbox;
+      this.#inboxRelays = nextInbox;
+      this.log(
+        `published relay lists — outbox: ${nextOutbox.join(", ")} · inbox: ${nextInbox.join(", ")}`,
+      );
+    });
+  }
+
+  /**
    * Publish the user's kind 0 profile (NIP-01 metadata). The supplied fields
    * are merged over the loaded profile so values this UI doesn't expose (banner,
    * lud16, …) are preserved; empty fields are removed.
@@ -338,35 +379,63 @@ export class MarmotController {
     }
   }
 
-  async #publishIdentity(): Promise<void> {
-    const nip65 = createNip65RelayListEvent({
-      pubkey: this.#deps.pubkey,
-      relays: this.#deps.relays,
-    });
-    const inbox = createInboxRelayListEvent({
-      pubkey: this.#deps.pubkey,
-      relays: this.#deps.relays,
-    });
-    await this.#deps.pool.publish(
-      this.#deps.relays,
-      await this.#deps.signer.signEvent(nip65),
+  /**
+   * Load the account's two advertised relay lists from the network and adopt
+   * them as the editable state, publishing a default (the operating relays)
+   * only when a list has never been published. This way the lists a returning
+   * user customised through the Relays modal survive restarts instead of being
+   * overwritten on every launch.
+   *
+   * - **NIP-65 outbox** (kind 10002): where the account publishes its
+   *   KeyPackages and is discoverable by inviters.
+   * - **Inbox** (kind 10050): where the account receives gift-wrapped welcomes.
+   */
+  async #loadOrPublishRelayLists(): Promise<void> {
+    const [outbox, inbox] = await Promise.all([
+      this.#deps.directory.outboxes(this.#deps.pubkey, this.#deps.relays),
+      this.#deps.directory.welcomeInboxes(this.#deps.pubkey, this.#deps.relays),
+    ]);
+
+    if (outbox.length) {
+      this.#outboxRelays = outbox;
+    } else {
+      await this.#publishOutboxList(this.#outboxRelays);
+      this.log("published your NIP-65 outbox relay list (kind 10002)");
+    }
+    if (inbox.length) {
+      this.#inboxRelays = inbox;
+    } else {
+      await this.#publishInboxList(this.#inboxRelays);
+      this.log("published your inbox relay list (kind 10050)");
+    }
+    this.#publish();
+  }
+
+  /** Sign and publish the NIP-65 outbox list (kind 10002) to the operating relays. */
+  async #publishOutboxList(relays: string[]): Promise<void> {
+    const event = await this.#deps.signer.signEvent(
+      createNip65RelayListEvent({ pubkey: this.#deps.pubkey, relays }),
     );
-    await this.#deps.pool.publish(
-      this.#deps.relays,
-      await this.#deps.signer.signEvent(inbox),
+    await this.#deps.pool.publish(this.#deps.relays, event);
+  }
+
+  /** Sign and publish the inbox list (kind 10050) to the operating relays. */
+  async #publishInboxList(relays: string[]): Promise<void> {
+    const event = await this.#deps.signer.signEvent(
+      createInboxRelayListEvent({ pubkey: this.#deps.pubkey, relays }),
     );
+    await this.#deps.pool.publish(this.#deps.relays, event);
   }
 
   /** Load the user's existing kind 0 profile from the relays, if any. */
   async #loadProfile(): Promise<void> {
     try {
-      const events = await this.#deps.pool.request(this.#deps.relays, {
-        kinds: [0],
-        authors: [this.#deps.pubkey],
-      });
-      const latest = events.length ? this.#newest(events) : undefined;
-      if (latest) {
-        this.#profile = getProfileContent(latest) ?? null;
+      const profile = await this.#deps.directory.profile(
+        this.#deps.pubkey,
+        this.#deps.relays,
+      );
+      if (profile) {
+        this.#profile = profile;
         this.#publish();
       }
     } catch (err) {
@@ -568,6 +637,8 @@ export class MarmotController {
       me: { pubkey: this.#deps.pubkey, npub: npubEncode(this.#deps.pubkey) },
       profile: this.#profile,
       relays: this.#deps.relays,
+      outboxRelays: this.#outboxRelays,
+      inboxRelays: this.#inboxRelays,
       clientId: this.#deps.clientId,
       activeGroupId: this.#activeId,
       messages,

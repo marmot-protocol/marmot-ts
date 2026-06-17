@@ -4,18 +4,15 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
-
-import {
-  getNip65Relays,
-  MarmotClient,
-  NIP65_RELAY_LIST_KIND,
-} from "@internet-privacy/marmot-ts";
-import { InMemoryKeyValueStore } from "@internet-privacy/marmot-ts/extra";
-import type { NostrEvent } from "applesauce-core/helpers/event";
 import { relaySet } from "applesauce-core/helpers/relays";
+import { RelayPool as AsRelayPool } from "applesauce-relay/pool";
+
+import { MarmotClient } from "@internet-privacy/marmot-ts";
+import { InMemoryKeyValueStore } from "@internet-privacy/marmot-ts/extra";
 
 import { accountProofSignerFor } from "./account-proof.js";
 import { ChatApp, formatError } from "./chat.js";
+import { Directory } from "./discovery.js";
 import { FileKeyValueStore } from "./file-store.js";
 import { type LogFile, redirectDebugToFile } from "./logging.js";
 import { RelayPool } from "./relay-pool.js";
@@ -58,10 +55,6 @@ function loadOrCreateSecret(
   return { hex, created: true };
 }
 
-function newest(events: NostrEvent[]): NostrEvent | undefined {
-  return events.slice().sort((a, b) => b.created_at - a.created_at)[0];
-}
-
 function makeStore<T>(ephemeral: boolean, path: string) {
   return ephemeral
     ? new InMemoryKeyValueStore<T>()
@@ -90,7 +83,9 @@ async function main(): Promise<void> {
   const account = PrivateKeyAccount.fromKey(secretHex);
   const pubkey = await account.signer.getPublicKey();
 
-  const pool = new RelayPool(bootstrapRelays);
+  const nostr = new AsRelayPool();
+  const directory = new Directory(nostr);
+  const pool = new RelayPool(nostr, bootstrapRelays, directory);
 
   const rl = createInterface({
     input: process.stdin,
@@ -118,19 +113,15 @@ async function main(): Promise<void> {
       (logFile ? ` (debug: stack traces on, logs → ${logFile.path})` : ""),
   );
 
-  // For a returning identity, adopt the relays the user already advertised in
-  // their NIP-65 (kind 10002) list so they don't have to re-specify them.
+  // For a returning identity, adopt the outbox relays the user already
+  // advertised in their NIP-65 (kind 10002) list so they don't have to
+  // re-specify them.
   let relays = bootstrapRelays;
   if (!created) {
-    const lists = await pool.request(bootstrapRelays, {
-      kinds: [NIP65_RELAY_LIST_KIND],
-      authors: [pubkey],
-    });
-    const latest = newest(lists);
-    const discovered = latest ? getNip65Relays(latest) : [];
+    const discovered = await directory.outboxes(pubkey, bootstrapRelays);
     if (discovered.length) {
       relays = relaySet(discovered, explicitRelays);
-      log(`found your NIP-65 list — using ${relays.join(", ")}`);
+      log(`found your NIP-65 outbox relays — using ${relays.join(", ")}`);
     } else {
       log("no NIP-65 list found for you — using bootstrap relays");
     }
@@ -153,6 +144,7 @@ async function main(): Promise<void> {
   const app = new ChatApp({
     client,
     pool,
+    directory,
     signer: account.signer,
     pubkey,
     relays,

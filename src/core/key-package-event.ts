@@ -9,9 +9,9 @@ import {
   defaultCredentialTypes,
   encode,
   KeyPackage,
-  keyPackageDecoder,
-  keyPackageEncoder,
+  type MlsKeyPackage,
   mlsMessageDecoder,
+  mlsMessageEncoder,
   protocolVersions,
   wireformats,
 } from "ts-mls";
@@ -94,15 +94,6 @@ export function createDeleteKeyPackageEvent(
   };
 }
 
-/** Runs a ts-mls decode, returning undefined instead of throwing on failure. */
-function tryDecode<T>(run: () => T | undefined): T | undefined {
-  try {
-    return run();
-  } catch {
-    return undefined;
-  }
-}
-
 /** Get the KeyPackage from a kind 30443 event */
 export function getKeyPackage(event: NostrEvent): KeyPackage {
   // Transport byte encoding is always standard base64; the spec forbids an
@@ -110,27 +101,20 @@ export function getKeyPackage(event: NostrEvent): KeyPackage {
   // (transports/nostr.md "Transport byte encoding").
   const content = decodeContent(event.content, "base64");
 
-  // TEMPORARY COMPAT HACK. The kind-30443 content should be a bare RFC 9420
-  // KeyPackage, but White Noise and the current darkmatter reference engine
-  // wrap it in an MLSMessage (4-byte header: ProtocolVersion 00 01 + WireFormat
-  // 00 05 = mls_key_package). Decoding those framed bytes as a bare KeyPackage
-  // desyncs on the header and throws ts-mls "8-byte length not supported".
-  // So we sniff for the MLSMessage frame first and unwrap it; otherwise we
-  // decode the bare KeyPackage we publish ourselves. Drop the framed branch
-  // once upstream stops wrapping — see docs/upstream-issues/keypackage-mlsmessage-framing.md.
-  //
-  // ts-mls `decode` throws (not just returns undefined) when a decoder hits
-  // bytes it cannot parse, so each attempt is guarded and we fall through to
-  // the next candidate on failure.
-  const framed = tryDecode(() => decode(mlsMessageDecoder, content));
-  if (framed && framed.wireformat === wireformats.mls_key_package) {
-    return framed.keyPackage;
-  }
+  // The spec frames kind-30443 content as an MLSMessage with wire_format
+  // mls_key_package (transports/nostr.md), a 4-byte header (ProtocolVersion
+  // 00 01 + WireFormat 00 05) ahead of the inner KeyPackage. This mirrors the
+  // kind-444 welcome framing and is what the darkmatter reference engine emits.
+  // We only accept this framed form — bare KeyPackage content is not spec
+  // conformant and is rejected.
+  const message = decode(mlsMessageDecoder, content);
+  if (!message) throw new Error("Failed to decode key package event content");
+  if (message.wireformat !== wireformats.mls_key_package)
+    throw new Error(
+      `Expected MLSMessage with mls_key_package wireformat, got wireformat ${message.wireformat}`,
+    );
 
-  const bare = tryDecode(() => decode(keyPackageDecoder, content));
-  if (!bare) throw new Error("Failed to decode key package");
-
-  return bare;
+  return message.keyPackage;
 }
 
 /** Gets the MLS protocol version from a kind 30443 event */
@@ -239,13 +223,18 @@ async function createKeyPackageEventInternal(
 ): Promise<EventTemplate> {
   const { keyPackage, relays, client } = options;
 
-  // Publish a bare RFC 9420 KeyPackage. The kind-30443 content is specified as
-  // the serialized KeyPackage bytes (transports/nostr.md), so this is the
-  // spec-correct form. NOTE: White Noise and the current darkmatter reference
-  // engine instead wrap the KeyPackage in an MLSMessage (wire_format
-  // mls_key_package); getKeyPackage tolerates that frame on read as a temporary
-  // compat hack. See docs/upstream-issues/keypackage-mlsmessage-framing.md.
-  const encodedBytes = encode(keyPackageEncoder, keyPackage);
+  // Publish the KeyPackage wrapped in an MLSMessage with wire_format
+  // mls_key_package (RFC 9420 §6). The kind-30443 content is specified as the
+  // serialized MLSMessage bytes (transports/nostr.md), mirroring the kind-444
+  // welcome framing, and this is what the darkmatter reference engine and
+  // deployed clients (e.g. White Noise) publish and expect. getKeyPackage
+  // still tolerates a bare KeyPackage on read for backwards compatibility.
+  const mlsMessage: MlsKeyPackage = {
+    version: protocolVersions.mls10,
+    wireformat: wireformats.mls_key_package,
+    keyPackage,
+  };
+  const encodedBytes = encode(mlsMessageEncoder, mlsMessage);
   const content = encodeContent(encodedBytes, "base64");
 
   // Get the cipher suite from the key package

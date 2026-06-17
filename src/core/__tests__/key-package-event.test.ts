@@ -375,7 +375,7 @@ describe("createKeyPackageEvent", () => {
     expect(decoded.leafNode.credential).toEqual(credential);
   });
 
-  it("publishes a bare KeyPackage (no MLSMessage frame)", async () => {
+  it("publishes an MLSMessage-framed KeyPackage (wire_format mls_key_package)", async () => {
     const credential = createCredential(validPubkey);
     const ciphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -392,11 +392,57 @@ describe("createKeyPackageEvent", () => {
       identifier: testD,
     });
 
-    // Spec-correct content is a bare RFC 9420 KeyPackage: ProtocolVersion mls10
-    // (00 01) followed directly by CipherSuite 0x0001 — NOT an MLSMessage frame,
-    // whose byte 2-3 would be WireFormat mls_key_package (00 05).
+    // Spec-correct content is an MLSMessage with wire_format mls_key_package
+    // (transports/nostr.md): ProtocolVersion mls10 (00 01) followed by
+    // WireFormat mls_key_package (00 05), then the inner KeyPackage. This
+    // mirrors the kind-444 welcome framing and what darkmatter/White Noise emit.
     const bytes = base64ToBytes(event.content);
-    expect(Array.from(bytes.subarray(0, 4))).toEqual([0x00, 0x01, 0x00, 0x01]);
+    expect(Array.from(bytes.subarray(0, 4))).toEqual([0x00, 0x01, 0x00, 0x05]);
+
+    // The framed bytes round-trip back to the same KeyPackage on read.
+    const mockEvent: NostrEvent = {
+      ...event,
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      pubkey: validPubkey,
+      id: "framed-roundtrip-id",
+      sig: "framed-roundtrip-sig",
+    };
+    expect(getKeyPackage(mockEvent).leafNode.credential).toEqual(credential);
+  });
+
+  it("rejects bare KeyPackage content (no MLSMessage frame)", async () => {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+    });
+
+    // A bare RFC 9420 KeyPackage (no MLSMessage frame) is not spec conformant
+    // for kind-30443 content and MUST be rejected. Its first 4 bytes are
+    // ProtocolVersion mls10 (00 01) + CipherSuite 0x0001, which a strict
+    // MLSMessage decode treats as wireformat 0x0001 (mls_public_message) and
+    // fails to parse as a key package.
+    const bareBytes = encode(keyPackageEncoder, keyPackage.publicPackage);
+    expect(Array.from(bareBytes.subarray(0, 4))).toEqual([
+      0x00, 0x01, 0x00, 0x01,
+    ]);
+
+    const event: NostrEvent = {
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      pubkey: validPubkey,
+      created_at: unixNow(),
+      content: bytesToBase64(bareBytes),
+      tags: [["d", testD]],
+      id: "bare-id",
+      sig: "bare-sig",
+    };
+
+    expect(() => getKeyPackage(event)).toThrow();
   });
 
   it("decodes MLSMessage-framed content (White Noise / darkmatter compat)", async () => {
@@ -471,13 +517,13 @@ describe("createKeyPackageEvent", () => {
   });
 });
 
-describe("MLSMessage-framing compat (temporary upstream hack)", () => {
+describe("MLSMessage-framing (spec-conformant kind 30443 content)", () => {
   // A real kind-30443 KeyPackage event captured from White Noise on
   // wss://relay.us.whitenoise.chat/. Author pubkey
   // 3cee7c372372c11f9c62d7e839da08969b9f5178ae5b6acc715bc12c066c37e6
   // (npub18nh8cderwtq3l8rz6l5rnksgj6de75tc4edk4nr3t0qjcpnvxlnqwmu2sv).
-  // Its content is an MLSMessage(wire_format = mls_key_package), not a bare
-  // KeyPackage. See docs/upstream-issues/keypackage-mlsmessage-framing.md.
+  // Its content is an MLSMessage(wire_format = mls_key_package), the
+  // spec-required framing (transports/nostr.md), not a bare KeyPackage.
   const whiteNoiseEvent: NostrEvent = {
     kind: ADDRESSABLE_KEY_PACKAGE_KIND,
     pubkey: "3cee7c372372c11f9c62d7e839da08969b9f5178ae5b6acc715bc12c066c37e6",

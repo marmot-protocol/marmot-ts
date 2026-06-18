@@ -301,7 +301,10 @@ export class GroupSession<
 
     const publish: GroupPublishWork[] = [];
     for (const proposal of removeProposals) {
-      const sendResult = await this.#engine.send({ kind: "proposal", proposal });
+      const sendResult = await this.#engine.send({
+        kind: "proposal",
+        proposal,
+      });
       if (sendResult.kind !== "proposal") {
         throw new Error("Expected proposal result from leave send");
       }

@@ -225,7 +225,9 @@ export function decodeEncryptedMediaPolicyV1(
   reader.end();
 
   if (mediaFormat !== ENCRYPTED_MEDIA_FORMAT_V1) {
-    throw new Error(`encrypted media format must be ${ENCRYPTED_MEDIA_FORMAT_V1}`);
+    throw new Error(
+      `encrypted media format must be ${ENCRYPTED_MEDIA_FORMAT_V1}`,
+    );
   }
 
   const allowedLocatorKinds: string[] = [];

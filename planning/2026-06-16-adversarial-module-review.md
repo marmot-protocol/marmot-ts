@@ -133,14 +133,25 @@ imports `getKeyPackageIdentifier` from the decode module). `key-package-event.ts
 is now a barrel re-exporting all three for source compatibility. Compile + all
 481 tests pass._
 
-### 6. `src/client/groups-manager.ts` — 573 lines, registry + factory + RPC facade
+### 6. `src/client/groups-manager.ts` — 573 lines, registry + factory + RPC facade — DONE
 
 Split `GroupRegistry` (cache/`#groups`/listeners/lifecycle), `GroupFactory`
 (`create()` 491–536, the only `accountProofSigner`/ciphersuite consumer), leaving
 a thin orchestrator. `leave()`'s inline proposal-building (461–471) should move
 behind `session.leave()` to match darkmatter's "leave is a SendIntent."
 
-### 7. `src/client/marmot-client.ts` — `joinGroupFromWelcome` layering violation
+_Completed: extracted `client/group-registry.ts` (`GroupRegistry` — the
+`#groups`/listener/`#groupLoadPromises` cache, hydrate/build/track/untrack,
+emits `updated`/`loaded`) and `client/group-factory.ts` (`GroupFactory.create()`
+— the sole `accountProofSigner`/ciphersuite consumer, darkmatter
+`do_create_group`). `GroupsManager` is now a thin orchestrator that forwards the
+registry's cache events and layers the lifecycle events
+(created/imported/joined/destroyed/left). `GroupSession.leave(ownPubkey)` now
+owns the self-remove proposal build (matching darkmatter `do_send_leave` —
+"leave is a SendIntent"); the manager just publishes its effects. Also added
+`GroupsManager.joinFromWelcome()` for item 7. Public API unchanged; all tests pass._
+
+### 7. `src/client/marmot-client.ts` — `joinGroupFromWelcome` layering violation — DONE
 
 A 70-line RFC-9420 KeyPackageRef-matching loop reaching into `welcome.secrets`/
 `secret.newMember` internals (210–333) — protocol logic in the composition root,
@@ -148,7 +159,15 @@ duplicated in spirit by `readInviteGroupInfo` (171–187). darkmatter makes this
 `engine.join_welcome`. Extract `keyPackages.selectForWelcome()` +
 `groups.joinFromWelcome()`.
 
-### 8. `src/core/components/internal.ts` — 211 lines, three unrelated concerns
+_Completed: added `KeyPackageManager.selectForWelcome(welcome)` (candidate
+selection + KeyPackageRef matching, ref-matches-first ordering; returns the new
+`WelcomeKeyPackageCandidate[]`) and `GroupsManager.joinFromWelcome({welcome,
+candidates, ciphersuiteImpl})` (the `joinGroup` loop + `verifyAllLeafAccountIdentityProofs`
++ adopt, mirroring engine `do_join_welcome`). `marmot-client.joinGroupFromWelcome`
+is now ~20 lines and touches no `welcome.secrets`/KeyPackageRef internals;
+`readInviteGroupInfo` reuses the same `selectForWelcome` path. Public API unchanged._
+
+### 8. `src/core/components/internal.ts` — 211 lines, three unrelated concerns — DONE
 
 A generic `compareBytes` (3–10) shipped beside a full hand-rolled IPv4/IPv6
 host-safety classifier (17–115, a browser-forced reimplementation of Rust
@@ -156,31 +175,62 @@ host-safety classifier (17–115, a browser-forced reimplementation of Rust
 `host-safety.ts` / `url.ts` — the file's own comments cite it as a port of
 darkmatter `host_safety.rs`.
 
-### 9. `src/core/welcome.ts` — 252 lines, codec + MLS-join fused (borderline)
+_Completed: split into `core/components/bytes.ts` (`compareBytes`),
+`core/components/host-safety.ts` (the IPv4/IPv6 non-routable classifiers +
+`isLoopbackHost`/`rejectNonRoutableHost`), and `core/components/url.ts`
+(`validateAndNormalizeHttpsUrl`). The 4 importers were repointed and
+`internal.ts` removed. Matches darkmatter's centralization in
+`traits/app_components/host_safety.rs`, reused (not duplicated) by the URL
+validators._
+
+### 9. `src/core/welcome.ts` — 252 lines, codec + MLS-join fused (borderline) — DONE
 
 Transport codec (build/parse kind-444 rumor) fused with actual `joinGroup`
 group-secret decryption (`readWelcomeGroupInfo`, 177–219). Split
 `welcome-event.ts` / `welcome-join.ts`. Lower urgency given size, but the
 `joinGroup` import is the tell.
 
-## Non-structural flags surfaced (separate follow-up)
+_Completed: split into `core/welcome-event.ts` (the kind-444 rumor codec +
+`getWelcome`/`getWelcomeKeyPackageRefs`) and `core/welcome-join.ts`
+(`readWelcomeGroupInfo`/`readWelcomeMarmotGroupView`, the `joinGroup` path).
+`welcome.ts` is now a barrel. The darkmatter review confirmed this seam: Rust
+hard-splits the welcome event codec (transport-nostr-peeler crate) from the MLS
+join (`cgka-engine` `do_join_welcome`)._
 
-- **`encrypted-media.ts:178`** — `decodeEncryptedMediaPolicyV1` _re-runs_
-  producer normalization instead of strict validate, so it silently repairs
-  non-canonical stored bytes where darkmatter rejects them → risk of
-  **cross-implementation commit-acceptance forks**.
-- **`binary.ts`** — `BinaryReader` mixes `.slice()` (335) and `.subarray()` (381)
-  over the backing buffer; latent aliasing bug, not a split issue.
+## Non-structural flags surfaced (separate follow-up) — DONE
+
+- **`encrypted-media.ts`** — DONE. The decoder no longer re-runs producer
+  normalization; it is a strict validator (rejects non-canonical case/dupes/
+  non-normalized URLs/trailing bytes). The compatibility review against
+  darkmatter `crates/traits/src/app_components/{encrypted_media.rs,tests.rs}`
+  surfaced **two further fork-causing wire divergences** beyond the flag, both
+  fixed: (a) the endpoint vector used a per-item length wrapper where darkmatter
+  uses a bare `{kind,url}` concatenation under one outer length (#171), and
+  (b) endpoint URLs rejected query strings and stripped the WHATWG trailing
+  slash where darkmatter accepts queries (#374) and keeps the slash. Now pinned
+  to darkmatter's authoritative byte vector. See `COMPATIBILITY_REVIEW.md`.
+- **`binary.ts`** — DONE. `BinaryReader.vector()` now copies its body with
+  `.slice()` (matching `bytes()`) instead of aliasing the backing buffer via
+  `.subarray()`.
 
 ## Structural gaps vs. darkmatter (missing a seam, not "too big")
 
-- No `TransportMessage`/envelope intermediate and no "route-then-peel" stage;
-  `GroupPeeler` lacks welcome methods, so welcome wrap/peel lives as free
-  functions. darkmatter's `TransportPeeler` carries both group and welcome.
-- Key-package and welcome transport are **publish-only** — no relay _fetch_ side.
-- `dictionary.ts` (293) — don't split; collapse its 16 hand-written
-  accessor/builder wrappers into a `{id, decode, encode}` descriptor table
-  (darkmatter's `codec.rs` idea).
+- `dictionary.ts` — DONE. Collapsed onto a `ComponentCodec<T> {id, decode,
+  encode}` descriptor table; the 16 accessor/builder wrappers are now one-line
+  projections (`getComponent`/`entryFor`) over their descriptor.
+- **Transport seams — deferred (net-new subsystems, not reshapes).** Confirmed
+  against the darkmatter map: there is no `TransportMessage`/`TransportEnvelope`
+  intermediate or "route-then-peel" stage; `NostrGroupPeeler` carries only
+  group methods (welcome wrap/peel lives in `NostrWelcomeDelivery`), whereas
+  darkmatter's `traits/src/transport.rs` `TransportEnvelope` routes both group
+  and welcome pre-peel and `TransportPeeler` carries both. The key-package and
+  welcome **transport helpers** are publish-only (the raw `NostrNetworkInterface`
+  does expose `request()`, but there is no `KeyPackageFetcher`/welcome-fetch
+  abstraction matching darkmatter's `DirectoryRelayFetcher` /
+  `NostrSubscription::AccountInbox`). These are new abstractions, not
+  refactors of existing code, and building them speculatively (no consuming use
+  case yet) would add unused/under-specified API. Documented as scoped
+  follow-ups in `COMPATIBILITY_REVIEW.md` with the darkmatter references.
 
 ## Items 1–3 are the high-payoff core
 

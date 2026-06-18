@@ -92,7 +92,9 @@ export class GroupRegistry<
   }
 
   /** Reads the cached instance for a group id, without loading from the store. */
-  peek(groupId: Uint8Array | string): MarmotGroup<THistory, TMedia> | undefined {
+  peek(
+    groupId: Uint8Array | string,
+  ): MarmotGroup<THistory, TMedia> | undefined {
     const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
     return this.#groups.get(id);
   }

@@ -483,7 +483,9 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       const hasMatchingSecret = welcome.secrets.some(
         (secret) =>
           secret.newMember.length === entry.keyPackageRef.length &&
-          secret.newMember.every((val, idx) => val === entry.keyPackageRef[idx]),
+          secret.newMember.every(
+            (val, idx) => val === entry.keyPackageRef[idx],
+          ),
       );
 
       candidates.push({

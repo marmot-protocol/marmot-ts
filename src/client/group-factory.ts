@@ -85,7 +85,9 @@ export class GroupFactory<
     name: string,
     options?: CreateGroupOptions,
   ): Promise<MarmotGroup<THistory, TMedia>> {
-    const ciphersuiteImpl = await this.#getCiphersuiteImpl(options?.ciphersuite);
+    const ciphersuiteImpl = await this.#getCiphersuiteImpl(
+      options?.ciphersuite,
+    );
 
     const pubkey = await this.#signer.getPublicKey();
     const credential = await createCredential(pubkey);

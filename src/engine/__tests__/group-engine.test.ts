@@ -243,6 +243,76 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
     ).rejects.toThrow("Not a group admin");
   });
 
+  it("allows a non-admin to commit a self-update-only commit (no proposals)", async () => {
+    const adminPubkey = "a".repeat(64);
+    const nonAdminPubkey = "b".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+
+    // Relays must be set so the group carries a transport.nostr.routing
+    // component; wrapping the resulting commit into a kind-445 event needs it.
+    const adminKp = await generateKeyPackage({
+      credential: createCredential(adminPubkey),
+      ciphersuiteImpl: impl,
+    });
+    const { clientState: createdState } = await createSimpleGroup(
+      adminKp,
+      impl,
+      "Test Group",
+      { adminPubkeys: [adminPubkey], relays: ["wss://relay.test"] },
+    );
+
+    const nonAdminKeyPackage = await generateKeyPackage({
+      credential: createCredential(nonAdminPubkey),
+      ciphersuiteImpl: impl,
+    });
+
+    const { welcome } = await createCommit({
+      context: {
+        cipherSuite: impl,
+        authService: unsafeTestingAuthenticationService,
+      },
+      state: createdState,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: nonAdminKeyPackage.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+
+    const nonAdminStateEpoch1 = await joinGroup({
+      context: {
+        cipherSuite: impl,
+        authService: unsafeTestingAuthenticationService,
+      },
+      welcome: welcome!.welcome!,
+      keyPackage: nonAdminKeyPackage.publicPackage,
+      privateKeys: nonAdminKeyPackage.privatePackage,
+      ratchetTree: undefined,
+    });
+
+    const engine = new MarmotGroupEngine({
+      state: nonAdminStateEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    // A proposal-less commit is a path-only self-update; the spec lets a
+    // non-admin commit it (protocol-core/group-messaging.md).
+    const result = await engine.send({
+      kind: "commit",
+      actorPubkey: nonAdminPubkey,
+      extraProposals: [],
+    });
+    expect(result.kind).toBe("groupEvolution");
+    expect(engine.lifecycle).toBe("PendingPublish");
+  });
+
   it("rejects a commit that adds a leaf with a forged account identity proof", () => {
     const impl = { id: 1 } as CiphersuiteImpl;
     const secretKey = new Uint8Array(32).fill(3);

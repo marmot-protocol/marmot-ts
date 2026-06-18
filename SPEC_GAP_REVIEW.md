@@ -233,11 +233,16 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 
 ### M8 — Non-admin outbound commits fully blocked
 
+- **Status:** FIXED (2026-06-18, live engine path) for the self-update-only shape; SelfRemove-only deferred to B6.
 - **Spec:** `protocol-core/group-messaging.md:50-56` — non-admins may commit a self-update-only commit and a
   SelfRemove-only commit.
-- **Code:** `src/client/group/marmot-group.ts:1245-1247` hard-rejects every non-admin in `commit()`. (Inbound
-  policy `createAdminCommitPolicyCallback` at `:380-387` does accept these shapes — so the gap is outbound only.)
-- **Fix:** allow non-admin `commit()` for self-update-only and SelfRemove-only commit shapes.
+- **Fix applied:** `MarmotGroupEngine.send` (`src/engine/group-engine.ts`, `commit` case) no longer hard-rejects
+  non-admins. The admin gate moved after proposal resolution and now allows a non-admin when the commit is
+  self-update-only — no proposals, or only `Update` proposals (an Update can only target the committer's own
+  leaf). This mirrors the inbound `createAdminCommitPolicyCallback` so an emitted commit is one a conformant peer
+  also accepts. Test: group-engine.test.ts "allows a non-admin to commit a self-update-only commit". The
+  SelfRemove-only carve-out is NOT implemented because ts-mls exposes no SelfRemove proposal type (see B6); the
+  `selfUpdate` send intent remains the un-gated path for a plain self-update.
 
 ### M9 — Encrypted media still on MIP-04 wire, not `encrypted-media-v1`
 

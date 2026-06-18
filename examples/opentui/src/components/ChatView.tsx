@@ -14,8 +14,10 @@ import { InputBar } from "./InputBar.js";
  */
 export function ChatView(props: {
   activeGroup?: MarmotGroup;
-  inputFocused: boolean;
+  focused: boolean;
+  composing: boolean;
   onFocusInput: () => void;
+  onDoneComposing: () => void;
 }) {
   const { messages } = useChat();
   const group = props.activeGroup;
@@ -29,24 +31,29 @@ export function ChatView(props: {
       flexGrow={1}
       flexDirection="column"
       border
-      borderColor="#444"
+      borderColor={props.focused ? "#FFD700" : "#444"}
       title={title}
+      onMouseDown={() => props.onFocusInput()}
     >
       <scrollbox flexGrow={1} paddingX={1} stickyScroll stickyStart="bottom">
         {!group ? (
           <text fg="#666">
-            no active group — use “New group” below, or accept an invite from
-            the sidebar.
+            no active group — press n to create one, or accept an invite from
+            the invites panel.
           </text>
         ) : list.length === 0 ? (
-          <text fg="#666">no messages yet — say hello.</text>
+          <text fg="#666">no messages yet — press n to compose.</text>
         ) : (
           list.map((message) => (
             <MessageRow key={message.id} message={message} />
           ))
         )}
       </scrollbox>
-      <InputBar focused={props.inputFocused} onFocus={props.onFocusInput} />
+      <InputBar
+        focused={props.composing}
+        onFocus={props.onFocusInput}
+        onSubmit={props.onDoneComposing}
+      />
     </box>
   );
 }

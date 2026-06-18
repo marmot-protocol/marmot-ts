@@ -156,7 +156,6 @@ export class MarmotController {
   // --- lifecycle -------------------------------------------------------------
 
   async start(): Promise<void> {
-    await this.#loadOrPublishRelayLists();
     await this.#ensureKeyPackage();
     await this.#loadProfile();
     await this.#restoreGroups();
@@ -164,6 +163,7 @@ export class MarmotController {
     void this.#watchGroups();
     this.log(`ready — you are ${npubEncode(this.#deps.pubkey)}`);
     this.log(`relays: ${this.#deps.relays.join(", ")}`);
+    void this.#loadRelayListsInBackground();
   }
 
   stop(): void {
@@ -379,18 +379,16 @@ export class MarmotController {
     }
   }
 
-  /**
-   * Load the account's two advertised relay lists from the network and adopt
-   * them as the editable state, publishing a default (the operating relays)
-   * only when a list has never been published. This way the lists a returning
-   * user customised through the Relays modal survive restarts instead of being
-   * overwritten on every launch.
-   *
-   * - **NIP-65 outbox** (kind 10002): where the account publishes its
-   *   KeyPackages and is discoverable by inviters.
-   * - **Inbox** (kind 10050): where the account receives gift-wrapped welcomes.
-   */
-  async #loadOrPublishRelayLists(): Promise<void> {
+  async #loadRelayListsInBackground(): Promise<void> {
+    try {
+      await this.#loadRelayLists();
+    } catch (err) {
+      this.logError(err);
+    }
+  }
+
+  /** Load advertised relay lists in the background and adopt them if present. */
+  async #loadRelayLists(): Promise<void> {
     const [outbox, inbox] = await Promise.all([
       this.#deps.directory.outboxes(this.#deps.pubkey, this.#deps.relays),
       this.#deps.directory.welcomeInboxes(this.#deps.pubkey, this.#deps.relays),
@@ -398,16 +396,12 @@ export class MarmotController {
 
     if (outbox.length) {
       this.#outboxRelays = outbox;
-    } else {
-      await this.#publishOutboxList(this.#outboxRelays);
-      this.log("published your NIP-65 outbox relay list (kind 10002)");
     }
     if (inbox.length) {
       this.#inboxRelays = inbox;
-    } else {
-      await this.#publishInboxList(this.#inboxRelays);
-      this.log("published your inbox relay list (kind 10050)");
     }
+    if (outbox.length || inbox.length)
+      this.log("loaded your advertised relay lists");
     this.#publish();
   }
 

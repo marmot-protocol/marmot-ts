@@ -62,14 +62,9 @@ function makeStore<T>(ephemeral: boolean, path: string) {
     : new FileKeyValueStore<T>(path);
 }
 
-/**
- * Build the identity, stores, network pool, client, and controller from CLI
- * options. Runs all the up-front network discovery (NIP-65 relay lookup)
- * *before* the TUI renderer takes over the terminal, so there is no flicker.
- */
 export async function createController(
   opts: CliOptions,
-  onProgress: (line: string) => void,
+  _onProgress: (line: string) => void,
 ): Promise<MarmotController> {
   const explicitRelays = opts.relays;
   const bootstrapRelays = explicitRelays.length
@@ -81,7 +76,6 @@ export async function createController(
   mkdirSync(dataDir, { recursive: true });
 
   const keyPath = join(dataDir, "identity.key");
-  const created = !opts.secOverride && !existsSync(keyPath);
   const secretHex = loadOrCreateSecret(keyPath, opts.secOverride);
   const account = PrivateKeyAccount.fromKey(secretHex);
   const pubkey = await account.signer.getPublicKey();
@@ -89,21 +83,6 @@ export async function createController(
   const nostr = new AsRelayPool();
   const directory = new Directory(nostr);
   const pool = new RelayPool(nostr, bootstrapRelays, directory);
-
-  // For a returning identity, adopt the outbox relays advertised in its NIP-65
-  // (kind 10002) list.
-  let relays = bootstrapRelays;
-  if (!created) {
-    onProgress("looking up your NIP-65 relay list…");
-    const discovered = await directory.outboxes(pubkey, bootstrapRelays);
-    if (discovered.length) {
-      relays = relaySet(discovered, explicitRelays);
-      onProgress(`using your NIP-65 outbox relays: ${relays.join(", ")}`);
-    } else {
-      onProgress("no NIP-65 list found — using bootstrap relays");
-    }
-  }
-  pool.defaultRelays = relays;
 
   const client = new MarmotClient({
     signer: account.signer,
@@ -130,7 +109,7 @@ export async function createController(
     directory,
     signer: account.signer,
     pubkey,
-    relays,
+    relays: bootstrapRelays,
     clientId,
     debug: opts.debug,
   });

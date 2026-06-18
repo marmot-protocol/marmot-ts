@@ -1,34 +1,27 @@
-import type { StatusLine } from "../marmot/controller.js";
+import { ListPanel } from "./ListPanel.js";
 import { useChat } from "../hooks/use-marmot.js";
 
-const LEVEL_COLORS: Record<StatusLine["level"], string> = {
-  info: "#9aa9b8",
-  warn: "#E5C07B",
-  error: "#E06C75",
-};
-
-/** A small footer showing the most recent lifecycle/status lines. */
-export function ActivityLog() {
+/** A navigable panel showing recent lifecycle/status lines. */
+export function ActivityLog(props: {
+  focused: boolean;
+  selectedIndex: number;
+  onFocus: () => void;
+}) {
   const { status } = useChat();
-  const recent = status.slice(-4);
+  const recent = status.slice(-8);
   return (
-    <box
-      height={6}
-      border
-      borderColor="#333"
-      title=" activity "
-      paddingX={1}
-      flexDirection="column"
-    >
-      {recent.length === 0 ? (
-        <text fg="#555">…</text>
-      ) : (
-        recent.map((line) => (
-          <text key={line.id} fg={LEVEL_COLORS[line.level]}>
-            {line.text}
-          </text>
-        ))
-      )}
-    </box>
+    <ListPanel
+      title="activity"
+      focused={props.focused}
+      items={recent.map((line) => ({
+        id: String(line.id),
+        label: line.text,
+        level: line.level,
+      }))}
+      selectedIndex={props.selectedIndex}
+      empty="…"
+      height={10}
+      onFocus={props.onFocus}
+    />
   );
 }

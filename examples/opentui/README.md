@@ -103,28 +103,30 @@ build on. The same runtime flags apply (`--name`, `--relay`, …).
 
 ## Using it
 
-There are no slash-commands — the UI is keyboard- and mouse-driven.
+There are no slash-commands or action buttons. The UI follows a lazygit-style
+keyboard model: one panel is focused, the focused panel has a gold border, and
+the footer shows the keys that apply right now.
 
-**Panes & focus.** The app has four focus targets: the message input, the
-**groups** list, the **invites** list, and the **action bar**. The focused pane
-has a gold border.
+**Global keys:**
 
-- **Tab / Shift+Tab** — cycle focus between panes (mouse-click a pane to focus it too).
-- **Message input** (focused by default) — type and press **Enter** to send to
-  the active group.
-- **Groups list** — **↑/↓** to highlight (the chat switches live), **Enter** to
-  confirm and jump back to the input.
-- **Invites list** — **↑/↓** to highlight, **Enter** to accept (join).
-- **Action bar** — **←/→** to highlight a button, **Enter** to run it. Buttons
-  are also clickable with the mouse.
-- **Ctrl+C** — exit.
+- **Tab / Shift+Tab** — cycle panels: **groups**, **invites**, **chat**, **activity**.
+- **h/l** or **←/→** — move focus to the previous/next panel.
+- **j/k** or **↑/↓** — move the selection inside the focused list panel.
+- **?** or **:** — open keyboard help for the current panel.
+- **q** or **Ctrl+C** — quit.
 
-**Action buttons:** `New group`, `Invite`, `Leave`, `My QR`, `Profile`,
-`Relays`, `KeyPkg`, `Quit`. `New group` and `Invite` open a small modal prompt
-(Enter confirms, Esc cancels); `My QR` shows your npub as a scannable QR code
-(also opened by clicking your npub in the header); `Profile` opens a kind-0
-metadata editor; `Relays` opens the relay-list editor (below); `KeyPkg` opens a
-publish/rotate chooser.
+**Panel keys:**
+
+- **Groups** — **Enter** opens the selected group, **n** creates a group,
+  **i** invites to the active group, **L** leaves the active group.
+- **Invites** — **Enter** or **a** accepts the selected invite.
+- **Chat** — **n** or **Enter** starts composing a message, **i** invites to the
+  active group.
+- **Activity** — **r** opens relay settings, **p** opens profile settings,
+  **K** opens the KeyPackage publish/rotate chooser.
+
+Text prompts use **Enter** to confirm and **Esc** to cancel. Clicking a panel
+still focuses it, but the intended path is keyboard-first.
 
 **Managing your relays.** `Relays` edits the two relay lists this account
 advertises on Nostr, each a whitespace/comma-separated list of `wss://` URLs:
@@ -135,19 +137,15 @@ advertises on Nostr, each a whitespace/comma-separated list of `wss://` URLs:
 - **Inbox** — your **kind 10050** list. This is where gift-wrapped welcomes are
   delivered to you.
 
-On startup the app loads whatever you've already published (so your edits
-survive restarts) and only publishes defaults — the operating relays — when a
-list has never been published. Pressing Enter re-signs and republishes both
-lists; the values are normalised, de-duplicated, and stripped of invalid URLs
-before publishing.
+After the UI is ready, the app loads whatever you've already published in the
+background so your edits survive restarts without blocking startup. Pressing
+Enter in the Relays modal re-signs and republishes both lists; the values are
+normalised, de-duplicated, and stripped of invalid URLs before publishing.
 
-A two-party session: copy each peer's npub from the header (or click it / press
-**My QR** to show a scannable QR code), click **New group** on one side and name
-it, click **Invite** and paste the other's npub, then on the other side select
-the invite in the sidebar and press **Enter** to join.
-
-> The mouse works (clicks on buttons and pane focus), but the keyboard path is
-> the most reliable across terminals.
+A two-party session: copy each peer's npub from the header (or click it to show
+a scannable QR code), press **n** in the groups panel and name a group, press
+**i** and paste the other's npub, then on the other side focus **invites** and
+press **Enter** or **a** to join.
 
 ## Known-divergent — avoid in interop tests
 

@@ -11,13 +11,18 @@ async function main(): Promise<void> {
   // Run network discovery before the renderer takes over the terminal.
   const controller = await createController(opts, (line) => console.log(line));
 
-  const renderer = await createCliRenderer({ exitOnCtrlC: true });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false });
 
+  let stopped = false;
   const quit = (): void => {
+    if (stopped) return;
+    stopped = true;
     controller.stop();
     process.exit(0);
   };
-  process.on("exit", () => controller.stop());
+  process.on("exit", () => {
+    if (!stopped) controller.stop();
+  });
   process.on("SIGINT", quit);
 
   createRoot(renderer).render(

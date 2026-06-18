@@ -8,11 +8,12 @@ import {
   useWatchedGroups,
   useWatchedInvites,
 } from "../hooks/use-marmot.js";
-import { ActionBar, type Action } from "./ActionBar.js";
 import { ActivityLog } from "./ActivityLog.js";
 import { ChatView } from "./ChatView.js";
 import { ChoicePrompt } from "./ChoicePrompt.js";
 import { Header } from "./Header.js";
+import { HelpOverlay } from "./HelpOverlay.js";
+import { KeybindingFooter, type KeyHint } from "./KeybindingFooter.js";
 import { ProfileModal } from "./ProfileModal.js";
 import { QrModal } from "./QrModal.js";
 import { RelaysModal } from "./RelaysModal.js";
@@ -27,23 +28,49 @@ type Modal =
   | { kind: "profile" }
   | { kind: "relays" }
   | { kind: "myqr" }
+  | { kind: "help" }
   | null;
 
-/**
- * Root layout and interaction controller. Manages focus across panes (Tab),
- * the action bar, and modal prompts, then wires the controller snapshot and the
- * two library async generators (groups + invites) into the tree.
- */
+type Key = {
+  name?: string;
+  sequence?: string;
+  shift?: boolean | undefined;
+  ctrl?: boolean | undefined;
+};
+
+function clamp(index: number, length: number): number {
+  if (length <= 0) return 0;
+  return Math.max(0, Math.min(index, length - 1));
+}
+
+function matches(key: Key, binding: string): boolean {
+  if (binding === "shift+tab") return key.name === "tab" && key.shift === true;
+  if (binding === "ctrl+c") return key.name === "c" && key.ctrl === true;
+  if (binding.length === 1 && binding >= "A" && binding <= "Z") {
+    return (
+      key.sequence === binding ||
+      (key.name === binding.toLowerCase() && key.shift === true)
+    );
+  }
+  if (binding === "enter") return key.name === "return" || key.name === "enter";
+  if (binding === "esc") return key.name === "escape";
+  return key.name === binding || key.sequence === binding;
+}
+
 export function App(props: { onQuit: () => void }) {
   const controller = useController();
-  const { me, activeGroupId, profile, outboxRelays, inboxRelays } = useChat();
+  const { me, activeGroupId, profile, outboxRelays, inboxRelays, status } =
+    useChat();
   const groups = useWatchedGroups();
   const invites = useWatchedInvites();
 
   const started = useRef(false);
-  const [focus, setFocus] = useState<Pane>("input");
-  const [actionIndex, setActionIndex] = useState(0);
+  const [focus, setFocus] = useState<Pane>("groups");
+  const [groupIndex, setGroupIndex] = useState(0);
+  const [inviteIndex, setInviteIndex] = useState(0);
+  const [activityIndex, setActivityIndex] = useState(0);
   const [modal, setModal] = useState<Modal>(null);
+  const [composing, setComposing] = useState(false);
 
   useEffect(() => {
     if (started.current) return;
@@ -51,40 +78,159 @@ export function App(props: { onQuit: () => void }) {
     controller.start().catch((err) => controller.logError(err));
   }, [controller]);
 
-  const actions: Action[] = [
-    { label: "New group", run: () => setModal({ kind: "new" }) },
-    { label: "Invite", run: () => setModal({ kind: "invite" }) },
-    { label: "Leave", run: () => void controller.leave() },
-    { label: "My QR", run: () => setModal({ kind: "myqr" }) },
-    { label: "Profile", run: () => setModal({ kind: "profile" }) },
-    { label: "Relays", run: () => setModal({ kind: "relays" }) },
-    { label: "KeyPkg", run: () => setModal({ kind: "keypkg" }) },
-    { label: "Quit", run: props.onQuit },
+  useEffect(
+    () => setGroupIndex((index) => clamp(index, groups.length)),
+    [groups],
+  );
+  useEffect(
+    () => setInviteIndex((index) => clamp(index, invites.length)),
+    [invites],
+  );
+  useEffect(
+    () => setActivityIndex((index) => clamp(index, status.slice(-8).length)),
+    [status],
+  );
+
+  const selectedGroup = groups[groupIndex];
+  const activeGroup = groups.find((group) => group.idStr === activeGroupId);
+  const selectedInvite = invites[inviteIndex];
+
+  const moveSelection = (delta: number): void => {
+    if (focus === "groups") {
+      setGroupIndex((index) => clamp(index + delta, groups.length));
+    } else if (focus === "invites") {
+      setInviteIndex((index) => clamp(index + delta, invites.length));
+    } else if (focus === "activity") {
+      setActivityIndex((index) =>
+        clamp(index + delta, status.slice(-8).length),
+      );
+    }
+  };
+
+  const activateGroup = (): void => {
+    if (!selectedGroup) return;
+    controller.setActive(selectedGroup.idStr);
+    setFocus("chat");
+  };
+
+  const inviteToActive = (): void => {
+    if (!activeGroupId) return;
+    setModal({ kind: "invite" });
+  };
+
+  const acceptInvite = (): void => {
+    if (!selectedInvite) return;
+    void controller.joinInvite(selectedInvite.id);
+    setFocus("chat");
+  };
+
+  const panelHints: Record<Pane, KeyHint[]> = {
+    groups: [
+      { key: "j/k", label: "move" },
+      { key: "enter", label: "open" },
+      { key: "n", label: "new group" },
+      { key: "i", label: "invite" },
+      { key: "L", label: "leave active" },
+    ],
+    invites: [
+      { key: "j/k", label: "move" },
+      { key: "enter", label: "accept" },
+      { key: "a", label: "accept" },
+    ],
+    chat: [
+      { key: "n", label: "compose" },
+      { key: "i", label: "invite" },
+    ],
+    activity: [
+      { key: "j/k", label: "move" },
+      { key: "r", label: "relays" },
+      { key: "p", label: "profile" },
+      { key: "K", label: "key package" },
+    ],
+  };
+
+  const globalHints: KeyHint[] = [
+    { key: "tab", label: "next panel" },
+    { key: "shift+tab", label: "prev panel" },
+    { key: "?", label: "help" },
+    { key: "q", label: "quit/back" },
   ];
 
-  useKeyboard((key) => {
-    if (modal) return; // modals handle their own keys (incl. Esc)
-
-    if (key.name === "tab") {
-      setFocus((pane) => (key.shift ? prevPane(pane) : nextPane(pane)));
+  useKeyboard((key: Key) => {
+    if (matches(key, "ctrl+c")) {
+      props.onQuit();
       return;
     }
 
-    // groups/invites keys are handled by their focused <select>; the input by
-    // its focused <input>. Only the action bar needs manual key handling.
-    if (focus === "actions") {
-      if (key.name === "left") {
-        setActionIndex((i) => (i - 1 + actions.length) % actions.length);
-      } else if (key.name === "right") {
-        setActionIndex((i) => (i + 1) % actions.length);
-      } else if (key.name === "return" || key.name === "enter") {
-        actions[actionIndex].run();
+    if (modal) {
+      if (
+        modal.kind === "help" &&
+        (matches(key, "esc") || matches(key, "q") || matches(key, "?"))
+      ) {
+        setModal(null);
       }
+      return;
+    }
+
+    if (composing) {
+      if (matches(key, "esc")) setComposing(false);
+      return;
+    }
+
+    if (matches(key, "tab")) {
+      setFocus((pane) => nextPane(pane));
+      return;
+    }
+    if (matches(key, "shift+tab")) {
+      setFocus((pane) => prevPane(pane));
+      return;
+    }
+    if (matches(key, "?") || matches(key, ":")) {
+      setModal({ kind: "help" });
+      return;
+    }
+    if (matches(key, "q")) {
+      props.onQuit();
+      return;
+    }
+    if (matches(key, "down") || matches(key, "j")) {
+      moveSelection(1);
+      return;
+    }
+    if (matches(key, "up") || matches(key, "k")) {
+      moveSelection(-1);
+      return;
+    }
+    if (matches(key, "h") || matches(key, "left")) {
+      setFocus((pane) => prevPane(pane));
+      return;
+    }
+    if (matches(key, "l") || matches(key, "right")) {
+      setFocus((pane) => nextPane(pane));
+      return;
+    }
+    if (matches(key, "enter")) {
+      if (focus === "groups") activateGroup();
+      else if (focus === "invites") acceptInvite();
+      else if (focus === "chat") setComposing(true);
+      return;
+    }
+
+    if (focus === "groups") {
+      if (matches(key, "n")) setModal({ kind: "new" });
+      else if (matches(key, "i")) inviteToActive();
+      else if (matches(key, "L")) void controller.leave();
+    } else if (focus === "invites") {
+      if (matches(key, "a")) acceptInvite();
+    } else if (focus === "chat") {
+      if (matches(key, "n")) setComposing(true);
+      else if (matches(key, "i")) inviteToActive();
+    } else if (focus === "activity") {
+      if (matches(key, "r")) setModal({ kind: "relays" });
+      else if (matches(key, "p")) setModal({ kind: "profile" });
+      else if (matches(key, "K")) setModal({ kind: "keypkg" });
     }
   });
-
-  const activeGroup = groups.find((group) => group.idStr === activeGroupId);
-  const modalOpen = modal !== null;
 
   return (
     <box
@@ -105,36 +251,39 @@ export function App(props: { onQuit: () => void }) {
           invites={invites}
           activeId={activeGroupId}
           focus={focus}
-          modalOpen={modalOpen}
+          groupIndex={groupIndex}
+          inviteIndex={inviteIndex}
           onFocusPane={setFocus}
-          onPreviewGroup={(id) => controller.setActive(id)}
-          onConfirmGroup={(id) => {
-            controller.setActive(id);
-            setFocus("input");
-          }}
-          onAcceptInvite={(id) => {
-            void controller.joinInvite(id);
-            setFocus("input");
-          }}
         />
-        <ChatView
-          activeGroup={activeGroup}
-          inputFocused={!modalOpen && focus === "input"}
-          onFocusInput={() => setFocus("input")}
-        />
+        <box flexGrow={1} flexDirection="column">
+          <ChatView
+            activeGroup={activeGroup}
+            focused={focus === "chat"}
+            composing={composing}
+            onFocusInput={() => setFocus("chat")}
+            onDoneComposing={() => setComposing(false)}
+          />
+          <ActivityLog
+            focused={focus === "activity"}
+            selectedIndex={activityIndex}
+            onFocus={() => setFocus("activity")}
+          />
+        </box>
       </box>
 
-      <ActionBar
-        actions={actions}
-        focused={focus === "actions"}
-        focusedIndex={actionIndex}
+      <KeybindingFooter
+        title={focus}
+        hints={[...panelHints[focus], ...globalHints]}
       />
-      <text fg="#555">
-        {" "}
-        Tab: switch pane · ↑/↓: navigate · Enter: select · mouse works too
-      </text>
-      <ActivityLog />
 
+      {modal?.kind === "help" && (
+        <HelpOverlay
+          panel={focus}
+          global={globalHints}
+          panelHints={panelHints[focus]}
+          onClose={() => setModal(null)}
+        />
+      )}
       {modal?.kind === "new" && (
         <TextPrompt
           title="new group"

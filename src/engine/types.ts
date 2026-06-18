@@ -9,7 +9,7 @@ import type {
 } from "ts-mls";
 
 import type { MarmotGroupView } from "../core/client-state.js";
-import type { Disposition } from "../core/inbound.js";
+import type { DeferredReason, Disposition } from "../core/inbound.js";
 
 /** A decrypted transport envelope paired with its MLS message. */
 export type PeeledMessagePair<TEnvelope> = {
@@ -114,11 +114,25 @@ export type UnreadableIngestResult<TEnvelope> = {
   errors: unknown[];
 };
 
+/**
+ * An envelope that cannot be processed yet but may become processable once more
+ * protocol bytes arrive (`protocol-core/inbound-processing.md` "deferred"). Unlike
+ * {@link UnreadableIngestResult}, this is NOT terminal: callers MUST retry when
+ * the missing state becomes available rather than treating it as malformed.
+ */
+export type DeferredIngestResult<TEnvelope> = {
+  kind: "deferred";
+  envelope: TEnvelope;
+  message: MlsMessage;
+  reason: DeferredReason;
+};
+
 /** Result from ingesting group transport envelopes. */
 export type IngestResult<TEnvelope> =
   | ProcessedIngestResult<TEnvelope>
   | RejectedIngestResult<TEnvelope>
   | SkippedIngestResult<TEnvelope>
+  | DeferredIngestResult<TEnvelope>
   | UnreadableIngestResult<TEnvelope>;
 
 /** An {@link IngestResult} carrying its protocol-visible {@link Disposition}. */

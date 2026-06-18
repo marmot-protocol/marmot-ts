@@ -59,10 +59,18 @@ export type UnreadableIngestResult = {
   errors: unknown[];
 };
 
+export type DeferredIngestResult = {
+  kind: "deferred";
+  event: NostrEvent;
+  message: import("ts-mls").MlsMessage;
+  reason: import("../../core/inbound.js").DeferredReason;
+};
+
 export type IngestResult =
   | ProcessedIngestResult
   | RejectedIngestResult
   | SkippedIngestResult
+  | DeferredIngestResult
   | UnreadableIngestResult;
 
 export type DispositionedIngestResult = IngestResult & {

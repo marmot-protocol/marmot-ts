@@ -22,10 +22,15 @@ import {
   compareCommitOrderingKeys,
   DEFAULT_CONVERGENCE_POLICY,
 } from "../core/convergence.js";
+import { type DeferredReason, deferredReasons } from "../core/inbound.js";
 import { classifyLateCommit } from "../core/retained-history.js";
 import type { RetainedHistoryStore } from "./retained-store.js";
 import type { IngestResult, PeeledMessagePair } from "./types.js";
 import { framedContentType, framedEpoch } from "./wire-format.js";
+
+/** A message deferred this batch, remembered so terminal yields report it as
+ * `deferred` (retryable) rather than `unreadable` (terminal/malformed). */
+type DeferredEntry = { message: MlsMessage; reason: DeferredReason };
 
 /** The applied outcome of a fork resolution, as the ingest loop consumes it. */
 export type AppliedForkResolution =
@@ -96,6 +101,35 @@ function envelopeLabel<TEnvelope>(envelope: TEnvelope): string {
   return "?";
 }
 
+/**
+ * Resolves a still-unprocessed envelope to its terminal {@link IngestResult}:
+ * `deferred` (retryable — missing parent / future epoch) when the batch marked
+ * it as such, otherwise `unreadable` (terminal). Keeping deferred inputs out of
+ * `unreadable` is what stops a future-epoch commit being mislabeled
+ * `stale: invalid_encoding` (`protocol-core/inbound-processing.md`).
+ */
+function terminalResult<TEnvelope>(
+  envelope: TEnvelope,
+  deferred: Map<TEnvelope, DeferredEntry>,
+  errorList: Array<{ envelope: TEnvelope; error: unknown }>,
+): IngestResult<TEnvelope> {
+  const entry = deferred.get(envelope);
+  if (entry)
+    return {
+      kind: "deferred",
+      envelope,
+      message: entry.message,
+      reason: entry.reason,
+    };
+  return {
+    kind: "unreadable",
+    envelope,
+    errors: errorList
+      .filter((e) => e.envelope === envelope)
+      .map((e) => e.error),
+  };
+}
+
 /** Orders peeled commits deterministically by their convergence ordering key. */
 function sortPeeledCommits<TEnvelope>(
   commits: PeeledMessagePair<TEnvelope>[],
@@ -130,6 +164,7 @@ export async function* ingestEnvelopes<TEnvelope>(
     retryCount?: number;
     maxRetries?: number;
     _errors?: Array<{ envelope: TEnvelope; error: unknown }>;
+    _deferred?: Map<TEnvelope, DeferredEntry>;
   },
 ): AsyncGenerator<IngestResult<TEnvelope>> {
   const log = ctx.log.extend(`ingest:${Date.now().toString(36).slice(-5)}`);
@@ -138,6 +173,11 @@ export async function* ingestEnvelopes<TEnvelope>(
   const maxRetries = options?.maxRetries ?? 5;
   const errorList: Array<{ envelope: TEnvelope; error: unknown }> =
     options?._errors ?? [];
+  // Envelopes deferred this batch (future-epoch / missing-parent commits). They
+  // ride the same retry set as `unreadable` so a later pass can apply them once
+  // the gap fills, but at a terminal yield they surface as `deferred`, not stale.
+  const deferred: Map<TEnvelope, DeferredEntry> =
+    options?._deferred ?? new Map();
 
   if (retryCount === 0) {
     log("start – %d envelope(s), maxRetries=%d", envelopes.length, maxRetries);
@@ -152,17 +192,11 @@ export async function* ingestEnvelopes<TEnvelope>(
 
   if (retryCount > maxRetries) {
     log(
-      "max retries exceeded – yielding %d envelope(s) as unreadable",
+      "max retries exceeded – yielding %d envelope(s) as deferred/unreadable",
       envelopes.length,
     );
     for (const envelope of envelopes) {
-      yield {
-        kind: "unreadable",
-        envelope,
-        errors: errorList
-          .filter((e) => e.envelope === envelope)
-          .map((e) => e.error),
-      };
+      yield terminalResult(envelope, deferred, errorList);
     }
     return;
   }
@@ -348,18 +382,20 @@ export async function* ingestEnvelopes<TEnvelope>(
     }
 
     if (commitEpoch > currentEpoch + 1n) {
+      // A commit more than one epoch ahead is missing the intermediate parent
+      // commit(s) that would advance us to its source epoch. That parent may
+      // still arrive (this or a later batch), so this is retryable `deferred`
+      // (missing_parent), not a terminal error. It rides `unreadable` for the
+      // in-batch retry but `deferred` remembers it for the terminal yield.
       log(
-        "defer commit envelope:%s epoch:%d too far ahead (current=%d)",
+        "defer commit envelope:%s epoch:%d too far ahead (current=%d) – missing parent",
         envelopeLabel(envelope),
         commitEpoch,
         currentEpoch,
       );
-      forkPool.push({ envelope, message, epoch: Number(commitEpoch) });
-      errorList.push({
-        envelope,
-        error: new Error(
-          `Commit epoch ${commitEpoch} is too far ahead of current epoch ${currentEpoch}`,
-        ),
+      deferred.set(envelope, {
+        message,
+        reason: deferredReasons.missingParent,
       });
       unreadable.push(envelope);
       continue;
@@ -528,17 +564,11 @@ export async function* ingestEnvelopes<TEnvelope>(
   // them now instead of spinning to maxRetries.
   if (ctx.getState() === stateBeforePass) {
     log(
-      "no progress this pass – yielding %d envelope(s) as unreadable",
+      "no progress this pass – yielding %d envelope(s) as deferred/unreadable",
       unreadable.length,
     );
     for (const envelope of unreadable) {
-      yield {
-        kind: "unreadable",
-        envelope,
-        errors: errorList
-          .filter((e) => e.envelope === envelope)
-          .map((e) => e.error),
-      };
+      yield terminalResult(envelope, deferred, errorList);
     }
     return;
   }
@@ -548,5 +578,6 @@ export async function* ingestEnvelopes<TEnvelope>(
     retryCount: retryCount + 1,
     maxRetries,
     _errors: errorList,
+    _deferred: deferred,
   });
 }

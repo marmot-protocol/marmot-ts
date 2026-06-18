@@ -126,15 +126,23 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 
 ### B7 — `deferred` disposition declared but never emitted
 
-- **Status:** DIVERGENT
+- **Status:** FIXED (2026-06-18, live engine path). NOTE: the original file:line evidence below points at the
+  now-deleted monolithic `marmot-group.ts`; the gap had been relocated into `src/engine/` and was fixed there.
 - **Spec:** `protocol-core/inbound-processing.md:51-63` — future-epoch / missing-parent / group-busy inputs are
   `deferred` (with reason) and retried when state becomes available; not terminal.
-- **Code:** `src/core/inbound.ts:63-77` declares `deferred` + reasons, but `ingestResultDisposition`
-  (`src/client/group/marmot-group.ts:197-221`) has no `deferred` arm. Such inputs go onto `unreadable`
-  (`:1856,:1928`) and after `maxRetries` map to terminal `stale: invalid_encoding` (`:218-219`).
-- **Impact:** retryable inputs are terminally mis-classified as malformed.
-- **Fix:** add a `deferred` arm; surface deferred-with-reason; retry on state availability instead of dropping
-  as stale-malformed after retry exhaustion.
+- **Fix applied:** added a `DeferredIngestResult` kind (`src/engine/types.ts`) + a `deferred` arm in
+  `ingestResultDisposition` (`src/engine/ingest-disposition.ts`). In `src/engine/ingest.ts` a commit whose
+  framed epoch is `> current + 1` is now recorded as `deferred(missing_parent)` instead of being pushed to the
+  fork pool and the `unreadable` list; it still rides the in-batch retry set, but the two terminal yield points
+  (max-retries, no-progress) surface it as `deferred`, not `stale: invalid_encoding`. The session-layer
+  `IngestResult` mirror (`src/client/session/group-session.ts`) gained the matching variant. Tests:
+  `src/engine/__tests__/ingest-deferred.test.ts` (end-to-end pipeline → `deferred: missing_parent`) +
+  `ingest-disposition.test.ts` (mapping). STILL NOT EMITTED: `future_epoch` (undecryptable app messages can't be
+  distinguished from garbage at the peel boundary) and `group_busy` (no PendingPublish/Merging inbound gate yet).
+- **Historical evidence (stale paths):** `src/core/inbound.ts:63-77` declared `deferred` + reasons, but the old
+  `ingestResultDisposition` (`marmot-group.ts:197-221`) had no `deferred` arm; inputs went onto `unreadable` and
+  after `maxRetries` mapped to terminal `stale: invalid_encoding`.
+- **Impact:** retryable inputs were terminally mis-classified as malformed.
 
 ---
 

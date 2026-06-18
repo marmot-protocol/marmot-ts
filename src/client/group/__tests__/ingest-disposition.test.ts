@@ -54,4 +54,13 @@ describe("ingestResultDisposition", () => {
       ingestResultDisposition({ kind: "unreadable", errors: [], ...stub }),
     ).toEqual({ kind: "stale", category: "invalid_encoding" });
   });
+
+  it("maps deferred to a retryable deferred carrying its reason", () => {
+    const reasons = ["future_epoch", "missing_parent", "group_busy"] as const;
+    for (const reason of reasons) {
+      expect(
+        ingestResultDisposition({ kind: "deferred", reason, ...stub }),
+      ).toEqual({ kind: "deferred", reason });
+    }
+  });
 });

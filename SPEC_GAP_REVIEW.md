@@ -160,11 +160,15 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 
 ### M2 — KeyPackage `i` ref not verified against decoded KeyPackage
 
+- **Status:** FIXED (2026-06-18).
 - **Spec:** `transports/nostr.md` §KeyPackage publication — receivers MUST verify the `i` tag (hex KeyPackageRef)
   against the decoded KeyPackage.
-- **Code:** `src/client/key-package-manager.ts:712-733` reads `i` and decodes the body but never recomputes/
-  compares the ref; `getKeyPackage` (`src/core/key-package-event.ts:113-125`) doesn't either.
-- **Fix:** recompute KeyPackageRef from the decoded package and compare to the `i` tag; reject on mismatch.
+- **Fix applied:** `KeyPackageStore.addPublished` (`src/client/key-package-store.ts`) now decodes the body,
+  recomputes the KeyPackageRef via `calculateKeyPackageRef`, and throws on mismatch with the resolved `i`-tag
+  key (case-insensitive). This is the single chokepoint for both `KeyPackageManager.track` (untrusted, receive
+  side — a throw makes `track` return `false`) and self-published events (always consistent). The duplicate
+  decode in the no-entry branch was removed (the verified body is reused). Test:
+  `key-package-manager.test.ts` "rejects an event whose `i` tag does not match the decoded KeyPackage".
 
 ### M3 — Inner app-event `id`/`pubkey` not validated against MLS sender
 

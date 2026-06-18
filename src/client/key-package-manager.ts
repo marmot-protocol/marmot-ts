@@ -386,11 +386,13 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   // ---------------------------------------------------------------------------
 
   /**
-   * Observes a Nostr event and, if it is a kind 30443 key package event with a
-   * valid `i` tag (MIP-00 keyPackageRef), records it in the store.
+   * Observes a Nostr event and, if it is a kind 30443 key package event whose
+   * `i` tag (MIP-00 KeyPackageRef) matches its decoded body, records it in the
+   * store. Events with no `i` tag, an undecodable body, or an `i` tag that does
+   * not match the recomputed ref are rejected.
    *
    * @param event - Any Nostr event; non-key-package events are silently ignored
-   * @returns `true` if the event was recorded, `false` if ignored
+   * @returns `true` if the event was recorded, `false` if ignored or rejected
    */
   async track(event: NostrEvent): Promise<boolean> {
     if (event.kind !== ADDRESSABLE_KEY_PACKAGE_KIND) {

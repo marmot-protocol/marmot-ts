@@ -185,13 +185,33 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    * {@link TrackedKeyPackage} is created by decoding the public key package
    * from the event body.
    *
-   * Throws if the event body cannot be decoded as a valid key package.
+   * Throws if the event body cannot be decoded as a valid key package, or if
+   * the event's `i` tag (KeyPackageRef) does not match the decoded body.
    */
   async addPublished(
     ref: string | Uint8Array,
     event: NostrEvent,
   ): Promise<void> {
     const key = this.#resolveKey(ref);
+
+    // MIP-00: the `i` tag IS the KeyPackageRef of the event body. Receivers MUST
+    // verify it against the decoded KeyPackage and reject on mismatch
+    // (transports/nostr.md §KeyPackage publication) so a forged `i` tag cannot
+    // make us index a package under a ref that is not its own. Decoding here
+    // also throws if the body is not a valid KeyPackage. This is the single
+    // chokepoint for both tracked (untrusted) and self-published events.
+    const publicPackage = getKeyPackage(event);
+    const computedRefBytes = await calculateKeyPackageRef(
+      publicPackage,
+      this.#cryptoProvider,
+    );
+    const computedRef = bytesToHex(computedRefBytes);
+    if (computedRef !== key.toLowerCase()) {
+      throw new Error(
+        `KeyPackage event ${event.id} carries i tag ${key} but its body's KeyPackageRef is ${computedRef}`,
+      );
+    }
+
     const existing = await this.#store.getItem(key);
 
     // Extract the addressable slot identifier if this is a kind 30443 event
@@ -226,17 +246,9 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       this.emit("updated", updated);
       this.#log("stored published event %s for %s", event.id, ref);
     } else {
-      // No local entry — decode the public key package from the event body.
-      // Throws if the event content is not a valid encoded KeyPackage.
-      const publicPackage = getKeyPackage(event);
-
-      const keyPackageRef = await calculateKeyPackageRef(
-        publicPackage,
-        this.#cryptoProvider,
-      );
-
+      // No local entry — record the package decoded and ref-verified above.
       const entry: TrackedKeyPackage = {
-        keyPackageRef,
+        keyPackageRef: computedRefBytes,
         publicPackage,
         ...(identifier !== undefined ? { identifier } : {}),
         published: [event],

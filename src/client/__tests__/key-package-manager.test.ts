@@ -617,6 +617,34 @@ describe("KeyPackageManager", () => {
       expect(result).toBe(false);
     });
 
+    it("rejects an event whose `i` tag does not match the decoded KeyPackage (MIP-00)", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      await manager.create({ relays: ["wss://relay.test"] });
+      const realEvent = network.events.find(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      )!;
+
+      // Same valid KeyPackage body, but a forged `i` tag claiming a different
+      // ref. Receivers MUST recompute the ref and reject the mismatch.
+      const forgedRef = "f".repeat(64);
+      const realRef = realEvent.tags.find((t) => t[0] === "i")![1];
+      expect(forgedRef).not.toBe(realRef);
+      const forged = {
+        ...realEvent,
+        id: "e".repeat(64),
+        tags: realEvent.tags.map((t) => (t[0] === "i" ? ["i", forgedRef] : t)),
+      };
+
+      const result = await manager.track(forged);
+
+      expect(result).toBe(false);
+      // Not indexed under the forged ref…
+      expect(await manager.get(forgedRef)).toBeNull();
+      // …and the real entry's published list did not grow from the forgery.
+      const realPublished = await getPublished(manager, realRef);
+      expect(realPublished.every((e) => e.id !== forged.id)).toBe(true);
+    });
+
     it("returns true and records a real kind 30443 published event", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });

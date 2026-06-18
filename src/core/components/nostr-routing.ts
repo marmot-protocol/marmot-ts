@@ -6,7 +6,7 @@ import {
   encodeUtf8,
 } from "../binary.js";
 import { isValidRelayUrl } from "../../utils/relay-url.js";
-import { compareBytes } from "./internal.js";
+import { compareBytes } from "./bytes.js";
 
 /**
  * Codec for `marmot.transport.nostr.routing.v1` (`0x8004`) — the public Nostr

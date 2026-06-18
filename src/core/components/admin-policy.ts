@@ -1,7 +1,7 @@
 /** @module @category Core - App Components */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { BinaryReader, BinaryWriter } from "../binary.js";
-import { compareBytes } from "./internal.js";
+import { compareBytes } from "./bytes.js";
 
 /**
  * Codec for `marmot.group.admin-policy.v1` (`0x8003`) — the set of group admin

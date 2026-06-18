@@ -1,13 +1,8 @@
 /** @module @category Core - App Components */
 
-/** Lexicographic comparison over raw bytes (matches Rust `[u8]`/`&[u8]` Ord). */
-export function compareBytes(a: Uint8Array, b: Uint8Array): number {
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) {
-    if (a[i] !== b[i]) return a[i] - b[i];
-  }
-  return a.length - b.length;
-}
+// A browser-forced reimplementation of the Rust `std::net` address checks used
+// by darkmatter `host_safety.rs`. Security-critical: these decide whether a
+// routing/media URL points at a non-routable (loopback/private/etc.) host.
 
 /**
  * Ports the darkmatter `reject_non_routable_ipv4` classifier. Returns `true`
@@ -119,64 +114,8 @@ function isLocalhostDomain(hostname: string): boolean {
   return lowered === "localhost" || lowered.endsWith(".localhost");
 }
 
-export interface HttpsUrlOptions {
-  /** Maximum byte length of both the input and normalized URL. */
-  maxLen: number;
-  /** Allow `http` URLs that point at a loopback host (encrypted-media only). */
-  allowLoopbackHttp?: boolean;
-  /** Reject URLs carrying a query string (encrypted-media endpoints). */
-  rejectQuery?: boolean;
-  /** Strip a single trailing `/` from the normalized URL (endpoints). */
-  trimTrailingSlash?: boolean;
-  /** Prefix used in thrown error messages. */
-  label: string;
-}
-
-/**
- * Validates and normalizes an `https` (optionally loopback-`http`) URL the way
- * the darkmatter `validate_and_normalize_*` helpers do: no credentials, no
- * fragment, a routable host, and length bounds. Returns the WHATWG-normalized
- * URL. Both this and the Rust `url` crate implement the WHATWG URL Standard, so
- * normalized output matches across implementations for ordinary URLs.
- */
-export function validateAndNormalizeHttpsUrl(
-  raw: string,
-  opts: HttpsUrlOptions,
-): string {
-  const { label, maxLen } = opts;
-  const trimmed = opts.trimTrailingSlash ? raw.trim() : raw;
-  if (trimmed.length === 0) throw new Error(`${label} must not be empty`);
-  if (utf8Len(trimmed) > maxLen)
-    throw new Error(`${label} exceeds ${maxLen} bytes`);
-  if (!URL.canParse(trimmed)) throw new Error(`${label} is invalid`);
-  const url = new URL(trimmed);
-
-  if (url.username !== "" || url.password !== "")
-    throw new Error(`${label} must not include credentials`);
-  if (url.hash !== "") throw new Error(`${label} must not include a fragment`);
-  if (opts.rejectQuery && url.search !== "")
-    throw new Error(`${label} must not include a query`);
-
-  const scheme = url.protocol.replace(/:$/, "");
-  const isLoopbackHttp =
-    scheme === "http" && opts.allowLoopbackHttp && isLoopbackHost(url.hostname);
-  if (scheme === "https") {
-    rejectNonRoutableHost(url.hostname, label);
-  } else if (!isLoopbackHttp) {
-    throw new Error(`${label} scheme must be https`);
-  }
-
-  let normalized = url.toString();
-  if (opts.trimTrailingSlash) {
-    const stripped = normalized.replace(/\/+$/, "");
-    if (stripped.length > 0) normalized = stripped;
-  }
-  if (utf8Len(normalized) > maxLen)
-    throw new Error(`${label} exceeds ${maxLen} bytes`);
-  return normalized;
-}
-
-function isLoopbackHost(hostname: string): boolean {
+/** Returns `true` when `hostname` resolves to a loopback IP or localhost domain. */
+export function isLoopbackHost(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, "");
   const v4 = parseIpv4(host);
   if (v4) return v4[0] === 127;
@@ -188,7 +127,12 @@ function isLoopbackHost(hostname: string): boolean {
   return isLocalhostDomain(host);
 }
 
-function rejectNonRoutableHost(hostname: string, label: string): void {
+/**
+ * Throws (with the given `label` prefix) when `hostname` points at a
+ * non-routable address or at localhost. Mirrors the darkmatter host-safety
+ * rejection performed inside `validate_and_normalize_*`.
+ */
+export function rejectNonRoutableHost(hostname: string, label: string): void {
   const host = hostname.replace(/^\[|\]$/g, "");
   const v4 = parseIpv4(host);
   if (v4) {
@@ -204,8 +148,4 @@ function rejectNonRoutableHost(hostname: string, label: string): void {
   }
   if (isLocalhostDomain(host))
     throw new Error(`${label} must not point at localhost`);
-}
-
-function utf8Len(s: string): number {
-  return new TextEncoder().encode(s).length;
 }

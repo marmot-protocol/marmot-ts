@@ -5,7 +5,7 @@ import {
   decodeUtf8,
   encodeUtf8,
 } from "../binary.js";
-import { validateAndNormalizeHttpsUrl } from "./internal.js";
+import { validateAndNormalizeHttpsUrl } from "./url.js";
 
 /**
  * Codec for `marmot.group.avatar-url.v1` (`0x8007`) — a small group avatar

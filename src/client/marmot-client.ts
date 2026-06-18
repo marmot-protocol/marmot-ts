@@ -3,27 +3,15 @@ import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
 import { EventSigner } from "applesauce-core";
 import {
   Capabilities,
-  ClientState,
   CryptoProvider,
   defaultCryptoProvider,
   GroupInfo,
-  joinGroup,
-  KeyPackage,
-  PrivateKeyPackage,
   Welcome,
 } from "ts-mls";
-import {
-  type AccountIdentityProofSigner,
-  verifyAllLeafAccountIdentityProofs,
-} from "../core/account-identity-proof.js";
-import { marmotAuthService } from "../core/auth-service.js";
+import { type AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import { SerializedClientState } from "../core/client-state.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
-import {
-  getWelcome,
-  getWelcomeKeyPackageRefs,
-  readWelcomeGroupInfo,
-} from "../core/welcome.js";
+import { getWelcome, readWelcomeGroupInfo } from "../core/welcome.js";
 import { logger } from "../utils/debug.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
 import {
@@ -166,19 +154,18 @@ export class MarmotClient<
     const welcome = isRumor(welcomeRumor)
       ? getWelcome(welcomeRumor)
       : welcomeRumor;
-    const refs = getWelcomeKeyPackageRefs(welcome);
 
-    for (const ref of refs) {
-      const stored = await this.keyPackages.get(ref);
-      if (!stored?.privatePackage) continue;
-
+    // Reuse the same candidate selection as joinGroupFromWelcome (ref matches
+    // first), then try decrypting the group info with each until one succeeds.
+    const candidates = await this.keyPackages.selectForWelcome(welcome);
+    for (const candidate of candidates) {
       try {
         const ciphersuiteImpl = await this.cryptoProvider.getCiphersuiteImpl(
-          stored.publicPackage.cipherSuite,
+          candidate.publicPackage.cipherSuite,
         );
         return await readWelcomeGroupInfo({
           welcome,
-          keyPackage: stored,
+          keyPackage: candidate,
           ciphersuiteImpl,
         });
       } catch {
@@ -223,92 +210,16 @@ export class MarmotClient<
       welcome.cipherSuite,
     );
 
-    const allKeyPackages = await this.keyPackages.list();
-    const candidatePackages: Array<{
-      publicPackage: KeyPackage;
-      privatePackage: PrivateKeyPackage;
-      keyPackageRef: Uint8Array;
-      hasMatchingSecret: boolean;
-    }> = [];
-
-    // Collect all key packages with matching cipher suite and compute their KeyPackageRef
-    // KeyPackageRef is used to identify which encrypted secret in the welcome is ours (RFC 9420)
-    for (const keyPackage of allKeyPackages) {
-      if (keyPackage.publicPackage.cipherSuite !== welcome.cipherSuite) {
-        continue;
-      }
-
-      const privateKeyPackage = await this.keyPackages.getPrivateKey(
-        keyPackage.keyPackageRef,
-      );
-      if (!privateKeyPackage) continue;
-
-      // Check if this key package's ref matches any secret in the welcome
-      // This is the RFC 9420 KeyPackageRef matching semantics
-      const hasMatchingSecret = welcome.secrets.some((secret) =>
-        secret.newMember.length === keyPackage.keyPackageRef.length
-          ? secret.newMember.every(
-              (val, idx) => val === keyPackage.keyPackageRef[idx],
-            )
-          : false,
-      );
-
-      candidatePackages.push({
-        publicPackage: keyPackage.publicPackage,
-        privatePackage: privateKeyPackage,
-        keyPackageRef: keyPackage.keyPackageRef,
-        hasMatchingSecret,
-      });
-    }
-
-    if (candidatePackages.length === 0) {
-      throw new Error(
-        "No matching KeyPackage found in local store. Make sure you have published a KeyPackage event.",
-      );
-    }
-
-    // Prioritize packages that have matching secrets in the welcome
-    // This ensures we try the most likely candidates first (RFC 9420 compliance)
-    const prioritizedKeyPackages = [
-      ...candidatePackages.filter((p) => p.hasMatchingSecret),
-      ...candidatePackages.filter((p) => !p.hasMatchingSecret),
-    ];
-
-    let clientState: ClientState | null = null;
-    let lastError: Error | null = null;
-    let consumedKeyPackageRef: Uint8Array | null = null;
-
-    for (const keyPackage of prioritizedKeyPackages) {
-      try {
-        // In v2, joinGroup takes a single params object with context
-        clientState = await joinGroup({
-          context: {
-            cipherSuite: ciphersuiteImpl,
-            authService: marmotAuthService,
-            externalPsks: {},
-          },
-          welcome,
-          keyPackage: keyPackage.publicPackage,
-          privateKeys: keyPackage.privatePackage,
-        });
-        consumedKeyPackageRef = keyPackage.keyPackageRef;
-        break;
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-      }
-    }
-
-    if (!clientState) {
-      const errorMessage = lastError
-        ? `Failed to join group with any matching key package. Last error: ${lastError.message}`
-        : "Failed to join group with any matching key package";
-      throw new Error(errorMessage);
-    }
-
-    // The spec requires every member leaf to carry a valid account identity
-    // proof, with no legacy fallback; reject joining a group that contains any
-    // proof-less or invalid leaf (foundation/account-identity-proof-v1.md).
-    verifyAllLeafAccountIdentityProofs(clientState, ciphersuiteImpl.id);
+    // Candidate selection (KeyPackageRef matching) lives in the key-package
+    // layer; the MLS join + leaf-proof validation + persistence live in the
+    // group layer — mirroring darkmatter's engine `do_join_welcome` rather than
+    // doing protocol matching here in the composition root.
+    const candidates = await this.keyPackages.selectForWelcome(welcome);
+    const { group, consumedKeyPackageRef } = await this.groups.joinFromWelcome({
+      welcome,
+      candidates,
+      ciphersuiteImpl,
+    });
 
     // Mark the consumed key package as used. Callers can later list used packages
     // with (await client.keyPackages.list()).filter(p => p.used) and rotate them
@@ -317,11 +228,6 @@ export class MarmotClient<
       await this.keyPackages.markUsed(consumedKeyPackageRef);
     }
 
-    // Persist and register the joined group via the groups manager. The
-    // manager emits `joined` on itself; listen on `client.groups` to observe it.
-    const group = await this.groups.adoptClientState(clientState, {
-      emit: "joined",
-    });
     log("joined group %s", group.idStr);
 
     // MIP-02 SHOULD: callers are responsible for calling group.selfUpdate() after

@@ -1,4 +1,6 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { getEventHash } from "applesauce-core/helpers/event";
+import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import {
   CiphersuiteImpl,
   createCommit,
@@ -13,12 +15,27 @@ import { describe, expect, it, vi } from "vitest";
 import { SerializedClientState } from "../../../core/client-state.js";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
+import { serializeApplicationRumor } from "../../../core/group-message.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../../extra";
 import { GroupSession } from "../group-session.js";
 
 const ADMIN = "a".repeat(64);
 const MEMBER = "b".repeat(64);
+
+/** Builds a kind-9 rumor authored by `pubkey` with a canonical NIP-01 id. */
+function rumorFrom(pubkey: string, content: string): Rumor {
+  const rumor: Rumor = {
+    id: "",
+    kind: 9,
+    pubkey,
+    created_at: 1000,
+    content,
+    tags: [],
+  };
+  rumor.id = getEventHash(rumor);
+  return rumor;
+}
 
 async function getImpl(): Promise<CiphersuiteImpl> {
   return getCiphersuiteImpl(
@@ -242,7 +259,9 @@ describe("GroupSession history persistence", () => {
     });
     const memberSession = makeSession(memberEpoch1, impl);
 
-    const payload = new TextEncoder().encode("from member");
+    // The inner app event must be authored by the MLS sender (MEMBER); a bare
+    // text payload would now be rejected as a non-conformant inner event.
+    const payload = serializeApplicationRumor(rumorFrom(MEMBER, "from member"));
     const effects = await memberSession.send({
       kind: "applicationMessage",
       payload,
@@ -258,6 +277,81 @@ describe("GroupSession history persistence", () => {
     expect(history.saveMessage).toHaveBeenCalledOnce();
     expect(onApplicationMessage).toHaveBeenCalledOnce();
     expect(onApplicationMessage.mock.calls[0][0]).toEqual(payload);
+  });
+});
+
+describe("GroupSession application-message authorship (M3)", () => {
+  it("rejects an app message whose inner pubkey is not the MLS sender", async () => {
+    const impl = await getImpl();
+    const { adminEpoch1, memberEpoch1 } = await createTwoMemberStates(impl);
+
+    const history = {
+      saveMessage: vi.fn(async () => {}),
+      purgeMessages: vi.fn(async () => {}),
+    };
+    const onApplicationMessage = vi.fn();
+    const adminSession = makeSession(adminEpoch1, impl, {
+      history,
+      onApplicationMessage,
+    });
+    const memberSession = makeSession(memberEpoch1, impl);
+
+    // MEMBER sends, but forges ADMIN as the inner author. The MLS layer
+    // authenticates the sender as MEMBER, so the binding must reject it.
+    const payload = serializeApplicationRumor(
+      rumorFrom(ADMIN, "forged author"),
+    );
+    const effects = await memberSession.send({
+      kind: "applicationMessage",
+      payload,
+    });
+
+    const results = [];
+    for await (const result of adminSession.ingest([
+      effects.publish[0].envelope,
+    ]))
+      results.push(result);
+
+    expect(results.find((r) => r.kind === "processed")).toBeUndefined();
+    const skipped = results.find((r) => r.kind === "skipped");
+    expect(skipped?.reason).toBe("invalid-app-payload");
+    expect(skipped?.disposition).toEqual({
+      kind: "stale",
+      category: "invalid_encoding",
+    });
+    expect(onApplicationMessage).not.toHaveBeenCalled();
+    expect(history.saveMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects an app message whose inner id is not canonical", async () => {
+    const impl = await getImpl();
+    const { adminEpoch1, memberEpoch1 } = await createTwoMemberStates(impl);
+
+    const onApplicationMessage = vi.fn();
+    const adminSession = makeSession(adminEpoch1, impl, {
+      onApplicationMessage,
+    });
+    const memberSession = makeSession(memberEpoch1, impl);
+
+    // Correct author (MEMBER) but a tampered, non-canonical id.
+    const tampered = rumorFrom(MEMBER, "tampered id");
+    tampered.id = "0".repeat(64);
+    const effects = await memberSession.send({
+      kind: "applicationMessage",
+      payload: serializeApplicationRumor(tampered),
+    });
+
+    const results = [];
+    for await (const result of adminSession.ingest([
+      effects.publish[0].envelope,
+    ]))
+      results.push(result);
+
+    expect(results.find((r) => r.kind === "processed")).toBeUndefined();
+    expect(results.find((r) => r.kind === "skipped")?.reason).toBe(
+      "invalid-app-payload",
+    );
+    expect(onApplicationMessage).not.toHaveBeenCalled();
   });
 });
 

@@ -104,7 +104,8 @@ export type SkippedIngestResult<TEnvelope> = {
     | "wrong-wireformat"
     | "self-echo"
     | "beyond-anchor"
-    | "missing-retained-anchor";
+    | "missing-retained-anchor"
+    | "invalid-app-payload";
 };
 
 /** An envelope that could not be decrypted or processed after all retry attempts. */

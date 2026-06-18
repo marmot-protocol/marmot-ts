@@ -24,6 +24,7 @@ export function ingestResultDisposition<TEnvelope>(
         case "self-echo":
           return disposition.stale(inputCategories.ownEcho);
         case "wrong-wireformat":
+        case "invalid-app-payload":
           return disposition.stale(inputCategories.invalidEncoding);
         case "beyond-anchor":
         case "missing-retained-anchor":

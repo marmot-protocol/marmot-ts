@@ -172,14 +172,22 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 
 ### M3 — Inner app-event `id`/`pubkey` not validated against MLS sender
 
+- **Status:** FIXED (2026-06-18, live engine path).
 - **Spec:** `foundation/application-messages.md` §Encoding (reject `id` ≠ canonical Nostr event id) +
-  `foundation/identity.md` §Application content (inner `pubkey` validated against the authenticated MLS sender).
-- **Code:** `src/core/group-message.ts:226-256` round-trips via JSON, checks only field presence, never recomputes
-  the canonical id; `src/client/group/group-rumor-history.ts:47-54` saves without id check;
-  `src/client/group/marmot-group.ts:1830-1845` has `senderLeafIndex` available but never binds inner `pubkey` to it.
-- **Impact:** a member can forge inner-event authorship (`id`/`pubkey`).
-- **Fix:** recompute canonical Nostr id and reject mismatch; bind inner `pubkey` to the MLS sender credential
-  before delivering/saving.
+  `foundation/identity.md` §Application content (inner `pubkey` validated against the authenticated MLS sender);
+  both failures classify as `invalid_encoding` per `foundation/errors.md` (the inner event is unsigned, so not
+  `invalid_signature`; authorship forgery is a decode rule, not `authorization_failed`).
+- **Fix applied:** `deserializeApplicationData` (`src/core/application-rumor.ts`) is now a strict decoder —
+  exactly the six NIP-01 members (`id, pubkey, created_at, kind, tags, content`; no `sig`/unknown members) and
+  the carried `id` must equal the canonical id recomputed via `getEventHash`. New
+  `verifyApplicationRumorAuthorship(payload, senderHex)` adds the MLS-sender binding. The engine
+  (`src/engine/ingest.ts` `isAuthenticApplicationMessage`) resolves the sender leaf → credential identity via
+  `getCredentialFromLeafIndex`/`getCredentialPubkey` and rejects a forged id or mismatched author as a new
+  `skipped` reason `invalid-app-payload` → `invalid_encoding`; the MLS ratchet still advances (the message was
+  MLS-authenticated) but the payload is never delivered/saved. Tests:
+  `group-session.test.ts` "application-message authorship (M3)" (forged author + non-canonical id rejected).
+  KNOWN GAP: duplicate-key rejection is not enforced (JSON.parse is last-write-wins); not a forgery vector since
+  the id + author bind the surviving values, but it is a residual non-canonical-input deviation.
 
 ### M4 — Credential identity not curve-validated
 

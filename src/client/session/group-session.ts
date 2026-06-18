@@ -50,7 +50,8 @@ export type SkippedIngestResult = {
     | "wrong-wireformat"
     | "self-echo"
     | "beyond-anchor"
-    | "missing-retained-anchor";
+    | "missing-retained-anchor"
+    | "invalid-app-payload";
 };
 
 export type UnreadableIngestResult = {

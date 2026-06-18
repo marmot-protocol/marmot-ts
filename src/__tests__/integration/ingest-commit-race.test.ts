@@ -1,5 +1,6 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { EventSigner } from "applesauce-core";
+import { getEventHash } from "applesauce-core/helpers/event";
 import {
   CiphersuiteImpl,
   type ClientState,
@@ -829,15 +830,18 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     // Record initial epoch
     const initialEpoch = group.state.groupContext.epoch;
 
-    // Create an application message (chat message)
+    // Create an application message (chat message). The inner event must carry
+    // a canonical NIP-01 id and be authored by the MLS sender (adminPubkey),
+    // otherwise the receiver now rejects it as a non-conformant inner event.
     const rumor: Rumor = {
-      id: "r".repeat(64),
+      id: "",
       kind: 1,
       content: "Hello, world!",
       tags: [],
       created_at: Math.floor(Date.now() / 1000),
       pubkey: adminPubkey,
     };
+    rumor.id = getEventHash(rumor);
 
     // Send application message through MarmotGroup
     // This should update state for forward secrecy and persist it

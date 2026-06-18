@@ -238,6 +238,7 @@ describe("exports", () => {
         "validateConvergencePolicy",
         "varintSize",
         "verifyAllLeafAccountIdentityProofs",
+        "verifyApplicationRumorAuthorship",
         "verifyLeafAccountIdentityProof",
       ]
     `);

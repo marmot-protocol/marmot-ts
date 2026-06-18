@@ -6,7 +6,9 @@ import {
   type ClientState,
   contentTypes,
   encode,
+  getCredentialFromLeafIndex,
   type IncomingMessageCallback,
+  type LeafIndex,
   mlsMessageEncoder,
   MlsMessage,
   processMessage,
@@ -15,6 +17,7 @@ import {
   wireformats,
 } from "ts-mls";
 
+import { verifyApplicationRumorAuthorship } from "../core/application-rumor.js";
 import { marmotAuthService } from "../core/auth-service.js";
 import {
   type CommitOrderingKey,
@@ -22,6 +25,7 @@ import {
   compareCommitOrderingKeys,
   DEFAULT_CONVERGENCE_POLICY,
 } from "../core/convergence.js";
+import { getCredentialPubkey } from "../core/credential.js";
 import { type DeferredReason, deferredReasons } from "../core/inbound.js";
 import { classifyLateCommit } from "../core/retained-history.js";
 import type { RetainedHistoryStore } from "./retained-store.js";
@@ -128,6 +132,42 @@ function terminalResult<TEnvelope>(
       .filter((e) => e.envelope === envelope)
       .map((e) => e.error),
   };
+}
+
+/**
+ * Whether a decrypted application message is authentic: its inner Nostr event
+ * id is canonical AND its `pubkey` matches the MLS-authenticated sender's
+ * account identity (`foundation/identity.md`, `protocol-core/group-messaging.md`).
+ * MLS authenticates *who* sent the bytes (the sender leaf); this binds the inner
+ * author to that sender so a member can't forge another account's authorship.
+ * A failure — including an unattributable sender (no leaf index) or a
+ * non-conformant payload — is `invalid_encoding`; the message is dropped, never
+ * delivered.
+ */
+function isAuthenticApplicationMessage(
+  result: ProcessMessageResult & { kind: "applicationMessage" },
+  state: ClientState,
+  log: Debugger,
+  label: string,
+): boolean {
+  const senderLeafIndex = (result as { senderLeafIndex?: unknown })
+    .senderLeafIndex;
+  if (senderLeafIndex === undefined) {
+    log("reject app message envelope:%s – unattributable sender", label);
+    return false;
+  }
+  try {
+    const credential = getCredentialFromLeafIndex(
+      state.ratchetTree,
+      senderLeafIndex as LeafIndex,
+    );
+    const senderPubkey = getCredentialPubkey(credential);
+    verifyApplicationRumorAuthorship(result.message, senderPubkey);
+    return true;
+  } catch (error) {
+    log("reject app message envelope:%s – %s", label, (error as Error).message);
+    return false;
+  }
 }
 
 /** Orders peeled commits deterministically by their convergence ordering key. */
@@ -324,8 +364,27 @@ export async function* ingestEnvelopes<TEnvelope>(
         ctx.setState(result.newState);
         yield { kind: "processed", result, envelope, message };
       } else if (result.kind === "applicationMessage") {
-        log("application message envelope:%s", envelopeLabel(envelope));
+        // The MLS layer has authenticated the sender; advance our ratchet to
+        // reflect the consumed generation even if we then drop the payload.
         ctx.setState(result.newState);
+        if (
+          !isAuthenticApplicationMessage(
+            result,
+            result.newState,
+            log,
+            envelopeLabel(envelope),
+          )
+        ) {
+          // M3: forged inner id / author ⇒ invalid_encoding, never delivered.
+          yield {
+            kind: "skipped",
+            envelope,
+            message,
+            reason: "invalid-app-payload",
+          };
+          continue;
+        }
+        log("application message envelope:%s", envelopeLabel(envelope));
         yield { kind: "processed", result, envelope, message };
       }
     } catch (error) {

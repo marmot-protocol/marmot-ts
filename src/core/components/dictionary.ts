@@ -133,94 +133,143 @@ export function makeLeafAppComponentsExtension(
 }
 
 // ---------------------------------------------------------------------------
-// Typed accessors
+// Component codec descriptor table
+//
+// Single source of truth pairing each component id with its codec (darkmatter's
+// `codec.rs` registry idea). The typed accessors and entry builders below are
+// one-line projections over this table, so adding a component means adding one
+// descriptor + its two thin wrappers — the id↔codec binding is never repeated.
 // ---------------------------------------------------------------------------
 
-function decodeOrUndefined<T>(
-  data: Uint8Array | undefined,
-  decode: (d: Uint8Array) => T,
-): T | undefined {
-  return data === undefined ? undefined : decode(data);
+/** A component id paired with its typed `data`-bytes codec. */
+type ComponentCodec<T> = {
+  id: AppComponentId;
+  decode: (data: Uint8Array) => T;
+  encode: (value: T) => Uint8Array;
+};
+
+function defineCodec<T>(
+  id: AppComponentId,
+  decode: (data: Uint8Array) => T,
+  encode: (value: T) => Uint8Array,
+): ComponentCodec<T> {
+  return { id, decode, encode };
 }
+
+const APP_COMPONENTS_CODEC = defineCodec(
+  APP_COMPONENTS_COMPONENT_ID,
+  decodeComponentsList,
+  encodeComponentsList,
+);
+const GROUP_PROFILE_CODEC = defineCodec(
+  GROUP_PROFILE_COMPONENT_ID,
+  decodeGroupProfileV1,
+  encodeGroupProfileV1,
+);
+const ADMIN_POLICY_CODEC = defineCodec(
+  GROUP_ADMIN_POLICY_COMPONENT_ID,
+  decodeAdminPolicyV1,
+  encodeAdminPolicyV1,
+);
+const NOSTR_ROUTING_CODEC = defineCodec(
+  NOSTR_ROUTING_COMPONENT_ID,
+  decodeNostrRoutingV1,
+  encodeNostrRoutingV1,
+);
+const MESSAGE_RETENTION_CODEC: ComponentCodec<bigint> = defineCodec(
+  GROUP_MESSAGE_RETENTION_COMPONENT_ID,
+  decodeMessageRetentionV1,
+  // The builder accepts number | bigint; the decoder yields bigint.
+  (seconds: number | bigint) => encodeMessageRetentionV1(seconds),
+);
+const AGENT_TEXT_STREAM_CODEC = defineCodec(
+  AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
+  decodeAgentTextStreamQuicPolicyV1,
+  encodeAgentTextStreamQuicPolicyV1,
+);
+const GROUP_AVATAR_URL_CODEC = defineCodec(
+  GROUP_AVATAR_URL_COMPONENT_ID,
+  decodeGroupAvatarUrlV1,
+  encodeGroupAvatarUrlV1,
+);
+const ENCRYPTED_MEDIA_CODEC = defineCodec(
+  GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
+  decodeEncryptedMediaPolicyV1,
+  encodeEncryptedMediaPolicyV1,
+);
+
+/** Reads + decodes a component from the dictionary, or `undefined` if absent. */
+function getComponent<T>(
+  extensions: GroupContextExtension[],
+  codec: ComponentCodec<T>,
+): T | undefined {
+  const data = getComponentData(extensions, codec.id);
+  return data === undefined ? undefined : codec.decode(data);
+}
+
+/** Builds a {@link ComponentData} entry by encoding `value` with `codec`. */
+function entryFor<T>(codec: ComponentCodec<T>, value: T): ComponentData {
+  return componentEntry(codec.id, codec.encode(value));
+}
+
+// ---------------------------------------------------------------------------
+// Typed accessors
+// ---------------------------------------------------------------------------
 
 /** The `app_components` advertising list (`0x0001`). */
 export function getAppComponents(
   extensions: GroupContextExtension[],
 ): AppComponentId[] | undefined {
-  return decodeOrUndefined(
-    getComponentData(extensions, APP_COMPONENTS_COMPONENT_ID),
-    decodeComponentsList,
-  );
+  return getComponent(extensions, APP_COMPONENTS_CODEC);
 }
 
 /** The `group.profile.v1` component (`0x8001`). */
 export function getGroupProfile(
   extensions: GroupContextExtension[],
 ): GroupProfileV1 | undefined {
-  return decodeOrUndefined(
-    getComponentData(extensions, GROUP_PROFILE_COMPONENT_ID),
-    decodeGroupProfileV1,
-  );
+  return getComponent(extensions, GROUP_PROFILE_CODEC);
 }
 
 /** The `admin-policy.v1` admin pubkey set (`0x8003`). */
 export function getAdminPolicy(
   extensions: GroupContextExtension[],
 ): string[] | undefined {
-  return decodeOrUndefined(
-    getComponentData(extensions, GROUP_ADMIN_POLICY_COMPONENT_ID),
-    decodeAdminPolicyV1,
-  );
+  return getComponent(extensions, ADMIN_POLICY_CODEC);
 }
 
 /** The `transport.nostr.routing.v1` component (`0x8004`). */
 export function getNostrRouting(
   extensions: GroupContextExtension[],
 ): NostrRoutingV1 | undefined {
-  return decodeOrUndefined(
-    getComponentData(extensions, NOSTR_ROUTING_COMPONENT_ID),
-    decodeNostrRoutingV1,
-  );
+  return getComponent(extensions, NOSTR_ROUTING_CODEC);
 }
 
 /** The `message-retention.v1` timer in seconds (`0x8005`). */
 export function getMessageRetention(
   extensions: GroupContextExtension[],
 ): bigint | undefined {
-  return decodeOrUndefined(
-    getComponentData(extensions, GROUP_MESSAGE_RETENTION_COMPONENT_ID),
-    decodeMessageRetentionV1,
-  );
+  return getComponent(extensions, MESSAGE_RETENTION_CODEC);
 }
 
 /** The `agent-text-stream.quic.v1` policy (`0x8006`). */
 export function getAgentTextStreamPolicy(
   extensions: GroupContextExtension[],
 ): AgentTextStreamQuicPolicyV1 | undefined {
-  return decodeOrUndefined(
-    getComponentData(extensions, AGENT_TEXT_STREAM_QUIC_COMPONENT_ID),
-    decodeAgentTextStreamQuicPolicyV1,
-  );
+  return getComponent(extensions, AGENT_TEXT_STREAM_CODEC);
 }
 
 /** The `group.avatar-url.v1` component (`0x8007`). */
 export function getGroupAvatarUrl(
   extensions: GroupContextExtension[],
 ): GroupAvatarUrlV1 | undefined {
-  return decodeOrUndefined(
-    getComponentData(extensions, GROUP_AVATAR_URL_COMPONENT_ID),
-    decodeGroupAvatarUrlV1,
-  );
+  return getComponent(extensions, GROUP_AVATAR_URL_CODEC);
 }
 
 /** The `group.encrypted-media.v1` policy (`0x8008`). */
 export function getEncryptedMediaPolicy(
   extensions: GroupContextExtension[],
 ): EncryptedMediaPolicyV1 | undefined {
-  return decodeOrUndefined(
-    getComponentData(extensions, GROUP_ENCRYPTED_MEDIA_COMPONENT_ID),
-    decodeEncryptedMediaPolicyV1,
-  );
+  return getComponent(extensions, ENCRYPTED_MEDIA_CODEC);
 }
 
 // ---------------------------------------------------------------------------
@@ -229,65 +278,44 @@ export function getEncryptedMediaPolicy(
 
 /** Builds the `app_components` advertising entry from a list of ids. */
 export function appComponentsEntry(ids: AppComponentId[]): ComponentData {
-  return componentEntry(APP_COMPONENTS_COMPONENT_ID, encodeComponentsList(ids));
+  return entryFor(APP_COMPONENTS_CODEC, ids);
 }
 
 /** Builds the `group.profile.v1` entry. */
 export function groupProfileEntry(profile: GroupProfileV1): ComponentData {
-  return componentEntry(
-    GROUP_PROFILE_COMPONENT_ID,
-    encodeGroupProfileV1(profile),
-  );
+  return entryFor(GROUP_PROFILE_CODEC, profile);
 }
 
 /** Builds the `admin-policy.v1` entry from hex admin pubkeys. */
 export function adminPolicyEntry(adminPubkeys: string[]): ComponentData {
-  return componentEntry(
-    GROUP_ADMIN_POLICY_COMPONENT_ID,
-    encodeAdminPolicyV1(adminPubkeys),
-  );
+  return entryFor(ADMIN_POLICY_CODEC, adminPubkeys);
 }
 
 /** Builds the `transport.nostr.routing.v1` entry. */
 export function nostrRoutingEntry(routing: NostrRoutingV1): ComponentData {
-  return componentEntry(
-    NOSTR_ROUTING_COMPONENT_ID,
-    encodeNostrRoutingV1(routing),
-  );
+  return entryFor(NOSTR_ROUTING_CODEC, routing);
 }
 
 /** Builds the `message-retention.v1` entry. */
 export function messageRetentionEntry(seconds: number | bigint): ComponentData {
-  return componentEntry(
-    GROUP_MESSAGE_RETENTION_COMPONENT_ID,
-    encodeMessageRetentionV1(seconds),
-  );
+  return entryFor(MESSAGE_RETENTION_CODEC, seconds as bigint);
 }
 
 /** Builds the `agent-text-stream.quic.v1` entry. */
 export function agentTextStreamEntry(
   policy: AgentTextStreamQuicPolicyV1,
 ): ComponentData {
-  return componentEntry(
-    AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
-    encodeAgentTextStreamQuicPolicyV1(policy),
-  );
+  return entryFor(AGENT_TEXT_STREAM_CODEC, policy);
 }
 
 /** Builds the `group.avatar-url.v1` entry. */
 export function groupAvatarUrlEntry(avatar: GroupAvatarUrlV1): ComponentData {
-  return componentEntry(
-    GROUP_AVATAR_URL_COMPONENT_ID,
-    encodeGroupAvatarUrlV1(avatar),
-  );
+  return entryFor(GROUP_AVATAR_URL_CODEC, avatar);
 }
 
 /** Builds the `group.encrypted-media.v1` entry. */
 export function encryptedMediaEntry(
   policy: EncryptedMediaPolicyV1,
 ): ComponentData {
-  return componentEntry(
-    GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
-    encodeEncryptedMediaPolicyV1(policy),
-  );
+  return entryFor(ENCRYPTED_MEDIA_CODEC, policy);
 }

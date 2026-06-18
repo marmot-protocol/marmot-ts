@@ -3,7 +3,12 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventSigner } from "applesauce-core";
 import { NostrEvent } from "applesauce-core/helpers/event";
 import { EventEmitter } from "eventemitter3";
-import { CiphersuiteName, CryptoProvider, PrivateKeyPackage } from "ts-mls";
+import {
+  CiphersuiteName,
+  CryptoProvider,
+  PrivateKeyPackage,
+  Welcome,
+} from "ts-mls";
 
 import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import {
@@ -25,6 +30,7 @@ import {
   ListedKeyPackage,
   LocalKeyPackage,
   StoredKeyPackage,
+  WelcomeKeyPackageCandidate,
 } from "./key-package-store.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
 
@@ -43,6 +49,7 @@ export {
   type LocalKeyPackage,
   type StoredKeyPackage,
   type TrackedKeyPackage,
+  type WelcomeKeyPackageCandidate,
 } from "./key-package-store.js";
 export {
   KeyPackagePublisher,
@@ -443,6 +450,55 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     ref: Uint8Array | string,
   ): Promise<PrivateKeyPackage | null> {
     return this.#store.getPrivateKey(ref);
+  }
+
+  /**
+   * Selects the locally-held key packages that could receive a given Welcome,
+   * ordered with the RFC 9420 KeyPackageRef matches first.
+   *
+   * Filters to packages whose ciphersuite matches the Welcome and for which
+   * local private material is held, computes whether each package's ref matches
+   * one of the Welcome's encrypted secrets, and returns the matching packages
+   * before the non-matching ones so `GroupsManager.joinFromWelcome` tries the
+   * most likely candidate first. This is the TypeScript analog of the private
+   * key-bundle lookup the darkmatter engine performs inside `do_join_welcome`.
+   *
+   * @param welcome - The decoded MLS Welcome message.
+   * @returns Candidate key packages in priority order (may be empty).
+   */
+  async selectForWelcome(
+    welcome: Welcome,
+  ): Promise<WelcomeKeyPackageCandidate[]> {
+    const entries = await this.list();
+    const candidates: WelcomeKeyPackageCandidate[] = [];
+
+    for (const entry of entries) {
+      if (entry.publicPackage.cipherSuite !== welcome.cipherSuite) continue;
+
+      const privatePackage = await this.getPrivateKey(entry.keyPackageRef);
+      if (!privatePackage) continue;
+
+      // RFC 9420 KeyPackageRef matching: does this package's ref equal the
+      // `newMember` ref of any encrypted secret in the Welcome?
+      const hasMatchingSecret = welcome.secrets.some(
+        (secret) =>
+          secret.newMember.length === entry.keyPackageRef.length &&
+          secret.newMember.every((val, idx) => val === entry.keyPackageRef[idx]),
+      );
+
+      candidates.push({
+        publicPackage: entry.publicPackage,
+        privatePackage,
+        keyPackageRef: entry.keyPackageRef,
+        hasMatchingSecret,
+      });
+    }
+
+    // Try packages whose ref matches a Welcome secret first (RFC 9420 compliance).
+    return [
+      ...candidates.filter((c) => c.hasMatchingSecret),
+      ...candidates.filter((c) => !c.hasMatchingSecret),
+    ];
   }
 
   /**

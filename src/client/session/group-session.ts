@@ -20,7 +20,12 @@ import type {
 } from "../../engine/types.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { NostrGroupPeeler } from "../group/nostr-peeler.js";
-import type { GroupEffects, GroupSessionSendIntent } from "./group-effects.js";
+import { proposeLeaveGroup } from "../group/proposals/leave-group.js";
+import type {
+  GroupEffects,
+  GroupPublishWork,
+  GroupSessionSendIntent,
+} from "./group-effects.js";
 
 export type ProcessedIngestResult = {
   kind: "processed";
@@ -275,6 +280,38 @@ export class GroupSession<
         };
       }
     }
+  }
+
+  /**
+   * Builds the self-remove proposal effects for leaving the group.
+   *
+   * Per RFC 9420 §12.4 a member cannot *commit* a Remove targeting their own
+   * leaf, so this emits self-remove proposal(s) for the next committer (e.g.
+   * an admin) to apply. Modelled as a send-intent — the darkmatter engine
+   * exposes the same operation as `do_send_leave` rather than letting callers
+   * hand-build the proposals.
+   *
+   * @param ownPubkey - The leaving member's Nostr public key (hex string).
+   * @returns Publishable proposal effects (one per owned leaf node).
+   */
+  async leave(ownPubkey: string): Promise<GroupEffects> {
+    const removeProposals = await proposeLeaveGroup(ownPubkey)(
+      this.proposalContext(),
+    );
+
+    const publish: GroupPublishWork[] = [];
+    for (const proposal of removeProposals) {
+      const sendResult = await this.#engine.send({ kind: "proposal", proposal });
+      if (sendResult.kind !== "proposal") {
+        throw new Error("Expected proposal result from leave send");
+      }
+      publish.push({
+        kind: "proposal",
+        envelope: sendResult.envelope,
+        pending: sendResult.pending,
+      });
+    }
+    return { publish };
   }
 
   async *ingest(

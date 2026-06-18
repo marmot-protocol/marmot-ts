@@ -88,6 +88,22 @@ export type StoredKeyPackage = LocalKeyPackage | TrackedKeyPackage;
 /** A {@link LocalKeyPackage} without the private material, safe to expose in listings */
 export type ListedKeyPackage = Omit<StoredKeyPackage, "privatePackage">;
 
+/**
+ * A locally-held key package selected as a candidate for joining from a
+ * specific Welcome message. Produced by `KeyPackageManager.selectForWelcome`
+ * and consumed by `GroupsManager.joinFromWelcome`.
+ */
+export type WelcomeKeyPackageCandidate = {
+  /** The public key package to hand to `joinGroup`. */
+  publicPackage: KeyPackage;
+  /** The matching local private material. */
+  privatePackage: PrivateKeyPackage;
+  /** The RFC 9420 KeyPackageRef of this package. */
+  keyPackageRef: Uint8Array;
+  /** Whether this package's ref matches an encrypted secret in the Welcome. */
+  hasMatchingSecret: boolean;
+};
+
 /** Events emitted by {@link KeyPackageStore} as its entries change. */
 export type KeyPackageStoreEvents = {
   /** Emitted when a key package is stored locally */

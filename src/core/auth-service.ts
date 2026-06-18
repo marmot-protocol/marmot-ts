@@ -5,7 +5,14 @@ import {
   defaultCredentialTypes,
 } from "ts-mls";
 
-/** Marmot credential policy (MIP-00): `basic` credential with 32-byte identity. */
+import { isValidAccountIdentity } from "./credential.js";
+
+/**
+ * Marmot credential policy (MIP-00 / `foundation/identity.md`): a `basic`
+ * credential whose identity is a valid 32-byte x-only secp256k1 public key.
+ * Rejecting non-curve identities here is the inbound gate that stops a peer
+ * adding a member whose account identity is not a real Nostr pubkey.
+ */
 export const marmotAuthService: AuthenticationService = {
   async validateCredential(
     credential: Credential,
@@ -16,8 +23,6 @@ export const marmotAuthService: AuthenticationService = {
 
     const basic = credential as CredentialBasic;
     if (!(basic.identity instanceof Uint8Array)) return false;
-    if (basic.identity.length !== 32) return false;
-
-    return true;
+    return isValidAccountIdentity(basic.identity);
   },
 };

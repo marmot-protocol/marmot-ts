@@ -64,7 +64,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     );
 
     // Make this a 2-member group (required for update paths).
-    const memberPubkey = "c".repeat(64);
+    const memberPubkey = "e".repeat(64);
     const memberCredential = createCredential(memberPubkey);
     const memberKeyPackage = await generateKeyPackage({
       credential: memberCredential,
@@ -158,7 +158,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     // ("Could not find common ancestor") because update paths are defined over
     // paths between distinct leaves.
     // ----------------------------------------------------------------------
-    const memberPubkey = "c".repeat(64);
+    const memberPubkey = "e".repeat(64);
     const memberCredential = createCredential(memberPubkey);
     const memberKeyPackage = await generateKeyPackage({
       credential: memberCredential,
@@ -318,7 +318,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     );
 
     // Build a 2-member group; the member is the fork-recovery receiver.
-    const memberPubkey = "c".repeat(64);
+    const memberPubkey = "e".repeat(64);
     const memberKeyPackage = await generateKeyPackage({
       credential: createCredential(memberPubkey),
       ciphersuiteImpl: impl,
@@ -453,7 +453,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     };
 
     // 2-member group; the member is the receiver.
-    const memberPubkey = "c".repeat(64);
+    const memberPubkey = "e".repeat(64);
     const memberKeyPackage = await generateKeyPackage({
       credential: createCredential(memberPubkey),
       ciphersuiteImpl: impl,
@@ -588,7 +588,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     };
 
     // 3-member group: admin (committer), C (receiver + witness), D (witness).
-    const cPub = "c".repeat(64);
+    const cPub = "e".repeat(64);
     const dPub = "d".repeat(64);
     const cKp = await generateKeyPackage({
       credential: createCredential(cPub),
@@ -764,7 +764,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     );
 
     // Add a member to make it a 2-member group (required for update paths)
-    const memberPubkey = "c".repeat(64);
+    const memberPubkey = "e".repeat(64);
     const memberCredential = createCredential(memberPubkey);
     const memberKeyPackage = await generateKeyPackage({
       credential: memberCredential,
@@ -902,7 +902,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     );
 
     // Add first member to make it a 2-member group
-    const member1Pubkey = "c".repeat(64);
+    const member1Pubkey = "e".repeat(64);
     const member1Credential = createCredential(member1Pubkey);
     const member1KeyPackage = await generateKeyPackage({
       credential: member1Credential,

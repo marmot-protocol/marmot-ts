@@ -21,7 +21,7 @@ import { InMemoryKeyValueStore } from "../../../extra";
 import { GroupSession } from "../group-session.js";
 
 const ADMIN = "a".repeat(64);
-const MEMBER = "b".repeat(64);
+const MEMBER = "d".repeat(64);
 
 /** Builds a kind-9 rumor authored by `pubkey` with a canonical NIP-01 id. */
 function rumorFrom(pubkey: string, content: string): Rumor {

@@ -205,6 +205,7 @@ describe("exports", () => {
         "isLifetimeValid",
         "isProposalMessage",
         "isSameCredential",
+        "isValidAccountIdentity",
         "isValidInboxRelayListEvent",
         "isValidNip65RelayListEvent",
         "isValidRelayUrl",

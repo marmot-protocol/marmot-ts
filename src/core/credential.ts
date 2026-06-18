@@ -1,4 +1,5 @@
 /** @module @category Core - Credentials */
+import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { Credential, CredentialBasic, defaultCredentialTypes } from "ts-mls";
 
@@ -6,14 +7,40 @@ export function isHexKey(str: string): boolean {
   return /^[0-9a-fA-F]{64}$/.test(str);
 }
 
+/**
+ * Whether `identity` is a valid Marmot account identity: exactly 32 bytes and a
+ * valid x-only secp256k1 public key (it lifts to a point on the curve via
+ * BIP-340 `lift_x`). `foundation/identity.md`: "clients reject credentials whose
+ * identity is not a valid x-only secp256k1 public key." Mirrors darkmatter
+ * `validate_credential_identity` (`k256::schnorr::VerifyingKey::from_bytes`).
+ */
+export function isValidAccountIdentity(identity: Uint8Array): boolean {
+  if (identity.length !== 32) return false;
+  try {
+    // lift_x: an x-only key is valid iff its x-coordinate is < the field prime
+    // and lies on the curve. Parsing it as a compressed point (even-y prefix)
+    // performs exactly that check; an invalid x throws.
+    secp256k1.Point.fromHex(`02${bytesToHex(identity)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Creates a MLS basic credential from a nostr public key. */
 export function createCredential(pubkey: string): CredentialBasic {
   if (isHexKey(pubkey) === false)
     throw new Error("Invalid nostr public key, must be 64 hex characters");
 
+  const identity = hexToBytes(pubkey);
+  if (!isValidAccountIdentity(identity))
+    throw new Error(
+      "Invalid nostr public key: not a valid x-only secp256k1 public key",
+    );
+
   return {
     credentialType: defaultCredentialTypes.basic,
-    identity: hexToBytes(pubkey),
+    identity,
   };
 }
 

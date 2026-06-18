@@ -174,7 +174,7 @@ describe("MarmotGroupEngine ingest – permanent decrypt failures", () => {
 describe("MarmotGroupEngine admin verification (MIP-03)", () => {
   it("rejects commit send from non-admin members", async () => {
     const adminPubkey = "a".repeat(64);
-    const nonAdminPubkey = "b".repeat(64);
+    const nonAdminPubkey = "d".repeat(64);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -219,7 +219,7 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
     });
 
     const thirdKeyPackage = await generateKeyPackage({
-      credential: createCredential("c".repeat(64)),
+      credential: createCredential("e".repeat(64)),
       ciphersuiteImpl: impl,
     });
 
@@ -245,7 +245,7 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
 
   it("allows a non-admin to commit a self-update-only commit (no proposals)", async () => {
     const adminPubkey = "a".repeat(64);
-    const nonAdminPubkey = "b".repeat(64);
+    const nonAdminPubkey = "d".repeat(64);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,

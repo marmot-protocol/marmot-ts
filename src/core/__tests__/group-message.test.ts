@@ -83,7 +83,7 @@ describe("group message encryption (MIP-03)", () => {
   });
 
   it("decrypts legacy format via fallback and warns once", async () => {
-    const { clientState, ciphersuite } = await createTestState("b".repeat(64));
+    const { clientState, ciphersuite } = await createTestState("2".repeat(64));
 
     const { message } = await createApplicationMessage({
       context: {
@@ -123,7 +123,7 @@ describe("group message encryption (MIP-03)", () => {
   });
 
   it("rejects invalid base64 group-event content", async () => {
-    const { clientState, ciphersuite } = await createTestState("c".repeat(64));
+    const { clientState, ciphersuite } = await createTestState("3".repeat(64));
 
     const event = {
       id: "a".repeat(64),
@@ -199,7 +199,7 @@ describe("group message encryption (MIP-03)", () => {
   });
 
   it("rejects payload with 12-byte nonce and empty ciphertext", async () => {
-    const { clientState, ciphersuite } = await createTestState("f".repeat(64));
+    const { clientState, ciphersuite } = await createTestState("4".repeat(64));
 
     const nonceOnly = new Uint8Array(12);
     const content = btoa(String.fromCharCode(...nonceOnly));

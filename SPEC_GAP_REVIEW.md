@@ -191,11 +191,17 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 
 ### M4 — Credential identity not curve-validated
 
-- **Spec:** `foundation/identity.md` / `key-packages.md` — reject credentials whose identity is not a valid
-  x-only secp256k1 public key. Rust: `identity.rs::validate_credential_identity` (`lift_x` on-curve).
-- **Code:** `src/core/auth-service.ts:14-22` checks only `length === 32`; `src/core/credential.ts:21-37` checks
-  only 64-hex format. No curve-point check anywhere.
-- **Fix:** add an x-only secp256k1 `lift_x` / on-curve check in `marmotAuthService` (and/or `getCredentialPubkey`).
+- **Status:** FIXED (2026-06-18).
+- **Spec:** `foundation/identity.md` — "clients reject credentials whose identity is not a valid x-only
+  secp256k1 public key." Rust: `identity.rs::validate_credential_identity` (32-byte length +
+  `k256::schnorr::VerifyingKey::from_bytes` = BIP-340 `lift_x` on-curve check).
+- **Fix applied:** new `isValidAccountIdentity(identity)` in `src/core/credential.ts` (32 bytes + `lift_x`
+  via `secp256k1.Point.fromHex("02"+x)`). `createCredential` throws on an off-curve key and
+  `marmotAuthService.validateCredential` (the inbound gate ts-mls calls on every added/processed credential)
+  rejects one — so a peer can no longer add a member whose account identity is not a real Nostr pubkey. Tests:
+  credential.test.ts "isValidAccountIdentity (M4)" + createCredential off-curve/x=0 rejection. NOTE: this
+  required migrating test fixtures that used off-curve fake pubkeys (`"b"`/`"c"`/`"f"`/`"0"`/`"1"` ×64) to
+  valid x-only keys (`a/d/e/2/3/4` ×64); transport ids / forged-ref test values were left as-is.
 
 ### M5 — nostr-routing relay-URL validation too loose
 

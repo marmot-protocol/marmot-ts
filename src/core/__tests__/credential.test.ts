@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { createCredential, getCredentialPubkey } from "../credential.js";
+import {
+  createCredential,
+  getCredentialPubkey,
+  isValidAccountIdentity,
+} from "../credential.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import {
   CredentialBasic,
@@ -8,10 +12,15 @@ import {
 } from "ts-mls";
 import { marmotAuthService } from "../auth-service.js";
 
+// Real x-only secp256k1 public keys (valid lift_x points), as Marmot account
+// identities MUST be (foundation/identity.md).
 const validPubkey =
   "1a9281606d737cf7b3c09ccdaefc47cb2af39c12d8528d54c747b8bd9e34a346";
 const anotherValidPubkey =
-  "26095f2b8dc8aa5c049848933af79155464921da76f4fdefc4a5a439a2ef6dce";
+  "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
+// An off-curve x-coordinate: 64 valid hex chars, 32 bytes, but not a point on
+// secp256k1 (no y satisfies the curve equation).
+const offCurvePubkey = "b".repeat(64);
 
 describe("createCredential", () => {
   it("should create a basic credential from a valid hex public key", () => {
@@ -91,6 +100,34 @@ describe("createCredential", () => {
       ),
     ).toThrow("Invalid nostr public key, must be 64 hex characters");
   });
+
+  it("should reject a 64-hex key that is not a valid x-only secp256k1 point (M4)", () => {
+    // Correct length/hex, but the x-coordinate is off-curve.
+    expect(() => createCredential(offCurvePubkey)).toThrow(
+      "not a valid x-only secp256k1 public key",
+    );
+    // x = 0 is also not a valid curve point.
+    expect(() => createCredential("0".repeat(64))).toThrow(
+      "not a valid x-only secp256k1 public key",
+    );
+  });
+});
+
+describe("isValidAccountIdentity (M4)", () => {
+  it("accepts a real 32-byte x-only secp256k1 public key", () => {
+    expect(isValidAccountIdentity(hexToBytes(validPubkey))).toBe(true);
+    expect(isValidAccountIdentity(hexToBytes(anotherValidPubkey))).toBe(true);
+  });
+
+  it("rejects an off-curve x-coordinate", () => {
+    expect(isValidAccountIdentity(hexToBytes(offCurvePubkey))).toBe(false);
+    expect(isValidAccountIdentity(new Uint8Array(32))).toBe(false); // x = 0
+  });
+
+  it("rejects identities that are not exactly 32 bytes", () => {
+    expect(isValidAccountIdentity(new Uint8Array(31))).toBe(false);
+    expect(isValidAccountIdentity(new Uint8Array(33))).toBe(false);
+  });
 });
 
 describe("getCredentialPubkey", () => {
@@ -164,9 +201,9 @@ describe("getCredentialPubkey", () => {
   it("should roundtrip with multiple different pubkeys", () => {
     const pubkeys = [
       "1a9281606d737cf7b3c09ccdaefc47cb2af39c12d8528d54c747b8bd9e34a346",
-      "26095f2b8dc8aa5c049848933af79155464921da76f4fdefc4a5a439a2ef6dce",
-      "0000000000000000000000000000000000000000000000000000000000000000",
-      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+      "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
     ];
 
     pubkeys.forEach((pubkey) => {

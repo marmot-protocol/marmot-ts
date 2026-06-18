@@ -170,7 +170,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
 describe("MarmotGroup admin verification (MIP-03)", () => {
   it("rejects commits from non-admin members", async () => {
     const adminPubkey = "a".repeat(64);
-    const nonAdminPubkey = "b".repeat(64);
+    const nonAdminPubkey = "d".repeat(64);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -222,7 +222,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     // Non-admin attempts to create a commit (should be rejected by admin verification)
     // Create a commit that includes proposals (not a self-update), which MUST remain
     // admin-only under MIP-03.
-    const thirdPubkey = "c".repeat(64);
+    const thirdPubkey = "e".repeat(64);
     const thirdCredential = createCredential(thirdPubkey);
     const thirdKeyPackage = await generateKeyPackage({
       credential: thirdCredential,
@@ -360,7 +360,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
 
   it("accepts non-admin self-update commits (no proposals) (MIP-02)", async () => {
     const adminPubkey = "a".repeat(64);
-    const nonAdminPubkey = "b".repeat(64);
+    const nonAdminPubkey = "d".repeat(64);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -479,7 +479,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
 
   it("accepts commits from admin members", async () => {
     const adminPubkey = "a".repeat(64);
-    const memberPubkey = "b".repeat(64);
+    const memberPubkey = "d".repeat(64);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,

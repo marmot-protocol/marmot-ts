@@ -13,6 +13,7 @@ import {
   compareCommitOrderingKeys,
   DEFAULT_CONVERGENCE_POLICY,
   isBranchEligible,
+  isWitnessEligible,
   selectCanonicalBranch,
   validateConvergencePolicy,
 } from "../convergence.js";
@@ -40,7 +41,10 @@ describe("convergence policy", () => {
   it("default satisfies the witness-override bound", () => {
     expect(() => validateConvergencePolicy(policy)).not.toThrow();
     expect(policy).toEqual({
+      policyVersion: 1,
       maxRewindCommits: 5,
+      appPayloadPastEpochLimit: 5,
+      settlementQuiescenceMs: 1000,
       witnessQuorumSendersPerEpoch: 2,
       witnessQuorumEpochs: 1,
       maxWitnessOverrideDepth: 1,
@@ -51,6 +55,28 @@ describe("convergence policy", () => {
     expect(() =>
       validateConvergencePolicy({ ...policy, maxWitnessOverrideDepth: 6 }),
     ).toThrow(/max_witness_override_depth/);
+  });
+
+  it("carries the profile-1 retention + settlement constants", () => {
+    expect(policy.policyVersion).toBe(1);
+    expect(policy.appPayloadPastEpochLimit).toBe(5);
+    expect(policy.settlementQuiescenceMs).toBe(1000);
+  });
+});
+
+describe("app-payload witness eligibility (convergence.md + retained-history.md)", () => {
+  const w = (epoch: number): AppWitness => ({ epoch, sender: sender(1) });
+
+  it("excludes witnesses at or before the fork epoch", () => {
+    expect(isWitnessEligible(w(3), 3, 4, policy)).toBe(false); // at fork
+    expect(isWitnessEligible(w(2), 3, 4, policy)).toBe(false); // before fork
+    expect(isWitnessEligible(w(4), 3, 4, policy)).toBe(true); // after fork
+  });
+
+  it("excludes witnesses outside the retained app-payload window of the tip", () => {
+    // limit = 5; reference tip is the candidate tip epoch.
+    expect(isWitnessEligible(w(4), 3, 10, policy)).toBe(false); // 10 - 4 = 6 > 5
+    expect(isWitnessEligible(w(5), 3, 10, policy)).toBe(true); // 10 - 5 = 5 <= 5
   });
 });
 

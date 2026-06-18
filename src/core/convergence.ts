@@ -2,6 +2,8 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
+import { isAppPayloadExpired } from "./retained-history.js";
+
 /**
  * Deterministic convergence primitives (Marmot v2 `protocol-core/convergence.md`).
  *
@@ -19,8 +21,28 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 
 /** The signed convergence policy governing branch selection for a group. */
 export interface ConvergencePolicy {
+  /**
+   * The pinned convergence-policy profile this set of constants names
+   * (`convergence.md`). Not a wire field — it identifies the profile; profile
+   * `1` is the values in {@link DEFAULT_CONVERGENCE_POLICY}.
+   */
+  policyVersion: number;
   /** How far back from the current tip a branch MAY fork and stay eligible. */
   maxRewindCommits: number;
+  /**
+   * The width of the retained app-payload window: an MLS application message is
+   * inside the window iff `reference_tip_epoch - message_epoch <= this`
+   * (`retained-history.md` "App-payload retention"). Messages outside it expire
+   * and MUST NOT count as convergence witnesses.
+   */
+  appPayloadPastEpochLimit: number;
+  /**
+   * The minimum quiescent time (ms) without new convergence-relevant input
+   * before a convergence pass MAY be treated as settled and queued outbound work
+   * released (`convergence.md`). Carried for completeness; the settle-window
+   * state machine itself (B5) is not yet wired.
+   */
+  settlementQuiescenceMs: number;
   /** Distinct senders needed for one branch epoch to count toward witness quorum. */
   witnessQuorumSendersPerEpoch: number;
   /** Number of branch epochs that MUST meet sender quorum. */
@@ -30,11 +52,14 @@ export interface ConvergencePolicy {
 }
 
 /**
- * The default Marmot convergence policy (`convergence.md`). Groups without
- * explicit policy bytes MUST treat this as active.
+ * The default Marmot convergence policy — profile version 1 (`convergence.md`).
+ * Groups without explicit policy bytes MUST treat this as active.
  */
 export const DEFAULT_CONVERGENCE_POLICY: ConvergencePolicy = {
+  policyVersion: 1,
   maxRewindCommits: 5,
+  appPayloadPastEpochLimit: 5,
+  settlementQuiescenceMs: 1000,
   witnessQuorumSendersPerEpoch: 2,
   witnessQuorumEpochs: 1,
   maxWitnessOverrideDepth: 1,
@@ -63,6 +88,31 @@ export function validateConvergencePolicy(policy: ConvergencePolicy): void {
 export interface AppWitness {
   epoch: number;
   sender: Uint8Array;
+}
+
+/**
+ * Whether an app-payload witness counts toward a candidate branch's score
+ * (`convergence.md` "App-payload witnesses", `retained-history.md`
+ * "App-payload retention"). A witness MUST decrypt strictly after the branch's
+ * `forkEpoch` (a message at/before the fork is not a witness for any candidate)
+ * AND be inside the retained app-payload window evaluated with the candidate's
+ * `tipEpoch` as the reference tip. Stale or pre-fork app payloads MUST NOT
+ * influence branch selection.
+ */
+export function isWitnessEligible(
+  witness: AppWitness,
+  forkEpoch: number,
+  tipEpoch: number,
+  policy: ConvergencePolicy,
+): boolean {
+  return (
+    witness.epoch > forkEpoch &&
+    !isAppPayloadExpired(
+      witness.epoch,
+      tipEpoch,
+      policy.appPayloadPastEpochLimit,
+    )
+  );
 }
 
 /** A candidate branch produced by replaying commits from a retained state. */

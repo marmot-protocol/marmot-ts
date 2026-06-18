@@ -21,6 +21,7 @@ import {
   commitDigest,
   type ConvergencePolicy,
   DEFAULT_CONVERGENCE_POLICY,
+  isWitnessEligible,
   selectCanonicalBranch,
 } from "../core/convergence.js";
 import { getCredentialPubkey } from "../core/credential.js";
@@ -219,12 +220,18 @@ export class ForkRecovery<TEnvelope> {
         );
       }
       if (!extended && tipMessage !== undefined) {
+        const tipEpoch = Number(state.groupContext.epoch);
         const branch: BranchCandidate = {
           id: `branch-${counter++}`,
           forkEpoch,
-          tipEpoch: Number(state.groupContext.epoch),
+          tipEpoch,
           tipDigest: this.#commitDigestOf(tipMessage),
-          appWitnesses: accumulated,
+          // Drop witnesses at/before the fork epoch or outside the retained
+          // app-payload window for this candidate's tip, so stale or pre-fork
+          // app payloads cannot influence branch scores.
+          appWitnesses: accumulated.filter((w) =>
+            isWitnessEligible(w, forkEpoch, tipEpoch, this.#policy),
+          ),
         };
         tips.set(branch, state);
         chains.set(branch, chain);

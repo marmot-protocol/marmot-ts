@@ -208,6 +208,7 @@ describe("exports", () => {
         "isValidInboxRelayListEvent",
         "isValidNip65RelayListEvent",
         "isValidRelayUrl",
+        "isWitnessEligible",
         "keyPackageDefaultExtensions",
         "makeAccountIdentityProofExtension",
         "makeAppComponentsExtension",

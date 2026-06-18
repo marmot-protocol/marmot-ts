@@ -211,16 +211,22 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 
 ### M6 — ConvergencePolicy missing 3 fields + app-payload retention window unenforced
 
-- **Spec:** `protocol-core/convergence.md:24-35` (policy fields incl. `policy_version`,
-  `app_payload_past_epoch_limit`, `settlement_quiescence_ms`); `:104` + `retained-history.md:41-49` (app messages
-  older than the window expire and MUST NOT count as witnesses).
-- **Code:** `src/core/convergence.ts:21-30` defines only 4 of 7 fields; `isAppPayloadExpired`
-  (`src/core/retained-history.ts:71-77`) is never called from the live path; witness gathering
-  (`src/client/group/marmot-group.ts:606-648`) applies no past-epoch limit. Rust:
-  `canonicalization.rs` (`is_app_payload_expired`, `app_message_past_epoch_limit`).
-- **Impact:** stale app messages can still count as convergence witnesses → branch scores diverge from Rust.
-- **Fix:** add the 3 policy fields (or a `CanonicalizationPolicy` wrapper); enforce `isAppPayloadExpired` in witness
-  gathering and app-message acceptance.
+- **Status:** FIXED (2026-06-18, live engine path) for witness gathering; the settle-window state machine that
+  *consumes* `settlement_quiescence_ms` is B5 (carried but not yet wired).
+- **Spec:** `protocol-core/convergence.md` policy table (profile 1: `app_payload_past_epoch_limit=5`,
+  `settlement_quiescence_ms=1000`, `policy_version` names the profile); `retained-history.md` "App-payload
+  retention" — a witness MUST be inside the window (`reference_tip - message_epoch <= limit`, reference tip =
+  the candidate branch's `tip_epoch`) and an app message that decrypts at `fork_epoch` or earlier is not a
+  witness for any candidate.
+- **Fix applied:** `ConvergencePolicy` now carries all profile-1 fields (`policyVersion`,
+  `appPayloadPastEpochLimit`, `settlementQuiescenceMs`) in `src/core/convergence.ts`. New pure predicate
+  `isWitnessEligible(witness, forkEpoch, tipEpoch, policy)` enforces both rules via `isAppPayloadExpired`;
+  `ForkRecovery.#buildBranches` (`src/engine/fork-recovery.ts`) filters each candidate's `appWitnesses` through
+  it, so stale or pre-fork app payloads no longer influence branch scores. Tests: convergence.test.ts
+  "app-payload witness eligibility" + the profile-constants assertion.
+- **Note:** delivery-side expiry (reference tip = canonical tip) is not separately gated because app messages
+  only ever decrypt against the current-epoch state in the linear ingest path (forward secrecy makes an
+  older-epoch payload undecryptable there); the reachable case is witness counting, which is now covered.
 
 ### M7 — `invalidated` disposition not emitted on rewind
 

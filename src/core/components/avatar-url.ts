@@ -68,17 +68,32 @@ export function encodeGroupAvatarUrlV1(avatar: GroupAvatarUrlV1): Uint8Array {
     .build();
 }
 
+/**
+ * Decodes a length-bounded opaque hint field. Presence is decided by the caller
+ * on the raw bytes; here a non-UTF-8 hint is interpreted as ABSENT (`undefined`)
+ * rather than rejected — matching darkmatter `String::from_utf8(..).ok()` in
+ * `avatar_url.rs`. Rejecting it would fork commit acceptance.
+ */
+function decodeHintOrUndefined(bytes: Uint8Array): string | undefined {
+  if (bytes.length === 0) return undefined;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Decodes `marmot.group.avatar-url.v1` component `data` bytes. */
 export function decodeGroupAvatarUrlV1(data: Uint8Array): GroupAvatarUrlV1 {
   const reader = new BinaryReader(data);
   const url = decodeUtf8(reader.opaque({ max: GROUP_AVATAR_URL_MAX_LEN }));
-  const dim = decodeUtf8(reader.opaque({ max: GROUP_AVATAR_HINT_MAX_LEN }));
-  const thumbhash = decodeUtf8(
-    reader.opaque({ max: GROUP_AVATAR_HINT_MAX_LEN }),
-  );
+  const dimBytes = reader.opaque({ max: GROUP_AVATAR_HINT_MAX_LEN });
+  const thumbhashBytes = reader.opaque({ max: GROUP_AVATAR_HINT_MAX_LEN });
   reader.end();
 
-  if (url === "" && (dim !== "" || thumbhash !== "")) {
+  // Presence is decided on the raw bytes: an absent state (empty url) must carry
+  // no hint bytes at all — even non-UTF-8 ones (darkmatter avatar_url.rs).
+  if (url === "" && (dimBytes.length > 0 || thumbhashBytes.length > 0)) {
     throw new Error("group avatar absent state must not include hints");
   }
   if (url !== "" && normalizeUrl(url) !== url) {
@@ -86,7 +101,7 @@ export function decodeGroupAvatarUrlV1(data: Uint8Array): GroupAvatarUrlV1 {
   }
   return {
     url,
-    dim: dim === "" ? undefined : dim,
-    thumbhash: thumbhash === "" ? undefined : thumbhash,
+    dim: decodeHintOrUndefined(dimBytes),
+    thumbhash: decodeHintOrUndefined(thumbhashBytes),
   };
 }

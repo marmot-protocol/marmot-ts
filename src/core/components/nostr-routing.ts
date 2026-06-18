@@ -38,6 +38,18 @@ function validateRelay(url: string): void {
     throw new Error("Nostr relay URL exceeds 512 bytes");
   }
   if (!isValidRelayUrl(url)) throw new Error("Invalid relay URL");
+  // darkmatter `validate_nostr_relay_url` (routing.rs) also rejects credentials,
+  // fragments, and a missing host. This validation runs on both encode and
+  // decode, so omitting it accepts routing bytes that a conformant peer rejects
+  // → cross-implementation commit-acceptance fork. isValidRelayUrl already
+  // guaranteed the URL parses and is ws/wss, so `new URL` will not throw here.
+  const parsed = new URL(url);
+  if (parsed.username !== "" || parsed.password !== "")
+    throw new Error("Nostr relay URL must not include credentials");
+  if (parsed.hash !== "")
+    throw new Error("Nostr relay URL must not include a fragment");
+  if (parsed.hostname === "")
+    throw new Error("Nostr relay URL must include a host");
 }
 
 /** Encodes a {@link NostrRoutingV1} to its component `data` bytes. */

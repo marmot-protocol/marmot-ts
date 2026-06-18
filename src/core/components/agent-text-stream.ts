@@ -24,7 +24,11 @@ const ROLE_MASK =
   AGENT_TEXT_STREAM_ROLE_FANOUT;
 
 const COMPONENT_STATE_LEN = 12;
-const MAX_PLAINTEXT_FRAME_LEN = 64 * 1024;
+// 65519 (not 64*1024) keeps a maximum-length frame's ciphertext within one
+// QUIC datagram, matching darkmatter AGENT_TEXT_STREAM_MAX_PLAINTEXT_FRAME_LEN
+// (agent_text_stream.rs). A larger cap would accept policy bytes a conformant
+// peer rejects.
+const MAX_PLAINTEXT_FRAME_LEN = 65519;
 const MAX_REPLAY_TTL_SECS = 5 * 60;
 const MAX_PADDING_BUCKET_BYTES = 4096;
 

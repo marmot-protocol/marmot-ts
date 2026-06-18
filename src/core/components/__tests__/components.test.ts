@@ -156,6 +156,23 @@ describe("nostr.routing.v1 (0x8004)", () => {
       encodeNostrRoutingV1({ nostrGroupId: new Uint8Array(16), relays }),
     ).toThrow(/32 bytes/);
   });
+
+  it("rejects relay URLs with credentials or a fragment (darkmatter parity)", () => {
+    // darkmatter validate_nostr_relay_url rejects these; accepting them would
+    // fork commit acceptance.
+    expect(() =>
+      encodeNostrRoutingV1({
+        nostrGroupId: gid,
+        relays: ["wss://user@relay.example"],
+      }),
+    ).toThrow(/credentials/);
+    expect(() =>
+      encodeNostrRoutingV1({
+        nostrGroupId: gid,
+        relays: ["wss://relay.example#frag"],
+      }),
+    ).toThrow(/fragment/);
+  });
 });
 
 describe("message-retention.v1 (0x8005)", () => {
@@ -214,6 +231,26 @@ describe("avatar-url.v1 (0x8007)", () => {
     expect(() =>
       encodeGroupAvatarUrlV1({ url: "https://localhost/a.png" }),
     ).toThrow(/localhost/);
+  });
+
+  it("decodes a non-UTF-8 hint as absent, not an error (darkmatter parity)", () => {
+    // opaque(url="https://e.example/") ++ opaque(dim=[0xff]) ++ opaque(thumbhash="")
+    // 0xff is a lone invalid UTF-8 byte; darkmatter treats the hint as absent
+    // rather than rejecting otherwise-valid state.
+    const bytes = hexToBytes(
+      "12" + "68747470733a2f2f652e6578616d706c652f" + "01ff" + "00",
+    );
+    const decoded = decodeGroupAvatarUrlV1(bytes);
+    expect(decoded.url).toBe("https://e.example/");
+    expect(decoded.dim).toBeUndefined();
+    expect(decoded.thumbhash).toBeUndefined();
+  });
+
+  it("still rejects hint bytes on an absent (empty-url) avatar", () => {
+    // Presence is decided on the raw bytes: empty url + any hint bytes (even
+    // non-UTF-8) is invalid.
+    const bytes = hexToBytes("00" + "01ff" + "00");
+    expect(() => decodeGroupAvatarUrlV1(bytes)).toThrow(/absent state/);
   });
 });
 
@@ -324,7 +361,8 @@ describe("agent-text-stream.quic.v1 (0x8006)", () => {
     const policy = {
       requiredMemberRoles: 0x01,
       allowedMemberRoles: 0x07,
-      maxPlaintextFrameLen: 65536,
+      // 65519 is the darkmatter max (one QUIC datagram); 65536 would be rejected.
+      maxPlaintextFrameLen: 65519,
       replayTtlSecs: 300,
       paddingBucketBytes: 4096,
     };

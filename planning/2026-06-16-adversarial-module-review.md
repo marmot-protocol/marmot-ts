@@ -80,7 +80,7 @@ injected `cryptoProvider` for ciphersuite resolution instead of always using the
 default. Public API unchanged; all 480 tests pass (exports snapshot gains
 `KeyPackageStore` + `KeyPackagePublisher`)._
 
-### 3. `src/core/group-message.ts` — 371 lines, the adapter/peeler conflation
+### 3. `src/core/group-message.ts` — 371 lines, the adapter/peeler conflation — DONE
 
 `createGroupEvent` (194) **encrypts MLS bytes AND builds + ephemerally-signs a
 routed Nostr event** in one call — the load-bearing conflation of the transport
@@ -90,7 +90,16 @@ layer. Also carries engine-only classification (`sortGroupCommits`, `is*Message`
 (engine-side), `application-rumor.ts`. Delete dead `createProposalEvent`/
 `createCommitEvent` aliases (301–317).
 
-### 4. `src/core/media.ts` — 466 lines, four dependency surfaces fused
+_Completed: extracted `core/group-message-crypto.ts` (the MIP-03
+encrypt/decrypt + `GroupMessagePair`, the randomBytes/cipher site),
+`core/group-event.ts` (`createGroupEvent` — the ephemeral-sign adapter),
+`core/group-message-classify.ts` (`sortGroupCommits` + `is*Message`), and
+`core/application-rumor.ts` (rumor JSON serialize/deserialize). `group-message.ts`
+is now a barrel re-exporting all four for source compatibility. Deleted the dead
+`createProposalEvent`/`createCommitEvent` aliases and dropped them from the
+exports snapshot. Compile + all 481 tests pass._
+
+### 4. `src/core/media.ts` — 466 lines, four dependency surfaces fused — DONE
 
 Crypto (MLS-exporter→HKDF→ChaCha20, AAD, 114–299) + MIME canonicalization +
 NIP-92/NIP-94 tag I/O (applesauce-coupled, 338–460) + the type model. Split into
@@ -98,7 +107,16 @@ NIP-92/NIP-94 tag I/O (applesauce-coupled, 338–460) + the type model. Split in
 platform-sensitive `crypto.ts` (the only `randomBytes`/cipher site) so it's
 auditable against darkmatter `media/crypto.rs`.
 
-### 5. `src/core/key-package-event.ts` — 374 lines, read/write seam fused
+_Completed: extracted `core/media/types.ts` (`MediaAttachment`,
+`EncryptMediaFileResult`, `MIP04_VERSION`), `core/media/canonical.ts`
+(`canonicalizeMimeType` + the internal `isValidMimeType`/`isValidHex`
+validators), `core/media/crypto.ts` (`buildMip04Aad` AAD + key derivation +
+the randomBytes/ChaCha20 encrypt/decrypt site), and `core/media/imeta.ts`
+(NIP-92/NIP-94 imeta parsing). `media.ts` is now a barrel with **explicit**
+named re-exports so the formerly-internal validators stay private (public
+surface unchanged). Compile + all 481 tests pass._
+
+### 5. `src/core/key-package-event.ts` — 374 lines, read/write seam fused — DONE
 
 Write-side ~110-line encoder (`createKeyPackageEventInternal`, 237–342, with
 GREASE/extension/version munging) sits beside all read-side tag accessors + the
@@ -106,6 +124,14 @@ MLSMessage-frame compat decode (97–203), plus an unrelated kind-5 delete build
 (53–95). Split encode/decode/delete; matches darkmatter adapter-builds /
 engine-reads. (Relevant to the KeyPackage MLSMessage-framing work — the compat
 hack belongs with the _read_ accessors.)
+
+_Completed: extracted `core/key-package-event-decode.ts` (all `getKeyPackage*`
+read accessors + the MLSMessage-frame compat decode), `core/key-package-event-encode.ts`
+(`createKeyPackageEvent` + the GREASE/extension/version munging builder), and
+`core/key-package-event-delete.ts` (the kind-5 NIP-09 delete builder, which
+imports `getKeyPackageIdentifier` from the decode module). `key-package-event.ts`
+is now a barrel re-exporting all three for source compatibility. Compile + all
+481 tests pass._
 
 ### 6. `src/client/groups-manager.ts` — 573 lines, registry + factory + RPC facade
 

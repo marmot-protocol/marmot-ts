@@ -62,10 +62,39 @@ function normalizeEndpointUrl(raw: string): string {
   return validateAndNormalizeHttpsUrl(raw, {
     maxLen: ENDPOINT_URL_MAX_LEN,
     allowLoopbackHttp: true,
-    rejectQuery: true,
-    trimTrailingSlash: true,
+    trimInput: true,
     label: "encrypted media endpoint URL",
   });
+}
+
+/**
+ * Canonical locator-kind rule (group-encrypted-media-v1.md): 1..64 bytes,
+ * lowercase ASCII letters, digits, and `-`. Pure validation — no trimming or
+ * case-folding — so it can run on the strict decode path (darkmatter
+ * `validate_locator_kind`).
+ */
+function validateLocatorKind(value: string, label: string): void {
+  if (value.length === 0) throw new Error(`${label} must not be empty`);
+  if (encodeUtf8(value).length > LOCATOR_KIND_MAX_LEN) {
+    throw new Error(`${label} exceeds ${LOCATOR_KIND_MAX_LEN} bytes`);
+  }
+  if (!/^[a-z0-9-]+$/.test(value)) {
+    throw new Error(
+      `${label} must contain only lowercase ASCII letters, digits, and '-'`,
+    );
+  }
+}
+
+/**
+ * Strict decode-side check that a stored endpoint base URL is already
+ * canonical: it validates AND is byte-equal to its own producer-side
+ * normalization. A non-normalized URL is rejected, never repaired (darkmatter
+ * `validate_blob_endpoint_url_is_canonical`).
+ */
+function validateEndpointUrlIsCanonical(baseUrl: string): void {
+  if (normalizeEndpointUrl(baseUrl) !== baseUrl) {
+    throw new Error("encrypted media endpoint base URL is not normalized");
+  }
 }
 
 /** Normalizes + validates a policy the way the Rust `EncryptedMediaPolicyV1::new` does. */
@@ -157,13 +186,14 @@ export function encodeEncryptedMediaPolicyV1(
     allowed.opaque(encodeUtf8(kind));
   }
 
+  // Each endpoint is the bare concatenation opaque(locator_kind) ++
+  // opaque(base_url) with NO per-item length wrapper — one outer length for the
+  // whole vector, then the concatenated items (darkmatter #171; spec
+  // `Type items<V>`). The sibling `allowed_locator_kinds` uses the same shape.
   const endpoints = new BinaryWriter();
   for (const endpoint of normalized.defaultBlobEndpoints) {
-    const encoded = new BinaryWriter()
-      .opaque(encodeUtf8(endpoint.locatorKind))
-      .opaque(encodeUtf8(endpoint.baseUrl))
-      .build();
-    endpoints.opaque(encoded);
+    endpoints.opaque(encodeUtf8(endpoint.locatorKind));
+    endpoints.opaque(encodeUtf8(endpoint.baseUrl));
   }
 
   // encode_component_vectors: bare concatenation of opaque(part) for each part.
@@ -174,7 +204,17 @@ export function encodeEncryptedMediaPolicyV1(
     .build();
 }
 
-/** Decodes `marmot.group.encrypted-media.v1` component `data` bytes. */
+/**
+ * Decodes `marmot.group.encrypted-media.v1` component `data` bytes strictly.
+ *
+ * Per darkmatter `decode_encrypted_media_policy_v1` and
+ * `foundation/canonical-encoding.md` ("Canonical decoding"), this is a decoder
+ * of signed, state-selecting Marmot bytes: it MUST reject input that is not
+ * already canonical and MUST NOT trim, case-fold, normalize, deduplicate, or
+ * reorder anything. Every check is a validation; a failure throws. Repairing
+ * non-canonical state here (as the old producer-`normalizePolicy` reuse did)
+ * forks commit acceptance against conformant implementations.
+ */
 export function decodeEncryptedMediaPolicyV1(
   data: Uint8Array,
 ): EncryptedMediaPolicyV1 {
@@ -184,26 +224,66 @@ export function decodeEncryptedMediaPolicyV1(
   const endpointsBytes = reader.opaque();
   reader.end();
 
+  if (mediaFormat !== ENCRYPTED_MEDIA_FORMAT_V1) {
+    throw new Error(`encrypted media format must be ${ENCRYPTED_MEDIA_FORMAT_V1}`);
+  }
+
   const allowedLocatorKinds: string[] = [];
   const allowedReader = new BinaryReader(allowedBytes);
   while (allowedReader.hasMore()) {
-    allowedLocatorKinds.push(decodeUtf8(allowedReader.opaque()));
+    const kind = decodeUtf8(allowedReader.opaque());
+    validateLocatorKind(kind, "allowed locator kind");
+    if (allowedLocatorKinds.includes(kind)) {
+      throw new Error(
+        "encrypted media policy has a duplicate allowed locator kind",
+      );
+    }
+    allowedLocatorKinds.push(kind);
+  }
+  if (allowedLocatorKinds.length === 0) {
+    throw new Error(
+      "encrypted media policy must allow at least one locator kind",
+    );
+  }
+  if (allowedLocatorKinds.length > MAX_LOCATOR_KINDS) {
+    throw new Error(
+      `encrypted media policy allows more than ${MAX_LOCATOR_KINDS} locator kinds`,
+    );
   }
 
+  // Endpoints: bare concatenation of opaque(locator_kind) ++ opaque(base_url),
+  // no per-item length wrapper (darkmatter #171).
   const defaultBlobEndpoints: BlobStoreEndpointV1[] = [];
   const endpointsReader = new BinaryReader(endpointsBytes);
   while (endpointsReader.hasMore()) {
-    const endpointReader = new BinaryReader(endpointsReader.opaque());
-    const locatorKind = decodeUtf8(endpointReader.opaque());
-    const baseUrl = decodeUtf8(endpointReader.opaque());
-    endpointReader.end();
+    const locatorKind = decodeUtf8(endpointsReader.opaque());
+    const baseUrl = decodeUtf8(endpointsReader.opaque());
+    validateLocatorKind(locatorKind, "endpoint locator kind");
+    if (!allowedLocatorKinds.includes(locatorKind)) {
+      throw new Error("encrypted media endpoint locator kind is not allowed");
+    }
+    validateEndpointUrlIsCanonical(baseUrl);
+    if (
+      defaultBlobEndpoints.some(
+        (e) => e.locatorKind === locatorKind && e.baseUrl === baseUrl,
+      )
+    ) {
+      throw new Error(
+        "encrypted media policy has a duplicate default blob endpoint",
+      );
+    }
     defaultBlobEndpoints.push({ locatorKind, baseUrl });
   }
+  if (defaultBlobEndpoints.length === 0) {
+    throw new Error(
+      "encrypted media policy must include at least one default blob endpoint",
+    );
+  }
+  if (defaultBlobEndpoints.length > MAX_BLOB_ENDPOINTS) {
+    throw new Error(
+      `encrypted media policy includes more than ${MAX_BLOB_ENDPOINTS} default blob endpoints`,
+    );
+  }
 
-  // Re-run normalization/validation, matching the Rust decoder's final `new(...)`.
-  return normalizePolicy({
-    mediaFormat,
-    allowedLocatorKinds,
-    defaultBlobEndpoints,
-  });
+  return { mediaFormat, allowedLocatorKinds, defaultBlobEndpoints };
 }

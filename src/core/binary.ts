@@ -378,7 +378,10 @@ export class BinaryReader {
       }
     }
     this.require(byteLength, "vector");
-    const body = this.data.subarray(this.offset, this.offset + byteLength);
+    // Copy (not subarray) so the inner reader owns an independent buffer — the
+    // same non-aliasing discipline as `bytes()`, avoiding a view that shares
+    // (and keeps alive) the outer backing store.
+    const body = this.data.slice(this.offset, this.offset + byteLength);
     this.offset += byteLength;
 
     const inner = new BinaryReader(body);

@@ -218,16 +218,25 @@ describe("avatar-url.v1 (0x8007)", () => {
 });
 
 describe("encrypted-media.v1 (0x8008)", () => {
-  it("matches the authoritative vector for a single loopback blossom endpoint", () => {
-    const policy = encryptedMediaBlossomDefault(["http://127.0.0.1:3000"]);
+  it("matches the darkmatter authoritative byte vector (#171 layout, no per-item wrapper)", () => {
+    // Cross-impl vector copied from darkmatter
+    // crates/traits/src/app_components/tests.rs
+    // (encrypted_media_policy_encodes_endpoints_without_per_item_wrapper):
+    //   media_format           = "encrypted-media-v1"
+    //   allowed_locator_kinds  = ["blossom-v1"]
+    //   default_blob_endpoints = [{ "blossom-v1", "https://blossom.primal.net/" }]
+    // Note: input lacks the trailing slash; WHATWG serialization adds it and it
+    // is kept (never stripped), and each endpoint is bare {kind,url} with no
+    // per-item length wrapper.
+    const policy = encryptedMediaBlossomDefault(["https://blossom.primal.net"]);
     expect(hex(encodeEncryptedMediaPolicyV1(policy))).toBe(
       "12656e637279707465642d6d656469612d7631" +
         "0b0a626c6f73736f6d2d7631" +
-        "22210a626c6f73736f6d2d763115687474703a2f2f3132372e302e302e313a33303030",
+        "270a626c6f73736f6d2d76311b68747470733a2f2f626c6f73736f6d2e7072696d616c2e6e65742f",
     );
   });
 
-  it("round-trips and dedups endpoints", () => {
+  it("round-trips and dedups endpoints, keeping the WHATWG trailing slash", () => {
     const policy = encryptedMediaBlossomDefault([
       "https://blobs.example.com",
       "https://blobs.example.com/",
@@ -238,8 +247,36 @@ describe("encrypted-media.v1 (0x8008)", () => {
     expect(decoded.mediaFormat).toBe("encrypted-media-v1");
     expect(decoded.allowedLocatorKinds).toEqual(["blossom-v1"]);
     expect(decoded.defaultBlobEndpoints).toEqual([
-      { locatorKind: "blossom-v1", baseUrl: "https://blobs.example.com" },
+      { locatorKind: "blossom-v1", baseUrl: "https://blobs.example.com/" },
     ]);
+  });
+
+  it("accepts a query-bearing endpoint URL (darkmatter #374)", () => {
+    const policy = encryptedMediaBlossomDefault([
+      "https://blossom.example/?x=1",
+    ]);
+    const decoded = decodeEncryptedMediaPolicyV1(
+      encodeEncryptedMediaPolicyV1(policy),
+    );
+    expect(decoded.defaultBlobEndpoints).toEqual([
+      { locatorKind: "blossom-v1", baseUrl: "https://blossom.example/?x=1" },
+    ]);
+  });
+
+  it("strictly rejects non-canonical stored bytes (no repair)", () => {
+    // Canonical encoding: media_format(19) ++ 0x0b ++ 0x0a ++ "blossom-v1"...
+    // Index 21 is the first byte of the allowed locator kind ("b" = 0x62).
+    const bytes = encodeEncryptedMediaPolicyV1(
+      encryptedMediaBlossomDefault(["https://blobs.example.com"]),
+    );
+    expect(bytes[21]).toBe(0x62);
+    // Uppercase it to "Blossom-v1": structurally valid, but non-canonical. A
+    // conformant strict decoder rejects it rather than case-folding to repair.
+    const corrupted = Uint8Array.from(bytes);
+    corrupted[21] = 0x42; // 'B'
+    expect(() => decodeEncryptedMediaPolicyV1(corrupted)).toThrow(
+      /lowercase ASCII/,
+    );
   });
 
   it("rejects an unknown media format", () => {

@@ -102,7 +102,7 @@ const { read, unreadable } = await decryptGroupMessages(
 
 ## Commit Ordering
 
-When multiple admins send commits for the same epoch, Marmot uses deterministic ordering to prevent conflicts ([MIP-03](https://github.com/parres-hq/marmot/blob/main/03.md)).
+When multiple admins send commits for the same epoch, Marmot uses deterministic convergence to prevent conflicts ([MIP-03](https://github.com/marmot-protocol/mips/blob/main/mips/mip-03.md)).
 
 ### Sorting Commits
 

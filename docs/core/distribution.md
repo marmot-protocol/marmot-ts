@@ -43,7 +43,7 @@ import { getKeyPackage } from "@internet-privacy/marmot-ts";
 
 // Fetch from relays
 const events = await fetchEvents(relays, {
-  kinds: [30443, 443],
+  kinds: [30443],
   authors: [targetPubkey],
   limit: 1,
 });

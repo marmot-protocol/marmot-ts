@@ -13,7 +13,6 @@ Marmot uses specific Nostr event kinds for different purposes:
 
 ```typescript
 import {
-  KEY_PACKAGE_KIND, // 443 (legacy)
   ADDRESSABLE_KEY_PACKAGE_KIND, // 30443
   WELCOME_EVENT_KIND, // 444
   GROUP_EVENT_KIND, // 445
@@ -22,8 +21,7 @@ import {
 } from "@internet-privacy/marmot-ts";
 ```
 
-- **443 (KEY_PACKAGE_KIND):** Legacy key package advertisement events (read/delete compatibility)
-- **30443 (ADDRESSABLE_KEY_PACKAGE_KIND):** Addressable key package advertisement events published by current clients
+- **30443 (ADDRESSABLE_KEY_PACKAGE_KIND):** Addressable key package advertisement events
 - **444 (WELCOME_EVENT_KIND):** Welcome messages for new members (wrapped in NIP-59 gift wraps)
 - **445 (GROUP_EVENT_KIND):** Group messages (commits, proposals, application messages)
 - **10002 (NIP65_RELAY_LIST_KIND):** NIP-65 relay list; Marmot discovers an account's key-package relays here (there is no dedicated key-package relay list)
@@ -34,14 +32,12 @@ import {
 MLS extensions used by Marmot:
 
 ```typescript
-import {
-  MARMOT_GROUP_DATA_EXTENSION_TYPE, // 0xf2ee
-  LAST_RESORT_EXTENSION_TYPE, // 0x000a
-} from "@internet-privacy/marmot-ts";
+import { LAST_RESORT_EXTENSION_TYPE } from "@internet-privacy/marmot-ts"; // 0x000a
 ```
 
-- **0xf2ee (MARMOT_GROUP_DATA_EXTENSION_TYPE):** Custom extension containing Marmot group metadata ([MIP-01](https://github.com/parres-hq/marmot/blob/main/01.md))
 - **0x000a (LAST_RESORT_EXTENSION_TYPE):** Marks key packages as reusable
+
+In Marmot v2, group metadata is no longer carried in a single `0xf2ee` extension — it lives in the **app-component dictionary** described below.
 
 ### Protocol Versions
 

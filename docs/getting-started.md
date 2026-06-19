@@ -81,34 +81,53 @@ For production apps, use IndexedDB (browser), file system (Node.js), or SQLite (
 
 ## Setup Network Interface
 
-Implement the `NostrNetworkInterface` to connect to Nostr relays:
+Implement the `NostrNetworkInterface` so the client can talk to relays. It has four methods:
 
 ```typescript
-import { SimplePool } from "nostr-tools/pool";
+import type {
+  NostrNetworkInterface,
+  PublishResponse,
+  Subscribable,
+} from "@internet-privacy/marmot-ts/client";
+import type { NostrEvent } from "applesauce-core/helpers/event";
+import type { Filter } from "applesauce-core/helpers/filter";
 
-const pool = new SimplePool();
-
-const network = {
-  async publish(relays: string[], event: NostrEvent) {
-    const results = await Promise.allSettled(pool.publish(relays, event));
-    return { success: results.some((r) => r.status === "fulfilled") };
+const network: NostrNetworkInterface = {
+  // Publish an event and report the per-relay outcome.
+  async publish(
+    relays: string[],
+    event: NostrEvent,
+  ): Promise<Record<string, PublishResponse>> {
+    // { [relayUrl]: { from, ok, message? } }
+    return await myPool.publish(relays, event);
   },
 
-  async request(relays: string[], filters: NostrFilter[]) {
-    return pool.querySync(relays, filters);
+  // Resolve a one-shot query to an array of events.
+  async request(
+    relays: string[],
+    filters: Filter | Filter[],
+  ): Promise<NostrEvent[]> {
+    return await myPool.request(relays, filters);
   },
 
-  subscription(relays: string[], filters: NostrFilter[]) {
-    // Return observable that emits Nostr events
-    // See Network docs for full implementation
+  // Open a live subscription that emits events as they arrive.
+  subscription(
+    relays: string[],
+    filters: Filter | Filter[],
+  ): Subscribable<NostrEvent> {
+    return myPool.subscription(relays, filters);
   },
 
-  async getUserInboxRelays(pubkey: string) {
-    // Fetch NIP-65 relay list for the user
+  // Resolve a user's kind 10050 inbox relays (where they receive gift wraps).
+  async getUserInboxRelays(pubkey: string): Promise<string[]> {
     return ["wss://relay.example.com"];
   },
 };
 ```
+
+::: tip Reference adapter
+The [`opentui` example](https://github.com/marmot-protocol/marmot-ts/tree/master/examples/opentui) wraps [`applesauce-relay`](https://hzrd149.github.io/applesauce/) in a complete `NostrNetworkInterface`. See [Network](/client/network) for the full contract.
+:::
 
 ## Initialize the Client
 
@@ -171,13 +190,13 @@ const memberPubkey = "abc123...";
 const keyPackageEvent = await client.network
   .request(
     ["wss://relay.example.com"],
-    [{ kinds: [30443, 443], authors: [memberPubkey], limit: 1 }],
+    [{ kinds: [30443], authors: [memberPubkey], limit: 1 }],
   )
   .then((events) => events[0]);
 
-// Invite them (sends encrypted Welcome message)
+// Invite them (adds them in a commit and delivers an encrypted Welcome)
 if (keyPackageEvent) {
-  await group.inviteByKeyPackageEvent(keyPackageEvent);
+  await client.groups.invite(group.id, keyPackageEvent);
   console.log("User invited!");
 }
 ```

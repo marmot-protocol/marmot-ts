@@ -10,11 +10,12 @@ The Client module (`marmot-ts/client`) provides a high-level, production-ready i
 ## What's in the Client Module
 
 - **MarmotClient:** Multi-group orchestration with lifecycle management
-- **MarmotGroup:** Group operations (messaging, proposals, commits)
+- **MarmotGroup:** Group operations (messaging, proposals, commits) — a facade over the engine
 - **GroupsManager:** Group creation, loading, watching, leaving, and destruction via `client.groups`
 - **KeyPackageManager:** Key package creation, publishing, watching, and rotation via `client.keyPackages`
+- **InviteManager:** Gift-wrap ingestion, decryption, and unread tracking via `client.invites`
 - **History Management:** Optional message storage with querying and pagination
-- **Proposal System:** Type-safe builders for group operations
+- **Proposal System:** Type-safe builders for group operations (`Proposals`)
 - **Network Abstraction:** Pluggable Nostr client integration
 - **Storage Abstraction:** Pluggable persistence backends
 
@@ -22,8 +23,10 @@ The Client module (`marmot-ts/client`) provides a high-level, production-ready i
 
 ```
 MarmotClient (Orchestration Layer)
-    ↓
-MarmotGroup (Group Operations Layer)
+    ↓  client.groups / client.keyPackages / client.invites
+MarmotGroup (Group Operations Facade)
+    ↓  GroupSession + GroupRuntime
+Engine Module (Protocol State Machine)
     ↓
 Core Module (Protocol Layer)
     ↓
@@ -144,4 +147,4 @@ Generic type system ensures type consistency between client and groups.
 
 ### Protocol Compliance
 
-Implements all Marmot Improvement Proposals (MIP-00 through MIP-03).
+Implements Marmot v2 (MIP-00 through MIP-03, with MIP-04 media in progress) and is wire-compatible with the darkmatter reference implementation.

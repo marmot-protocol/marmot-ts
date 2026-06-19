@@ -7,7 +7,7 @@ heroImageAlt: A pixel-art marmot engineer with a wrench standing before glowing 
 
 ## Overview
 
-Marmot-TS is organized into two main modules that work together to provide privacy-preserving group messaging:
+Marmot-TS is organized into layered modules that work together to provide privacy-preserving group messaging:
 
 ```
 ┌─────────────────────────────────────┐
@@ -16,7 +16,14 @@ Marmot-TS is organized into two main modules that work together to provide priva
                  ↓
 ┌─────────────────────────────────────┐
 │      Client Module                  │
-│  (MarmotClient, MarmotGroup)        │
+│  (MarmotClient, MarmotGroup,        │
+│   managers, storage, network)       │
+└─────────────────────────────────────┘
+                 ↓
+┌─────────────────────────────────────┐
+│      Engine Module                  │
+│  (MarmotGroupEngine, convergence    │
+│   & ingest state machine)           │
 └─────────────────────────────────────┘
                  ↓
 ┌─────────────────────────────────────┐
@@ -29,15 +36,19 @@ Marmot-TS is organized into two main modules that work together to provide priva
 └─────────────────────────────────────┘
 ```
 
+`MarmotGroup` is a thin facade: it owns a `GroupSession` (which wraps the
+`MarmotGroupEngine` protocol state machine) and a `GroupRuntime` (which publishes
+the engine's outbound effects to relays).
+
 ## Modules
 
 ### Core Module
 
-The [Core module](/core/) implements the Marmot protocol layer and provides fundamental building blocks:
+The [Core module](/core/) implements the Marmot v2 protocol layer and provides fundamental building blocks:
 
-- **Protocol Implementation:** MLS group operations following Marmot specifications (MIP-00 through MIP-03)
-- **Identity Bridging:** Converting Nostr public keys to MLS credentials
-- **Message Encryption:** NIP-44 encryption layered over MLS for group messages
+- **Protocol Implementation:** MLS group operations following the Marmot v2 specifications (MIP-00 through MIP-03)
+- **Identity Bridging:** Converting Nostr public keys to MLS credentials (incl. the account-identity-proof LeafNode extension)
+- **Message Encryption:** Per-epoch MIP-03 encryption for group events; NIP-59 gift wraps for Welcomes
 - **Key Package Management:** Creating and handling cryptographic material for member addition
 - **State Serialization:** Encoding/decoding group state for persistence
 
@@ -66,6 +77,24 @@ The [Client module](/client/) provides a high-level, production-ready implementa
 - Want history and message storage
 - Prefer high-level, opinionated APIs
 
+### Engine Module
+
+The [Engine module](https://github.com/marmot-protocol/marmot-ts/tree/master/src/engine) (`marmot-ts/engine`) is the protocol state machine that sits between the client and core layers. It is transport-agnostic — it knows nothing about Nostr — and is responsible for:
+
+- **`MarmotGroupEngine`:** owns the MLS `ClientState` and drives inbound/outbound processing
+- **Convergence:** deterministic resolution of concurrent commits (`convergenceStatus`: `Syncing` → `Resolving` → `Settled`/`Blocked`)
+- **Lifecycle:** the publish-before-apply commit lifecycle (`Stable`, `PendingPublish`, `Merging`)
+- **Ingest dispositions:** classifying every inbound envelope (`processed`, `deferred`, `unreadable`, `autoCommit`, `removed`, …)
+- **Retained history & fork recovery:** bounded rewind so late or reordered events can still be processed
+
+Outbound sends are **convergence-gated**: a `SendIntent` submitted while the group is not `Settled` is queued until convergence resolves. The client layer adds the Nostr transport (`GroupRuntime`) and persistence (`GroupSession`) around this engine.
+
+**When to use Engine:**
+
+- Embedding Marmot over a non-Nostr transport
+- Building a custom client with bespoke persistence or scheduling
+- Reasoning about convergence and commit ordering directly
+
 ## Layered Architecture
 
 ### Application Layer
@@ -81,11 +110,19 @@ Your chat UI, commands, and business logic.
 
 ### Client Layer (Group Operations)
 
-- **MarmotGroup** handles single group operations
-- Message sending and receiving
+- **MarmotGroup** facade over a `GroupSession` + `GroupRuntime`
+- Message sending and receiving (Nostr kind 445 transport)
 - Proposal and commit creation
 - Event ingestion and processing
-- Admin policy enforcement
+- History and media services
+
+### Engine Layer (Protocol State Machine)
+
+- **MarmotGroupEngine** owns the MLS `ClientState`
+- Convergence resolution and commit lifecycle
+- Ingest disposition classification
+- Retained-history rewind and fork recovery
+- Admin commit-policy enforcement
 
 ### Core Layer (Protocol)
 
@@ -117,7 +154,7 @@ Your chat UI, commands, and business logic.
 ### Adding Members
 
 ```
-1. Fetch recipient's key package (kind 30443, with legacy kind 443 fallback, from relays)
+1. Fetch recipient's key package (kind 30443 from relays)
 2. MLS add proposal + commit → Welcome + MLSMessage
 3. createWelcomeRumor() → kind 444 rumor
 4. createGiftWrap() → kind 1059 encrypted gift wrap
@@ -139,18 +176,20 @@ Your chat UI, commands, and business logic.
 
 ```
 1. Fetch kind 445 events from relays
-2. decryptGroupMessageEvent() → MLSMessage
-3. Process commits/proposals → Update ClientState
-4. Extract application data → deserializeApplicationData()
-5. Display message in UI
+2. group.ingest(events) → engine peels each into an MLSMessage
+3. Engine processes commits/proposals → updates ClientState (convergence-aware)
+4. Each envelope yields a disposition (processed, deferred, unreadable, …)
+5. Decrypted application messages emit the `applicationMessage` event
+6. deserializeApplicationData() → rumor → display in UI
 ```
 
 ## Design Principles
 
 ### Separation of Concerns
 
-- **Core:** Protocol implementation, no I/O or storage
-- **Client:** I/O, storage, lifecycle management, high-level APIs
+- **Core:** Protocol/crypto primitives, no I/O, storage, or transport
+- **Engine:** Protocol state machine — convergence, lifecycle, ingest — transport-agnostic
+- **Client:** I/O, storage, Nostr transport, lifecycle management, high-level APIs
 - **Application:** UI, user interactions, business logic
 
 ### Composability
@@ -197,12 +236,13 @@ Your chat UI, commands, and business logic.
 
 ## Protocol Compliance
 
-Marmot-TS implements the following Marmot Improvement Proposals:
+Marmot-TS implements **Marmot v2** and is wire-compatible with the [darkmatter](https://github.com/parres-hq/darkmatter) reference implementation:
 
-- **[MIP-00](https://github.com/parres-hq/marmot/blob/main/00.md):** Gift Wrap for Welcome Messages (NIP-59)
-- **[MIP-01](https://github.com/parres-hq/marmot/blob/main/01.md):** Marmot Group Data Extension (0xf2ee)
-- **[MIP-02](https://github.com/parres-hq/marmot/blob/main/02.md):** Welcome Message Ordering (commit before welcome)
-- **[MIP-03](https://github.com/parres-hq/marmot/blob/main/03.md):** Admin Policy & Commit Ordering
+- **[MIP-00](https://github.com/marmot-protocol/mips/blob/main/mips/mip-00.md):** Introduction and Basic Operations
+- **[MIP-01](https://github.com/marmot-protocol/mips/blob/main/mips/mip-01.md):** Network Transport & Relay Communication
+- **[MIP-02](https://github.com/marmot-protocol/mips/blob/main/mips/mip-02.md):** Identities and Keys
+- **[MIP-03](https://github.com/marmot-protocol/mips/blob/main/mips/mip-03.md):** Group State & Memberships
+- **[MIP-04](https://github.com/marmot-protocol/mips/blob/main/mips/mip-04.md):** Encrypted Media _(in progress)_
 
 ## Security Properties
 

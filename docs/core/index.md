@@ -5,23 +5,24 @@ heroImageAlt: A pixel-art marmot in a wizard hat pointing a wand at a glowing co
 
 # Core Module
 
-The Core module (`marmot-ts/core`) implements the Marmot protocol layer, providing the fundamental building blocks for privacy-preserving group messaging. It bridges MLS (Message Layer Security) cryptographic operations with Nostr's decentralized event distribution.
+The Core module (`marmot-ts/core`) implements the Marmot v2 protocol layer, providing the fundamental building blocks for privacy-preserving group messaging. It bridges MLS (Message Layer Security) cryptographic operations with Nostr's decentralized event distribution, and is wire-compatible with the [darkmatter](https://github.com/parres-hq/darkmatter) reference implementation.
 
 ## What's in the Core Module
 
 The Core module is responsible for:
 
-- **Protocol Implementation:** MLS group operations following Marmot specifications (MIP-00 through MIP-03)
-- **Identity Bridging:** Converting Nostr public keys to MLS credentials
-- **Message Encryption:** NIP-44 encryption layered over MLS for group messages
+- **Protocol Implementation:** MLS group operations following the Marmot v2 specifications (MIP-00 through MIP-03)
+- **Identity Bridging:** Converting Nostr public keys to MLS credentials, including the `marmot.account-identity-proof.v1` LeafNode extension
+- **Message Encryption:** Group events (kind 445) encrypted with a per-epoch MIP-03 key; Welcome messages gift-wrapped via NIP-59
 - **Key Package Management:** Creating and handling cryptographic material for member addition
 - **State Serialization:** Encoding/decoding group state for persistence
 
 ## Key Dependencies
 
 - **ts-mls** - RFC 9420 compliant MLS implementation
-- **nostr-tools** - Nostr event handling and NIP-44 encryption
-- **@noble/hashes** - Cryptographic hashing
+- **applesauce-core / applesauce-common** - Nostr event handling, NIP-44, and gift-wrap helpers
+- **@noble/hashes, @noble/curves, @noble/ciphers** - Cryptographic primitives
+- **@hpke/core** - HPKE for MLS key encapsulation
 
 ## Installation
 
@@ -90,7 +91,8 @@ For most applications, use the [Client module](/client/) instead, which provides
 
 The Core module implements the following Marmot Improvement Proposals:
 
-- **[MIP-00](https://github.com/parres-hq/marmot/blob/main/00.md):** Gift Wrap for Welcome Messages (NIP-59)
-- **[MIP-01](https://github.com/parres-hq/marmot/blob/main/01.md):** Marmot Group Data Extension (0xf2ee)
-- **[MIP-02](https://github.com/parres-hq/marmot/blob/main/02.md):** Welcome Message Ordering (commit before welcome)
-- **[MIP-03](https://github.com/parres-hq/marmot/blob/main/03.md):** Admin Policy & Commit Ordering
+- **[MIP-00](https://github.com/marmot-protocol/mips/blob/main/mips/mip-00.md):** Introduction and Basic Operations
+- **[MIP-01](https://github.com/marmot-protocol/mips/blob/main/mips/mip-01.md):** Network Transport & Relay Communication
+- **[MIP-02](https://github.com/marmot-protocol/mips/blob/main/mips/mip-02.md):** Identities and Keys
+- **[MIP-03](https://github.com/marmot-protocol/mips/blob/main/mips/mip-03.md):** Group State & Memberships
+- **[MIP-04](https://github.com/marmot-protocol/mips/blob/main/mips/mip-04.md):** Encrypted Media _(in progress)_

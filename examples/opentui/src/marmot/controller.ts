@@ -20,6 +20,7 @@ import {
   type MarmotClient,
   type MarmotGroup,
   Proposals,
+  type UnreadInvite,
   type WelcomeRecipient,
 } from "@internet-privacy/marmot-ts/client";
 import {
@@ -38,6 +39,7 @@ import {
   getKeyPackageIdentifier,
   getKeyPackageReference,
   getNostrGroupIdHex,
+  getWelcomeKeyPackageRefs,
   GROUP_EVENT_KIND,
 } from "@internet-privacy/marmot-ts";
 import type { Proposal } from "@internet-privacy/marmot-ts/mls";
@@ -212,6 +214,11 @@ export interface ControllerDeps {
   debug: boolean;
   /** Optional sink for status lines when the UI has no on-screen log panel. */
   statusLog?: (line: StatusLine) => void;
+  /**
+   * Optional teardown hook run on {@link MarmotController.stop}, e.g. to close
+   * the SQLite connection before a reset deletes the database file.
+   */
+  dispose?: () => void;
   /**
    * Set only for a freshly-created account: the display name to publish as the
    * kind 0 profile on first start. Its presence also triggers publishing the
@@ -480,6 +487,7 @@ export class MarmotController {
     for (const gen of this.#historySubs.values()) void gen.return(undefined);
     this.#historySubs.clear();
     this.#deps.pool.close();
+    this.#deps.dispose?.();
   }
 
   // --- actions ---------------------------------------------------------------
@@ -718,6 +726,50 @@ export class MarmotController {
       this.#activeId = group.idStr;
       this.log(`joined "${groupName(group)}" — now active`);
     });
+  }
+
+  /**
+   * Dismiss an invite without joining: drop it from the unread list so it stops
+   * showing in the panel. Reuses the library's `markAsRead` primitive — the same
+   * call {@link joinInvite} makes after a successful join — minus the join. The
+   * dedupe index is preserved, so a dismissed invite won't be re-ingested.
+   */
+  async dismissInvite(inviteId: string): Promise<void> {
+    try {
+      await this.#deps.client.invites.markAsRead(inviteId);
+      this.log("invite dismissed");
+    } catch (err) {
+      this.logError(err);
+    }
+  }
+
+  /**
+   * Like the library's `invites.watchUnread()`, but drops invites whose target
+   * KeyPackage we no longer hold — accepting one of those would fail with "No
+   * matching KeyPackage found" (see {@link joinInvite}). The UI watches this so
+   * the panel only ever lists invites the user can actually accept.
+   */
+  async *watchAcceptableInvites(): AsyncGenerator<UnreadInvite[]> {
+    for await (const invites of this.#deps.client.invites.watchUnread()) {
+      const held = await Promise.all(
+        invites.map((invite) => this.#hasKeyPackageForInvite(invite)),
+      );
+      yield invites.filter((_, index) => held[index]);
+    }
+  }
+
+  /** True when we hold the private KeyPackage a Welcome rumor is addressed to. */
+  async #hasKeyPackageForInvite(invite: UnreadInvite): Promise<boolean> {
+    try {
+      for (const ref of getWelcomeKeyPackageRefs(invite)) {
+        if (await this.#deps.client.keyPackages.has(ref)) return true;
+      }
+      return false;
+    } catch {
+      // An unparseable Welcome can't be joined either; treat it as unacceptable
+      // rather than letting it crash the watch generator.
+      return false;
+    }
   }
 
   async leave(): Promise<void> {

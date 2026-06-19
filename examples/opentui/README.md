@@ -19,7 +19,7 @@ UI is driven by three of the library's own async surfaces:
 | Library surface                  | Type            | Consumed by                                       |
 | -------------------------------- | --------------- | ------------------------------------------------- |
 | `client.groups.watch()`          | async generator | `useWatchedGroups()` → the sidebar group list     |
-| `client.invites.watchUnread()`   | async generator | `useWatchedInvites()` → the pending-invite list   |
+| `client.invites.watchUnread()`   | async generator | `useWatchedInvites()` → the pending-invite list (filtered to held KeyPackages) |
 | `group.ingest(events)`           | async generator | the controller, to decrypt incoming relay events  |
 | `group.on("applicationMessage")` | event emitter   | the controller, to append to the message timeline |
 
@@ -101,10 +101,13 @@ welcome inbox (kind 10050). Set them when creating an account (profile panel →
 > `ws://localhost:<port>` via the new-account flow or the in-app relay editor.
 
 An account is generated on first run and persisted under the `--name` label.
+Local state (groups, KeyPackages, invites, and message history) lives in a single
+`state.db` SQLite database in that directory, alongside the raw `identity.key`;
+`--ephemeral` keeps everything in memory and writes nothing to disk.
 To switch identities without restarting, focus the **profile** panel and press
 **o**. A form asks for a display name (published as your kind 0 profile) and an
 optional relay list used for both your inbox and outbox — it defaults to
-`relay.us.whitenoise.chat`. Creating the account wipes that label's stored
+`wss://relay.us.whitenoise.chat`. Creating the account wipes that label's stored
 identity, groups, KeyPackages, and invites, generates a fresh key, publishes the
 new profile + relay lists, and reconnects in place. (Use a different `--name`
 instead if you want to keep both accounts around.)
@@ -156,7 +159,9 @@ the footer shows the keys that apply right now.
 - **Groups** — **Enter** opens the selected group, **n** creates a group,
   **i** invites to the active group, **e** edits the selected group's info when
   you are an admin, **L** leaves the active group.
-- **Invites** — **Enter** or **a** accepts the selected invite.
+- **Invites** — **Enter** or **a** accepts the selected invite, **d** dismisses
+  it (drops it from the list without joining). Only invites whose KeyPackage you
+  still hold are listed; ones you can't accept are filtered out.
 - **Chat** — **n** or **Enter** starts composing a message; the input stays
   focused after each **Enter** so you can send several in a row, and **Esc**
   stops composing. **i** invites to the active group, **m** opens the members

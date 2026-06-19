@@ -54,11 +54,16 @@ export function useWatchedGroups(): MarmotGroup[] {
   );
 }
 
-/** The live unread-invite list, driven by the `invites.watchUnread()` generator. */
+/**
+ * The live unread-invite list. Driven by the controller's
+ * `watchAcceptableInvites()` — `invites.watchUnread()` filtered down to invites
+ * whose target KeyPackage we still hold, so the panel never lists one that would
+ * fail to accept.
+ */
 export function useWatchedInvites(): UnreadInvite[] {
   const controller = useController();
   return useAsyncIterable<UnreadInvite[]>(
-    () => controller.client.invites.watchUnread(),
+    () => controller.watchAcceptableInvites(),
     [],
   );
 }

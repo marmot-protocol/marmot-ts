@@ -172,6 +172,11 @@ export function App(props: {
     setFocus("chat");
   };
 
+  const dismissInvite = (): void => {
+    if (!selectedInvite) return;
+    void controller.dismissInvite(selectedInvite.id);
+  };
+
   const panelHints: Record<Pane, KeyHint[]> = {
     groups: [
       { key: "j/k", label: "switch group" },
@@ -186,6 +191,7 @@ export function App(props: {
       { key: "j/k", label: "move" },
       { key: "enter", label: "accept" },
       { key: "a", label: "accept" },
+      { key: "d", label: "dismiss" },
       { key: "r", label: "relays" },
       { key: "p", label: "profile" },
     ],
@@ -305,6 +311,7 @@ export function App(props: {
       } else if (matches(key, "L")) void controller.leave();
     } else if (focus === "invites") {
       if (matches(key, "a")) acceptInvite();
+      else if (matches(key, "d")) dismissInvite();
       else if (matches(key, "r")) setModal({ kind: "relays" });
       else if (matches(key, "p")) setModal({ kind: "profile" });
     } else if (focus === "chat") {

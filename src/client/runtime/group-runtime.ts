@@ -163,6 +163,16 @@ export class GroupRuntime {
       throw new Error("Group has no relays available to send messages.");
 
     const response = await this.#getNetwork().publish(relays, envelope);
+    const acked = Object.entries(response)
+      .filter(([, r]) => r.ok)
+      .map(([url]) => url);
+    this.#log?.(
+      "publish kind-%d eventId=%s relays=%o acked=%o",
+      envelope.kind,
+      envelope.id,
+      relays,
+      acked,
+    );
     if (!hasAck(response)) {
       const errors = Object.values(response)
         .filter((r) => !r.ok && r.message)

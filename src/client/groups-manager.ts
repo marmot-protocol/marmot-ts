@@ -12,6 +12,7 @@ import {
   Welcome,
 } from "ts-mls";
 import { SerializedClientState } from "../core/client-state.js";
+import type { MarmotGroupInfo } from "../core/client-state.js";
 import {
   type AccountIdentityProofSigner,
   verifyAllLeafAccountIdentityProofs,
@@ -192,6 +193,11 @@ export class GroupsManager<
   /** Returns the runtime publisher for a loaded or persisted group. */
   async runtime(groupId: Uint8Array | string): Promise<GroupRuntime> {
     return (await this.get(groupId)).runtime;
+  }
+
+  /** Returns the complete group info/debug model for a loaded or persisted group. */
+  async info(groupId: Uint8Array | string): Promise<MarmotGroupInfo> {
+    return (await this.get(groupId)).info;
   }
 
   /** Sends a session intent and publishes the resulting effects through the group runtime. */

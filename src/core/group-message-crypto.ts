@@ -14,6 +14,32 @@ import { decodeContent, encodeContent } from "../utils/encoding.js";
 import { decryptLegacyGroupMessageEventContent } from "./group-message-legacy.js";
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { concatBytes, randomBytes } from "@noble/ciphers/utils.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
+import { logger } from "../utils/debug.js";
+
+/**
+ * Diagnostics logger for group-event exporter/epoch tracing.
+ * Enable with `DEBUG=marmot-ts:group-crypto` (or `marmot-ts:*`).
+ */
+const cryptoLog = logger.extend("group-crypto");
+
+/**
+ * Returns a short, non-reversible fingerprint of the 32-byte exporter-derived
+ * key so two clients can be compared without logging the secret itself.
+ */
+function keyFingerprint(key: Uint8Array): string {
+  return bytesToHex(sha256(key)).slice(0, 16);
+}
+
+/** Best-effort read of the MLS epoch from a ClientState for logging. */
+function epochOf(state: ClientState): string {
+  try {
+    return String(state.groupContext.epoch);
+  } catch {
+    return "?";
+  }
+}
 
 /**
  * Derives the MIP-03 group-event encryption key for a group epoch.
@@ -59,14 +85,32 @@ export async function decryptGroupMessageEvent(
 
     const nonce = payload.subarray(0, 12);
     const ciphertext = payload.subarray(12);
-    const serializedMessage = chacha20poly1305(
-      key,
-      nonce,
-      new Uint8Array(0),
-    ).decrypt(ciphertext);
+    let serializedMessage: Uint8Array;
+    try {
+      serializedMessage = chacha20poly1305(
+        key,
+        nonce,
+        new Uint8Array(0),
+      ).decrypt(ciphertext);
+    } catch (aeadError) {
+      cryptoLog(
+        "decrypt kind-445 FAILED (wrong-epoch exporter): localEpoch=%s exporterKey=%s eventId=%s",
+        epochOf(clientState),
+        keyFingerprint(key),
+        message.id,
+      );
+      throw aeadError;
+    }
 
     const decoded = decode(mlsMessageDecoder, serializedMessage);
     if (!decoded) throw new Error("Failed to decode MLS message");
+    cryptoLog(
+      "decrypt kind-445 ok: localEpoch=%s wireformat=%s exporterKey=%s eventId=%s",
+      epochOf(clientState),
+      decoded.wireformat,
+      keyFingerprint(key),
+      message.id,
+    );
     return decoded;
   } catch (primaryError) {
     try {
@@ -102,6 +146,13 @@ export async function createEncryptedGroupEventContent({
 }): Promise<string> {
   const serializedMessage = encode(mlsMessageEncoder, message);
   const key = await getGroupEventEncryptionKey(state, ciphersuite);
+  cryptoLog(
+    "encrypt kind-445: epoch=%s wireformat=%s exporterKey=%s bytes=%d",
+    epochOf(state),
+    message.wireformat,
+    keyFingerprint(key),
+    serializedMessage.length,
+  );
   const nonce = randomBytes(12);
   const ciphertext = chacha20poly1305(key, nonce, new Uint8Array(0)).encrypt(
     serializedMessage,

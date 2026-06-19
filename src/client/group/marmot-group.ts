@@ -15,7 +15,11 @@ import type { ProposalAction, ProposalContext } from "../../engine/types.js";
 import type { MediaAttachment } from "../../core/media.js";
 import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
-import type { SerializedClientState } from "../../core/client-state.js";
+import {
+  getMarmotGroupInfo,
+  type MarmotGroupInfo,
+  type SerializedClientState,
+} from "../../core/client-state.js";
 import { GroupRuntime } from "../runtime/group-runtime.js";
 import {
   GroupSession,
@@ -230,6 +234,11 @@ export class MarmotGroup<
 
   get groupData() {
     return this.session.groupData;
+  }
+
+  /** Complete group info/debug model for chat panels and diagnostics. */
+  get info(): MarmotGroupInfo {
+    return getMarmotGroupInfo(this.state);
   }
 
   get unappliedProposals() {

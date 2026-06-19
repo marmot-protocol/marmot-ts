@@ -175,6 +175,7 @@ describe("exports", () => {
         "getKeyPackageNostrPubkey",
         "getKeyPackageReference",
         "getKeyPackageRelays",
+        "getMarmotGroupInfo",
         "getMarmotGroupView",
         "getMediaAttachmentFromFileEvent",
         "getMediaAttachments",

@@ -200,14 +200,18 @@ export class GroupsManager<
     return (await this.get(groupId)).info;
   }
 
-  /** Sends a session intent and publishes the resulting effects through the group runtime. */
+  /**
+   * Sends a session intent through the group, convergence-gated (B5): published
+   * immediately when convergence is `Settled`, otherwise queued until the
+   * quiescence window settles and the queue drains. Used by `commit`/`invite`
+   * and direct application-message sends; `leave` bypasses the gate.
+   */
   async send(
     groupId: Uint8Array | string,
     intent: GroupSessionSendIntent,
   ): Promise<GroupPublishResult[]> {
     const group = await this.get(groupId);
-    const effects = await group.session.send(intent);
-    return group.runtime.publishEffects(effects);
+    return group.submitIntent(intent);
   }
 
   /**

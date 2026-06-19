@@ -13,6 +13,8 @@ import {
 
 import type { ProposalAction, ProposalContext } from "../../engine/types.js";
 import type { MediaAttachment } from "../../core/media.js";
+import { mayReleaseOutbound } from "../../core/convergence-status.js";
+import type { ConvergenceScheduler } from "../../engine/group-engine.js";
 import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import {
@@ -21,6 +23,10 @@ import {
   type SerializedClientState,
 } from "../../core/client-state.js";
 import { GroupRuntime } from "../runtime/group-runtime.js";
+import type {
+  GroupPublishResult,
+  GroupSessionSendIntent,
+} from "../session/group-effects.js";
 import {
   GroupSession,
   type DispositionedIngestResult,
@@ -138,6 +144,11 @@ export type MarmotGroupOptions<
    * (`convergence.md` `settlementQuiescenceMs`). Defaults to the profile-1 value.
    */
   settlementQuiescenceMs?: number;
+  /**
+   * Injectable settle-check timer for releasing queued outbound work (B5).
+   * Defaults to `setTimeout`; tests pass a controllable fake.
+   */
+  scheduler?: ConvergenceScheduler;
 };
 
 /** Map of events that can be emitted by a MarmotGroup */
@@ -197,6 +208,18 @@ export class MarmotGroup<
   readonly runtime: GroupRuntime;
   /** Optional media helper for group encrypted attachments. */
   readonly mediaService: GroupMediaService<TMedia>;
+
+  /**
+   * Outbound intents held while convergence is not `Settled` (B5). Each entry
+   * keeps the caller's promise open until the intent is built, encrypted, and
+   * published at drain time — so a commit is regenerated against the canonical
+   * post-settle state and never reuses a pre-selection staged commit.
+   */
+  readonly #outboundQueue: Array<{
+    intent: GroupSessionSendIntent;
+    resolve: (results: GroupPublishResult[]) => void;
+    reject: (error: unknown) => void;
+  }> = [];
 
   private log: Debugger;
 
@@ -288,6 +311,9 @@ export class MarmotGroup<
       history: this.history,
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,
+      scheduler: options.scheduler,
+      // When the quiescence window elapses, release any queued outbound (B5).
+      onSettleCheck: () => this.#drainOutbound(),
       onStateChanged: (newState) => this.emit("stateChanged", newState),
       onStateSaved: () => this.emit("stateSaved", this),
       onApplicationMessage: (message) =>
@@ -370,8 +396,7 @@ export class MarmotGroup<
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
-    const effects = await this.session.send({ kind: "selfUpdate" });
-    const [result] = await this.runtime.publishEffects(effects);
+    const [result] = await this.submitIntent({ kind: "selfUpdate" });
     return result.response;
   }
 
@@ -420,9 +445,69 @@ export class MarmotGroup<
   async sendProposal(
     proposal: Proposal,
   ): Promise<Record<string, PublishResponse>> {
-    const effects = await this.session.send({ kind: "proposal", proposal });
-    const [result] = await this.runtime.publishEffects(effects);
+    const [result] = await this.submitIntent({ kind: "proposal", proposal });
     return result.response;
+  }
+
+  /**
+   * Convergence-gated outbound entry point (B5). While convergence is `Settled`
+   * and the lifecycle allows outbound, the intent is built, encrypted, and
+   * published immediately. Otherwise it is queued and the returned promise stays
+   * pending until the quiescence window settles and the queue drains — so app
+   * payloads are held, and group-state commits are (re)generated only against the
+   * canonical post-settle state. `leave()` and the self_remove auto-committer
+   * bypass this gate by design (departures and convergence progress, not fresh
+   * local intents).
+   */
+  async submitIntent(
+    intent: GroupSessionSendIntent,
+  ): Promise<GroupPublishResult[]> {
+    if (mayReleaseOutbound(this.session.convergenceStatus, this.lifecycle)) {
+      return this.#sendNow(intent);
+    }
+    this.log(
+      "queueing %s — convergence %s, lifecycle %s",
+      intent.kind,
+      this.session.convergenceStatus,
+      this.lifecycle,
+    );
+    return new Promise<GroupPublishResult[]>((resolve, reject) => {
+      this.#outboundQueue.push({ intent, resolve, reject });
+    });
+  }
+
+  /** Builds + publishes an intent's effects immediately (no gating). */
+  async #sendNow(
+    intent: GroupSessionSendIntent,
+  ): Promise<GroupPublishResult[]> {
+    const effects = await this.session.send(intent);
+    return this.runtime.publishEffects(effects);
+  }
+
+  /**
+   * Releases queued outbound while convergence is `Settled` and the lifecycle
+   * allows outbound (B5). Drains FIFO so send order is preserved; re-checks the
+   * gate each iteration so a fork arriving mid-drain re-queues the remainder.
+   */
+  async #drainOutbound(): Promise<void> {
+    while (
+      this.#outboundQueue.length > 0 &&
+      mayReleaseOutbound(this.session.convergenceStatus, this.lifecycle)
+    ) {
+      const item = this.#outboundQueue.shift()!;
+      try {
+        item.resolve(await this.#sendNow(item.intent));
+      } catch (error) {
+        item.reject(error);
+      }
+    }
+  }
+
+  /** Rejects and clears every queued outbound intent (teardown / removal). */
+  #rejectQueuedOutbound(reason: string): void {
+    if (this.#outboundQueue.length === 0) return;
+    const error = new Error(reason);
+    for (const item of this.#outboundQueue.splice(0)) item.reject(error);
   }
 
   /**
@@ -470,6 +555,8 @@ export class MarmotGroup<
       // app calls destroy() when it wants to purge.
       if (result.kind === "removed") {
         this.log("removed from group by inbound commit");
+        // The tombstone can never send again; fail any queued outbound (B5).
+        this.#rejectQueuedOutbound("Removed from group; outbound cancelled.");
         this.emit("removed", this);
       }
       yield result;
@@ -512,9 +599,22 @@ export class MarmotGroup<
     return this.mediaService.decryptMedia(encrypted, attachment);
   }
 
+  /**
+   * Releases in-memory resources without touching persisted state (B5): cancels
+   * the settle-check timer and fails any queued outbound. Call on unload so a
+   * timer/promise does not outlive the cached instance.
+   */
+  dispose() {
+    this.session.dispose();
+    this.#rejectQueuedOutbound("Group unloaded; outbound cancelled.");
+  }
+
   /** Destroys the group and purges the group history */
   async destroy() {
     this.log("destroying group");
+
+    // Stop the settle timer and fail queued outbound before tearing down (B5).
+    this.dispose();
 
     this.log("clearing group media");
     if (this.media) await this.media.clearMedia();

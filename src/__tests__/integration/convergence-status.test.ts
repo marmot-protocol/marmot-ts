@@ -58,12 +58,37 @@ function fakeClock(startMs: number) {
   };
 }
 
+/** A controllable fake settle-timer: `fire()` invokes the pending callback. */
+function controllableScheduler() {
+  let pending: (() => void) | null = null;
+  return {
+    scheduler: {
+      setTimer: (_ms: number, cb: () => void) => {
+        pending = cb;
+        return {};
+      },
+      clearTimer: () => {
+        pending = null;
+      },
+    },
+    fire: () => {
+      const cb = pending;
+      pending = null;
+      cb?.();
+    },
+  };
+}
+
 function marmotGroup(
   state: ClientState,
   pubkey: string,
   impl: CiphersuiteImpl,
   published: NostrEvent[],
   now: () => number,
+  scheduler?: {
+    setTimer: (ms: number, cb: () => void) => unknown;
+    clearTimer: (h: unknown) => void;
+  },
 ) {
   return new MarmotGroup(state, {
     store: new InMemoryKeyValueStore<SerializedClientState>(),
@@ -72,6 +97,7 @@ function marmotGroup(
     network: recordingNetwork(published),
     now,
     settlementQuiescenceMs: QUIESCENCE_MS,
+    scheduler,
   });
 }
 
@@ -177,5 +203,100 @@ describe("convergence status (B5, increment 2)", () => {
     // Window elapses with a clean fixed point -> Settled.
     clock.advance(1);
     expect(dGroup.convergenceStatus).toBe(convergenceStatuses.settled);
+  });
+
+  it("queues an outbound send while Syncing and drains it once the window settles (Inc 3)", async () => {
+    const adminPubkey = "a".repeat(64);
+    const dPubkey = "d".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const ctx = {
+      cipherSuite: impl,
+      authService: unsafeTestingAuthenticationService,
+    };
+
+    const adminKp = await generateKeyPackage({
+      credential: createCredential(adminPubkey),
+      ciphersuiteImpl: impl,
+    });
+    const { clientState: created } = await createSimpleGroup(
+      adminKp,
+      impl,
+      "Group",
+      { adminPubkeys: [adminPubkey], relays: [RELAY] },
+    );
+    const dKp = await generateKeyPackage({
+      credential: createCredential(dPubkey),
+      ciphersuiteImpl: impl,
+    });
+    const { newState: adminEpoch1, welcome } = await createCommit({
+      context: ctx,
+      state: created,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: dKp.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+    const welcomeMsg = welcome!.welcome ?? (welcome as never);
+    const dEpoch1 = await joinGroup({
+      context: ctx,
+      welcome: welcomeMsg,
+      keyPackage: dKp.publicPackage,
+      privateKeys: dKp.privatePackage,
+      ratchetTree: undefined,
+    });
+    const { commit } = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const commitEvent = await createGroupEvent({
+      message: commit,
+      state: adminEpoch1,
+      ciphersuite: impl,
+    });
+
+    const clock = fakeClock(100_000);
+    const { scheduler, fire } = controllableScheduler();
+    const published: NostrEvent[] = [];
+    const dGroup = marmotGroup(
+      dEpoch1,
+      dPubkey,
+      impl,
+      published,
+      clock.now,
+      scheduler,
+    );
+
+    // Ingesting the commit drives the group to Syncing and arms the settle timer.
+    for await (const _ of dGroup.ingest([commitEvent])) void _;
+    expect(dGroup.convergenceStatus).toBe(convergenceStatuses.syncing);
+
+    // Sending while Syncing must NOT publish yet — it queues, promise pending.
+    const sendPromise = dGroup.submitIntent({
+      kind: "applicationMessage",
+      payload: new TextEncoder().encode("queued while syncing"),
+    });
+    let settledEarly = false;
+    void sendPromise.then(() => (settledEarly = true));
+    await Promise.resolve();
+    expect(published).toHaveLength(0);
+    expect(settledEarly).toBe(false);
+
+    // The window elapses; firing the settle timer drains the queue and publishes.
+    clock.advance(QUIESCENCE_MS);
+    expect(dGroup.convergenceStatus).toBe(convergenceStatuses.settled);
+    fire();
+    const results = await sendPromise;
+    expect(published).toHaveLength(1);
+    expect(results.length).toBeGreaterThan(0);
   });
 });

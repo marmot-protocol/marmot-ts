@@ -160,6 +160,10 @@ export class GroupRegistry<
       this.#groupListeners.delete(id);
     }
 
+    // Release the settle-check timer + any queued outbound so an unloaded
+    // instance leaves nothing pending (B5).
+    existing.dispose();
+
     this.#groups.delete(id);
     this.emit("updated", this.loaded);
   }

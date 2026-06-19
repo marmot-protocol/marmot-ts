@@ -121,6 +121,10 @@ export type GroupSessionOptions<
   now?: () => number;
   /** Quiescence window (ms) before convergence may be treated as settled. */
   settlementQuiescenceMs?: number;
+  /** Injectable settle-check timer (B5); defaults to `setTimeout`. */
+  scheduler?: import("../../engine/group-engine.js").ConvergenceScheduler;
+  /** Fired when the quiescence window elapses, so the owner can drain queued outbound (B5). */
+  onSettleCheck?: () => void | Promise<void>;
 };
 
 export function ingestResultDisposition(result: IngestResult): Disposition {
@@ -173,6 +177,8 @@ export class GroupSession<
       peeler: this.#peeler,
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,
+      scheduler: options.scheduler,
+      onSettleCheck: options.onSettleCheck,
       onStateChanged: (newState) => {
         this.#dirty = true;
         this.#groupData = null;
@@ -231,6 +237,11 @@ export class GroupSession<
   async destroyLocalState(): Promise<void> {
     await this.history?.purgeMessages();
     await this.store.removeItem(bytesToHex(this.id));
+  }
+
+  /** Releases engine resources (the settle-check timer); call on teardown (B5). */
+  dispose(): void {
+    this.#engine.dispose();
   }
 
   confirmPublished(pending: PendingState): void {

@@ -59,6 +59,24 @@ import type {
   SendResult,
 } from "./types.js";
 
+/** An opaque handle returned by {@link ConvergenceScheduler.setTimer}. */
+export type TimerHandle = unknown;
+
+/**
+ * Injectable timer used to fire the convergence settle-check once the quiescence
+ * window elapses (B5). Defaults to `setTimeout`/`clearTimeout`; tests pass a
+ * controllable fake so the settle moment is deterministic.
+ */
+export interface ConvergenceScheduler {
+  setTimer(ms: number, cb: () => void): TimerHandle;
+  clearTimer(handle: TimerHandle): void;
+}
+
+const DEFAULT_SCHEDULER: ConvergenceScheduler = {
+  setTimer: (ms, cb) => setTimeout(cb, ms),
+  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 export type MarmotGroupEngineOptions<TEnvelope> = {
   state: ClientState;
   ciphersuite: CiphersuiteImpl;
@@ -74,6 +92,14 @@ export type MarmotGroupEngineOptions<TEnvelope> = {
    * (`convergence.md` `settlementQuiescenceMs`). Defaults to the profile-1 value.
    */
   settlementQuiescenceMs?: number;
+  /** Injectable timer for the settle-check; defaults to `setTimeout` (B5). */
+  scheduler?: ConvergenceScheduler;
+  /**
+   * Called once the quiescence window elapses after convergence-relevant input,
+   * so the owner can re-check {@link convergenceStatus} and release any queued
+   * outbound work (B5). The engine itself holds no outbound queue.
+   */
+  onSettleCheck?: () => void | Promise<void>;
 };
 
 /**
@@ -116,6 +142,13 @@ export class MarmotGroupEngine<TEnvelope> {
   /** Whether the last convergence pass hit a blocking (missing-anchor) error. */
   #lastPassBlocked = false;
 
+  /** Injectable timer for the settle-check (B5). */
+  readonly #scheduler: ConvergenceScheduler;
+  /** Settle-window elapsed callback; re-checks status to release queued outbound. */
+  readonly #onSettleCheck?: () => void | Promise<void>;
+  /** Handle of the pending settle-check timer, if any (cleared/reset per pass). */
+  #settleTimer: TimerHandle | undefined;
+
   constructor(options: MarmotGroupEngineOptions<TEnvelope>) {
     this.#state = options.state;
     this.ciphersuite = options.ciphersuite;
@@ -125,6 +158,8 @@ export class MarmotGroupEngine<TEnvelope> {
     this.#settlementQuiescenceMs =
       options.settlementQuiescenceMs ??
       DEFAULT_CONVERGENCE_POLICY.settlementQuiescenceMs;
+    this.#scheduler = options.scheduler ?? DEFAULT_SCHEDULER;
+    this.#onSettleCheck = options.onSettleCheck;
 
     this.#retained = new RetainedHistoryStore(options.state);
     this.#forkRecovery = new ForkRecovery(options.ciphersuite, options.peeler);
@@ -426,6 +461,9 @@ export class MarmotGroupEngine<TEnvelope> {
       this.#lastConvergenceRelevantInputMs = this.#now();
       this.#lastPassUnresolved = unresolved;
       this.#lastPassBlocked = blocked;
+      // The window just reset; arm the settle-check so queued outbound is
+      // re-evaluated once it elapses (B5). Reschedules any prior pending check.
+      this.#scheduleSettleCheck();
     }
 
     // After the batch, if this client is the deterministically-elected committer
@@ -462,6 +500,38 @@ export class MarmotGroupEngine<TEnvelope> {
       case "autoCommit":
       case "unreadable":
         return false;
+    }
+  }
+
+  /**
+   * Arms (or re-arms) the settle-check timer to fire when the quiescence window
+   * since the last convergence-relevant input elapses (B5). Cancels any pending
+   * check first, so a fresh input always restarts the window. A no-op when no
+   * settle callback is wired (the engine has nothing to notify).
+   */
+  #scheduleSettleCheck(): void {
+    if (!this.#onSettleCheck) return;
+    if (this.#settleTimer !== undefined) {
+      this.#scheduler.clearTimer(this.#settleTimer);
+      this.#settleTimer = undefined;
+    }
+    const elapsed = this.#now() - this.#lastConvergenceRelevantInputMs;
+    const delay = Math.max(0, this.#settlementQuiescenceMs - elapsed);
+    this.#settleTimer = this.#scheduler.setTimer(delay, () => {
+      this.#settleTimer = undefined;
+      // Fire-and-forget; the owner's drain handles and logs its own errors.
+      void this.#onSettleCheck?.();
+    });
+  }
+
+  /**
+   * Releases engine resources — currently the pending settle-check timer.
+   * Called on group teardown (destroy/unload) so no timer outlives the group.
+   */
+  dispose(): void {
+    if (this.#settleTimer !== undefined) {
+      this.#scheduler.clearTimer(this.#settleTimer);
+      this.#settleTimer = undefined;
     }
   }
 

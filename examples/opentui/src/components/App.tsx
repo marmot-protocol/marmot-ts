@@ -15,8 +15,10 @@ import { GroupDebugModal } from "./GroupDebugModal.js";
 import { GroupInfoModal } from "./GroupInfoModal.js";
 import { Header } from "./Header.js";
 import { HelpOverlay } from "./HelpOverlay.js";
+import { InviteModal } from "./InviteModal.js";
 import { KeyPackageModal } from "./KeyPackageModal.js";
 import { KeybindingFooter, type KeyHint } from "./KeybindingFooter.js";
+import { NewAccountModal } from "./NewAccountModal.js";
 import { ProfileModal } from "./ProfileModal.js";
 import { ProfilePanel } from "./ProfilePanel.js";
 import { QrModal } from "./QrModal.js";
@@ -25,18 +27,21 @@ import { Sidebar } from "./Sidebar.js";
 import { TextPrompt } from "./TextPrompt.js";
 import { nextPane, type Pane, prevPane } from "./focus.js";
 import { groupIsAdmin } from "../marmot/format.js";
+import type { InviteCandidates } from "../marmot/controller.js";
 
 type Modal =
   | { kind: "new" }
   | { kind: "new-relays"; name: string }
   | { kind: "new-manual-relays"; name: string }
   | { kind: "invite" }
+  | { kind: "invite-select"; data: InviteCandidates }
   | { kind: "keypkg" }
   | { kind: "groupdebug"; groupId: string }
   | { kind: "groupinfo"; groupId: string }
   | { kind: "profile" }
   | { kind: "relays" }
   | { kind: "myqr" }
+  | { kind: "newaccount" }
   | { kind: "help" }
   | null;
 
@@ -80,7 +85,10 @@ function parseRelays(text: string): string[] {
   return text.split(/[\s,]+/).filter(Boolean);
 }
 
-export function App(props: { onQuit: () => void }) {
+export function App(props: {
+  onQuit: () => void;
+  onLogout: (params: { name: string; relays: string[] }) => void;
+}) {
   const controller = useController();
   const { me, activeGroupId, outboxRelays, inboxRelays, keyPackages } =
     useChat();
@@ -116,6 +124,24 @@ export function App(props: { onQuit: () => void }) {
     ? groupIsAdmin(selectedGroup, me.pubkey)
     : false;
 
+  // While the groups panel has focus, the active group follows the selection so
+  // the chat panel previews each group as the user scrolls through the list with
+  // j/k. Enter then just focuses the chat panel (see activateGroup). Guarded on a
+  // real change because setActive republishes the snapshot on every call.
+  useEffect(() => {
+    if (focus !== "groups" || !selectedGroup) return;
+    if (selectedGroup.idStr === activeGroupId) return;
+    controller.setActive(selectedGroup.idStr);
+  }, [focus, selectedGroup, activeGroupId, controller]);
+
+  // Composing is only valid while the chat panel has focus. If focus moves
+  // elsewhere (e.g. a mouse click on another panel, which bypasses the keyboard
+  // handler), stop composing so the <input> releases keyboard focus — otherwise
+  // it keeps capturing keys and every global shortcut is blocked.
+  useEffect(() => {
+    if (focus !== "chat" && composing) setComposing(false);
+  }, [focus, composing]);
+
   const moveSelection = (delta: number): void => {
     if (focus === "groups") {
       setGroupIndex((index) => clamp(index + delta, groups.length));
@@ -143,8 +169,8 @@ export function App(props: { onQuit: () => void }) {
 
   const panelHints: Record<Pane, KeyHint[]> = {
     groups: [
-      { key: "j/k", label: "move" },
-      { key: "enter", label: "open" },
+      { key: "j/k", label: "switch group" },
+      { key: "enter", label: "open chat" },
       { key: "n", label: "new group" },
       { key: "i", label: "invite" },
       ...(selectedGroupIsAdmin ? [{ key: "e", label: "edit info" }] : []),
@@ -157,19 +183,25 @@ export function App(props: { onQuit: () => void }) {
       { key: "r", label: "relays" },
       { key: "p", label: "profile" },
     ],
-    chat: [
-      { key: "n", label: "compose" },
-      { key: "i", label: "invite" },
-      { key: "g", label: "group info" },
-      { key: "r", label: "relays" },
-      { key: "p", label: "profile" },
-      { key: "K", label: "key package" },
-    ],
+    chat: composing
+      ? [
+          { key: "enter", label: "send" },
+          { key: "esc", label: "stop composing" },
+        ]
+      : [
+          { key: "n", label: "compose" },
+          { key: "i", label: "invite" },
+          { key: "g", label: "group info" },
+          { key: "r", label: "relays" },
+          { key: "p", label: "profile" },
+          { key: "K", label: "key package" },
+        ],
     profile: [
       { key: "i", label: "invite QR" },
       { key: "p", label: "edit profile" },
       { key: "r", label: "edit relays" },
       { key: "K", label: "key package" },
+      { key: "o", label: "new account" },
     ],
   };
 
@@ -193,9 +225,12 @@ export function App(props: { onQuit: () => void }) {
       modal?.kind === "invite" ||
       modal?.kind === "groupinfo" ||
       modal?.kind === "profile" ||
-      modal?.kind === "relays";
+      modal?.kind === "relays" ||
+      modal?.kind === "newaccount";
 
-    if (textInputFocused && isTextEntryKey(key)) return;
+    // Let Escape through even while a text input is focused, so it can exit
+    // composing (and other modals' own handlers can act on it).
+    if (textInputFocused && isTextEntryKey(key) && !matches(key, "esc")) return;
 
     if (modal) {
       if (
@@ -274,6 +309,7 @@ export function App(props: { onQuit: () => void }) {
       else if (matches(key, "p")) setModal({ kind: "profile" });
       else if (matches(key, "r")) setModal({ kind: "relays" });
       else if (matches(key, "K")) setModal({ kind: "keypkg" });
+      else if (matches(key, "o")) setModal({ kind: "newaccount" });
     }
   });
 
@@ -305,7 +341,6 @@ export function App(props: { onQuit: () => void }) {
           focused={focus === "chat"}
           composing={composing}
           onFocusInput={() => setFocus("chat")}
-          onDoneComposing={() => setComposing(false)}
         />
         <ProfilePanel
           focused={focus === "profile"}
@@ -380,7 +415,21 @@ export function App(props: { onQuit: () => void }) {
           onSubmit={(value) => {
             setModal(null);
             const target = value.trim();
-            if (target) void controller.invite(target);
+            if (!target) return;
+            void controller.loadInviteCandidates(target).then((data) => {
+              if (data) setModal({ kind: "invite-select", data });
+            });
+          }}
+          onCancel={() => setModal(null)}
+        />
+      )}
+      {modal?.kind === "invite-select" && (
+        <InviteModal
+          data={modal.data}
+          onConfirm={(events) => {
+            const { groupId } = modal.data;
+            setModal(null);
+            void controller.inviteKeyPackages(groupId, events);
           }}
           onCancel={() => setModal(null)}
         />
@@ -433,6 +482,15 @@ export function App(props: { onQuit: () => void }) {
       )}
       {modal?.kind === "myqr" && (
         <QrModal npub={me.npub} onClose={() => setModal(null)} />
+      )}
+      {modal?.kind === "newaccount" && (
+        <NewAccountModal
+          onSubmit={(params) => {
+            setModal(null);
+            props.onLogout(params);
+          }}
+          onCancel={() => setModal(null)}
+        />
       )}
       {modal?.kind === "relays" && (
         <RelaysModal

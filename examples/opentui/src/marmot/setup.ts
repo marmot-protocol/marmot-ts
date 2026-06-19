@@ -1,9 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { EventStore } from "applesauce-core/event-store";
+import { normalizeRelayUrl } from "applesauce-core/helpers";
 import { relaySet } from "applesauce-core/helpers/relays";
 import { createEventLoaderForStore } from "applesauce-loaders/loaders";
 import { RelayPool as AsRelayPool } from "applesauce-relay/pool";
@@ -64,6 +71,28 @@ export function parseArgs(argv: string[]): CliOptions {
   };
 }
 
+/** The per-label files that together make up one account's local state. */
+const STATE_FILES = [
+  "identity.key",
+  "groups.json",
+  "keypackages.json",
+  "invites.json",
+] as const;
+
+/**
+ * Wipe a label's identity and local state so the next {@link createController}
+ * call starts a brand-new account. Deleting `identity.key` forces
+ * {@link loadOrCreateSecret} to generate a fresh secret; deleting the store
+ * files drops the previous account's groups, KeyPackages, and invites. The old
+ * controller must be stopped first — it holds these files open in memory and
+ * would otherwise rewrite them on its next mutation.
+ */
+function resetAccountFiles(dataDir: string): void {
+  for (const file of STATE_FILES) {
+    rmSync(join(dataDir, file), { force: true });
+  }
+}
+
 function loadOrCreateSecret(keyPath: string, override: string): string {
   if (override) {
     writeFileSync(keyPath, override);
@@ -82,11 +111,56 @@ function makeStore<T>(ephemeral: boolean, path: string) {
     : new FileKeyValueStore<T>(path);
 }
 
+/** Normalise a free-form relay list to `wss://` URLs, dropping invalid entries. */
+function normalizeRelayList(relays: string[]): string[] {
+  return relaySet(
+    relays.flatMap((relay) => {
+      try {
+        return [normalizeRelayUrl(relay)];
+      } catch {
+        return [];
+      }
+    }),
+  );
+}
+
+/** Relay a freshly-created account falls back to when none is entered. */
+const DEFAULT_NEW_ACCOUNT_RELAY = "relay.us.whitenoise.chat";
+
+/**
+ * Details for the in-app "create a new account" flow. When present,
+ * {@link createController} wipes the existing identity/state first and brings
+ * the controller up as a brand-new account that publishes `name` + the relay
+ * lists on its first start.
+ */
+export interface NewAccountSetup {
+  /** Display name to publish as the new account's kind 0 profile. */
+  name: string;
+  /** Relays to use as the account's inbox + outbox; empty falls back to default. */
+  relays: string[];
+}
+
 export async function createController(
   opts: CliOptions,
   onStatus: (line: StatusLine) => void,
+  /**
+   * When set, wipe this label's identity and stored state first so the
+   * controller comes up as the brand-new account described here. Used by the
+   * in-app "create a new account" flow; `--sec` is ignored on a reset so we
+   * never re-import the key the user just logged out of.
+   */
+  newAccount?: NewAccountSetup,
 ): Promise<MarmotController> {
-  const explicitRelays = opts.relays;
+  const fresh = Boolean(newAccount);
+  // A fresh account operates on the relays the user just chose (falling back to
+  // the default whitenoise relay); otherwise honour the CLI relays / defaults.
+  const explicitRelays = fresh
+    ? normalizeRelayList(
+        newAccount!.relays.length
+          ? newAccount!.relays
+          : [DEFAULT_NEW_ACCOUNT_RELAY],
+      )
+    : opts.relays;
   const bootstrapRelays = explicitRelays.length
     ? explicitRelays
     : relaySet(DEFAULT_RELAYS);
@@ -94,9 +168,10 @@ export async function createController(
 
   const dataDir = join(homedir(), ".marmot-opentui", opts.label);
   mkdirSync(dataDir, { recursive: true });
+  if (fresh) resetAccountFiles(dataDir);
 
   const keyPath = join(dataDir, "identity.key");
-  const secretHex = loadOrCreateSecret(keyPath, opts.secOverride);
+  const secretHex = loadOrCreateSecret(keyPath, fresh ? "" : opts.secOverride);
   const account = PrivateKeyAccount.fromKey(secretHex);
   const pubkey = await account.signer.getPublicKey();
 
@@ -146,5 +221,7 @@ export async function createController(
     clientId,
     debug: opts.debug,
     statusLog: onStatus,
+    // Only freshly-created accounts publish an initial profile on first start.
+    initialProfileName: newAccount?.name?.trim() || undefined,
   });
 }

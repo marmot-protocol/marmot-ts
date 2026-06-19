@@ -18,7 +18,6 @@ export function ChatView(props: {
   focused: boolean;
   composing: boolean;
   onFocusInput: () => void;
-  onDoneComposing: () => void;
 }) {
   const { messages } = useChat();
   const group = props.activeGroup;
@@ -50,11 +49,7 @@ export function ChatView(props: {
           ))
         )}
       </scrollbox>
-      <InputBar
-        focused={props.composing}
-        onFocus={props.onFocusInput}
-        onSubmit={props.onDoneComposing}
-      />
+      <InputBar focused={props.composing} onFocus={props.onFocusInput} />
     </box>
   );
 }

@@ -94,6 +94,15 @@ into this directory and run `bun run src/index.tsx --name alice`.)
 > reliable testing, run a permissive local relay (e.g. `strfry`,
 > `nostr-rs-relay`) and pass it with `--relay ws://localhost:<port>`.
 
+An account is generated on first run and persisted under the `--name` label.
+To switch identities without restarting, focus the **profile** panel and press
+**o**. A form asks for a display name (published as your kind 0 profile) and an
+optional relay list used for both your inbox and outbox — it defaults to
+`relay.us.whitenoise.chat`. Creating the account wipes that label's stored
+identity, groups, KeyPackages, and invites, generates a fresh key, publishes the
+new profile + relay lists, and reconnects in place. (Use a different `--name`
+instead if you want to keep both accounts around.)
+
 ## Compile a standalone binary
 
 ```bash
@@ -142,9 +151,14 @@ the footer shows the keys that apply right now.
   **i** invites to the active group, **e** edits the selected group's info when
   you are an admin, **L** leaves the active group.
 - **Invites** — **Enter** or **a** accepts the selected invite.
-- **Chat** — **n** or **Enter** starts composing a message, **i** invites to the
-  active group, **r** opens relay settings, **p** opens profile settings, and
-  **K** opens the KeyPackage publish/rotate chooser.
+- **Chat** — **n** or **Enter** starts composing a message; the input stays
+  focused after each **Enter** so you can send several in a row, and **Esc**
+  stops composing. **i** invites to the active group, **r** opens relay settings,
+  **p** opens profile settings, and **K** opens the KeyPackage publish/rotate
+  chooser.
+- **Profile** — **i** shows your invite QR, **p** edits your profile, **r** edits
+  your relays, **K** opens the KeyPackage chooser, and **o** logs out and creates
+  a fresh account (prompting for a name and optional relays).
 
 Text prompts use **Enter** to confirm and **Esc** to cancel. Clicking a panel
 still focuses it, but the intended path is keyboard-first.
@@ -165,8 +179,12 @@ normalised, de-duplicated, and stripped of invalid URLs before publishing.
 
 A two-party session: copy each peer's npub from the header (or click it to show
 a scannable QR code), press **n** in the groups panel and name a group, press
-**i** and paste the other's npub, then on the other side focus **invites** and
-press **Enter** or **a** to join.
+**i** and paste the other's npub. The app fetches that peer's published
+KeyPackages and lists them newest-first; **space** selects which device(s) to
+invite, **f** toggles between only-invitable and all KeyPackages (each row shows
+whether it's invitable to this group or why not), and **Enter** sends the
+invite(s). On the other side focus **invites** and press **Enter** or **a** to
+join.
 
 ## Known-divergent — avoid in interop tests
 

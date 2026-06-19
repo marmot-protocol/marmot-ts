@@ -5,20 +5,18 @@ import { useController } from "../hooks/use-marmot.js";
 /**
  * The message composer. It only sends chat messages to the active group — all
  * other actions live in the action bar and the sidebar lists. After each submit
- * the input is remounted (via a changing `key`) to clear it.
+ * the input is remounted (via a changing `key`) to clear it but stays focused,
+ * so several messages can be sent in a row; Esc exits composing (handled in
+ * {@link App}).
  */
-export function InputBar(props: {
-  focused: boolean;
-  onFocus: () => void;
-  onSubmit: () => void;
-}) {
+export function InputBar(props: { focused: boolean; onFocus: () => void }) {
   const controller = useController();
   const [resetKey, setResetKey] = useState(0);
 
   const handleSubmit = async (value: string) => {
     const text = value.trim();
+    // Clear the field by remounting; keep `focused` so the user can keep typing.
     setResetKey((k) => k + 1);
-    props.onSubmit();
     if (!text) return;
     try {
       await controller.sendText(text);

@@ -18,12 +18,24 @@ import {
   type MarmotClient,
   type MarmotGroup,
   Proposals,
+  type WelcomeRecipient,
 } from "@internet-privacy/marmot-ts/client";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
+  AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
+  AGENT_TEXT_STREAM_QUIC_FANOUT_EXTENSION_TYPE,
+  AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
+  AGENT_TEXT_STREAM_QUIC_SEND_EXTENSION_TYPE,
+  AGENT_TEXT_STREAM_ROLE_FANOUT,
+  AGENT_TEXT_STREAM_ROLE_RECEIVE,
+  AGENT_TEXT_STREAM_ROLE_SEND,
   createInboxRelayListEvent,
   createNip65RelayListEvent,
   deserializeApplicationData,
+  getCredentialPubkey,
+  getKeyPackage,
+  getKeyPackageIdentifier,
+  getKeyPackageReference,
   getNostrGroupIdHex,
   GROUP_EVENT_KIND,
 } from "@internet-privacy/marmot-ts";
@@ -61,6 +73,37 @@ function hex(bytes: Uint8Array): string {
 function codePointHex(value: number): string {
   return `0x${value.toString(16).padStart(4, "0")}`;
 }
+
+/**
+ * MLS `required_capabilities` GroupContext extension type (code point `0x0003`).
+ * A LeafNode added to the group MUST advertise every extension/proposal/credential
+ * listed here (capability-negotiation.md "enforce on add").
+ */
+const REQUIRED_CAPABILITIES_EXTENSION_TYPE = 0x0003;
+
+/**
+ * Maps each agent-text-stream-QUIC `required_member_roles` bit to the LeafNode
+ * capability (extension type) a KeyPackage must advertise to satisfy it. A group
+ * whose policy requires a role rejects any KeyPackage missing the marker
+ * (agent-text-stream-quic-v1.md `do_send_invite`).
+ */
+const ROLE_CAPABILITIES = [
+  {
+    bit: AGENT_TEXT_STREAM_ROLE_RECEIVE,
+    extension: AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
+    name: "receive",
+  },
+  {
+    bit: AGENT_TEXT_STREAM_ROLE_SEND,
+    extension: AGENT_TEXT_STREAM_QUIC_SEND_EXTENSION_TYPE,
+    name: "send",
+  },
+  {
+    bit: AGENT_TEXT_STREAM_ROLE_FANOUT,
+    extension: AGENT_TEXT_STREAM_QUIC_FANOUT_EXTENSION_TYPE,
+    name: "fanout",
+  },
+] as const;
 
 function normalizeRelays(relays: string[]): string[] {
   return relaySet(
@@ -153,6 +196,12 @@ export interface ControllerDeps {
   debug: boolean;
   /** Optional sink for status lines when the UI has no on-screen log panel. */
   statusLog?: (line: StatusLine) => void;
+  /**
+   * Set only for a freshly-created account: the display name to publish as the
+   * kind 0 profile on first start. Its presence also triggers publishing the
+   * account's NIP-65 outbox + kind 10050 inbox relay lists so peers can find it.
+   */
+  initialProfileName?: string;
 }
 
 /** A single decrypted chat message rendered in the timeline. */
@@ -212,6 +261,55 @@ export interface KeyPackageDetails {
   keyPackageExtensions: KeyPackageExtensionDetails[];
   leafNodeExtensions: KeyPackageExtensionDetails[];
   requiredCapabilities: RequiredCapabilitiesDetails | null;
+}
+
+/**
+ * One of an invitee's published KeyPackage events (kind 30443), annotated with
+ * whether it can be added to the active group. One invitee can publish several
+ * (one per device/slot); the invite UI lists them so an admin can choose which
+ * device(s) to add.
+ */
+export interface InviteCandidate {
+  /** The KeyPackage event id (stable selection key). */
+  id: string;
+  /** The raw KeyPackage event, handed back to {@link MarmotController.inviteKeyPackages}. */
+  event: NostrEvent;
+  /** Event `created_at` (seconds); the list is sorted newest-first. */
+  createdAt: number;
+  /** The addressable slot (`d` tag) identifying the publishing device, if any. */
+  deviceId: string | null;
+  /** The KeyPackageRef (`i` tag) hex, if present. */
+  refHex: string | null;
+  /** The KeyPackage's MLS cipher suite, hex. */
+  cipherSuite: string;
+  /** True when the KeyPackage satisfies every group add requirement. */
+  invitable: boolean;
+  /** True when this KeyPackage's account is already a group member. */
+  alreadyMember: boolean;
+  /** Human-readable reasons the KeyPackage is not invitable (empty when it is). */
+  reasons: string[];
+}
+
+/** The invitee's KeyPackages resolved against a specific group. */
+export interface InviteCandidates {
+  pubkey: string;
+  npub: string;
+  /** The group these candidates were evaluated against (hex id). */
+  groupId: string;
+  groupName: string;
+  candidates: InviteCandidate[];
+}
+
+/** Pre-computed group state used to evaluate each {@link InviteCandidate}. */
+interface GroupInviteContext {
+  cipherSuite: number;
+  members: Set<string>;
+  required: {
+    extensionTypes: number[];
+    proposalTypes: number[];
+    credentialTypes: number[];
+  } | null;
+  requiredRoles: number;
 }
 
 /**
@@ -317,6 +415,8 @@ export class MarmotController {
   async start(): Promise<void> {
     await this.#ensureKeyPackage();
     if (this.#watchAbort) return;
+    await this.#publishInitialIdentity();
+    if (this.#watchAbort) return;
     await this.#restoreGroups();
     if (this.#watchAbort) return;
     this.#subscribeInvites();
@@ -324,6 +424,20 @@ export class MarmotController {
     this.log(`ready — you are ${npubEncode(this.#deps.pubkey)}`);
     this.log(`relays: ${this.#deps.relays.join(", ")}`);
     void this.#loadRelayListsInBackground();
+  }
+
+  /**
+   * For a freshly-created account only: publish the chosen display name (kind 0)
+   * and advertise the operating relays as the account's NIP-65 outbox + kind
+   * 10050 inbox lists, so peers can discover this new identity and its
+   * KeyPackage. A no-op for returning accounts (no `initialProfileName`).
+   */
+  async #publishInitialIdentity(): Promise<void> {
+    const name = this.#deps.initialProfileName;
+    if (!name) return;
+    await this.saveProfile({ name });
+    if (this.#watchAbort) return;
+    await this.saveRelayLists(this.#outboxRelays, this.#inboxRelays);
   }
 
   stop(): void {
@@ -345,7 +459,8 @@ export class MarmotController {
   async createGroup(name: string, relays = this.#deps.relays): Promise<void> {
     await this.#withBusy(async () => {
       const groupRelays = normalizeRelays(relays);
-      if (!groupRelays.length) throw new Error("group needs at least one relay");
+      if (!groupRelays.length)
+        throw new Error("group needs at least one relay");
       const group = await this.#deps.client.groups.create(name, {
         relays: groupRelays,
       });
@@ -357,17 +472,27 @@ export class MarmotController {
     });
   }
 
-  async invite(input: string): Promise<void> {
-    await this.#withBusy(async () => {
+  /**
+   * Resolves an invitee's published KeyPackages and annotates each with whether
+   * it can be added to the active group. The invite UI lists the result (newest
+   * first) so an admin can choose which device(s) to invite; nothing is sent
+   * here. Returns `null` (and logs) on any failure so the caller can simply skip
+   * opening the selection modal.
+   */
+  async loadInviteCandidates(input: string): Promise<InviteCandidates | null> {
+    if (this.#watchAbort) return null;
+    this.#busy = true;
+    this.#publish();
+    try {
       const group = this.#requireActive();
       const pubkeyHex = normalizeToPubkey(input);
       if (!pubkeyHex) throw new Error(`invalid pubkey or npub: ${input}`);
 
       // Discover the invitee's NIP-65 (kind 10002) outbox relays — where they
-      // publish their KeyPackage. The Directory's address loader also falls
+      // publish their KeyPackages. The Directory's address loader also falls
       // back to public NIP-65 indexers, so this works even for peers we've
       // never shared a relay with.
-      this.log(`discovering KeyPackage for ${npubShort(pubkeyHex)}…`);
+      this.log(`discovering KeyPackages for ${npubShort(pubkeyHex)}…`);
       const discovered = await this.#deps.directory.outboxes(
         pubkeyHex,
         this.#deps.relays,
@@ -378,7 +503,7 @@ export class MarmotController {
           : `no NIP-65 outbox relays found; using session relays`,
       );
       const searchRelays = relaySet(discovered, this.#deps.relays);
-      this.log(`fetching KeyPackage from ${searchRelays.join(", ")}`);
+      this.log(`fetching KeyPackages from ${searchRelays.join(", ")}`);
       const kps = await this.#deps.pool.request(searchRelays, {
         kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
         authors: [pubkeyHex],
@@ -386,11 +511,164 @@ export class MarmotController {
       if (!kps.length) {
         throw new Error(`no KeyPackage found for ${npubShort(pubkeyHex)}`);
       }
-      await this.#deps.client.groups.invite(group.id, this.#newest(kps));
+
+      const context = this.#groupInviteContext(group);
+      const candidates = kps
+        .slice()
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((event) => this.#describeCandidate(context, event));
+      const invitable = candidates.filter((c) => c.invitable).length;
       this.log(
-        `invited ${npubShort(pubkeyHex)} to "${groupName(group)}" — welcome delivered`,
+        `found ${candidates.length} KeyPackage(s) for ${npubShort(pubkeyHex)} — ${invitable} invitable to "${groupName(group)}"`,
+      );
+      return {
+        pubkey: pubkeyHex,
+        npub: npubEncode(pubkeyHex),
+        groupId: group.idStr,
+        groupName: groupName(group),
+        candidates,
+      };
+    } catch (err) {
+      this.logError(err);
+      return null;
+    } finally {
+      this.#busy = false;
+      this.#publish();
+    }
+  }
+
+  /**
+   * Adds the selected KeyPackages to the group in a single commit and delivers a
+   * Welcome to each. Multiple KeyPackages (e.g. several of the invitee's devices)
+   * become individual Add proposals in one epoch advance.
+   */
+  async inviteKeyPackages(
+    groupId: string,
+    events: NostrEvent[],
+  ): Promise<void> {
+    await this.#withBusy(async () => {
+      const group = this.#groups.get(groupId);
+      if (!group) throw new Error("group is not loaded");
+      if (!events.length) throw new Error("no key packages selected");
+
+      const recipients: WelcomeRecipient[] = events.map((event) => ({
+        pubkey: event.pubkey,
+        keyPackageEventId: event.id,
+        keyPackageEvent: event,
+      }));
+      await this.#deps.client.groups.commit(group.id, {
+        extraProposals: events.map((event) =>
+          Proposals.proposeInviteUser(event),
+        ),
+        welcomeRecipients: recipients,
+      });
+      this.log(
+        `invited ${events.length} key package(s) to "${groupName(group)}" — welcome(s) delivered`,
       );
     });
+  }
+
+  /** Snapshots the group state needed to evaluate KeyPackage add-eligibility. */
+  #groupInviteContext(group: MarmotGroup): GroupInviteContext {
+    const info = group.info;
+    const requiredExtension = group.state.groupContext.extensions.find(
+      (extension) =>
+        extension.extensionType === REQUIRED_CAPABILITIES_EXTENSION_TYPE,
+    );
+    const data = requiredExtension?.extensionData as
+      | {
+          extensionTypes?: number[];
+          proposalTypes?: number[];
+          credentialTypes?: number[];
+        }
+      | undefined;
+    const required = data
+      ? {
+          extensionTypes: data.extensionTypes ?? [],
+          proposalTypes: data.proposalTypes ?? [],
+          credentialTypes: data.credentialTypes ?? [],
+        }
+      : null;
+
+    const policy = info.app.components.find(
+      (component) => component.id === AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
+    )?.decoded as { requiredMemberRoles?: number } | undefined;
+
+    return {
+      cipherSuite: group.state.groupContext.cipherSuite,
+      members: new Set(info.members.pubkeys),
+      required,
+      requiredRoles: policy?.requiredMemberRoles ?? 0,
+    };
+  }
+
+  /** Evaluates one KeyPackage event against the group's add requirements. */
+  #describeCandidate(
+    context: GroupInviteContext,
+    event: NostrEvent,
+  ): InviteCandidate {
+    const reasons: string[] = [];
+    let alreadyMember = false;
+    let cipherSuite = "?";
+    const deviceId = getKeyPackageIdentifier(event) ?? null;
+    const refHex = getKeyPackageReference(event) ?? null;
+
+    try {
+      const keyPackage = getKeyPackage(event);
+      cipherSuite = codePointHex(keyPackage.cipherSuite);
+
+      const memberPubkey = getCredentialPubkey(keyPackage.leafNode.credential);
+      if (context.members.has(memberPubkey)) {
+        alreadyMember = true;
+        reasons.push("already a member");
+      }
+
+      if (keyPackage.cipherSuite !== context.cipherSuite) {
+        reasons.push(
+          `cipher suite ${codePointHex(keyPackage.cipherSuite)} ≠ group ${codePointHex(context.cipherSuite)}`,
+        );
+      }
+
+      const capabilities = keyPackage.leafNode.capabilities;
+      if (context.required) {
+        for (const type of context.required.extensionTypes)
+          if (!capabilities.extensions.includes(type))
+            reasons.push(`missing extension ${codePointHex(type)}`);
+        for (const type of context.required.proposalTypes)
+          if (!capabilities.proposals.includes(type))
+            reasons.push(`missing proposal ${codePointHex(type)}`);
+        for (const type of context.required.credentialTypes)
+          if (!capabilities.credentials.includes(type))
+            reasons.push(`missing credential ${codePointHex(type)}`);
+      }
+
+      for (const role of ROLE_CAPABILITIES) {
+        if (
+          context.requiredRoles & role.bit &&
+          !capabilities.extensions.includes(role.extension)
+        ) {
+          reasons.push(
+            `missing ${role.name} role ${codePointHex(role.extension)}`,
+          );
+        }
+      }
+    } catch (err) {
+      reasons.push(
+        `undecodable: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    return {
+      id: event.id,
+      event,
+      createdAt: event.created_at,
+      deviceId,
+      refHex,
+      cipherSuite,
+      invitable: reasons.length === 0,
+      alreadyMember,
+      reasons,
+    };
   }
 
   async joinInvite(inviteId: string): Promise<void> {
@@ -860,10 +1138,6 @@ export class MarmotController {
     const group = this.#groups.get(this.#activeId);
     if (!group) throw new Error("active group is not loaded");
     return group;
-  }
-
-  #newest(events: NostrEvent[]): NostrEvent {
-    return events.slice().sort((a, b) => b.created_at - a.created_at)[0];
   }
 
   // --- snapshot plumbing -----------------------------------------------------

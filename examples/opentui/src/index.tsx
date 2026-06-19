@@ -1,15 +1,69 @@
+import { useCallback, useRef, useState } from "react";
+
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 
 import { App } from "./components/App.js";
 import { MarmotProvider } from "./hooks/use-marmot.js";
 import { redirectDebugToFile, type LogFile } from "./marmot/logging.js";
+import type { MarmotController } from "./marmot/controller.js";
 import {
   createController,
   HELP_TEXT,
   parseArgs,
   wantsHelp,
+  type CliOptions,
 } from "./marmot/setup.js";
+
+/**
+ * Owns the live {@link MarmotController} and swaps it out when the user logs out
+ * and starts a fresh account. Building a new controller wipes the old account's
+ * local state (see {@link createController}'s `fresh` flag), so we remount
+ * {@link App} via a changing `key` to clear its per-account UI state, and hand
+ * the new controller back to `onController` so process-level cleanup stops the
+ * right one.
+ */
+function Root(props: {
+  initial: MarmotController;
+  opts: CliOptions;
+  logFile?: LogFile;
+  onQuit: () => void;
+  onController: (controller: MarmotController) => void;
+}) {
+  const [controller, setController] = useState(props.initial);
+  const [generation, setGeneration] = useState(0);
+  const switching = useRef(false);
+
+  const handleLogout = useCallback(
+    (params: { name: string; relays: string[] }) => {
+      if (switching.current) return;
+      switching.current = true;
+      const previous = controller;
+      void (async () => {
+        try {
+          previous.stop();
+          const next = await createController(
+            props.opts,
+            (line) => props.logFile?.status(line),
+            params,
+          );
+          props.onController(next);
+          setController(next);
+          setGeneration((value) => value + 1);
+        } finally {
+          switching.current = false;
+        }
+      })();
+    },
+    [controller, props],
+  );
+
+  return (
+    <MarmotProvider controller={controller}>
+      <App key={generation} onQuit={props.onQuit} onLogout={handleLogout} />
+    </MarmotProvider>
+  );
+}
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -23,15 +77,17 @@ async function main(): Promise<void> {
   if (opts.logsPath) logFile = redirectDebugToFile(opts.logsPath);
 
   // Run network discovery before the renderer takes over the terminal.
-  const controller = await createController(opts, (line) =>
-    logFile?.status(line),
-  );
+  const initial = await createController(opts, (line) => logFile?.status(line));
 
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     exitSignals: [],
   });
   const root = createRoot(renderer);
+
+  // Tracks the controller currently mounted by <Root> so teardown stops the
+  // live one even after the user has logged into a fresh account.
+  let live = initial;
 
   let stopped = false;
   const quit = (): void => {
@@ -41,7 +97,7 @@ async function main(): Promise<void> {
     process.off("SIGTERM", quit);
     root.unmount();
     renderer.destroy();
-    controller.stop();
+    live.stop();
     logFile?.close();
     process.exitCode = 0;
   };
@@ -49,7 +105,7 @@ async function main(): Promise<void> {
     if (!stopped) {
       root.unmount();
       renderer.destroy();
-      controller.stop();
+      live.stop();
     }
     logFile?.close();
   });
@@ -57,9 +113,15 @@ async function main(): Promise<void> {
   process.on("SIGTERM", quit);
 
   root.render(
-    <MarmotProvider controller={controller}>
-      <App onQuit={quit} />
-    </MarmotProvider>,
+    <Root
+      initial={initial}
+      opts={opts}
+      logFile={logFile}
+      onQuit={quit}
+      onController={(controller) => {
+        live = controller;
+      }}
+    />,
   );
 }
 

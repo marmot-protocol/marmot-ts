@@ -36,6 +36,8 @@ type Key = {
   sequence?: string;
   shift?: boolean | undefined;
   ctrl?: boolean | undefined;
+  meta?: boolean | undefined;
+  option?: boolean | undefined;
 };
 
 function clamp(index: number, length: number): number {
@@ -52,9 +54,17 @@ function matches(key: Key, binding: string): boolean {
       (key.name === binding.toLowerCase() && key.shift === true)
     );
   }
+  if (binding.length === 1 && binding >= "a" && binding <= "z") {
+    return key.sequence === binding || (key.name === binding && !key.shift);
+  }
   if (binding === "enter") return key.name === "return" || key.name === "enter";
   if (binding === "esc") return key.name === "escape";
   return key.name === binding || key.sequence === binding;
+}
+
+function isTextEntryKey(key: Key): boolean {
+  if (key.ctrl || key.meta || key.option) return false;
+  return key.sequence?.length === 1 || key.name?.length === 1;
 }
 
 export function App(props: { onQuit: () => void }) {
@@ -161,6 +171,15 @@ export function App(props: { onQuit: () => void }) {
       props.onQuit();
       return;
     }
+
+    const textInputFocused =
+      composing ||
+      modal?.kind === "new" ||
+      modal?.kind === "invite" ||
+      modal?.kind === "profile" ||
+      modal?.kind === "relays";
+
+    if (textInputFocused && isTextEntryKey(key)) return;
 
     if (modal) {
       if (

@@ -6,6 +6,7 @@ import {
   defaultCredentialTypes,
   defaultExtensionTypes,
   protocolVersions,
+  selfRemoveProposalType,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 import {
@@ -34,7 +35,7 @@ describe("ensureMarmotCapabilities", () => {
     expect(result.extensions).toContain(3);
   });
 
-  it("should advertise the app_data_update proposal type", () => {
+  it("should advertise the app_data_update and self_remove proposal types", () => {
     const capabilities: Capabilities = {
       versions: [protocolVersions.mls10],
       ciphersuites: [ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519],
@@ -46,6 +47,7 @@ describe("ensureMarmotCapabilities", () => {
     const result = ensureMarmotCapabilities(capabilities);
 
     expect(result.proposals).toContain(appDataUpdateProposalType);
+    expect(result.proposals).toContain(selfRemoveProposalType);
   });
 
   it("should not duplicate code points if already present", () => {
@@ -103,7 +105,10 @@ describe("ensureMarmotCapabilities", () => {
       LAST_RESORT_EXTENSION_TYPE,
       ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
     ]);
-    expect(result.proposals).toEqual([appDataUpdateProposalType]);
+    expect(result.proposals).toEqual([
+      appDataUpdateProposalType,
+      selfRemoveProposalType,
+    ]);
   });
 });
 
@@ -117,8 +122,10 @@ describe("marmotRequiredCapabilitiesExtension", () => {
       appDataDictionaryExtensionType,
       ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
     ]);
+    // app_data_update (0x0008) before self_remove (0x000a).
     expect(ext.extensionData.proposalTypes).toEqual([
       appDataUpdateProposalType,
+      selfRemoveProposalType,
     ]);
     expect(ext.extensionData.credentialTypes).toEqual([]);
   });

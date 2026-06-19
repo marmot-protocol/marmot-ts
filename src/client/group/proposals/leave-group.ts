@@ -1,37 +1,35 @@
 /** @module @category Client - Proposals */
-import { defaultProposalTypes, ProposalRemove } from "ts-mls";
+import { ProposalSelfRemove, selfRemoveProposalType } from "ts-mls";
 
 import { getPubkeyLeafNodeIndexes } from "../../../core/group-members.js";
 import { ProposalAction } from "../marmot-group.js";
 
 /**
- * Proposes removing all leaf nodes belonging to the given pubkey from the
- * group. Intended for self-removal (leaving), where the caller passes their
- * own public key.
+ * Proposes the caller's own departure via an MLS `self_remove` proposal
+ * (Marmot v2 `protocol-core/member-departure.md`). The proposal body is empty —
+ * the leaving member is identified by the proposal's MLS sender — so it is
+ * committed by *another* member (the deterministic auto-committer, or an admin),
+ * never by the leaver: RFC 9420 §12.2 forbids a committer from removing their
+ * own leaf, which is exactly the case `self_remove` is designed for.
  *
- * Per RFC 9420 §12.4 a member cannot *commit* a Remove targeting their own
- * leaf — the resulting proposals must be committed by another member (e.g.
- * an admin calling {@link MarmotGroup.commit}).
+ * Unlike the legacy self-targeted `Remove`, a single `self_remove` covers the
+ * sender regardless of how many leaves they hold; the leaf lookup here only
+ * guards that the caller is actually a member.
  *
  * @param pubkey - The Nostr public key (hex string) of the member leaving.
- * @returns A {@link ProposalAction} that yields one {@link ProposalRemove}
- *   per leaf node found for the given pubkey.
+ * @returns A {@link ProposalAction} yielding one {@link ProposalSelfRemove}.
  */
 export function proposeLeaveGroup(
   pubkey: string,
-): ProposalAction<ProposalRemove[]> {
+): ProposalAction<ProposalSelfRemove[]> {
   return async ({ state }) => {
     const leafIndexes = getPubkeyLeafNodeIndexes(state, pubkey);
 
     if (leafIndexes.length === 0)
       throw new Error(`Could not find own leaf node in the ratchet tree.`);
 
-    return leafIndexes.map(
-      (leafIndex) =>
-        ({
-          proposalType: defaultProposalTypes.remove,
-          remove: { removed: leafIndex },
-        }) satisfies ProposalRemove,
-    );
+    return [
+      { proposalType: selfRemoveProposalType } satisfies ProposalSelfRemove,
+    ];
   };
 }

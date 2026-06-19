@@ -5,6 +5,7 @@ import {
   Capabilities,
   defaultExtensionTypes,
   type ExtensionRequiredCapabilities,
+  selfRemoveProposalType,
 } from "ts-mls";
 import { ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE } from "./account-identity-proof.js";
 import { LAST_RESORT_EXTENSION_TYPE } from "./protocol.js";
@@ -18,7 +19,9 @@ import { LAST_RESORT_EXTENSION_TYPE } from "./protocol.js";
  * `app_data_dictionary` GroupContext extension (`0x0006`) and mutates them with
  * `app_data_update` proposals (`0x0008`), both from draft-ietf-mls-extensions-09.
  * Every member MUST advertise support for the extension and the proposal type.
- * `last_resort` (`0x000a`) is also advertised for key-package reuse.
+ * `last_resort` (`0x000a` extension) is also advertised for key-package reuse,
+ * and the `self_remove` proposal (`0x000a` proposal type) for member departure
+ * (`protocol-core/member-departure.md`).
  */
 export function ensureMarmotCapabilities(
   capabilities: Capabilities,
@@ -42,6 +45,10 @@ export function ensureMarmotCapabilities(
   if (!proposals.includes(appDataUpdateProposalType))
     proposals.push(appDataUpdateProposalType);
 
+  // self_remove proposal for member departure (MIP-03).
+  if (!proposals.includes(selfRemoveProposalType))
+    proposals.push(selfRemoveProposalType);
+
   return {
     ...capabilities,
     extensions,
@@ -58,9 +65,11 @@ export function ensureMarmotCapabilities(
  *
  * The baseline is fixed, not member-derived: the `app_data_dictionary`
  * extension (`0x0006`) and account-identity-proof extension (`0xF2F1`) plus the
- * `app_data_update` proposal (`0x0008`) — byte-matched to darkmatter
- * `required_capabilities_extension`. Lists are sorted ascending to mirror the
- * Rust `BTreeSet` ordering; `credentialTypes` is empty.
+ * `app_data_update` (`0x0008`) and `self_remove` (`0x000a`) proposals. The
+ * `self_remove` requirement matches a darkmatter MIP-03 client (which registers
+ * the self-remove feature as Required, advertising proposal type 10 in both leaf
+ * and required capabilities). Lists are sorted ascending to mirror the Rust
+ * `BTreeSet` ordering; `credentialTypes` is empty.
  */
 export function marmotRequiredCapabilitiesExtension(): ExtensionRequiredCapabilities {
   const extensionTypes = [
@@ -68,11 +77,16 @@ export function marmotRequiredCapabilitiesExtension(): ExtensionRequiredCapabili
     ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
   ].sort((a, b) => a - b);
 
+  const proposalTypes = [
+    appDataUpdateProposalType,
+    selfRemoveProposalType,
+  ].sort((a, b) => a - b);
+
   return {
     extensionType: defaultExtensionTypes.required_capabilities,
     extensionData: {
       extensionTypes,
-      proposalTypes: [appDataUpdateProposalType],
+      proposalTypes,
       credentialTypes: [],
     },
   };

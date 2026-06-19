@@ -30,7 +30,6 @@ export const HELP_TEXT = `Usage: marmot-opentui [options]
 
 Options:
   --name <label>   Profile name; data + identity live in ~/.marmot-opentui/<label>/ (default: default)
-  --relay <url>    Relay URL to use. Repeatable. (default: ${DEFAULT_RELAYS.join(", ")})
   --sec <hex>      Use a specific 32-byte hex Nostr secret key.
   --ephemeral      Keep all state in memory.
   --debug          Include full stack traces and cause chains in status errors.
@@ -47,7 +46,6 @@ export interface CliOptions {
   ephemeral: boolean;
   debug: boolean;
   logsPath: string;
-  relays: string[];
   secOverride: string;
 }
 
@@ -57,16 +55,11 @@ export function parseArgs(argv: string[]): CliOptions {
     const i = argv.indexOf(name);
     return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
   };
-  const explicitRelays: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--relay" && argv[i + 1]) explicitRelays.push(argv[++i]);
-  }
   return {
     label: option("--name", "default"),
     ephemeral: flag("--ephemeral"),
     logsPath: option("--logs", ""),
     debug: flag("--debug") || Boolean(option("--logs", "")),
-    relays: relaySet(explicitRelays),
     secOverride: option("--sec", ""),
   };
 }
@@ -153,16 +146,20 @@ export async function createController(
 ): Promise<MarmotController> {
   const fresh = Boolean(newAccount);
   // A fresh account operates on the relays the user just chose (falling back to
-  // the default whitenoise relay); otherwise honour the CLI relays / defaults.
-  const explicitRelays = fresh
+  // the default whitenoise relay). A returning account only needs somewhere to
+  // bootstrap discovery from: it connects to the defaults, then adopts its own
+  // advertised NIP-65 outbox + kind-10050 inbox relays once they're loaded (see
+  // MarmotController#loadRelayLists). These bootstrap relays are NOT where
+  // invites are watched — that follows the kind-10050 inbox list.
+  const chosenRelays = fresh
     ? normalizeRelayList(
         newAccount!.relays.length
           ? newAccount!.relays
           : [DEFAULT_NEW_ACCOUNT_RELAY],
       )
-    : opts.relays;
-  const bootstrapRelays = explicitRelays.length
-    ? explicitRelays
+    : [];
+  const bootstrapRelays = chosenRelays.length
+    ? chosenRelays
     : relaySet(DEFAULT_RELAYS);
   const clientId = `marmot-opentui-${opts.label}`;
 

@@ -83,16 +83,22 @@ into this directory and run `bun run src/index.tsx --name alice`.)
 | Flag             | Default                                 | Meaning                                                             |
 | ---------------- | --------------------------------------- | ------------------------------------------------------------------- |
 | `--name <label>` | `default`                               | Profile name; data + identity live in `~/.marmot-opentui/<label>/`. |
-| `--relay <url>`  | `wss://relay.damus.io`, `wss://nos.lol` | Repeatable. Point all peers at the **same** relay(s).               |
 | `--sec <hex>`    | (generated)                             | Use a specific 32-byte hex Nostr secret key.                        |
 | `--ephemeral`    | off                                     | Keep all state in memory (nothing written to disk).                 |
 | `--debug`        | off                                     | Include full stack traces (and `cause` chains) in status errors.    |
 | `--logs <path>`  | off                                     | Enable `debug` logging and append status/debug lines to this file.  |
 | `--help`, `-h`   | off                                     | Print the options and exit without starting the OpenTUI UI.         |
 
+Relays are no longer chosen with a flag. The app bootstraps discovery from a
+default set (`wss://relay.damus.io`, `wss://nos.lol`) and then operates on the
+account's own **published** relay lists — its NIP-65 outbox (kind 10002) and
+welcome inbox (kind 10050). Set them when creating an account (profile panel →
+**o**) or edit them in-app (**r** → relays).
+
 > Many public relays reject MLS event kinds (443/30443/444/445/1059). For
 > reliable testing, run a permissive local relay (e.g. `strfry`,
-> `nostr-rs-relay`) and pass it with `--relay ws://localhost:<port>`.
+> `nostr-rs-relay`) and point your account's relay lists at
+> `ws://localhost:<port>` via the new-account flow or the in-app relay editor.
 
 An account is generated on first run and persisted under the `--name` label.
 To switch identities without restarting, focus the **profile** panel and press
@@ -114,7 +120,7 @@ pnpm --filter marmot-opentui compile        # or: cd here && bun run compile
 single, self-contained executable in `dist/` — no Bun or `node_modules` needed
 to run it. OpenTUI's native renderer (`libopentui.so`) is embedded into the
 binary, so the artifact is **platform-specific**: it targets the OS/arch you
-build on. The same runtime flags apply (`--name`, `--relay`, …).
+build on. The same runtime flags apply (`--name`, `--sec`, …).
 
 ## Debug with VS Code
 
@@ -153,9 +159,10 @@ the footer shows the keys that apply right now.
 - **Invites** — **Enter** or **a** accepts the selected invite.
 - **Chat** — **n** or **Enter** starts composing a message; the input stays
   focused after each **Enter** so you can send several in a row, and **Esc**
-  stops composing. **i** invites to the active group, **r** opens relay settings,
-  **p** opens profile settings, and **K** opens the KeyPackage publish/rotate
-  chooser.
+  stops composing. **i** invites to the active group, **m** opens the members
+  list, **g** opens the group debug view, **e** edits the active group's info
+  when you are an admin, **r** opens relay settings, **p** opens profile
+  settings, and **K** opens the KeyPackage publish/rotate chooser.
 - **Profile** — **i** shows your invite QR, **p** edits your profile, **r** edits
   your relays, **K** opens the KeyPackage chooser, and **o** logs out and creates
   a fresh account (prompting for a name and optional relays).

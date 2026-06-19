@@ -61,6 +61,14 @@ const GIFT_WRAP_KIND = 1059;
  */
 const transportLog = createDebug("opentui:group-transport");
 
+/**
+ * Invite ingester diagnostics — gift-wrap subscription setup, every kind-1059
+ * seen (id/author/relay), ingest dedupe result, and decrypt outcome.
+ * Enable with `DEBUG=opentui:invite` (opentui enables `*` by default). Pair with
+ * `DEBUG=marmot-ts:*` to also see the library's `InviteManager` decrypt logs.
+ */
+const inviteLog = createDebug("opentui:invite");
+
 /** Minimal signer shape (applesauce `EventSigner`) the controller needs. */
 type Signer = {
   getPublicKey(): Promise<string> | string;
@@ -861,7 +869,12 @@ export class MarmotController {
       await this.#publishOutboxList(nextOutbox);
       await this.#publishInboxList(nextInbox);
       this.#outboxRelays = nextOutbox;
+      const inboxChanged =
+        relaySet(nextInbox).join(",") !== relaySet(this.#inboxRelays).join(",");
       this.#inboxRelays = nextInbox;
+      // Follow the new kind-10050 inbox list with the invite subscription so
+      // future Welcomes land where we're actually listening.
+      if (inboxChanged) this.#subscribeInvites();
       this.log(
         `published relay lists — outbox: ${nextOutbox.join(", ")} · inbox: ${nextInbox.join(", ")}`,
       );
@@ -949,11 +962,24 @@ export class MarmotController {
     if (outbox.length) {
       this.#outboxRelays = outbox;
     }
-    if (inbox.length) {
-      this.#inboxRelays = inbox;
-    }
+    // Did the discovered kind-10050 inbox list differ from what the current
+    // gift-wrap subscription is watching? Compare against the prior value before
+    // adopting the new one.
+    const before = relaySet(this.#inboxRelays).join(",");
+    if (inbox.length) this.#inboxRelays = inbox;
+    const inboxChanged = relaySet(this.#inboxRelays).join(",") !== before;
     if (outbox.length || inbox.length)
       this.log("loaded your advertised relay lists");
+    // Move the invite subscription onto the published inbox relays. Without this
+    // the subscription stays on the bootstrap defaults and any Welcome delivered
+    // to a 10050 relay we didn't bootstrap from would be silently missed.
+    if (inboxChanged) {
+      inviteLog(
+        "advertised inbox relays changed — re-subscribing (inbox=%o)",
+        this.#inboxRelays,
+      );
+      this.#subscribeInvites();
+    }
     this.#publish();
   }
 
@@ -1109,30 +1135,74 @@ export class MarmotController {
     this.#publish();
   }
 
+  /**
+   * (Re)subscribe for gift-wrapped invites (kind 1059) on our *advertised
+   * kind-10050 inbox relays* — that's exactly where inviters deliver the Welcome
+   * (see `NostrWelcomeDelivery.deliver` → `getUserInboxRelays`). `#inboxRelays`
+   * is seeded with the bootstrap relays and updated to the published 10050 list
+   * once `#loadRelayLists` resolves it; this is idempotent (tears down any prior
+   * subscription first) so it can be re-run whenever that list changes.
+   * Subscribing anywhere else (e.g. the bootstrap/session relays) is the bug
+   * that made invites silently never arrive.
+   */
   #subscribeInvites(): void {
     if (this.#watchAbort) return;
-    const sub = this.#deps.pool.subscription(this.#deps.relays, {
+    const relays = relaySet(this.#inboxRelays);
+    inviteLog(
+      "subscribe gift-wraps kind=%d p=%s relays=%o",
+      GIFT_WRAP_KIND,
+      this.#deps.pubkey.slice(0, 8),
+      relays,
+    );
+    const sub = this.#deps.pool.subscription(relays, {
       kinds: [GIFT_WRAP_KIND],
       "#p": [this.#deps.pubkey],
     });
+    this.#inviteSub?.unsubscribe();
     this.#inviteSub = sub.subscribe({
       next: (event) => void this.#onGiftWrap(event),
     });
     // Decrypt anything already stored so the invites panel shows it on startup.
-    void this.#deps.client.invites.decryptGiftWraps().catch(() => {});
+    void this.#deps.client.invites
+      .getReceived()
+      .then((received) => {
+        if (received.length)
+          inviteLog("decrypting %d stored gift-wrap(s)", received.length);
+        return this.#deps.client.invites.decryptGiftWraps();
+      })
+      .catch((err) => inviteLog("startup decrypt failed: %O", err));
   }
 
   async #onGiftWrap(event: NostrEvent): Promise<void> {
-    if (this.#seenEvents.has(event.id)) return;
+    if (this.#seenEvents.has(event.id)) {
+      inviteLog("gift-wrap %s already seen this session — skip", event.id);
+      return;
+    }
     this.#seenEvents.add(event.id);
+    inviteLog(
+      "gift-wrap inbound id=%s author=%s created_at=%d",
+      event.id,
+      event.pubkey.slice(0, 8),
+      event.created_at,
+    );
     try {
       const added = await this.#deps.client.invites.ingestEvent(event);
-      if (!added) return;
+      if (!added) {
+        inviteLog("gift-wrap %s already ingested (dedup) — skip", event.id);
+        return;
+      }
+      inviteLog("gift-wrap %s ingested — decrypting", event.id);
       // decryptGiftWraps emits "decrypted", which the React watchUnread()
       // generator is listening for, so the invites panel updates itself.
-      await this.#deps.client.invites.decryptGiftWraps();
+      const decrypted = await this.#deps.client.invites.decryptGiftWraps();
+      inviteLog(
+        "gift-wrap %s decrypt produced %d unread invite(s)",
+        event.id,
+        decrypted.length,
+      );
       this.log("📨 new invite received — see the Invites panel");
     } catch (err) {
+      inviteLog("gift-wrap %s failed: %O", event.id, err);
       this.logError(err);
     }
   }

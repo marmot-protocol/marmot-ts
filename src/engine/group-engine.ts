@@ -12,6 +12,7 @@ import {
   type IncomingMessageCallback,
   acceptAll,
   Proposal,
+  selfRemoveProposalType,
 } from "ts-mls";
 
 import { marmotAuthService } from "../core/auth-service.js";
@@ -204,18 +205,23 @@ export class MarmotGroupEngine<TEnvelope> {
         // MIP-03 admin-only commits, with the non-admin carve-out from
         // protocol-core/group-messaging.md: a non-admin may commit a
         // self-update-only commit (no proposals, or only self-targeted Update
-        // proposals — an Update can only target the committer's own leaf) and a
-        // SelfRemove-only commit (ts-mls does not yet expose SelfRemove; see
-        // B6). Anything that changes other members or group state needs admin.
-        // This mirrors the inbound admin policy (admin-policy.ts) so a commit we
-        // emit is one a conformant peer also accepts.
+        // proposals — an Update can only target the committer's own leaf) or a
+        // self_remove-only commit (committing peers' departures — this is the
+        // auto-committer path). Anything that changes other members or group
+        // state needs admin. This mirrors the inbound admin policy
+        // (admin-policy.ts) so a commit we emit is one a conformant peer accepts.
         if (!groupData.adminPubkeys.includes(intent.actorPubkey)) {
           const selfUpdateOnly = allProposals.every(
             (p) => p.proposalType === defaultProposalTypes.update,
           );
-          if (!selfUpdateOnly) {
+          const selfRemoveOnly =
+            allProposals.length > 0 &&
+            allProposals.every(
+              (p) => p.proposalType === selfRemoveProposalType,
+            );
+          if (!selfUpdateOnly && !selfRemoveOnly) {
             throw new Error(
-              "Not a group admin. Non-admins may only commit a self-update-only commit.",
+              "Not a group admin. Non-admins may only commit a self-update-only or self_remove-only commit.",
             );
           }
         }

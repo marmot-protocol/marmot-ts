@@ -2,6 +2,7 @@
 import {
   defaultProposalTypes,
   getCredentialFromLeafIndex,
+  selfRemoveProposalType,
   type ClientState,
   type IncomingMessageCallback,
   type LeafIndex,
@@ -51,6 +52,26 @@ export function createAdminCommitPolicyCallback(args: {
       }
     }
 
+    // An admin MUST drop admin before self-removing (member-departure.md), so a
+    // self_remove whose sender (the leaver) is still an active admin is invalid.
+    // Checked before the admin short-circuit below, so even an admin committer
+    // cannot splice in an admin's self_remove.
+    for (const { proposal, senderLeafIndex } of incoming.proposals) {
+      if (proposal.proposalType !== selfRemoveProposalType) continue;
+      if (senderLeafIndex === undefined) return "reject";
+      try {
+        const leaverPubkey = getCredentialPubkey(
+          getCredentialFromLeafIndex(
+            ratchetTree,
+            toLeafIndex(Number(senderLeafIndex)),
+          ),
+        );
+        if (adminPubkeys.includes(leaverPubkey)) return "reject";
+      } catch {
+        return "reject";
+      }
+    }
+
     const senderLeafIndexUnknown = incoming.senderLeafIndex;
     if (senderLeafIndexUnknown === undefined) return "reject";
 
@@ -70,6 +91,9 @@ export function createAdminCommitPolicyCallback(args: {
 
       if (incoming.proposals.length === 0) return "accept";
 
+      // A non-admin may commit only a self-update-only commit (its own Update)
+      // or a self_remove-only commit (committing peers' departures), per
+      // protocol-core/group-messaging.md.
       const isSelfUpdateOnly = incoming.proposals.every(
         (p) =>
           p.proposal.proposalType === defaultProposalTypes.update &&
@@ -77,7 +101,11 @@ export function createAdminCommitPolicyCallback(args: {
           Number(p.senderLeafIndex) === Number(senderLeafIndex),
       );
 
-      return isSelfUpdateOnly ? "accept" : "reject";
+      const isSelfRemoveOnly = incoming.proposals.every(
+        (p) => p.proposal.proposalType === selfRemoveProposalType,
+      );
+
+      return isSelfUpdateOnly || isSelfRemoveOnly ? "accept" : "reject";
     } catch {
       if (onUnverifiableCommit === "retry") {
         throw new Error("unverifiable commit sender");

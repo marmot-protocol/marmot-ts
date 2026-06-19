@@ -4,7 +4,7 @@
     "lib": ["ESNext", "DOM"],
     "module": "Preserve",
     "moduleResolution": "bundler",
-    "types": ["node"],
+    "types": ["node", "bun"],
     "jsx": "react-jsx",
     "jsxImportSource": "@opentui/react",
     "strict": true,

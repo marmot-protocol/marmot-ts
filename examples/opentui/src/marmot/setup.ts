@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import {
   existsSync,
   mkdirSync,
@@ -25,8 +26,8 @@ import {
 
 import { accountProofSignerFor } from "../helpers/account-proof.js";
 import { Directory, LOOKUP_RELAYS } from "../helpers/discovery.js";
-import { FileKeyValueStore } from "../helpers/file-store.js";
 import { PrefixedKeyValueStore } from "../helpers/prefixed-store.js";
+import { SqliteKeyValueStore } from "../helpers/sqlite-store.js";
 import { RelayPool } from "../helpers/relay-pool.js";
 import { MarmotController, type StatusLine } from "./controller.js";
 
@@ -70,22 +71,25 @@ export function parseArgs(argv: string[]): CliOptions {
   };
 }
 
-/** The per-label files that together make up one account's local state. */
+/**
+ * The per-label files that together make up one account's local state. All
+ * key-value stores share `state.db`; SQLite's WAL mode keeps `-wal`/`-shm`
+ * sidecars next to it, which must be removed alongside the main file on reset.
+ */
 const STATE_FILES = [
   "identity.key",
-  "groups.json",
-  "keypackages.json",
-  "invites.json",
-  "messages.json",
+  "state.db",
+  "state.db-wal",
+  "state.db-shm",
 ] as const;
 
 /**
  * Wipe a label's identity and local state so the next {@link createController}
  * call starts a brand-new account. Deleting `identity.key` forces
- * {@link loadOrCreateSecret} to generate a fresh secret; deleting the store
- * files drops the previous account's groups, KeyPackages, and invites. The old
- * controller must be stopped first — it holds these files open in memory and
- * would otherwise rewrite them on its next mutation.
+ * {@link loadOrCreateSecret} to generate a fresh secret; deleting `state.db`
+ * drops the previous account's groups, KeyPackages, invites, and messages. The
+ * old controller must be stopped first — it holds the SQLite connection open and
+ * would otherwise keep writing to (and recreate) the file we just deleted.
  */
 function resetAccountFiles(dataDir: string): void {
   for (const file of STATE_FILES) {
@@ -105,10 +109,25 @@ function loadOrCreateSecret(keyPath: string, override: string): string {
   return hex;
 }
 
-function makeStore<T>(ephemeral: boolean, path: string) {
-  return ephemeral
-    ? new InMemoryKeyValueStore<T>()
-    : new FileKeyValueStore<T>(path);
+/**
+ * Open the shared per-account SQLite database. WAL mode + `synchronous=NORMAL`
+ * gives fast, crash-safe single-process writes for a local demo store.
+ */
+function openDatabase(path: string): Database {
+  const db = new Database(path, { create: true });
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA synchronous = NORMAL");
+  return db;
+}
+
+/**
+ * One key-value store backed by a `db` table, or an in-memory store when `db` is
+ * null (the `--ephemeral` path, where nothing touches disk).
+ */
+function makeStore<T>(db: Database | null, table: string) {
+  return db
+    ? new SqliteKeyValueStore<T>(db, table)
+    : new InMemoryKeyValueStore<T>();
 }
 
 /** Normalise a free-form relay list to `wss://` URLs, dropping invalid entries. */
@@ -125,7 +144,7 @@ function normalizeRelayList(relays: string[]): string[] {
 }
 
 /** Relay a freshly-created account falls back to when none is entered. */
-const DEFAULT_NEW_ACCOUNT_RELAY = "relay.us.whitenoise.chat";
+const DEFAULT_NEW_ACCOUNT_RELAY = "wss://relay.us.whitenoise.chat";
 
 /**
  * Details for the in-app "create a new account" flow. When present,
@@ -174,6 +193,12 @@ export async function createController(
   mkdirSync(dataDir, { recursive: true });
   if (fresh) resetAccountFiles(dataDir);
 
+  // One SQLite connection holds every key-value store for this account (groups,
+  // KeyPackages, invites, messages) as separate tables. Null in ephemeral mode,
+  // where each store falls back to memory and nothing touches disk. Opened after
+  // any reset above so we never recreate a file we just deleted.
+  const db = opts.ephemeral ? null : openDatabase(join(dataDir, "state.db"));
+
   const keyPath = join(dataDir, "identity.key");
   const secretHex = loadOrCreateSecret(keyPath, fresh ? "" : opts.secOverride);
   const account = PrivateKeyAccount.fromKey(secretHex);
@@ -199,10 +224,7 @@ export async function createController(
   // backend is scoped to a `${groupHex}:` keyspace so groups never read or
   // clear each other's messages. Keyed by rumor id, so re-ingesting a group
   // event (e.g. relay backfill) overwrites in place rather than duplicating.
-  const messagesStore = makeStore<Rumor>(
-    opts.ephemeral,
-    join(dataDir, "messages.json"),
-  );
+  const messagesStore = makeStore<Rumor>(db, "messages");
   const historyFactory = GroupRumorHistory.makeFactory(
     (groupId) =>
       new KeyValueRumorHistoryBackend(
@@ -217,23 +239,17 @@ export async function createController(
     signer: account.signer,
     accountProofSigner: accountProofSignerFor(account),
     network: pool,
-    groupStateStore: makeStore(
-      opts.ephemeral,
-      join(dataDir, "groups.json"),
-    ) as any,
-    keyPackageStore: makeStore(
-      opts.ephemeral,
-      join(dataDir, "keypackages.json"),
-    ) as any,
-    inviteStore: makeStore(
-      opts.ephemeral,
-      join(dataDir, "invites.json"),
-    ) as any,
+    groupStateStore: makeStore(db, "groups") as any,
+    keyPackageStore: makeStore(db, "keypackages") as any,
+    inviteStore: makeStore(db, "invites") as any,
     historyFactory,
     clientId,
   });
 
   return new MarmotController({
+    // Closing the SQLite connection on stop() releases the file before any reset
+    // deletes it, and flushes the WAL for the next run.
+    dispose: () => db?.close(),
     client,
     pool,
     directory,

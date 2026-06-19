@@ -233,6 +233,14 @@ export interface ChatMessage {
   mine: boolean;
 }
 
+/** Per-group state for loading older (off-window) messages on demand. */
+export interface PaginationState {
+  /** True while an older page is being loaded. */
+  loadingOlder: boolean;
+  /** True once the oldest stored message has been reached. */
+  exhausted: boolean;
+}
+
 export interface StatusLine {
   id: number;
   level: "info" | "warn" | "error";
@@ -348,6 +356,8 @@ export interface ChatSnapshot {
   activeGroupId: string | null;
   /** Messages keyed by group id (hex). */
   messages: Record<string, ChatMessage[]>;
+  /** Older-message pagination state keyed by group id (hex). */
+  pagination: Record<string, PaginationState>;
   status: StatusLine[];
   /** True while a long-running action (invite/join/create) is in flight. */
   busy: boolean;
@@ -380,6 +390,8 @@ export class MarmotController {
   readonly #messages = new Map<string, ChatMessage[]>();
   /** Live `history.subscribe()` generators, one per attached group. */
   readonly #historySubs = new Map<string, AsyncGenerator<Rumor[]>>();
+  /** Older-message pagination state, one per group id. */
+  readonly #pagination = new Map<string, PaginationState>();
 
   readonly #listeners = new Set<Listener>();
 
@@ -831,6 +843,54 @@ export class MarmotController {
     await this.#deps.client.groups.send(group.id, intent);
   }
 
+  /**
+   * Load the next older page of messages for a group from local history (the
+   * live subscription only holds the newest {@link HISTORY_WINDOW}). Older pages
+   * are merged into the timeline via {@link #upsertMessages}. Guards against
+   * concurrent loads and stops once the oldest stored message is reached.
+   */
+  async loadOlder(groupId: string): Promise<void> {
+    const group = this.#groups.get(groupId);
+    if (!group) return;
+    const history = group.history as unknown as GroupRumorHistory | undefined;
+    if (!history) return;
+    const state = this.#paginationState(groupId);
+    if (state.loadingOlder || state.exhausted) return;
+
+    const oldest = this.#messages.get(groupId)?.[0]?.createdAt;
+    state.loadingOlder = true;
+    this.#publish();
+    try {
+      const loader = history.createPaginatedLoader({
+        kinds: [CHAT_MESSAGE_KIND],
+        until: oldest !== undefined ? oldest - 1 : undefined,
+        limit: HISTORY_WINDOW,
+      });
+      const known = this.#messageIndex.get(groupId)?.size ?? 0;
+      const { value } = await loader.next();
+      void loader.return?.(undefined);
+      const page = (value ?? []) as Rumor[];
+      if (page.length) this.#upsertMessages(group, page);
+      const grew = (this.#messageIndex.get(groupId)?.size ?? 0) > known;
+      // Reached the top when the page was short or contributed nothing new.
+      if (page.length < HISTORY_WINDOW || !grew) state.exhausted = true;
+    } catch (err) {
+      this.logError(err);
+    } finally {
+      state.loadingOlder = false;
+      this.#publish();
+    }
+  }
+
+  #paginationState(id: string): PaginationState {
+    let state = this.#pagination.get(id);
+    if (!state) {
+      state = { loadingOlder: false, exhausted: false };
+      this.#pagination.set(id, state);
+    }
+    return state;
+  }
+
   async publishKeyPackage(): Promise<void> {
     await this.#withBusy(async () => {
       const kp = await this.#deps.client.keyPackages.create({
@@ -1153,6 +1213,7 @@ export class MarmotController {
       this.#historySubs.delete(id);
       void history.return(undefined);
     }
+    this.#pagination.delete(id);
     this.#groups.delete(id);
     this.#publish();
   }
@@ -1355,6 +1416,8 @@ export class MarmotController {
   #buildSnapshot(): ChatSnapshot {
     const messages: Record<string, ChatMessage[]> = {};
     for (const [id, list] of this.#messages) messages[id] = list;
+    const pagination: Record<string, PaginationState> = {};
+    for (const [id, state] of this.#pagination) pagination[id] = { ...state };
     return {
       me: { pubkey: this.#deps.pubkey, npub: npubEncode(this.#deps.pubkey) },
       relays: this.#deps.relays,
@@ -1365,6 +1428,7 @@ export class MarmotController {
       clientId: this.#deps.clientId,
       activeGroupId: this.#activeId,
       messages,
+      pagination,
       status: this.#status,
       busy: this.#busy,
     };

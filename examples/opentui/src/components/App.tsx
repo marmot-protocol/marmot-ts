@@ -125,6 +125,9 @@ export function App(props: {
   const selectedGroupIsAdmin = selectedGroup
     ? groupIsAdmin(selectedGroup, me.pubkey)
     : false;
+  const activeGroupIsAdmin = activeGroup
+    ? groupIsAdmin(activeGroup, me.pubkey)
+    : false;
 
   // While the groups panel has focus, the active group follows the selection so
   // the chat panel previews each group as the user scrolls through the list with
@@ -193,9 +196,11 @@ export function App(props: {
         ]
       : [
           { key: "n", label: "compose" },
+          { key: "u", label: "load older" },
           { key: "i", label: "invite" },
           { key: "m", label: "members" },
           { key: "g", label: "group info" },
+          ...(activeGroupIsAdmin ? [{ key: "e", label: "edit info" }] : []),
           { key: "r", label: "relays" },
           { key: "p", label: "profile" },
           { key: "K", label: "key package" },
@@ -304,11 +309,15 @@ export function App(props: {
       else if (matches(key, "p")) setModal({ kind: "profile" });
     } else if (focus === "chat") {
       if (matches(key, "n")) setComposing(true);
+      else if (matches(key, "u") && activeGroupId)
+        void controller.loadOlder(activeGroupId);
       else if (matches(key, "i")) inviteToActive();
       else if (matches(key, "m") && activeGroupId) {
         setModal({ kind: "members", groupId: activeGroupId });
       } else if (matches(key, "g") && activeGroupId) {
         setModal({ kind: "groupdebug", groupId: activeGroupId });
+      } else if (matches(key, "e") && activeGroupIsAdmin && activeGroupId) {
+        setModal({ kind: "groupinfo", groupId: activeGroupId });
       } else if (matches(key, "r")) setModal({ kind: "relays" });
       else if (matches(key, "p")) setModal({ kind: "profile" });
       else if (matches(key, "K")) setModal({ kind: "keypkg" });

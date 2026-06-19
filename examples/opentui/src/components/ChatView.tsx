@@ -19,9 +19,10 @@ export function ChatView(props: {
   composing: boolean;
   onFocusInput: () => void;
 }) {
-  const { messages } = useChat();
+  const { messages, pagination } = useChat();
   const group = props.activeGroup;
   const list = group ? (messages[group.idStr] ?? []) : [];
+  const pager = group ? pagination[group.idStr] : undefined;
   const title = group
     ? ` ${groupName(group)} · epoch ${groupEpoch(group)} · ${groupMemberCount(group)} members `
     : " no active group ";
@@ -44,9 +45,18 @@ export function ChatView(props: {
         ) : list.length === 0 ? (
           <text fg="#666">no messages yet — press n to compose.</text>
         ) : (
-          list.map((message) => (
-            <MessageRow key={message.id} message={message} />
-          ))
+          <>
+            <text fg="#555">
+              {pager?.loadingOlder
+                ? "loading older messages…"
+                : pager?.exhausted
+                  ? "— start of history —"
+                  : "↑ press u to load older messages"}
+            </text>
+            {list.map((message) => (
+              <MessageRow key={message.id} message={message} />
+            ))}
+          </>
         )}
       </scrollbox>
       <InputBar focused={props.composing} onFocus={props.onFocusInput} />

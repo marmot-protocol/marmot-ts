@@ -93,6 +93,13 @@ export type GroupsManagerEvents<
   destroyed: (groupId: Uint8Array) => void;
   /** Emitted when the client leaves a group via self-remove proposal events */
   left: (groupId: Uint8Array) => void;
+  /**
+   * Emitted when an inbound commit removed the client from a group — an admin's
+   * involuntary Remove, or a peer committing the client's own self_remove. The
+   * group's local state is kept as a `removedFromGroup` tombstone; the app may
+   * call {@link GroupsManager.destroy} to purge it.
+   */
+  removed: (groupId: Uint8Array) => void;
 };
 
 /**
@@ -152,6 +159,7 @@ export class GroupsManager<
     // Forward the registry's cache-level events as our own.
     this.#registry.on("updated", (groups) => this.emit("updated", groups));
     this.#registry.on("loaded", (group) => this.emit("loaded", group));
+    this.#registry.on("removed", (group) => this.emit("removed", group.id));
   }
 
   /** Returns the list of currently loaded group instances */

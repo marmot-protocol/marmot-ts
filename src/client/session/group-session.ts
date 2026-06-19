@@ -80,6 +80,13 @@ export type AutoCommitIngestResult = {
   actorPubkey: string;
 };
 
+export type RemovedIngestResult = {
+  kind: "removed";
+  result: import("ts-mls").ProcessMessageResult;
+  event: NostrEvent;
+  message: import("ts-mls").MlsMessage;
+};
+
 export type IngestResult =
   | ProcessedIngestResult
   | RejectedIngestResult
@@ -87,6 +94,7 @@ export type IngestResult =
   | DeferredIngestResult
   | InvalidatedIngestResult
   | AutoCommitIngestResult
+  | RemovedIngestResult
   | UnreadableIngestResult;
 
 export type DispositionedIngestResult = IngestResult & {

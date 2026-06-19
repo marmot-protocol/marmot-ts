@@ -156,6 +156,22 @@ export type AutoCommitIngestResult<TEnvelope> = {
   actorPubkey: string;
 };
 
+/**
+ * An inbound commit that removed *this* client from the group — an admin's
+ * involuntary `Remove`, or a peer committing this client's own `self_remove`
+ * (`protocol-core/member-departure.md`). The commit applied and advanced state
+ * to the `removedFromGroup` tombstone: no secrets advanced, so nothing further
+ * can be decrypted, and retained history is moot. The transport-owning layer
+ * surfaces this (a `removed` event); local-state teardown is left to the app —
+ * the engine keeps the tombstone.
+ */
+export type RemovedIngestResult<TEnvelope> = {
+  kind: "removed";
+  result: ProcessMessageResult;
+  envelope: TEnvelope;
+  message: MlsMessage;
+};
+
 /** Result from ingesting group transport envelopes. */
 export type IngestResult<TEnvelope> =
   | ProcessedIngestResult<TEnvelope>
@@ -164,6 +180,7 @@ export type IngestResult<TEnvelope> =
   | DeferredIngestResult<TEnvelope>
   | InvalidatedIngestResult<TEnvelope>
   | AutoCommitIngestResult<TEnvelope>
+  | RemovedIngestResult<TEnvelope>
   | UnreadableIngestResult<TEnvelope>;
 
 /** An {@link IngestResult} carrying its protocol-visible {@link Disposition}. */

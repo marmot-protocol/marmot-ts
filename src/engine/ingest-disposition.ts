@@ -23,6 +23,10 @@ export function ingestResultDisposition<TEnvelope>(
       // A locally-staged self_remove-only commit (B6) — an accepted local action,
       // not an inbound message disposition.
       return disposition.accepted();
+    case "removed":
+      // A valid commit that legitimately removed us — accepted inbound; terminal
+      // for our membership (member-departure.md).
+      return disposition.accepted();
     case "skipped":
       switch (result.reason) {
         case "past-epoch":

@@ -519,6 +519,21 @@ export async function* ingestEnvelopes<TEnvelope>(
 
         const parentState = ctx.getState();
         ctx.setState(result.newState);
+
+        // The commit removed *us* (an admin's Remove, or a peer committing our
+        // own self_remove). State is now the `removedFromGroup` tombstone: no
+        // secrets advanced, so nothing else in this batch can be decrypted and
+        // retained history is moot. Surface it and stop the generator — there is
+        // nothing left to process once we are out (member-departure.md).
+        if (result.newState.groupActiveState.kind === "removedFromGroup") {
+          log(
+            "commit envelope:%s removed us from the group",
+            envelopeLabel(envelope),
+          );
+          yield { kind: "removed", result, envelope, message };
+          return;
+        }
+
         ctx.retained.record(parentState, message, result.newState);
         log(
           "commit envelope:%s applied – new epoch:%d",
@@ -565,12 +580,23 @@ export async function* ingestEnvelopes<TEnvelope>(
           ctx.getState().groupContext.epoch,
         );
         const rep = retainedPool[0];
-        yield {
-          kind: "processed",
-          result: resolution.result,
-          envelope: rep.envelope,
-          message: rep.message,
-        };
+        // The canonical branch we rewound onto may itself have removed us; the
+        // winning tip is now live state, so report `removed` rather than
+        // `processed` (member-departure.md). The rewind's `invalidated`
+        // retractions below are still reported — they are independent.
+        yield ctx.getState().groupActiveState.kind === "removedFromGroup"
+          ? {
+              kind: "removed",
+              result: resolution.result,
+              envelope: rep.envelope,
+              message: rep.message,
+            }
+          : {
+              kind: "processed",
+              result: resolution.result,
+              envelope: rep.envelope,
+              message: rep.message,
+            };
         for (let i = 1; i < retainedPool.length; i++)
           yield {
             kind: "skipped",

@@ -55,6 +55,8 @@ export type {
   SkippedIngestResult,
   DeferredIngestResult,
   InvalidatedIngestResult,
+  AutoCommitIngestResult,
+  RemovedIngestResult,
   UnreadableIngestResult,
 } from "../session/group-session.js";
 export { ingestResultDisposition } from "../session/group-session.js";
@@ -137,6 +139,14 @@ export type MarmotGroupEvents<
   stateSaved: (group: MarmotGroup<THistory, TMedia>) => void;
   /** Emitted when the group is destroyed */
   destroyed: (group: MarmotGroup<THistory, TMedia>) => void;
+  /**
+   * Emitted when an inbound commit removed this member from the group — an
+   * admin's involuntary Remove, or a peer committing this member's own
+   * self_remove. Local state is kept as a `removedFromGroup` tombstone (it is
+   * persisted, but the group can no longer send or decrypt); the application
+   * decides when to call {@link MarmotGroup.destroy} to purge it.
+   */
+  removed: (group: MarmotGroup<THistory, TMedia>) => void;
   /** Emitted when history persistence fails (best-effort, non-blocking) */
   historyError: (error: Error) => void;
 };
@@ -420,6 +430,16 @@ export class MarmotGroup<
         } catch {
           /* rolled back; retried on a later ingest */
         }
+      }
+
+      // An inbound commit removed us (involuntary Remove, or a peer committing
+      // our own self_remove). The session has already applied + persisted the
+      // `removedFromGroup` tombstone; surface it so the app can react. Per the
+      // chosen policy we keep the tombstone rather than auto-destroying — the
+      // app calls destroy() when it wants to purge.
+      if (result.kind === "removed") {
+        this.log("removed from group by inbound commit");
+        this.emit("removed", this);
       }
       yield result;
     }

@@ -43,6 +43,8 @@ export type GroupRegistryEvents<
   updated: (groups: MarmotGroup<THistory, TMedia>[]) => void;
   /** Emitted when a group is loaded from the store into the cache. */
   loaded: (group: MarmotGroup<THistory, TMedia>) => void;
+  /** Emitted when an inbound commit removed the client from a tracked group. */
+  removed: (group: MarmotGroup<THistory, TMedia>) => void;
 };
 
 /**
@@ -67,7 +69,10 @@ export class GroupRegistry<
   #groups = new Map<string, MarmotGroup<THistory, TMedia>>();
 
   /** Per-group listener handles, so we can detach them when a group is unloaded. */
-  #groupListeners = new Map<string, { destroyed: () => void }>();
+  #groupListeners = new Map<
+    string,
+    { destroyed: () => void; removed: () => void }
+  >();
 
   /** Tracks in-flight group loads to prevent duplicate instances under concurrency */
   #groupLoadPromises = new Map<
@@ -132,7 +137,11 @@ export class GroupRegistry<
     // If a group self-destroys, drop it from the cache so `loaded` stays accurate.
     const destroyed = () => this.untrack(id);
     group.on("destroyed", destroyed);
-    this.#groupListeners.set(id, { destroyed });
+    // Involuntary removal keeps the tombstone (group stays tracked); forward the
+    // signal so the manager can re-emit it to the application.
+    const removed = () => this.emit("removed", group);
+    group.on("removed", removed);
+    this.#groupListeners.set(id, { destroyed, removed });
 
     this.emit("updated", this.loaded);
   }
@@ -147,6 +156,7 @@ export class GroupRegistry<
     const listeners = this.#groupListeners.get(id);
     if (listeners) {
       existing.off("destroyed", listeners.destroyed);
+      existing.off("removed", listeners.removed);
       this.#groupListeners.delete(id);
     }
 

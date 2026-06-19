@@ -1,3 +1,4 @@
+import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { normalizeRelayUrl } from "applesauce-core/helpers";
 import {
@@ -14,6 +15,7 @@ import type { EventStore } from "applesauce-core/event-store";
 import {
   createApplicationMessageIntent,
   createChatRumor,
+  type GroupRumorHistory,
   type ListedKeyPackage,
   type MarmotClient,
   type MarmotGroup,
@@ -31,7 +33,6 @@ import {
   AGENT_TEXT_STREAM_ROLE_SEND,
   createInboxRelayListEvent,
   createNip65RelayListEvent,
-  deserializeApplicationData,
   getCredentialPubkey,
   getKeyPackage,
   getKeyPackageIdentifier,
@@ -54,6 +55,12 @@ import {
 } from "./format.js";
 
 const GIFT_WRAP_KIND = 1059;
+
+/** Kind of the chat rumors {@link createChatRumor} produces (Marmot chat message). */
+const CHAT_MESSAGE_KIND = 9;
+
+/** How many of the newest messages the live history window holds per group. */
+const HISTORY_WINDOW = 50;
 
 /**
  * Group transport diagnostics (relays + h-tag for sub/publish).
@@ -367,8 +374,12 @@ export class MarmotController {
   readonly #groupSubs = new Map<string, { unsubscribe(): void }>();
   readonly #bound = new Set<string>();
   readonly #seenEvents = new Set<string>();
-  readonly #seenMessages = new Set<string>();
+  /** Per-group rumor union (id → message), the source of the rendered timeline. */
+  readonly #messageIndex = new Map<string, Map<string, ChatMessage>>();
+  /** The rendered, oldest-first timeline projected from {@link #messageIndex}. */
   readonly #messages = new Map<string, ChatMessage[]>();
+  /** Live `history.subscribe()` generators, one per attached group. */
+  readonly #historySubs = new Map<string, AsyncGenerator<Rumor[]>>();
 
   readonly #listeners = new Set<Listener>();
 
@@ -454,6 +465,8 @@ export class MarmotController {
     this.#watchAbort = true;
     this.#inviteSub?.unsubscribe();
     for (const sub of this.#groupSubs.values()) sub.unsubscribe();
+    for (const gen of this.#historySubs.values()) void gen.return(undefined);
+    this.#historySubs.clear();
     this.#deps.pool.close();
   }
 
@@ -812,9 +825,10 @@ export class MarmotController {
     const pubkey = await group.signer.getPublicKey();
     const rumor = createChatRumor({ pubkey, content: text });
     const intent = createApplicationMessageIntent(rumor);
+    // `send` saves the rumor to group.history, which the per-group
+    // history.subscribe() loop projects into the timeline — including this
+    // self-sent message — so no manual local echo is needed here.
     await this.#deps.client.groups.send(group.id, intent);
-    // Self-echo is skipped on ingest, so append the local copy immediately.
-    this.#addMessage(group, rumor.id, pubkey, text, rumor.created_at, true);
   }
 
   async publishKeyPackage(): Promise<void> {
@@ -1087,12 +1101,15 @@ export class MarmotController {
     this.#groups.set(id, group);
     if (!this.#messages.has(id)) this.#messages.set(id, []);
     if (!this.#bound.has(id)) {
-      group.on("applicationMessage", (bytes: Uint8Array) =>
-        this.#onAppMessage(group, bytes),
-      );
       group.on("stateChanged", () => this.#publish());
       this.#bound.add(id);
     }
+    // Project the group's persisted + live rumor history into the timeline.
+    // This replaces the old `applicationMessage` echo: both self-sent (via
+    // `send`) and ingested messages are saved to group.history, and the
+    // subscription below delivers them. The first yield is the persisted
+    // backlog from disk, so reopening a group shows its history instantly.
+    this.#startHistory(group);
     const relays = group.relays?.length
       ? relaySet(group.relays)
       : this.#deps.relays;
@@ -1131,6 +1148,11 @@ export class MarmotController {
   #detachGroup(id: string): void {
     this.#groupSubs.get(id)?.unsubscribe();
     this.#groupSubs.delete(id);
+    const history = this.#historySubs.get(id);
+    if (history) {
+      this.#historySubs.delete(id);
+      void history.return(undefined);
+    }
     this.#groups.delete(id);
     this.#publish();
   }
@@ -1236,45 +1258,83 @@ export class MarmotController {
     }
   }
 
-  #onAppMessage(group: MarmotGroup, bytes: Uint8Array): void {
+  /**
+   * Start projecting a group's rumor history into the timeline. `subscribe`
+   * yields the newest {@link HISTORY_WINDOW} messages from disk immediately, then
+   * re-yields the (growing) timeline on every saved rumor — both self-sent and
+   * ingested. Older messages beyond the window are loaded on demand by
+   * {@link loadOlder}. Idempotent per group.
+   *
+   * Note: relay backfill is the existing `#attachGroup(catchUp)` path — ingesting
+   * a kind-445 event saves its rumor to history, which this subscription
+   * delivers. Backfill can only decrypt epochs still retained by the engine's
+   * bounded rewind horizon; messages from pruned epochs surface as `unreadable`
+   * in {@link #drainIngest} and cannot be recovered.
+   */
+  #startHistory(group: MarmotGroup): void {
+    const id = group.idStr;
+    const history = group.history as unknown as GroupRumorHistory | undefined;
+    if (!history || this.#historySubs.has(id)) return;
+    const gen = history.subscribe({
+      kinds: [CHAT_MESSAGE_KIND],
+      limit: HISTORY_WINDOW,
+    });
+    this.#historySubs.set(id, gen);
+    void this.#consumeHistory(group, gen);
+  }
+
+  async #consumeHistory(
+    group: MarmotGroup,
+    gen: AsyncGenerator<Rumor[]>,
+  ): Promise<void> {
+    const id = group.idStr;
     try {
-      const rumor = deserializeApplicationData(bytes);
-      this.#addMessage(
-        group,
-        rumor.id,
-        rumor.pubkey,
-        rumor.content,
-        rumor.created_at,
-        rumor.pubkey === this.#deps.pubkey,
-      );
+      for await (const rumors of gen) {
+        // Stop if the controller is shutting down or this group was detached
+        // and re-attached with a newer generator.
+        if (this.#watchAbort || this.#historySubs.get(id) !== gen) break;
+        // An empty yield means the history was purged; clear the union too.
+        this.#upsertMessages(group, rumors, rumors.length === 0);
+      }
     } catch (err) {
-      this.log("(received an app message that could not be decoded)", "warn");
-      if (this.#deps.debug) this.logError(err);
+      if (!this.#watchAbort) this.logError(err);
     }
   }
 
-  #addMessage(
-    group: MarmotGroup,
-    id: string,
-    authorPubkey: string,
-    content: string,
-    createdAt: number,
-    mine: boolean,
-  ): void {
-    if (this.#seenMessages.has(id)) return;
-    this.#seenMessages.add(id);
-    const message: ChatMessage = {
-      id,
+  /**
+   * Merge `rumors` into the group's message union and re-project the rendered,
+   * oldest-first timeline. Used by both the live history subscription and
+   * {@link loadOlder} pagination; keying by rumor id makes re-delivery (e.g.
+   * relay backfill) idempotent.
+   */
+  #upsertMessages(group: MarmotGroup, rumors: Rumor[], clear = false): void {
+    const id = group.idStr;
+    let index = this.#messageIndex.get(id);
+    if (!index) {
+      index = new Map<string, ChatMessage>();
+      this.#messageIndex.set(id, index);
+    }
+    if (clear) index.clear();
+    for (const rumor of rumors)
+      index.set(rumor.id, this.#toChatMessage(group, rumor));
+    const sorted = [...index.values()].sort(
+      (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
+    );
+    this.#messages.set(id, sorted);
+    this.#publish();
+  }
+
+  #toChatMessage(group: MarmotGroup, rumor: Rumor): ChatMessage {
+    const mine = rumor.pubkey === this.#deps.pubkey;
+    return {
+      id: rumor.id,
       groupId: group.idStr,
-      authorPubkey,
-      authorLabel: mine ? "you" : npubShort(authorPubkey),
-      content,
-      createdAt,
+      authorPubkey: rumor.pubkey,
+      authorLabel: mine ? "you" : npubShort(rumor.pubkey),
+      content: rumor.content,
+      createdAt: rumor.created_at,
       mine,
     };
-    const list = this.#messages.get(group.idStr) ?? [];
-    this.#messages.set(group.idStr, [...list, message]);
-    this.#publish();
   }
 
   #requireActive(): MarmotGroup {

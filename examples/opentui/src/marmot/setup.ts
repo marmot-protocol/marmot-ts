@@ -15,12 +15,18 @@ import { relaySet } from "applesauce-core/helpers/relays";
 import { createEventLoaderForStore } from "applesauce-loaders/loaders";
 import { RelayPool as AsRelayPool } from "applesauce-relay/pool";
 
-import { MarmotClient } from "@internet-privacy/marmot-ts";
-import { InMemoryKeyValueStore } from "@internet-privacy/marmot-ts/extra";
+import type { Rumor } from "applesauce-common/helpers/gift-wrap";
+
+import { GroupRumorHistory, MarmotClient } from "@internet-privacy/marmot-ts";
+import {
+  InMemoryKeyValueStore,
+  KeyValueRumorHistoryBackend,
+} from "@internet-privacy/marmot-ts/extra";
 
 import { accountProofSignerFor } from "../helpers/account-proof.js";
 import { Directory, LOOKUP_RELAYS } from "../helpers/discovery.js";
 import { FileKeyValueStore } from "../helpers/file-store.js";
+import { PrefixedKeyValueStore } from "../helpers/prefixed-store.js";
 import { RelayPool } from "../helpers/relay-pool.js";
 import { MarmotController, type StatusLine } from "./controller.js";
 
@@ -70,6 +76,7 @@ const STATE_FILES = [
   "groups.json",
   "keypackages.json",
   "invites.json",
+  "messages.json",
 ] as const;
 
 /**
@@ -188,6 +195,24 @@ export async function createController(
   const directory = new Directory(eventStore);
   const pool = new RelayPool(nostr, bootstrapRelays, directory);
 
+  // One shared message store holds every group's rumor history. Each group's
+  // backend is scoped to a `${groupHex}:` keyspace so groups never read or
+  // clear each other's messages. Keyed by rumor id, so re-ingesting a group
+  // event (e.g. relay backfill) overwrites in place rather than duplicating.
+  const messagesStore = makeStore<Rumor>(
+    opts.ephemeral,
+    join(dataDir, "messages.json"),
+  );
+  const historyFactory = GroupRumorHistory.makeFactory(
+    (groupId) =>
+      new KeyValueRumorHistoryBackend(
+        new PrefixedKeyValueStore(
+          messagesStore,
+          Buffer.from(groupId).toString("hex") + ":",
+        ),
+      ),
+  );
+
   const client = new MarmotClient({
     signer: account.signer,
     accountProofSigner: accountProofSignerFor(account),
@@ -204,6 +229,7 @@ export async function createController(
       opts.ephemeral,
       join(dataDir, "invites.json"),
     ) as any,
+    historyFactory,
     clientId,
   });
 

@@ -23,6 +23,36 @@ const ROLE_MASK =
   AGENT_TEXT_STREAM_ROLE_SEND |
   AGENT_TEXT_STREAM_ROLE_FANOUT;
 
+/**
+ * MLS LeafNode extension types that advertise each agent-text-stream-QUIC member
+ * role. A member advertises a role by listing the role's extension type in its
+ * LeafNode capabilities (agent-text-stream-quic-v1.md "role capability"); a
+ * group's `required_member_roles` mask is enforced against these on invite/join.
+ * A client that does not advertise a required role capability cannot be invited
+ * into the group.
+ *
+ * @see darkmatter `crates/traits/src/agent_text_stream.rs`
+ *   (`AGENT_TEXT_STREAM_QUIC_{RECEIVE,SEND,FANOUT}_CAPABILITY`)
+ */
+export const AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE = 0xf2d1;
+export const AGENT_TEXT_STREAM_QUIC_SEND_EXTENSION_TYPE = 0xf2d2;
+export const AGENT_TEXT_STREAM_QUIC_FANOUT_EXTENSION_TYPE = 0xf2d4;
+
+/**
+ * All agent-text-stream-QUIC role capability extension types, ascending — the
+ * full registered set (`registries.md`).
+ *
+ * Note: marmot-ts only *advertises* `receive` in its KeyPackage capabilities
+ * (see {@link ensureMarmotCapabilities}), because it has no QUIC data plane and
+ * `receive` is satisfiable by reading the final MLS message. This list is the
+ * registry reference for all three roles, not the set marmot-ts claims.
+ */
+export const AGENT_TEXT_STREAM_QUIC_ROLE_EXTENSION_TYPES = [
+  AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
+  AGENT_TEXT_STREAM_QUIC_SEND_EXTENSION_TYPE,
+  AGENT_TEXT_STREAM_QUIC_FANOUT_EXTENSION_TYPE,
+] as const;
+
 const COMPONENT_STATE_LEN = 12;
 // 65519 (not 64*1024) keeps a maximum-length frame's ciphertext within one
 // QUIC datagram, matching darkmatter AGENT_TEXT_STREAM_MAX_PLAINTEXT_FRAME_LEN

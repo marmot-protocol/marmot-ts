@@ -11,6 +11,9 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+  AGENT_TEXT_STREAM_QUIC_FANOUT_EXTENSION_TYPE,
+  AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
+  AGENT_TEXT_STREAM_QUIC_SEND_EXTENSION_TYPE,
   ensureMarmotCapabilities,
   LAST_RESORT_EXTENSION_TYPE,
   marmotRequiredCapabilitiesExtension,
@@ -33,6 +36,31 @@ describe("ensureMarmotCapabilities", () => {
     expect(result.extensions).toContain(1);
     expect(result.extensions).toContain(2);
     expect(result.extensions).toContain(3);
+  });
+
+  it("should advertise only the agent-text-stream-QUIC receive role (0xf2d1)", () => {
+    const capabilities: Capabilities = {
+      versions: [protocolVersions.mls10],
+      ciphersuites: [ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519],
+      extensions: [],
+      proposals: [],
+      credentials: [defaultCredentialTypes.basic],
+    };
+
+    const result = ensureMarmotCapabilities(capabilities);
+
+    // `receive` is honest for a non-QUIC client (it reads the final MLS message)
+    // and is what darkmatter's default group requires. `send`/`fanout` would
+    // claim a QUIC data plane marmot-ts does not have, so they are NOT advertised.
+    expect(result.extensions).toContain(
+      AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
+    );
+    expect(result.extensions).not.toContain(
+      AGENT_TEXT_STREAM_QUIC_SEND_EXTENSION_TYPE,
+    );
+    expect(result.extensions).not.toContain(
+      AGENT_TEXT_STREAM_QUIC_FANOUT_EXTENSION_TYPE,
+    );
   });
 
   it("should advertise the app_data_update and self_remove proposal types", () => {
@@ -104,6 +132,7 @@ describe("ensureMarmotCapabilities", () => {
       appDataDictionaryExtensionType,
       LAST_RESORT_EXTENSION_TYPE,
       ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+      AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
     ]);
     expect(result.proposals).toEqual([
       appDataUpdateProposalType,

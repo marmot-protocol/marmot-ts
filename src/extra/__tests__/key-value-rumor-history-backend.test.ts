@@ -171,7 +171,9 @@ describe("GroupRumorHistory over KeyValueRumorHistoryBackend", () => {
     const backend = makeBackend();
     // 120 rumors at increasing timestamps
     for (let i = 0; i < 120; i++) {
-      await backend.addRumor(makeRumor({ id: nextId(), created_at: 1_000 + i }));
+      await backend.addRumor(
+        makeRumor({ id: nextId(), created_at: 1_000 + i }),
+      );
     }
 
     const history = new GroupRumorHistory(backend);

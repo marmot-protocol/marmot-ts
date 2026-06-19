@@ -29,7 +29,9 @@ export class KeyValueRumorHistoryBackend implements GroupRumorHistoryBackend {
     const filtersArray = Array.isArray(filters) ? filters : [filters];
 
     const keys = await this.store.keys();
-    const stored = await Promise.all(keys.map((key) => this.store.getItem(key)));
+    const stored = await Promise.all(
+      keys.map((key) => this.store.getItem(key)),
+    );
 
     const seen = new Set<string>();
     const results: Rumor[] = [];

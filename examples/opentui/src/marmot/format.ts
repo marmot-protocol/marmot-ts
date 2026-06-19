@@ -19,6 +19,10 @@ export function groupName(group: MarmotGroup): string {
   return group.groupData?.name || short(group.idStr);
 }
 
+export function groupIsAdmin(group: MarmotGroup, pubkey: string): boolean {
+  return group.groupData?.adminPubkeys.includes(pubkey) ?? false;
+}
+
 export function groupEpoch(group: MarmotGroup): number {
   return Number(group.state.groupContext.epoch);
 }

@@ -3,14 +3,15 @@ import type {
   UnreadInvite,
 } from "@internet-privacy/marmot-ts/client";
 
-import {
-  groupEpoch,
-  groupMemberCount,
-  groupName,
-  npubShort,
-} from "../marmot/format.js";
+import { groupEpoch, groupMemberCount, groupName, npubShort } from "../marmot/format.js";
+import { useDisplayName } from "../hooks/use-profile.js";
 import { ListPanel } from "./ListPanel.js";
 import type { Pane } from "./focus.js";
+
+/** Resolves an inviter's display name reactively, falling back to a short npub. */
+function InviteName(props: { pubkey: string }) {
+  return <>{useDisplayName(props.pubkey, npubShort(props.pubkey))}</>;
+}
 
 export function Sidebar(props: {
   groups: MarmotGroup[];
@@ -41,7 +42,7 @@ export function Sidebar(props: {
         focused={props.focus === "invites"}
         items={props.invites.map((invite) => ({
           id: invite.id,
-          label: npubShort(invite.pubkey),
+          label: <InviteName pubkey={invite.pubkey} />,
         }))}
         selectedIndex={props.inviteIndex}
         empty="none yet"

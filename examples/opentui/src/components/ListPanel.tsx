@@ -1,6 +1,9 @@
+import type { ReactNode } from "react";
+
 export interface ListPanelItem {
   id: string;
-  label: string;
+  /** A plain string, or a node (e.g. one that resolves a name reactively). */
+  label: ReactNode;
   detail?: string;
   level?: "info" | "warn" | "error";
 }

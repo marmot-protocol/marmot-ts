@@ -8,23 +8,32 @@ import {
   useWatchedGroups,
   useWatchedInvites,
 } from "../hooks/use-marmot.js";
-import { ActivityLog } from "./ActivityLog.js";
+import { useProfile } from "../hooks/use-profile.js";
 import { ChatView } from "./ChatView.js";
 import { ChoicePrompt } from "./ChoicePrompt.js";
+import { GroupDebugModal } from "./GroupDebugModal.js";
+import { GroupInfoModal } from "./GroupInfoModal.js";
 import { Header } from "./Header.js";
 import { HelpOverlay } from "./HelpOverlay.js";
+import { KeyPackageModal } from "./KeyPackageModal.js";
 import { KeybindingFooter, type KeyHint } from "./KeybindingFooter.js";
 import { ProfileModal } from "./ProfileModal.js";
+import { ProfilePanel } from "./ProfilePanel.js";
 import { QrModal } from "./QrModal.js";
 import { RelaysModal } from "./RelaysModal.js";
 import { Sidebar } from "./Sidebar.js";
 import { TextPrompt } from "./TextPrompt.js";
 import { nextPane, type Pane, prevPane } from "./focus.js";
+import { groupIsAdmin } from "../marmot/format.js";
 
 type Modal =
   | { kind: "new" }
+  | { kind: "new-relays"; name: string }
+  | { kind: "new-manual-relays"; name: string }
   | { kind: "invite" }
   | { kind: "keypkg" }
+  | { kind: "groupdebug"; groupId: string }
+  | { kind: "groupinfo"; groupId: string }
   | { kind: "profile" }
   | { kind: "relays" }
   | { kind: "myqr" }
@@ -67,10 +76,15 @@ function isTextEntryKey(key: Key): boolean {
   return key.sequence?.length === 1 || key.name?.length === 1;
 }
 
+function parseRelays(text: string): string[] {
+  return text.split(/[\s,]+/).filter(Boolean);
+}
+
 export function App(props: { onQuit: () => void }) {
   const controller = useController();
-  const { me, activeGroupId, profile, outboxRelays, inboxRelays, status } =
+  const { me, activeGroupId, outboxRelays, inboxRelays, keyPackages } =
     useChat();
+  const myProfile = useProfile(me.pubkey);
   const groups = useWatchedGroups();
   const invites = useWatchedInvites();
 
@@ -78,7 +92,6 @@ export function App(props: { onQuit: () => void }) {
   const [focus, setFocus] = useState<Pane>("groups");
   const [groupIndex, setGroupIndex] = useState(0);
   const [inviteIndex, setInviteIndex] = useState(0);
-  const [activityIndex, setActivityIndex] = useState(0);
   const [modal, setModal] = useState<Modal>(null);
   const [composing, setComposing] = useState(false);
 
@@ -96,24 +109,18 @@ export function App(props: { onQuit: () => void }) {
     () => setInviteIndex((index) => clamp(index, invites.length)),
     [invites],
   );
-  useEffect(
-    () => setActivityIndex((index) => clamp(index, status.slice(-8).length)),
-    [status],
-  );
-
   const selectedGroup = groups[groupIndex];
   const activeGroup = groups.find((group) => group.idStr === activeGroupId);
   const selectedInvite = invites[inviteIndex];
+  const selectedGroupIsAdmin = selectedGroup
+    ? groupIsAdmin(selectedGroup, me.pubkey)
+    : false;
 
   const moveSelection = (delta: number): void => {
     if (focus === "groups") {
       setGroupIndex((index) => clamp(index + delta, groups.length));
     } else if (focus === "invites") {
       setInviteIndex((index) => clamp(index + delta, invites.length));
-    } else if (focus === "activity") {
-      setActivityIndex((index) =>
-        clamp(index + delta, status.slice(-8).length),
-      );
     }
   };
 
@@ -140,21 +147,28 @@ export function App(props: { onQuit: () => void }) {
       { key: "enter", label: "open" },
       { key: "n", label: "new group" },
       { key: "i", label: "invite" },
+      ...(selectedGroupIsAdmin ? [{ key: "e", label: "edit info" }] : []),
       { key: "L", label: "leave active" },
     ],
     invites: [
       { key: "j/k", label: "move" },
       { key: "enter", label: "accept" },
       { key: "a", label: "accept" },
+      { key: "r", label: "relays" },
+      { key: "p", label: "profile" },
     ],
     chat: [
       { key: "n", label: "compose" },
       { key: "i", label: "invite" },
-    ],
-    activity: [
-      { key: "j/k", label: "move" },
+      { key: "g", label: "group info" },
       { key: "r", label: "relays" },
       { key: "p", label: "profile" },
+      { key: "K", label: "key package" },
+    ],
+    profile: [
+      { key: "i", label: "invite QR" },
+      { key: "p", label: "edit profile" },
+      { key: "r", label: "edit relays" },
       { key: "K", label: "key package" },
     ],
   };
@@ -175,7 +189,9 @@ export function App(props: { onQuit: () => void }) {
     const textInputFocused =
       composing ||
       modal?.kind === "new" ||
+      modal?.kind === "new-manual-relays" ||
       modal?.kind === "invite" ||
+      modal?.kind === "groupinfo" ||
       modal?.kind === "profile" ||
       modal?.kind === "relays";
 
@@ -238,15 +254,25 @@ export function App(props: { onQuit: () => void }) {
     if (focus === "groups") {
       if (matches(key, "n")) setModal({ kind: "new" });
       else if (matches(key, "i")) inviteToActive();
-      else if (matches(key, "L")) void controller.leave();
+      else if (matches(key, "e") && selectedGroupIsAdmin && selectedGroup) {
+        setModal({ kind: "groupinfo", groupId: selectedGroup.idStr });
+      } else if (matches(key, "L")) void controller.leave();
     } else if (focus === "invites") {
       if (matches(key, "a")) acceptInvite();
+      else if (matches(key, "r")) setModal({ kind: "relays" });
+      else if (matches(key, "p")) setModal({ kind: "profile" });
     } else if (focus === "chat") {
       if (matches(key, "n")) setComposing(true);
       else if (matches(key, "i")) inviteToActive();
-    } else if (focus === "activity") {
-      if (matches(key, "r")) setModal({ kind: "relays" });
+      else if (matches(key, "g") && activeGroupId) {
+        setModal({ kind: "groupdebug", groupId: activeGroupId });
+      } else if (matches(key, "r")) setModal({ kind: "relays" });
       else if (matches(key, "p")) setModal({ kind: "profile" });
+      else if (matches(key, "K")) setModal({ kind: "keypkg" });
+    } else if (focus === "profile") {
+      if (matches(key, "i")) setModal({ kind: "myqr" });
+      else if (matches(key, "p")) setModal({ kind: "profile" });
+      else if (matches(key, "r")) setModal({ kind: "relays" });
       else if (matches(key, "K")) setModal({ kind: "keypkg" });
     }
   });
@@ -274,20 +300,18 @@ export function App(props: { onQuit: () => void }) {
           inviteIndex={inviteIndex}
           onFocusPane={setFocus}
         />
-        <box flexGrow={1} flexDirection="column">
-          <ChatView
-            activeGroup={activeGroup}
-            focused={focus === "chat"}
-            composing={composing}
-            onFocusInput={() => setFocus("chat")}
-            onDoneComposing={() => setComposing(false)}
-          />
-          <ActivityLog
-            focused={focus === "activity"}
-            selectedIndex={activityIndex}
-            onFocus={() => setFocus("activity")}
-          />
-        </box>
+        <ChatView
+          activeGroup={activeGroup}
+          focused={focus === "chat"}
+          composing={composing}
+          onFocusInput={() => setFocus("chat")}
+          onDoneComposing={() => setComposing(false)}
+        />
+        <ProfilePanel
+          focused={focus === "profile"}
+          hints={panelHints.profile}
+          onFocus={() => setFocus("profile")}
+        />
       </box>
 
       <KeybindingFooter
@@ -308,9 +332,43 @@ export function App(props: { onQuit: () => void }) {
           title="new group"
           placeholder="group name"
           onSubmit={(value) => {
-            setModal(null);
             const name = value.trim();
-            if (name) void controller.createGroup(name);
+            setModal(name ? { kind: "new-relays", name } : null);
+          }}
+          onCancel={() => setModal(null)}
+        />
+      )}
+      {modal?.kind === "new-relays" && (
+        <ChoicePrompt
+          title="group relays"
+          options={[
+            {
+              name: "Use default outbox relays",
+              description: outboxRelays.join(", ") || "none loaded",
+            },
+            {
+              name: "Enter relays manually",
+              description: "space or comma separated relay URLs/domains",
+            },
+          ]}
+          onSelect={(index) => {
+            if (index === 0) {
+              setModal(null);
+              void controller.createGroup(modal.name, outboxRelays);
+            } else {
+              setModal({ kind: "new-manual-relays", name: modal.name });
+            }
+          }}
+          onCancel={() => setModal(null)}
+        />
+      )}
+      {modal?.kind === "new-manual-relays" && (
+        <TextPrompt
+          title="group relays"
+          placeholder="relay.damus.io, wss://relay.primal.net"
+          onSubmit={(value) => {
+            setModal(null);
+            void controller.createGroup(modal.name, parseRelays(value));
           }}
           onCancel={() => setModal(null)}
         />
@@ -327,24 +385,45 @@ export function App(props: { onQuit: () => void }) {
           onCancel={() => setModal(null)}
         />
       )}
+      {modal?.kind === "groupinfo" &&
+        groups.find((group) => group.idStr === modal.groupId) && (
+          <GroupInfoModal
+            group={groups.find((group) => group.idStr === modal.groupId)!}
+            onSave={(fields) => {
+              const name = fields.name.trim();
+              setModal(null);
+              void controller.updateGroupInfo(modal.groupId, {
+                name,
+                description: fields.description.trim(),
+              });
+            }}
+            onCancel={() => setModal(null)}
+          />
+        )}
+      {modal?.kind === "groupdebug" &&
+        groups.find((group) => group.idStr === modal.groupId) && (
+          <GroupDebugModal
+            group={groups.find((group) => group.idStr === modal.groupId)!}
+            onClose={() => setModal(null)}
+          />
+        )}
       {modal?.kind === "keypkg" && (
-        <ChoicePrompt
-          title="key package"
-          options={[
-            { name: "Publish a fresh KeyPackage", description: "" },
-            { name: "Rotate this device's KeyPackage", description: "" },
-          ]}
-          onSelect={(index) => {
+        <KeyPackageModal
+          summary={keyPackages}
+          onPublish={() => {
             setModal(null);
-            if (index === 0) void controller.publishKeyPackage();
-            else void controller.rotateKeyPackage();
+            void controller.publishKeyPackage();
+          }}
+          onRotate={() => {
+            setModal(null);
+            void controller.rotateKeyPackage();
           }}
           onCancel={() => setModal(null)}
         />
       )}
       {modal?.kind === "profile" && (
         <ProfileModal
-          profile={profile}
+          profile={myProfile?.metadata ?? null}
           onSave={(fields) => {
             setModal(null);
             void controller.saveProfile(fields);

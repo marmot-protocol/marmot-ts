@@ -27,6 +27,7 @@ export class RelayPool implements NostrNetworkInterface {
 
   readonly #pool: AsRelayPool;
   readonly #directory: Directory;
+  #closed = false;
 
   constructor(
     pool: AsRelayPool,
@@ -42,6 +43,7 @@ export class RelayPool implements NostrNetworkInterface {
     relays: string[],
     event: NostrEvent,
   ): Promise<Record<string, PublishResponse>> {
+    if (this.#closed) return {};
     const targets = resolveRelays(relays, this.defaultRelays);
     const responses = await this.#pool.publish(targets, event);
     const results: Record<string, PublishResponse> = {};
@@ -55,6 +57,7 @@ export class RelayPool implements NostrNetworkInterface {
     relays: string[],
     filters: Filter | Filter[],
   ): Promise<NostrEvent[]> {
+    if (this.#closed) return [];
     const targets = resolveRelays(relays, this.defaultRelays);
     const collected: NostrEvent[] = [];
     await new Promise<void>((resolve, reject) => {
@@ -71,11 +74,20 @@ export class RelayPool implements NostrNetworkInterface {
     relays: string[],
     filters: Filter | Filter[],
   ): Subscribable<NostrEvent> {
+    if (this.#closed) {
+      return {
+        subscribe: (observer) => {
+          observer.complete?.();
+          return { unsubscribe: () => {} };
+        },
+      };
+    }
     const targets = resolveRelays(relays, this.defaultRelays);
     return this.#pool.subscription(targets, filters);
   }
 
   async getUserInboxRelays(pubkey: string): Promise<string[]> {
+    if (this.#closed) return this.defaultRelays;
     const relays = await this.#directory.welcomeInboxes(
       pubkey,
       this.defaultRelays,
@@ -83,7 +95,14 @@ export class RelayPool implements NostrNetworkInterface {
     return relays.length ? relays : this.defaultRelays;
   }
 
+  get relayCount(): number {
+    return this.#pool.relays.size;
+  }
+
   close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#directory.close();
     for (const relay of [...this.#pool.relays.values()]) {
       this.#pool.remove(relay, true);
     }

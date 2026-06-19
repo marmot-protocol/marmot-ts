@@ -3,24 +3,43 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
+import { EventStore } from "applesauce-core/event-store";
 import { relaySet } from "applesauce-core/helpers/relays";
+import { createEventLoaderForStore } from "applesauce-loaders/loaders";
 import { RelayPool as AsRelayPool } from "applesauce-relay/pool";
 
 import { MarmotClient } from "@internet-privacy/marmot-ts";
 import { InMemoryKeyValueStore } from "@internet-privacy/marmot-ts/extra";
 
 import { accountProofSignerFor } from "../helpers/account-proof.js";
-import { Directory } from "../helpers/discovery.js";
+import { Directory, LOOKUP_RELAYS } from "../helpers/discovery.js";
 import { FileKeyValueStore } from "../helpers/file-store.js";
 import { RelayPool } from "../helpers/relay-pool.js";
-import { MarmotController } from "./controller.js";
+import { MarmotController, type StatusLine } from "./controller.js";
 
 const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
+
+export const HELP_TEXT = `Usage: marmot-opentui [options]
+
+Options:
+  --name <label>   Profile name; data + identity live in ~/.marmot-opentui/<label>/ (default: default)
+  --relay <url>    Relay URL to use. Repeatable. (default: ${DEFAULT_RELAYS.join(", ")})
+  --sec <hex>      Use a specific 32-byte hex Nostr secret key.
+  --ephemeral      Keep all state in memory.
+  --debug          Include full stack traces and cause chains in status errors.
+  --logs <path>    Enable debug logging and append status/debug lines to this file.
+  --help, -h       Print this help and exit.
+`;
+
+export function wantsHelp(argv: string[]): boolean {
+  return argv.includes("--help") || argv.includes("-h");
+}
 
 export interface CliOptions {
   label: string;
   ephemeral: boolean;
   debug: boolean;
+  logsPath: string;
   relays: string[];
   secOverride: string;
 }
@@ -38,7 +57,8 @@ export function parseArgs(argv: string[]): CliOptions {
   return {
     label: option("--name", "default"),
     ephemeral: flag("--ephemeral"),
-    debug: flag("--debug"),
+    logsPath: option("--logs", ""),
+    debug: flag("--debug") || Boolean(option("--logs", "")),
     relays: relaySet(explicitRelays),
     secOverride: option("--sec", ""),
   };
@@ -64,7 +84,7 @@ function makeStore<T>(ephemeral: boolean, path: string) {
 
 export async function createController(
   opts: CliOptions,
-  _onProgress: (line: string) => void,
+  onStatus: (line: StatusLine) => void,
 ): Promise<MarmotController> {
   const explicitRelays = opts.relays;
   const bootstrapRelays = explicitRelays.length
@@ -81,7 +101,19 @@ export async function createController(
   const pubkey = await account.signer.getPublicKey();
 
   const nostr = new AsRelayPool();
-  const directory = new Directory(nostr);
+
+  // One in-memory EventStore powers both the reactive UI (via `castUser().*$`
+  // and `use$`) and the imperative {@link Directory} lookups. Attaching a
+  // loader makes any subscription to a missing event fetch it from the
+  // bootstrap relays (always) and the public {@link LOOKUP_RELAYS} (fallback),
+  // batching + de-duplicating along the way.
+  const eventStore = new EventStore();
+  createEventLoaderForStore(eventStore, nostr, {
+    lookupRelays: LOOKUP_RELAYS,
+    extraRelays: bootstrapRelays,
+  });
+
+  const directory = new Directory(eventStore);
   const pool = new RelayPool(nostr, bootstrapRelays, directory);
 
   const client = new MarmotClient({
@@ -107,10 +139,12 @@ export async function createController(
     client,
     pool,
     directory,
+    eventStore,
     signer: account.signer,
     pubkey,
     relays: bootstrapRelays,
     clientId,
     debug: opts.debug,
+    statusLog: onStatus,
   });
 }

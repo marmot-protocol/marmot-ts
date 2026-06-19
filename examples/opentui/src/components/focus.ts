@@ -1,7 +1,7 @@
 /** The focusable panels the user cycles through with Tab / Shift+Tab. */
-export type Pane = "groups" | "invites" | "chat" | "activity";
+export type Pane = "groups" | "invites" | "chat" | "profile";
 
-export const PANES: Pane[] = ["groups", "invites", "chat", "activity"];
+export const PANES: Pane[] = ["groups", "invites", "chat", "profile"];
 
 export function nextPane(pane: Pane): Pane {
   return PANES[(PANES.indexOf(pane) + 1) % PANES.length];

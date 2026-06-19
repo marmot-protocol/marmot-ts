@@ -3,6 +3,7 @@ import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
 import type { ChatMessage } from "../marmot/controller.js";
 import { groupEpoch, groupMemberCount, groupName } from "../marmot/format.js";
 import { useChat } from "../hooks/use-marmot.js";
+import { useDisplayName } from "../hooks/use-profile.js";
 import { InputBar } from "./InputBar.js";
 
 /**
@@ -61,12 +62,15 @@ export function ChatView(props: {
 function MessageRow(props: { message: ChatMessage }) {
   const { message } = props;
   const time = new Date(message.createdAt * 1000).toLocaleTimeString();
+  // Resolve the author's kind 0 display name reactively, falling back to the
+  // short-npub label the controller precomputed while it loads. Own messages
+  // keep the "you" label.
+  const resolved = useDisplayName(message.authorPubkey, message.authorLabel);
+  const author = message.mine ? message.authorLabel : resolved;
   return (
     <text>
       <span fg="#444">{time} </span>
-      <span fg={message.mine ? "#7CFC00" : "#5FAFFF"}>
-        {message.authorLabel}
-      </span>
+      <span fg={message.mine ? "#7CFC00" : "#5FAFFF"}>{author}</span>
       <span fg="#555">: </span>
       {message.content}
     </text>

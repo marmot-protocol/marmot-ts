@@ -1,11 +1,11 @@
+import { castUser } from "applesauce-common/casts";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { getInboxes, getOutboxes } from "applesauce-core/helpers/mailboxes";
 import {
   getProfileContent,
   type ProfileContent,
 } from "applesauce-core/helpers/profile";
-import { EventStore } from "applesauce-core/event-store";
-import { createAddressLoader } from "applesauce-loaders/loaders";
+import type { EventStore } from "applesauce-core/event-store";
 
 import {
   getInboxRelays,
@@ -19,7 +19,9 @@ const METADATA_KIND = 0;
  * Public relays the {@link Directory} always falls back to when a user's relay
  * lists can't be found on the relays we already know. These are well-known
  * NIP-65 indexers/aggregators plus the White Noise relays, so we can discover
- * the outboxes of users we've never shared a relay with.
+ * the outboxes of users we've never shared a relay with. Wire these into the
+ * shared {@link EventStore}'s loader (see `setup.ts`) so reactive reads
+ * (`castUser(...).profile$`) and these imperative lookups share one cache.
  */
 export const LOOKUP_RELAYS = [
   "wss://relay.us.whitenoise.chat",
@@ -28,81 +30,48 @@ export const LOOKUP_RELAYS = [
   "wss://index.hzrd149.com",
 ];
 
-/** Minimal shape of the loader observables we consume (avoids an rxjs import). */
-type Subscribable<T> = {
-  subscribe(observer: {
-    next: (value: T) => void;
-    error: (err: unknown) => void;
-    complete: () => void;
-  }): { unsubscribe(): void };
-};
-
-/** Drain a loader observable into an array, with a safety timeout. */
-function collect(
-  observable: Subscribable<NostrEvent>,
-  timeoutMs = 10_000,
-): Promise<NostrEvent[]> {
-  return new Promise((resolve, reject) => {
-    const events: NostrEvent[] = [];
-    let done = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let sub: { unsubscribe(): void } | undefined;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      if (timer) clearTimeout(timer);
-      sub?.unsubscribe();
-      resolve(events);
-    };
-    sub = observable.subscribe({
-      next: (event) => events.push(event),
-      error: (err) => {
-        if (done) return;
-        done = true;
-        if (timer) clearTimeout(timer);
-        reject(err);
-      },
-      complete: finish,
-    });
-    if (!done) timer = setTimeout(finish, timeoutMs);
-  });
-}
-
 /**
- * Discovers other accounts' relay lists and profiles using applesauce's
- * {@link createAddressLoader | address loader}. The loader batches and
- * de-duplicates requests through a shared {@link EventStore}, follows relay
- * hints, and falls back to {@link LOOKUP_RELAYS} when an event can't be found
- * on the relays we're already connected to — so callers no longer hand-roll
- * NIP-65 lookups or relay unions.
+ * Imperative accessors for other accounts' relay lists and profiles, reading
+ * straight from the shared {@link EventStore}. Subscribing to a replaceable the
+ * store doesn't have triggers its `eventLoader` (configured in `setup.ts`),
+ * which batches/de-duplicates the request and falls back to
+ * {@link LOOKUP_RELAYS} — so callers no longer hand-roll NIP-65 lookups, and
+ * anything fetched here also lands in the cache that powers the reactive UI
+ * (and vice-versa).
+ *
+ * The reactive UI consumes the same data via `castUser(...).profile$` /
+ * `outboxes$`; this class only exists for the flows that genuinely need an
+ * awaited value (invite discovery, relay-list bootstrap, welcome inboxes).
  */
 export class Directory {
-  readonly #load: ReturnType<typeof createAddressLoader>;
+  readonly #store: EventStore;
+  #closed = false;
 
-  constructor(
-    pool: Parameters<typeof createAddressLoader>[0],
-    store: EventStore = new EventStore(),
-  ) {
-    // The loader keeps a reference to the store for de-duplication; we don't
-    // need to read from it directly here.
-    this.#load = createAddressLoader(pool, {
-      eventStore: store,
-      lookupRelays: LOOKUP_RELAYS,
-    });
+  constructor(store: EventStore) {
+    this.#store = store;
   }
 
-  /** Latest version of a replaceable event for a pubkey, or undefined. */
+  close(): void {
+    this.#closed = true;
+  }
+
+  /**
+   * Latest version of a replaceable event for a pubkey, or undefined. Reads
+   * reactively from the store and resolves with the first value the loader
+   * produces (or undefined after a timeout).
+   */
   async #latest(
     kind: number,
     pubkey: string,
     hints?: string[],
   ): Promise<NostrEvent | undefined> {
-    const events = await collect(this.#load({ kind, pubkey, relays: hints }));
-    return events.reduce<NostrEvent | undefined>(
-      (best, event) =>
-        !best || event.created_at > best.created_at ? event : best,
-      undefined,
-    );
+    if (this.#closed) return undefined;
+    const user = castUser(pubkey, this.#store);
+    const event = await user
+      .replaceable(kind, undefined, hints)
+      .$first(10_000, undefined);
+    if (this.#closed) return undefined;
+    return event ?? undefined;
   }
 
   /**

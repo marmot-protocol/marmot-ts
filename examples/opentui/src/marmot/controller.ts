@@ -1,16 +1,23 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
+import { normalizeRelayUrl } from "applesauce-core/helpers";
 import {
   normalizeToPubkey,
   npubEncode,
 } from "applesauce-core/helpers/pointers";
-import type { ProfileContent } from "applesauce-core/helpers/profile";
+import {
+  getProfileContent,
+  type ProfileContent,
+} from "applesauce-core/helpers/profile";
 import { relaySet } from "applesauce-core/helpers/relays";
+import type { EventStore } from "applesauce-core/event-store";
 
 import {
   createApplicationMessageIntent,
   createChatRumor,
+  type ListedKeyPackage,
   type MarmotClient,
   type MarmotGroup,
+  Proposals,
 } from "@internet-privacy/marmot-ts/client";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
@@ -21,11 +28,25 @@ import {
   GROUP_EVENT_KIND,
 } from "@internet-privacy/marmot-ts";
 
+import createDebug from "debug";
+
 import type { Directory } from "../helpers/discovery.js";
 import type { RelayPool } from "../helpers/relay-pool.js";
-import { groupName, hexShort, npubShort, short } from "./format.js";
+import {
+  groupIsAdmin,
+  groupName,
+  hexShort,
+  npubShort,
+  short,
+} from "./format.js";
 
 const GIFT_WRAP_KIND = 1059;
+
+/**
+ * Group transport diagnostics (relays + h-tag for sub/publish).
+ * Enable with `DEBUG=opentui:group-transport` (opentui enables `*` by default).
+ */
+const transportLog = createDebug("opentui:group-transport");
 
 /** Minimal signer shape (applesauce `EventSigner`) the controller needs. */
 type Signer = {
@@ -33,10 +54,96 @@ type Signer = {
   signEvent(draft: any): Promise<NostrEvent> | NostrEvent;
 };
 
+function hex(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("hex");
+}
+
+function codePointHex(value: number): string {
+  return `0x${value.toString(16).padStart(4, "0")}`;
+}
+
+function normalizeRelays(relays: string[]): string[] {
+  return relaySet(
+    relays.flatMap((relay) => {
+      try {
+        return [normalizeRelayUrl(relay)];
+      } catch {
+        return [];
+      }
+    }),
+  );
+}
+
+function extensionDetails(
+  extensions: { extensionType: number; extensionData: unknown }[],
+): KeyPackageExtensionDetails[] {
+  return extensions.map((extension) => ({
+    type: codePointHex(extension.extensionType),
+    dataHex:
+      extension.extensionData instanceof Uint8Array
+        ? hex(extension.extensionData)
+        : JSON.stringify(extension.extensionData),
+  }));
+}
+
+function requiredCapabilitiesDetails(
+  extensions: { extensionType: number; extensionData: any }[],
+): RequiredCapabilitiesDetails | null {
+  const required = extensions.find(
+    (extension) => extension.extensionType === 3,
+  );
+  if (!required) return null;
+  return {
+    extensionTypes: (required.extensionData.extensionTypes ?? []).map(
+      codePointHex,
+    ),
+    proposalTypes: (required.extensionData.proposalTypes ?? []).map(
+      codePointHex,
+    ),
+    credentialTypes: (required.extensionData.credentialTypes ?? []).map(
+      codePointHex,
+    ),
+  };
+}
+
+function keyPackageDetails(pkg: ListedKeyPackage): KeyPackageDetails {
+  const capabilities = pkg.publicPackage.leafNode.capabilities;
+  const keyPackageExtensions = extensionDetails(pkg.publicPackage.extensions);
+  const leafNodeExtensions = extensionDetails(
+    pkg.publicPackage.leafNode.extensions,
+  );
+
+  return {
+    refHex: hex(pkg.keyPackageRef),
+    slot: pkg.identifier ?? null,
+    used: pkg.used === true,
+    publishedCount: pkg.published?.length ?? 0,
+    cipherSuite: codePointHex(pkg.publicPackage.cipherSuite),
+    initKeyHex: hex(pkg.publicPackage.initKey),
+    signatureHex: hex(pkg.publicPackage.signature),
+    capabilities: {
+      versions: capabilities.versions.map(codePointHex),
+      ciphersuites: capabilities.ciphersuites.map(codePointHex),
+      extensions: capabilities.extensions.map(codePointHex),
+      proposals: capabilities.proposals.map(codePointHex),
+      credentials: capabilities.credentials.map(codePointHex),
+    },
+    keyPackageExtensions,
+    leafNodeExtensions,
+    requiredCapabilities:
+      requiredCapabilitiesDetails(pkg.publicPackage.extensions as any[]) ??
+      requiredCapabilitiesDetails(
+        pkg.publicPackage.leafNode.extensions as any[],
+      ),
+  };
+}
+
 export interface ControllerDeps {
   client: MarmotClient;
   pool: RelayPool;
   directory: Directory;
+  /** Shared reactive event cache; also exposed to React for `useProfile`. */
+  eventStore: EventStore;
   signer: Signer;
   pubkey: string;
   relays: string[];
@@ -44,6 +151,8 @@ export interface ControllerDeps {
   clientId: string;
   /** When true, error logs include the full stack trace and cause chain. */
   debug: boolean;
+  /** Optional sink for status lines when the UI has no on-screen log panel. */
+  statusLog?: (line: StatusLine) => void;
 }
 
 /** A single decrypted chat message rendered in the timeline. */
@@ -66,6 +175,45 @@ export interface StatusLine {
   at: number;
 }
 
+export interface KeyPackageSummary {
+  total: number;
+  unused: number;
+  slot: string | null;
+  newestPublishedAt: number | null;
+  current: KeyPackageDetails | null;
+}
+
+export interface KeyPackageExtensionDetails {
+  type: string;
+  dataHex: string;
+}
+
+export interface RequiredCapabilitiesDetails {
+  extensionTypes: string[];
+  proposalTypes: string[];
+  credentialTypes: string[];
+}
+
+export interface KeyPackageDetails {
+  refHex: string;
+  slot: string | null;
+  used: boolean;
+  publishedCount: number;
+  cipherSuite: string;
+  initKeyHex: string;
+  signatureHex: string;
+  capabilities: {
+    versions: string[];
+    ciphersuites: string[];
+    extensions: string[];
+    proposals: string[];
+    credentials: string[];
+  };
+  keyPackageExtensions: KeyPackageExtensionDetails[];
+  leafNodeExtensions: KeyPackageExtensionDetails[];
+  requiredCapabilities: RequiredCapabilitiesDetails | null;
+}
+
 /**
  * Immutable snapshot consumed by React via `useSyncExternalStore`. The group
  * and invite lists are intentionally NOT here: the React layer reads those
@@ -75,13 +223,13 @@ export interface StatusLine {
  */
 export interface ChatSnapshot {
   me: { pubkey: string; npub: string };
-  /** The user's own kind 0 profile metadata, once loaded (null if none). */
-  profile: ProfileContent | null;
   relays: string[];
+  connectedRelayCount: number;
   /** The account's advertised NIP-65 outbox relays (kind 10002). */
   outboxRelays: string[];
   /** The account's advertised inbox relays for welcomes (kind 10050). */
   inboxRelays: string[];
+  keyPackages: KeyPackageSummary;
   clientId: string;
   activeGroupId: string | null;
   /** Messages keyed by group id (hex). */
@@ -119,7 +267,13 @@ export class MarmotController {
 
   #status: StatusLine[] = [];
   #activeId: string | null = null;
-  #profile: ProfileContent | null = null;
+  #keyPackages: KeyPackageSummary = {
+    total: 0,
+    unused: 0,
+    slot: null,
+    newestPublishedAt: null,
+    current: null,
+  };
   /** Advertised NIP-65 outbox list (kind 10002); seeded with operating relays. */
   #outboxRelays: string[];
   /** Advertised inbox list for welcomes (kind 10050); seeded with operating relays. */
@@ -153,12 +307,18 @@ export class MarmotController {
     return this.#deps.client;
   }
 
+  /** Shared reactive event cache, consumed by the React `useProfile` hook. */
+  get eventStore(): EventStore {
+    return this.#deps.eventStore;
+  }
+
   // --- lifecycle -------------------------------------------------------------
 
   async start(): Promise<void> {
     await this.#ensureKeyPackage();
-    await this.#loadProfile();
+    if (this.#watchAbort) return;
     await this.#restoreGroups();
+    if (this.#watchAbort) return;
     this.#subscribeInvites();
     void this.#watchGroups();
     this.log(`ready — you are ${npubEncode(this.#deps.pubkey)}`);
@@ -167,6 +327,7 @@ export class MarmotController {
   }
 
   stop(): void {
+    if (this.#watchAbort) return;
     this.#watchAbort = true;
     this.#inviteSub?.unsubscribe();
     for (const sub of this.#groupSubs.values()) sub.unsubscribe();
@@ -181,14 +342,18 @@ export class MarmotController {
     this.#publish();
   }
 
-  async createGroup(name: string): Promise<void> {
+  async createGroup(name: string, relays = this.#deps.relays): Promise<void> {
     await this.#withBusy(async () => {
+      const groupRelays = normalizeRelays(relays);
+      if (!groupRelays.length) throw new Error("group needs at least one relay");
       const group = await this.#deps.client.groups.create(name, {
-        relays: this.#deps.relays,
+        relays: groupRelays,
       });
       await this.#attachGroup(group, false);
       this.#activeId = group.idStr;
-      this.log(`created "${name}" (${short(group.idStr)}) — now active`);
+      this.log(
+        `created "${name}" (${short(group.idStr)}) on ${groupRelays.join(", ")} — now active`,
+      );
     });
   }
 
@@ -259,6 +424,28 @@ export class MarmotController {
     });
   }
 
+  async updateGroupInfo(
+    groupId: string,
+    fields: { name: string; description: string },
+  ): Promise<void> {
+    await this.#withBusy(async () => {
+      const group = this.#groups.get(groupId);
+      if (!group) throw new Error("group is not loaded");
+      if (!groupIsAdmin(group, this.#deps.pubkey)) {
+        throw new Error("only group admins can update group info");
+      }
+
+      const [proposal] = await Proposals.proposeUpdateMetadata(fields)(
+        group.session.proposalContext(),
+      );
+      if (!proposal) return;
+      await this.#deps.client.groups.commit(group.id, {
+        extraProposals: [proposal],
+      });
+      this.log(`updated group info for "${fields.name}"`);
+    });
+  }
+
   async sendText(text: string): Promise<void> {
     const group = this.#requireActive();
     const pubkey = await group.signer.getPublicKey();
@@ -274,6 +461,7 @@ export class MarmotController {
       const kp = await this.#deps.client.keyPackages.create({
         relays: this.#deps.relays,
       });
+      await this.#refreshKeyPackageSummary();
       this.log(
         `published KeyPackage ${hexShort(kp.keyPackageRef)} (slot ${kp.identifier ?? "?"})`,
       );
@@ -292,6 +480,7 @@ export class MarmotController {
         current.keyPackageRef,
         { relays: this.#deps.relays },
       );
+      await this.#refreshKeyPackageSummary();
       this.log(
         `rotated KeyPackage ${hexShort(current.keyPackageRef)} → ${hexShort(rotated.keyPackageRef)}`,
       );
@@ -306,8 +495,8 @@ export class MarmotController {
    */
   async saveRelayLists(outbox: string[], inbox: string[]): Promise<void> {
     await this.#withBusy(async () => {
-      const nextOutbox = relaySet(outbox);
-      const nextInbox = relaySet(inbox);
+      const nextOutbox = normalizeRelays(outbox);
+      const nextInbox = normalizeRelays(inbox);
       if (!nextOutbox.length) {
         throw new Error("outbox (NIP-65) list needs at least one valid relay");
       }
@@ -333,7 +522,15 @@ export class MarmotController {
    */
   async saveProfile(fields: ProfileContent): Promise<void> {
     await this.#withBusy(async () => {
-      const merged: ProfileContent = { ...(this.#profile ?? {}) };
+      // Merge over the latest kind 0 already in the shared store so values this
+      // UI doesn't expose (banner, lud16, …) survive a save.
+      const existing = this.#deps.eventStore.getReplaceable(
+        0,
+        this.#deps.pubkey,
+      );
+      const merged: ProfileContent = {
+        ...(existing ? getProfileContent(existing) : {}),
+      };
       for (const [key, value] of Object.entries(fields)) {
         const text = typeof value === "string" ? value.trim() : value;
         if (text === "" || text == null) delete (merged as any)[key];
@@ -346,17 +543,17 @@ export class MarmotController {
         created_at: Math.floor(Date.now() / 1000),
       });
       await this.#deps.pool.publish(this.#deps.relays, event);
-      this.#profile = merged;
+      // Feed the new event into the store so `useProfile` updates immediately.
+      this.#deps.eventStore.add(event);
       this.log(`published profile (${merged.name || "no name"})`);
     });
   }
 
   /** Public logging hook so the UI can surface command errors uniformly. */
   log(text: string, level: StatusLine["level"] = "info"): void {
-    this.#status = [
-      ...this.#status.slice(-200),
-      { id: this.#statusSeq++, level, text, at: Date.now() },
-    ];
+    const line = { id: this.#statusSeq++, level, text, at: Date.now() };
+    this.#status = [...this.#status.slice(-200), line];
+    this.#deps.statusLog?.(line);
     this.#publish();
   }
 
@@ -367,6 +564,7 @@ export class MarmotController {
   // --- internals -------------------------------------------------------------
 
   async #withBusy(fn: () => Promise<void>): Promise<void> {
+    if (this.#watchAbort) return;
     this.#busy = true;
     this.#publish();
     try {
@@ -383,7 +581,7 @@ export class MarmotController {
     try {
       await this.#loadRelayLists();
     } catch (err) {
-      this.logError(err);
+      if (!this.#watchAbort) this.logError(err);
     }
   }
 
@@ -393,6 +591,7 @@ export class MarmotController {
       this.#deps.directory.outboxes(this.#deps.pubkey, this.#deps.relays),
       this.#deps.directory.welcomeInboxes(this.#deps.pubkey, this.#deps.relays),
     ]);
+    if (this.#watchAbort) return;
 
     if (outbox.length) {
       this.#outboxRelays = outbox;
@@ -411,6 +610,7 @@ export class MarmotController {
       createNip65RelayListEvent({ pubkey: this.#deps.pubkey, relays }),
     );
     await this.#deps.pool.publish(this.#deps.relays, event);
+    this.#deps.eventStore.add(event);
   }
 
   /** Sign and publish the inbox list (kind 10050) to the operating relays. */
@@ -419,34 +619,59 @@ export class MarmotController {
       createInboxRelayListEvent({ pubkey: this.#deps.pubkey, relays }),
     );
     await this.#deps.pool.publish(this.#deps.relays, event);
-  }
-
-  /** Load the user's existing kind 0 profile from the relays, if any. */
-  async #loadProfile(): Promise<void> {
-    try {
-      const profile = await this.#deps.directory.profile(
-        this.#deps.pubkey,
-        this.#deps.relays,
-      );
-      if (profile) {
-        this.#profile = profile;
-        this.#publish();
-      }
-    } catch (err) {
-      if (this.#deps.debug) this.logError(err);
-    }
+    this.#deps.eventStore.add(event);
   }
 
   async #ensureKeyPackage(): Promise<void> {
     const existing = await this.#deps.client.keyPackages.list();
-    if (existing.some((pkg) => !pkg.used)) return;
+    if (this.#watchAbort) return;
+    if (existing.some((pkg) => !pkg.used)) {
+      this.#setKeyPackageSummary(existing);
+      return;
+    }
     await this.#deps.client.keyPackages.create({ relays: this.#deps.relays });
+    if (this.#watchAbort) return;
+    await this.#refreshKeyPackageSummary();
     this.log("published a fresh KeyPackage so others can invite you");
+  }
+
+  async #refreshKeyPackageSummary(): Promise<void> {
+    this.#setKeyPackageSummary(await this.#deps.client.keyPackages.list());
+    this.#publish();
+  }
+
+  #setKeyPackageSummary(
+    packages: Awaited<ReturnType<MarmotClient["keyPackages"]["list"]>>,
+  ): void {
+    const current =
+      packages.find(
+        (pkg) => !pkg.used && pkg.identifier === this.#deps.clientId,
+      ) ??
+      packages.find((pkg) => !pkg.used) ??
+      packages[0];
+    const newestPublishedAt = Math.max(
+      0,
+      ...packages.flatMap((pkg) =>
+        (pkg.published ?? []).map((event) => event.created_at),
+      ),
+    );
+    this.#keyPackages = {
+      total: packages.length,
+      unused: packages.filter((pkg) => !pkg.used).length,
+      slot: current?.identifier ?? null,
+      newestPublishedAt: newestPublishedAt || null,
+      current: current ? keyPackageDetails(current) : null,
+    };
   }
 
   async #restoreGroups(): Promise<void> {
     const groups = await this.#deps.client.groups.loadAll();
-    for (const group of groups) await this.#attachGroup(group, true);
+    if (this.#watchAbort) return;
+    for (const group of groups) {
+      if (this.#watchAbort) return;
+      await this.#attachGroup(group, true);
+    }
+    if (this.#watchAbort) return;
     if (groups.length && !this.#activeId) this.#activeId = groups[0].idStr;
     if (groups.length) this.log(`restored ${groups.length} group(s)`);
   }
@@ -462,10 +687,12 @@ export class MarmotController {
         if (this.#watchAbort) break;
         const live = new Set(groups.map((g) => g.idStr));
         for (const group of groups) {
+          if (this.#watchAbort) break;
           if (!this.#groups.has(group.idStr)) {
             await this.#attachGroup(group, true);
           }
         }
+        if (this.#watchAbort) break;
         for (const id of [...this.#groups.keys()]) {
           if (!live.has(id)) this.#detachGroup(id);
         }
@@ -476,6 +703,7 @@ export class MarmotController {
   }
 
   async #attachGroup(group: MarmotGroup, catchUp: boolean): Promise<void> {
+    if (this.#watchAbort) return;
     const id = group.idStr;
     this.#groups.set(id, group);
     if (!this.#messages.has(id)) this.#messages.set(id, []);
@@ -483,18 +711,31 @@ export class MarmotController {
       group.on("applicationMessage", (bytes: Uint8Array) =>
         this.#onAppMessage(group, bytes),
       );
+      group.on("stateChanged", () => this.#publish());
       this.#bound.add(id);
     }
     const relays = group.relays?.length
       ? relaySet(group.relays)
       : this.#deps.relays;
     const h = getNostrGroupIdHex(group.state);
+    transportLog(
+      "attach group=%s h=%s epoch=%s catchUp=%s relays(%s)=%o group.relays=%o",
+      id,
+      h,
+      String(group.state.groupContext.epoch),
+      catchUp,
+      group.relays?.length ? "group" : "fallback",
+      relays,
+      group.relays,
+    );
     if (catchUp) {
       const backlog = await this.#deps.pool.request(relays, {
         kinds: [GROUP_EVENT_KIND],
         "#h": [h],
       });
+      if (this.#watchAbort) return;
       await this.#drainIngest(group, backlog);
+      if (this.#watchAbort) return;
     }
     const sub = this.#deps.pool.subscription(relays, {
       kinds: [GROUP_EVENT_KIND],
@@ -516,6 +757,7 @@ export class MarmotController {
   }
 
   #subscribeInvites(): void {
+    if (this.#watchAbort) return;
     const sub = this.#deps.pool.subscription(this.#deps.relays, {
       kinds: [GIFT_WRAP_KIND],
       "#p": [this.#deps.pubkey],
@@ -545,6 +787,13 @@ export class MarmotController {
   async #onGroupEvent(group: MarmotGroup, event: NostrEvent): Promise<void> {
     if (this.#seenEvents.has(event.id)) return;
     this.#seenEvents.add(event.id);
+    transportLog(
+      "inbound kind-445 group=%s eventId=%s author=%s localEpoch=%s",
+      group.idStr,
+      event.id,
+      event.pubkey.slice(0, 8),
+      String(group.state.groupContext.epoch),
+    );
     await this.#drainIngest(group, [event]);
   }
 
@@ -629,10 +878,11 @@ export class MarmotController {
     for (const [id, list] of this.#messages) messages[id] = list;
     return {
       me: { pubkey: this.#deps.pubkey, npub: npubEncode(this.#deps.pubkey) },
-      profile: this.#profile,
       relays: this.#deps.relays,
+      connectedRelayCount: this.#deps.pool.relayCount,
       outboxRelays: this.#outboxRelays,
       inboxRelays: this.#inboxRelays,
+      keyPackages: this.#keyPackages,
       clientId: this.#deps.clientId,
       activeGroupId: this.#activeId,
       messages,

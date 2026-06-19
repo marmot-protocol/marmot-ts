@@ -1,6 +1,5 @@
-import { getDisplayName } from "applesauce-core/helpers/profile";
-
 import { useChat } from "../hooks/use-marmot.js";
+import { useDisplayName } from "../hooks/use-profile.js";
 
 /** The top status bar: identity (profile name when set), live counts, busy. */
 export function Header(props: {
@@ -8,8 +7,8 @@ export function Header(props: {
   inviteCount: number;
   onShowQr: () => void;
 }) {
-  const { me, profile, relays, busy } = useChat();
-  const name = getDisplayName(profile ?? undefined);
+  const { me, relays, busy } = useChat();
+  const name = useDisplayName(me.pubkey);
   return (
     <box backgroundColor="#1b1b2b" flexDirection="column">
       <box height={1} paddingX={1} flexDirection="row">

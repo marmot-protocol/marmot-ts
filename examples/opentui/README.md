@@ -8,8 +8,8 @@ example and interoperates with the Rust reference crates on the happy path:
 > publish KeyPackage → discover peer → invite → welcome → join → exchange text
 
 Where `tui-chat` is a readline loop, this app is a live, multi-pane TUI: a group
-sidebar, a sticky-scrolling message timeline, pending-invite list, and a status
-feed — all updating reactively as protocol state changes.
+sidebar, a sticky-scrolling message timeline, and pending-invite list — all
+updating reactively as protocol state changes.
 
 ## Why this example exists
 
@@ -35,15 +35,19 @@ detached. That hook is the thing this example is really here to exercise.
   drain `ingest`, local echo). It exposes an immutable snapshot for React via
   `useSyncExternalStore`. This is the imperative half the async generators can't
   express.
-- **`src/hooks/`** — `useAsyncIterable` (the generator → state bridge) and
-  `useChat` / `useWatchedGroups` / `useWatchedInvites` (the React entry points).
+- **`src/hooks/`** — `useAsyncIterable` (the generator → state bridge),
+  `useChat` / `useWatchedGroups` / `useWatchedInvites` (the React entry points),
+  and `useProfile` / `useDisplayName` (applesauce's `castUser(...).profile$`
+  cast + the `use$` hook, so member/author display names auto-load and stay
+  reactive instead of being prefetched and threaded through the controller).
 - **`src/components/`** — the OpenTUI React tree (`App` owns focus/keyboard,
-  `Sidebar` + `ChatView` + `InputBar` + `Header` + `ActivityLog`, plus the
+  `Sidebar` + `ChatView` + `InputBar` + `Header`, plus the
   interactive `ActionBar`/`Button` and the `TextPrompt`/`ChoicePrompt` modals).
   `focus.ts` defines the pane cycle.
-- **`src/helpers/`** — `RelayPool`, `Directory` (relay-list/profile discovery
-  via applesauce's address loader), `FileKeyValueStore`, and the account-proof
-  signer, carried over verbatim from `tui-chat` (they are UI-agnostic).
+- **`src/helpers/`** — `RelayPool`, `Directory` (imperative relay-list/profile
+  lookups that read from the shared `EventStore`, whose loader auto-fetches and
+  de-duplicates — the same cache the reactive UI casts read), `FileKeyValueStore`,
+  and the account-proof signer.
 
 ## Runtime
 
@@ -82,7 +86,9 @@ into this directory and run `bun run src/index.tsx --name alice`.)
 | `--relay <url>`  | `wss://relay.damus.io`, `wss://nos.lol` | Repeatable. Point all peers at the **same** relay(s).               |
 | `--sec <hex>`    | (generated)                             | Use a specific 32-byte hex Nostr secret key.                        |
 | `--ephemeral`    | off                                     | Keep all state in memory (nothing written to disk).                 |
-| `--debug`        | off                                     | Show full stack traces (and `cause` chains) in the activity feed.   |
+| `--debug`        | off                                     | Include full stack traces (and `cause` chains) in status errors.    |
+| `--logs <path>`  | off                                     | Enable `debug` logging and append status/debug lines to this file.  |
+| `--help`, `-h`   | off                                     | Print the options and exit without starting the OpenTUI UI.         |
 
 > Many public relays reject MLS event kinds (443/30443/444/445/1059). For
 > reliable testing, run a permissive local relay (e.g. `strfry`,
@@ -101,6 +107,21 @@ to run it. OpenTUI's native renderer (`libopentui.so`) is embedded into the
 binary, so the artifact is **platform-specific**: it targets the OS/arch you
 build on. The same runtime flags apply (`--name`, `--relay`, …).
 
+## Debug with VS Code
+
+This repo includes VS Code debug configurations for the OpenTUI example.
+
+To attach to a running TUI process, start Bun with the inspector enabled:
+
+```bash
+cd examples/opentui
+bun --inspect=9229 run src/index.tsx --name alice --logs ./alice.log
+```
+
+Then run **Attach: OpenTUI Bun (9229)** from VS Code's Run and Debug panel.
+Use **Launch: OpenTUI Bun Inspector** if you want VS Code to start the process
+for you in an integrated terminal.
+
 ## Using it
 
 There are no slash-commands or action buttons. The UI follows a lazygit-style
@@ -109,7 +130,7 @@ the footer shows the keys that apply right now.
 
 **Global keys:**
 
-- **Tab / Shift+Tab** — cycle panels: **groups**, **invites**, **chat**, **activity**.
+- **Tab / Shift+Tab** — cycle panels: **groups**, **invites**, **chat**.
 - **h/l** or **←/→** — move focus to the previous/next panel.
 - **j/k** or **↑/↓** — move the selection inside the focused list panel.
 - **?** or **:** — open keyboard help for the current panel.
@@ -118,11 +139,11 @@ the footer shows the keys that apply right now.
 **Panel keys:**
 
 - **Groups** — **Enter** opens the selected group, **n** creates a group,
-  **i** invites to the active group, **L** leaves the active group.
+  **i** invites to the active group, **e** edits the selected group's info when
+  you are an admin, **L** leaves the active group.
 - **Invites** — **Enter** or **a** accepts the selected invite.
 - **Chat** — **n** or **Enter** starts composing a message, **i** invites to the
-  active group.
-- **Activity** — **r** opens relay settings, **p** opens profile settings,
+  active group, **r** opens relay settings, **p** opens profile settings, and
   **K** opens the KeyPackage publish/rotate chooser.
 
 Text prompts use **Enter** to confirm and **Esc** to cancel. Clicking a panel
@@ -155,6 +176,7 @@ from the shared lifecycle (they do **not** break happy-path turn-taking chat):
 - **Concurrent commits** (two members committing at once) — convergence /
   quiescence settlement is not implemented yet (gap **B5**).
 - **`/leave`** — sends a plain MLS `Remove`; spec peers expect MLS `SelfRemove`
-  with a deterministic auto-committer (gap **B6**). The activity feed warns you.
+  with a deterministic auto-committer (gap **B6**). The status log warns you
+  when `--logs <path>` is enabled.
 - **Heavy message reordering / dropped relays** — out-of-order inputs are not
   yet retried via the `deferred` disposition (gap **B7**).

@@ -404,7 +404,25 @@ export class MarmotGroup<
     events: NostrEvent[],
     options?: { maxRetries?: number },
   ): AsyncGenerator<DispositionedIngestResult> {
-    yield* this.session.ingest(events, options);
+    for await (const result of this.session.ingest(events, options)) {
+      // The engine elected us to commit a peer's departure (B6): publish the
+      // staged self_remove-only commit (publish-before-apply). On publish
+      // failure the staged commit is rolled back and the self_remove stays
+      // pending, so a later ingest re-elects and retries — swallow the throw so
+      // it does not abort delivery of the rest of the batch.
+      if (result.kind === "autoCommit") {
+        try {
+          await this.runtime.publishCommit({
+            envelope: result.event,
+            pending: result.pending,
+            actorPubkey: result.actorPubkey,
+          });
+        } catch {
+          /* rolled back; retried on a later ingest */
+        }
+      }
+      yield result;
+    }
   }
 
   /**

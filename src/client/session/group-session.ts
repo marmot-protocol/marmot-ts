@@ -73,12 +73,20 @@ export type InvalidatedIngestResult = {
   message: import("ts-mls").MlsMessage;
 };
 
+export type AutoCommitIngestResult = {
+  kind: "autoCommit";
+  event: NostrEvent;
+  pending: PendingState;
+  actorPubkey: string;
+};
+
 export type IngestResult =
   | ProcessedIngestResult
   | RejectedIngestResult
   | SkippedIngestResult
   | DeferredIngestResult
   | InvalidatedIngestResult
+  | AutoCommitIngestResult
   | UnreadableIngestResult;
 
 export type DispositionedIngestResult = IngestResult & {

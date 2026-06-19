@@ -19,6 +19,10 @@ export function ingestResultDisposition<TEnvelope>(
       return disposition.deferred(result.reason);
     case "invalidated":
       return disposition.invalidated();
+    case "autoCommit":
+      // A locally-staged self_remove-only commit (B6) — an accepted local action,
+      // not an inbound message disposition.
+      return disposition.accepted();
     case "skipped":
       switch (result.reason) {
         case "past-epoch":

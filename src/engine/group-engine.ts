@@ -9,14 +9,20 @@ import {
   CreateCommitOptions,
   createProposal,
   defaultProposalTypes,
+  getCredentialFromLeafIndex,
   type IncomingMessageCallback,
+  isSelfRemoveProposal,
   acceptAll,
+  type LeafIndex,
+  nodeTypes,
   Proposal,
   selfRemoveProposalType,
 } from "ts-mls";
 
 import { marmotAuthService } from "../core/auth-service.js";
 import { getMarmotGroupView } from "../core/client-state.js";
+import { getCredentialPubkey } from "../core/credential.js";
+import { decideAutoCommit } from "./auto-committer.js";
 import {
   canTransitionLifecycle,
   type GroupLifecycleState,
@@ -36,6 +42,7 @@ import {
 import { ingestResultDisposition } from "./ingest-disposition.js";
 import { RetainedHistoryStore } from "./retained-store.js";
 import type {
+  AutoCommitIngestResult,
   DispositionedIngestResult,
   GroupPeeler,
   PendingState,
@@ -349,6 +356,108 @@ export class MarmotGroupEngine<TEnvelope> {
         disposition: ingestResultDisposition(result),
       };
     }
+
+    // After the batch, if this client is the deterministically-elected committer
+    // for any pending self_remove proposals, build and stage a self_remove-only
+    // commit (B6, member-departure.md). It is surfaced as an `autoCommit` result;
+    // the layer that owns the transport publishes it (publish-before-apply).
+    const auto = await this.#maybeAutoCommitSelfRemoves();
+    if (auto) yield { ...auto, disposition: ingestResultDisposition(auto) };
+  }
+
+  /**
+   * If pending proposals are exactly a set of `self_remove`s this client is
+   * elected to commit (lowest eligible leaf, {@link decideAutoCommit}), builds
+   * and stages a `self_remove`-only commit by reference. Returns the staged
+   * commit for the caller to publish, or `undefined` when this client should
+   * just observe.
+   */
+  async #maybeAutoCommitSelfRemoves(): Promise<
+    AutoCommitIngestResult<TEnvelope> | undefined
+  > {
+    if (!mayPrepareLocalCommit(this.#lifecycle)) return undefined;
+
+    const state = this.#state;
+    const unapplied = Object.values(state.unappliedProposals);
+    if (unapplied.length === 0) return undefined;
+
+    // createCommit bundles ALL unapplied proposals by reference, so only
+    // auto-commit when every pending proposal is a self_remove — otherwise we
+    // would fold foreign proposals into a commit that is no longer
+    // self_remove-only. Mixed sets are left for an admin's explicit commit.
+    if (!unapplied.every((p) => isSelfRemoveProposal(p.proposal)))
+      return undefined;
+
+    const groupData = getMarmotGroupView(state);
+    const adminPubkeys = groupData?.adminPubkeys ?? [];
+
+    const leaverLeafIndices: number[] = [];
+    let anyLeaverIsActiveAdmin = false;
+    for (const p of unapplied) {
+      if (p.senderLeafIndex === undefined) return undefined;
+      leaverLeafIndices.push(Number(p.senderLeafIndex));
+      try {
+        const leaverPubkey = getCredentialPubkey(
+          getCredentialFromLeafIndex(
+            state.ratchetTree,
+            p.senderLeafIndex as LeafIndex,
+          ),
+        );
+        if (adminPubkeys.includes(leaverPubkey)) anyLeaverIsActiveAdmin = true;
+      } catch {
+        anyLeaverIsActiveAdmin = true; // fail-closed
+      }
+    }
+
+    let ownPubkey: string;
+    try {
+      ownPubkey = getCredentialPubkey(
+        getCredentialFromLeafIndex(
+          state.ratchetTree,
+          state.privatePath.leafIndex as LeafIndex,
+        ),
+      );
+    } catch {
+      return undefined;
+    }
+
+    const decision = decideAutoCommit({
+      leaverLeafIndices,
+      ownLeafIndex: Number(state.privatePath.leafIndex),
+      memberLeafIndices: this.#occupiedLeafIndices(),
+      anyLeaverIsActiveAdmin,
+    });
+    if (decision !== "commit") return undefined;
+
+    // No extraProposals/refs: createCommit bundles the pending self_removes by
+    // reference (required — an inline self_remove inherits the committer as
+    // sender and is rejected). The send-path admin gate sees no extra proposals
+    // and treats it as a self-update-only commit, which a non-admin may make.
+    const result = await this.send({ kind: "commit", actorPubkey: ownPubkey });
+    if (result.kind !== "groupEvolution") return undefined;
+
+    this.log(
+      "auto-committing %d self_remove proposal(s)",
+      leaverLeafIndices.length,
+    );
+    return {
+      kind: "autoCommit",
+      envelope: result.envelope,
+      pending: result.pending,
+      actorPubkey: ownPubkey,
+    };
+  }
+
+  /** Leaf indices of all occupied leaves in the current ratchet tree. */
+  #occupiedLeafIndices(): number[] {
+    const out: number[] = [];
+    const tree = this.#state.ratchetTree;
+    for (let nodeIndex = 0; nodeIndex < tree.length; nodeIndex++) {
+      const node = tree[nodeIndex];
+      if (node && node.nodeType === nodeTypes.leaf)
+        out.push(Math.floor(nodeIndex / 2));
+    }
+    return out;
   }
 
   #setState(newState: ClientState): void {

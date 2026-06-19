@@ -141,6 +141,21 @@ export type InvalidatedIngestResult<TEnvelope> = {
   message: MlsMessage;
 };
 
+/**
+ * A `self_remove`-only commit this client built and staged during ingest because
+ * it is the deterministically-elected committer for a peer's departure (B6,
+ * `protocol-core/member-departure.md`). It is NOT applied yet — the layer that
+ * owns the transport MUST publish `envelope` and then confirm/roll back the
+ * `pending` state (publish-before-apply), exactly like a local commit send.
+ */
+export type AutoCommitIngestResult<TEnvelope> = {
+  kind: "autoCommit";
+  envelope: TEnvelope;
+  pending: PendingState;
+  /** This client's own pubkey — the auto-committer (actor) of the commit. */
+  actorPubkey: string;
+};
+
 /** Result from ingesting group transport envelopes. */
 export type IngestResult<TEnvelope> =
   | ProcessedIngestResult<TEnvelope>
@@ -148,6 +163,7 @@ export type IngestResult<TEnvelope> =
   | SkippedIngestResult<TEnvelope>
   | DeferredIngestResult<TEnvelope>
   | InvalidatedIngestResult<TEnvelope>
+  | AutoCommitIngestResult<TEnvelope>
   | UnreadableIngestResult<TEnvelope>;
 
 /** An {@link IngestResult} carrying its protocol-visible {@link Disposition}. */

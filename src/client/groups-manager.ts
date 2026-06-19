@@ -255,7 +255,9 @@ export class GroupsManager<
     options?: { maxRetries?: number },
   ): AsyncGenerator<DispositionedIngestResult> {
     const group = await this.get(groupId);
-    yield* group.session.ingest(events, options);
+    // Route through the group facade (not the raw session) so an elected
+    // self_remove auto-commit (B6) is published via the group's runtime.
+    yield* group.ingest(events, options);
   }
 
   /** Loads all groups from the store and returns them */

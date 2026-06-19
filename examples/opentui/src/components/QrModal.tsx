@@ -1,7 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { useKeyboard } from "@opentui/react";
 import { qrcode } from "@libs/qrcode";
+
+import { copyToClipboard } from "../helpers/clipboard.js";
 
 const DARK = "#000000";
 const LIGHT = "#ffffff";
@@ -42,8 +44,15 @@ function toLines(matrix: boolean[][]): Run[][] {
  */
 export function QrModal(props: { npub: string; onClose: () => void }) {
   const lines = useMemo(() => toLines(qrcode(props.npub)), [props.npub]);
+  const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
 
-  useKeyboard(() => props.onClose());
+  useKeyboard((key) => {
+    if (key.name === "c" && !key.ctrl) {
+      copyToClipboard(props.npub).then((ok) => setCopied(ok ? "ok" : "fail"));
+      return;
+    }
+    props.onClose();
+  });
 
   return (
     <box
@@ -82,7 +91,14 @@ export function QrModal(props: { npub: string; onClose: () => void }) {
         <text fg="#7fd1ff" selectable marginTop={1}>
           {props.npub}
         </text>
-        <text fg="#666">scan to invite this account · press any key to close</text>
+        {copied === "ok" ? (
+          <text fg="#7CFC00">copied npub to clipboard</text>
+        ) : copied === "fail" ? (
+          <text fg="#ff6b6b">copy failed — no clipboard tool found</text>
+        ) : null}
+        <text fg="#666">
+          press c to copy npub · scan to invite · any other key closes
+        </text>
       </box>
     </box>
   );

@@ -4,6 +4,7 @@ import { Debugger } from "debug";
 import {
   CiphersuiteImpl,
   ClientState,
+  contentTypes,
   createApplicationMessage,
   createCommit,
   CreateCommitOptions,
@@ -24,12 +25,18 @@ import { getMarmotGroupView } from "../core/client-state.js";
 import { getCredentialPubkey } from "../core/credential.js";
 import { decideAutoCommit } from "./auto-committer.js";
 import {
+  type ConvergenceStatus,
+  deriveConvergenceStatus,
+} from "../core/convergence-status.js";
+import { DEFAULT_CONVERGENCE_POLICY } from "../core/convergence.js";
+import {
   canTransitionLifecycle,
   type GroupLifecycleState,
   groupLifecycleStates,
   mayPrepareLocalCommit,
   transitionLifecycle,
 } from "../core/group-lifecycle.js";
+import { framedContentType } from "./wire-format.js";
 import { logger } from "../utils/debug.js";
 import { createAdminCommitPolicyCallback } from "./admin-policy.js";
 import { DeliveredPayloadLedger } from "./delivered-payloads.js";
@@ -45,6 +52,7 @@ import type {
   AutoCommitIngestResult,
   DispositionedIngestResult,
   GroupPeeler,
+  IngestResult,
   PendingState,
   ProposalContext,
   SendIntent,
@@ -56,6 +64,16 @@ export type MarmotGroupEngineOptions<TEnvelope> = {
   ciphersuite: CiphersuiteImpl;
   peeler: GroupPeeler<TEnvelope>;
   onStateChanged?: (state: ClientState) => void;
+  /**
+   * Injectable wall-clock (ms) for the convergence-status quiescence window
+   * (B5). Defaults to `Date.now`; tests pass a fake clock for determinism.
+   */
+  now?: () => number;
+  /**
+   * Quiescence window (ms) before a convergence pass may be treated as settled
+   * (`convergence.md` `settlementQuiescenceMs`). Defaults to the profile-1 value.
+   */
+  settlementQuiescenceMs?: number;
 };
 
 /**
@@ -86,19 +104,30 @@ export class MarmotGroupEngine<TEnvelope> {
   readonly #delivered = new DeliveredPayloadLedger<TEnvelope>();
 
   readonly #onStateChanged?: (state: ClientState) => void;
-  private log: Debugger;
+
+  /** Injectable wall-clock for the convergence quiescence window (B5). */
+  readonly #now: () => number;
+  /** Quiescence window (ms) before a convergence pass may be treated as settled. */
+  readonly #settlementQuiescenceMs: number;
+  /** Wall-clock (ms) of the most recent convergence-relevant inbound input. */
+  #lastConvergenceRelevantInputMs = 0;
+  /** Whether the last convergence pass left a non-proposal input undispositioned. */
+  #lastPassUnresolved = false;
+  /** Whether the last convergence pass hit a blocking (missing-anchor) error. */
+  #lastPassBlocked = false;
 
   constructor(options: MarmotGroupEngineOptions<TEnvelope>) {
     this.#state = options.state;
     this.ciphersuite = options.ciphersuite;
     this.peeler = options.peeler;
     this.#onStateChanged = options.onStateChanged;
+    this.#now = options.now ?? (() => Date.now());
+    this.#settlementQuiescenceMs =
+      options.settlementQuiescenceMs ??
+      DEFAULT_CONVERGENCE_POLICY.settlementQuiescenceMs;
 
     this.#retained = new RetainedHistoryStore(options.state);
     this.#forkRecovery = new ForkRecovery(options.ciphersuite, options.peeler);
-
-    const idStr = bytesToHex(options.state.groupContext.groupId);
-    this.log = logger.extend(`group-engine:${idStr.slice(0, 8)}`);
   }
 
   get state(): ClientState {
@@ -117,6 +146,23 @@ export class MarmotGroupEngine<TEnvelope> {
    */
   get lifecycle(): GroupLifecycleState {
     return this.#lifecycle;
+  }
+
+  /**
+   * The derived convergence status (`group-state.md` §Convergence status, B5):
+   * `Syncing` while the quiescence window since the last convergence-relevant
+   * input has not elapsed, then `Resolving` / `Blocked` / `Settled` per the last
+   * pass. Recomputed on every read against the injected clock, so it advances to
+   * `Settled` as wall-clock time passes even with no new input.
+   */
+  get convergenceStatus(): ConvergenceStatus {
+    return deriveConvergenceStatus({
+      nowMs: this.#now(),
+      lastConvergenceRelevantInputMs: this.#lastConvergenceRelevantInputMs,
+      settlementQuiescenceMs: this.#settlementQuiescenceMs,
+      hasUnresolvedInput: this.#lastPassUnresolved,
+      hasBlockingError: this.#lastPassBlocked,
+    });
   }
 
   /** Executes a local send intent and returns the wrapped transport envelope. */
@@ -346,15 +392,40 @@ export class MarmotGroupEngine<TEnvelope> {
     envelopes: TEnvelope[],
     options?: { maxRetries?: number },
   ): AsyncGenerator<DispositionedIngestResult<TEnvelope>> {
+    // Track this batch's convergence signal (B5): whether it carried any
+    // convergence-relevant input (commits / fork material), whether anything was
+    // left undispositioned (a deferred commit ⇒ Resolving), and whether it hit a
+    // blocking missing-anchor error (⇒ Blocked).
+    let convergenceRelevant = false;
+    let unresolved = false;
+    let blocked = false;
+
     for await (const result of ingestEnvelopes(
       this.#ingestContext(),
       envelopes,
       options,
     )) {
+      if (this.#isConvergenceRelevant(result)) convergenceRelevant = true;
+      if (result.kind === "deferred") unresolved = true;
+      if (
+        result.kind === "skipped" &&
+        result.reason === "missing-retained-anchor"
+      )
+        blocked = true;
+
       yield {
         ...result,
         disposition: ingestResultDisposition(result),
       };
+    }
+
+    // A convergence pass ran only if convergence-relevant input arrived; a batch
+    // of pure application messages or lone proposals MUST NOT reset the
+    // quiescence window or overwrite the last pass's status inputs.
+    if (convergenceRelevant) {
+      this.#lastConvergenceRelevantInputMs = this.#now();
+      this.#lastPassUnresolved = unresolved;
+      this.#lastPassBlocked = blocked;
     }
 
     // After the batch, if this client is the deterministically-elected committer
@@ -363,6 +434,35 @@ export class MarmotGroupEngine<TEnvelope> {
     // the layer that owns the transport publishes it (publish-before-apply).
     const auto = await this.#maybeAutoCommitSelfRemoves();
     if (auto) yield { ...auto, disposition: ingestResultDisposition(auto) };
+  }
+
+  /**
+   * Whether an ingest result represents convergence-relevant input — a commit
+   * (applied, rejected, deferred, or one that removed us), fork material
+   * (past-epoch / beyond-anchor / missing-anchor skips), or a rewind retraction.
+   * Application messages, lone proposals, self-echoes, our own staged
+   * auto-commit, and undecryptable garbage are NOT convergence-relevant and MUST
+   * NOT reset the quiescence window (B5; lone-proposal exemption darkmatter#154).
+   */
+  #isConvergenceRelevant(result: IngestResult<TEnvelope>): boolean {
+    switch (result.kind) {
+      case "processed":
+      case "rejected":
+        return framedContentType(result.message) === contentTypes.commit;
+      case "deferred":
+      case "invalidated":
+      case "removed":
+        return true;
+      case "skipped":
+        return (
+          result.reason === "past-epoch" ||
+          result.reason === "beyond-anchor" ||
+          result.reason === "missing-retained-anchor"
+        );
+      case "autoCommit":
+      case "unreadable":
+        return false;
+    }
   }
 
   /**
@@ -436,7 +536,7 @@ export class MarmotGroupEngine<TEnvelope> {
     const result = await this.send({ kind: "commit", actorPubkey: ownPubkey });
     if (result.kind !== "groupEvolution") return undefined;
 
-    this.log(
+    this.#log()(
       "auto-committing %d self_remove proposal(s)",
       leaverLeafIndices.length,
     );
@@ -465,13 +565,18 @@ export class MarmotGroupEngine<TEnvelope> {
     this.#onStateChanged?.(newState);
   }
 
+  #log(): Debugger {
+    const idStr = bytesToHex(this.#state.groupContext.groupId);
+    return logger.extend(`group-engine:${idStr.slice(0, 8)}`);
+  }
+
   /** The dependency surface the ingest pipeline drives. */
   #ingestContext(): IngestContext<TEnvelope> {
     return {
       ciphersuite: this.ciphersuite,
       peeler: this.peeler,
       retained: this.#retained,
-      log: this.log,
+      log: this.#log(),
       getState: () => this.#state,
       setState: (state) => this.#setState(state),
       createAdminCallback: () => this.#createAdminVerificationCallback(),

@@ -117,6 +117,10 @@ export type GroupSessionOptions<
   onStateSaved?: () => void;
   onApplicationMessage?: (message: Uint8Array) => void;
   onHistoryError?: (error: Error) => void;
+  /** Injectable wall-clock for the convergence quiescence window (B5; tests). */
+  now?: () => number;
+  /** Quiescence window (ms) before convergence may be treated as settled. */
+  settlementQuiescenceMs?: number;
 };
 
 export function ingestResultDisposition(result: IngestResult): Disposition {
@@ -167,6 +171,8 @@ export class GroupSession<
       state: options.state,
       ciphersuite: this.ciphersuite,
       peeler: this.#peeler,
+      now: options.now,
+      settlementQuiescenceMs: options.settlementQuiescenceMs,
       onStateChanged: (newState) => {
         this.#dirty = true;
         this.#groupData = null;
@@ -189,6 +195,11 @@ export class GroupSession<
 
   get lifecycle() {
     return this.#engine.lifecycle;
+  }
+
+  /** The derived convergence status (`group-state.md` §Convergence status, B5). */
+  get convergenceStatus() {
+    return this.#engine.convergenceStatus;
   }
 
   get groupData(): MarmotGroupView | null {

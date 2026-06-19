@@ -124,6 +124,16 @@ export type MarmotGroupOptions<
    * not provided.
    */
   media?: TMedia | GroupMediaFactory<TMedia>;
+  /**
+   * Injectable wall-clock (ms) for the convergence quiescence window (B5).
+   * Defaults to `Date.now`; tests inject a fake clock for determinism.
+   */
+  now?: () => number;
+  /**
+   * Quiescence window (ms) before convergence may be treated as settled
+   * (`convergence.md` `settlementQuiescenceMs`). Defaults to the profile-1 value.
+   */
+  settlementQuiescenceMs?: number;
 };
 
 /** Map of events that can be emitted by a MarmotGroup */
@@ -208,6 +218,16 @@ export class MarmotGroup<
     return this.session.lifecycle;
   }
 
+  /**
+   * The group's derived convergence status (`group-state.md` §Convergence
+   * status, B5): `Syncing` / `Resolving` / `Settled` / `Blocked`. Recomputed on
+   * read against the clock, so it advances to `Settled` once the quiescence
+   * window elapses with no further convergence-relevant input.
+   */
+  get convergenceStatus() {
+    return this.session.convergenceStatus;
+  }
+
   get groupData() {
     return this.session.groupData;
   }
@@ -257,6 +277,8 @@ export class MarmotGroup<
       ciphersuite: this.ciphersuite,
       store: this.store,
       history: this.history,
+      now: options.now,
+      settlementQuiescenceMs: options.settlementQuiescenceMs,
       onStateChanged: (newState) => this.emit("stateChanged", newState),
       onStateSaved: () => this.emit("stateSaved", this),
       onApplicationMessage: (message) =>

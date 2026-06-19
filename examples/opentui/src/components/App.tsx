@@ -18,6 +18,7 @@ import { HelpOverlay } from "./HelpOverlay.js";
 import { InviteModal } from "./InviteModal.js";
 import { KeyPackageModal } from "./KeyPackageModal.js";
 import { KeybindingFooter, type KeyHint } from "./KeybindingFooter.js";
+import { MembersModal } from "./MembersModal.js";
 import { NewAccountModal } from "./NewAccountModal.js";
 import { ProfileModal } from "./ProfileModal.js";
 import { ProfilePanel } from "./ProfilePanel.js";
@@ -38,6 +39,7 @@ type Modal =
   | { kind: "keypkg" }
   | { kind: "groupdebug"; groupId: string }
   | { kind: "groupinfo"; groupId: string }
+  | { kind: "members"; groupId: string }
   | { kind: "profile" }
   | { kind: "relays" }
   | { kind: "myqr" }
@@ -173,6 +175,7 @@ export function App(props: {
       { key: "enter", label: "open chat" },
       { key: "n", label: "new group" },
       { key: "i", label: "invite" },
+      { key: "m", label: "members" },
       ...(selectedGroupIsAdmin ? [{ key: "e", label: "edit info" }] : []),
       { key: "L", label: "leave active" },
     ],
@@ -191,6 +194,7 @@ export function App(props: {
       : [
           { key: "n", label: "compose" },
           { key: "i", label: "invite" },
+          { key: "m", label: "members" },
           { key: "g", label: "group info" },
           { key: "r", label: "relays" },
           { key: "p", label: "profile" },
@@ -289,7 +293,9 @@ export function App(props: {
     if (focus === "groups") {
       if (matches(key, "n")) setModal({ kind: "new" });
       else if (matches(key, "i")) inviteToActive();
-      else if (matches(key, "e") && selectedGroupIsAdmin && selectedGroup) {
+      else if (matches(key, "m") && selectedGroup) {
+        setModal({ kind: "members", groupId: selectedGroup.idStr });
+      } else if (matches(key, "e") && selectedGroupIsAdmin && selectedGroup) {
         setModal({ kind: "groupinfo", groupId: selectedGroup.idStr });
       } else if (matches(key, "L")) void controller.leave();
     } else if (focus === "invites") {
@@ -299,7 +305,9 @@ export function App(props: {
     } else if (focus === "chat") {
       if (matches(key, "n")) setComposing(true);
       else if (matches(key, "i")) inviteToActive();
-      else if (matches(key, "g") && activeGroupId) {
+      else if (matches(key, "m") && activeGroupId) {
+        setModal({ kind: "members", groupId: activeGroupId });
+      } else if (matches(key, "g") && activeGroupId) {
         setModal({ kind: "groupdebug", groupId: activeGroupId });
       } else if (matches(key, "r")) setModal({ kind: "relays" });
       else if (matches(key, "p")) setModal({ kind: "profile" });
@@ -453,6 +461,23 @@ export function App(props: {
         groups.find((group) => group.idStr === modal.groupId) && (
           <GroupDebugModal
             group={groups.find((group) => group.idStr === modal.groupId)!}
+            onClose={() => setModal(null)}
+          />
+        )}
+      {modal?.kind === "members" &&
+        groups.find((group) => group.idStr === modal.groupId) && (
+          <MembersModal
+            group={groups.find((group) => group.idStr === modal.groupId)!}
+            mePubkey={me.pubkey}
+            onPromote={(pubkey) =>
+              void controller.setMemberAdmin(modal.groupId, pubkey, true)
+            }
+            onDemote={(pubkey) =>
+              void controller.setMemberAdmin(modal.groupId, pubkey, false)
+            }
+            onRemove={(pubkey) =>
+              void controller.removeMember(modal.groupId, pubkey)
+            }
             onClose={() => setModal(null)}
           />
         )}

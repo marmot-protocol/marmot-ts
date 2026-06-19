@@ -1,9 +1,6 @@
 import { useKeyboard } from "@opentui/react";
-import { npubEncode } from "applesauce-core/helpers/pointers";
 
 import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
-
-import { useProfile } from "../hooks/use-profile.js";
 
 function shortHex(value: string, max = 96): string {
   if (value.length <= max) return value || "empty";
@@ -26,42 +23,22 @@ function row(label: string, value: string | number | boolean) {
 function formatDecoded(value: unknown): string {
   if (value === undefined) return "not decoded";
   if (typeof value === "bigint") return value.toString();
-  if (value instanceof Uint8Array) return shortHex(Buffer.from(value).toString("hex"));
+  if (value instanceof Uint8Array)
+    return shortHex(Buffer.from(value).toString("hex"));
   if (Array.isArray(value)) {
     return value.map((item) => formatDecoded(item)).join(", ");
   }
   if (value && typeof value === "object") {
     const entries = Object.entries(value).map(([key, item]) => {
-      const formatted = item instanceof Uint8Array
-        ? Buffer.from(item).toString("hex")
-        : formatDecoded(item);
+      const formatted =
+        item instanceof Uint8Array
+          ? Buffer.from(item).toString("hex")
+          : formatDecoded(item);
       return `${key}=${formatted}`;
     });
     return entries.join("; ");
   }
   return String(value);
-}
-
-/**
- * A single decoded group member. The display name resolves reactively through
- * the shared event store (`useProfile`), so it fills in as the kind 0 metadata
- * loads — no profile map threaded down from the controller.
- */
-function MemberRow(props: { pubkey: string }) {
-  const profile = useProfile(props.pubkey);
-  const name = profile?.displayName || profile?.name;
-  return (
-    <box flexDirection="column" marginTop={1}>
-      <text>
-        <span fg="#666">name: </span>
-        <span fg="#d7dde8">{name || "profile name unavailable"}</span>
-      </text>
-      <text>
-        <span fg="#666">npub: </span>
-        <span fg="#7fd1ff">{npubEncode(props.pubkey)}</span>
-      </text>
-    </box>
-  );
 }
 
 export function GroupDebugModal(props: {
@@ -113,8 +90,14 @@ export function GroupDebugModal(props: {
               "transcript hash",
               shortHex(info.mls.confirmedTranscriptHashHex),
             )}
-            {row("confirmation tag", shortHex(info.mls.confirmationTagHex ?? ""))}
-            {row("historical epochs", info.mls.historicalEpochs.join(", ") || "none")}
+            {row(
+              "confirmation tag",
+              shortHex(info.mls.confirmationTagHex ?? ""),
+            )}
+            {row(
+              "historical epochs",
+              info.mls.historicalEpochs.join(", ") || "none",
+            )}
 
             <text fg="#666"> </text>
             <text fg="#FFD700">Nostr Transport</text>
@@ -137,9 +120,11 @@ export function GroupDebugModal(props: {
             {row("component count", info.app.componentCount)}
             {row(
               "required ids",
-              info.app.requiredComponentIds.map(componentId).join(", ") || "none",
+              info.app.requiredComponentIds.map(componentId).join(", ") ||
+                "none",
             )}
-            {info.app.decodeError && row("dictionary decode error", info.app.decodeError)}
+            {info.app.decodeError &&
+              row("dictionary decode error", info.app.decodeError)}
             {info.app.components.map((component) => (
               <box
                 key={`${component.idHex}:${component.name}`}
@@ -153,19 +138,12 @@ export function GroupDebugModal(props: {
                 {row("raw", shortHex(component.dataHex))}
                 {component.decodeError
                   ? row("decode error", component.decodeError)
-                  : row("decoded", shortHex(formatDecoded(component.decoded), 180))}
+                  : row(
+                      "decoded",
+                      shortHex(formatDecoded(component.decoded), 180),
+                    )}
               </box>
             ))}
-
-            <text fg="#666"> </text>
-            <text fg="#FFD700">Members</text>
-            {info.members.pubkeys.length ? (
-              info.members.pubkeys.map((pubkey) => (
-                <MemberRow key={`member:${pubkey}`} pubkey={pubkey} />
-              ))
-            ) : (
-              <text fg="#666">no member pubkeys decoded</text>
-            )}
           </box>
         </scrollbox>
         <text fg="#666">esc/q: close</text>

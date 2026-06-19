@@ -39,6 +39,7 @@ import {
   getNostrGroupIdHex,
   GROUP_EVENT_KIND,
 } from "@internet-privacy/marmot-ts";
+import type { Proposal } from "@internet-privacy/marmot-ts/mls";
 
 import createDebug from "debug";
 
@@ -721,6 +722,80 @@ export class MarmotController {
         extraProposals: [proposal],
       });
       this.log(`updated group info for "${fields.name}"`);
+    });
+  }
+
+  /**
+   * Promotes or demotes a member in the group's admin set. The next set is
+   * computed from the current view so callers only express intent (`makeAdmin`),
+   * and the change rides the same `app_data_update` commit path as
+   * {@link updateGroupInfo}. Admins only; refuses to demote the last admin.
+   */
+  async setMemberAdmin(
+    groupId: string,
+    pubkey: string,
+    makeAdmin: boolean,
+  ): Promise<void> {
+    await this.#withBusy(async () => {
+      const group = this.#groups.get(groupId);
+      if (!group) throw new Error("group is not loaded");
+      if (!groupIsAdmin(group, this.#deps.pubkey)) {
+        throw new Error("only group admins can change admins");
+      }
+      const current = group.groupData?.adminPubkeys ?? [];
+      if (makeAdmin === current.includes(pubkey)) return; // already in/out
+      const next = makeAdmin
+        ? [...current, pubkey]
+        : current.filter((key) => key !== pubkey);
+      if (next.length === 0) {
+        throw new Error("cannot demote the last admin");
+      }
+
+      const [proposal] = await Proposals.proposeUpdateMetadata({
+        adminPubkeys: next,
+      })(group.session.proposalContext());
+      if (!proposal) return;
+      await this.#deps.client.groups.commit(group.id, {
+        extraProposals: [proposal],
+      });
+      this.log(
+        `${makeAdmin ? "promoted" : "demoted"} ${npubShort(pubkey)} ${makeAdmin ? "to" : "from"} admin`,
+      );
+    });
+  }
+
+  /**
+   * Removes a member — every device/leaf they hold — from the group in a single
+   * commit. If they were an admin, the admin set is updated in the same commit so
+   * the policy component never names a non-member. Admins only; use
+   * {@link leave} to remove yourself.
+   */
+  async removeMember(groupId: string, pubkey: string): Promise<void> {
+    await this.#withBusy(async () => {
+      const group = this.#groups.get(groupId);
+      if (!group) throw new Error("group is not loaded");
+      if (!groupIsAdmin(group, this.#deps.pubkey)) {
+        throw new Error("only group admins can remove members");
+      }
+      if (pubkey === this.#deps.pubkey) {
+        throw new Error("use leave to remove yourself");
+      }
+
+      const context = group.session.proposalContext();
+      const extraProposals: Proposal[] =
+        await Proposals.proposeRemoveUser(pubkey)(context);
+      if (!extraProposals.length) return;
+
+      const current = group.groupData?.adminPubkeys ?? [];
+      if (current.includes(pubkey)) {
+        const [metadata] = await Proposals.proposeUpdateMetadata({
+          adminPubkeys: current.filter((key) => key !== pubkey),
+        })(context);
+        if (metadata) extraProposals.push(metadata);
+      }
+
+      await this.#deps.client.groups.commit(group.id, { extraProposals });
+      this.log(`removed ${npubShort(pubkey)} from "${groupName(group)}"`);
     });
   }
 

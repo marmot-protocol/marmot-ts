@@ -17,6 +17,8 @@ export function ingestResultDisposition<TEnvelope>(
       return disposition.stale(inputCategories.authorizationFailed);
     case "deferred":
       return disposition.deferred(result.reason);
+    case "invalidated":
+      return disposition.invalidated();
     case "skipped":
       switch (result.reason) {
         case "past-epoch":

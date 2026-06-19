@@ -437,6 +437,174 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     );
   });
 
+  it("reports an app payload delivered on an abandoned branch as invalidated on rewind (M7)", async () => {
+    const adminPubkey = "a".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { clientState: createdState } = await createTestGroupState(
+      adminPubkey,
+      impl,
+    );
+
+    // 2-member group; the member is the fork-recovery receiver.
+    const memberPubkey = "e".repeat(64);
+    const memberKeyPackage = await generateKeyPackage({
+      credential: createCredential(memberPubkey),
+      ciphersuiteImpl: impl,
+    });
+    const ctx = {
+      cipherSuite: impl,
+      authService: unsafeTestingAuthenticationService,
+    };
+    const { newState: adminStateEpoch1, welcome } = await createCommit({
+      context: ctx,
+      state: createdState,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: memberKeyPackage.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+    const memberStateEpoch1 = await joinGroup({
+      context: ctx,
+      welcome: welcome!.welcome ?? (welcome as never),
+      keyPackage: memberKeyPackage.publicPackage,
+      privateKeys: memberKeyPackage.privatePackage,
+      ratchetTree: undefined,
+    });
+
+    // Two competing commits from the same epoch-1 admin state.
+    const commitA = await createCommit({
+      context: ctx,
+      state: adminStateEpoch1,
+      extraProposals: [],
+    });
+    const commitB = await createCommit({
+      context: ctx,
+      state: adminStateEpoch1,
+      extraProposals: [],
+    });
+    // The canonical winner is the lower commit_digest; the member first follows
+    // the higher (losing) branch, then rewinds to the lower one.
+    const digestA = commitDigest(encode(mlsMessageEncoder, commitA.commit));
+    const digestB = commitDigest(encode(mlsMessageEncoder, commitB.commit));
+    const aWins =
+      Buffer.compare(Buffer.from(digestA), Buffer.from(digestB)) < 0;
+    const lower = aWins ? commitA : commitB;
+    const higher = aWins ? commitB : commitA;
+
+    const lowerEvent = await createGroupEvent({
+      message: lower.commit,
+      state: adminStateEpoch1,
+      ciphersuite: impl,
+    });
+    const higherEvent = await createGroupEvent({
+      message: higher.commit,
+      state: adminStateEpoch1,
+      ciphersuite: impl,
+    });
+
+    // An admin application message on the HIGHER (losing) branch, epoch 2. It is
+    // encrypted under that branch's epoch-2 exporter secret, so the member can
+    // only decrypt it while it is sitting on that branch. The inner rumor is
+    // authored by the MLS sender (admin) with a canonical id, so it passes the
+    // M3 authorship check and is delivered as accepted.
+    const rumor: Rumor = {
+      id: "",
+      kind: 1,
+      content: "message on the losing branch",
+      tags: [],
+      created_at: 1_700_000_000,
+      pubkey: adminPubkey,
+    };
+    rumor.id = getEventHash(rumor);
+    const losingAppMessage = await createApplicationMessage({
+      context: ctx,
+      state: higher.newState,
+      message: new TextEncoder().encode(JSON.stringify(rumor)),
+    });
+    const losingAppEvent = await createGroupEvent({
+      message: losingAppMessage.message,
+      state: higher.newState,
+      ciphersuite: impl,
+    });
+
+    // The canonical state = the member applying the lower commit directly.
+    const expected = await processMessage({
+      context: ctx,
+      state: memberStateEpoch1,
+      message: lower.commit,
+    });
+    if (expected.kind !== "newState") throw new Error("expected newState");
+
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
+    await store.setItem(
+      bytesToHex(memberStateEpoch1.groupContext.groupId),
+      encode(clientStateEncoder, memberStateEpoch1),
+    );
+    const network: NostrNetworkInterface = {
+      request: async () => {
+        throw new Error("not used");
+      },
+      subscription: () => {
+        throw new Error("not used");
+      },
+      publish: async () => {
+        throw new Error("not used");
+      },
+      getUserInboxRelays: async () => {
+        throw new Error("not used");
+      },
+    };
+    const group = new MarmotGroup(memberStateEpoch1, {
+      store,
+      signer: { getPublicKey: async () => memberPubkey } as EventSigner,
+      ciphersuite: impl,
+      network,
+    });
+
+    // Follow the higher (losing) branch.
+    for await (const _ of group.ingest([higherEvent])) void _;
+    expect(group.state.groupContext.epoch).toBe(
+      memberStateEpoch1.groupContext.epoch + 1n,
+    );
+
+    // Deliver the app payload while on the losing branch — accepted (eager).
+    let deliveredAccepted = false;
+    for await (const res of group.ingest([losingAppEvent])) {
+      if (
+        res.kind === "processed" &&
+        res.result.kind === "applicationMessage"
+      ) {
+        deliveredAccepted = true;
+        expect(res.disposition).toEqual({ kind: "accepted" });
+      }
+    }
+    expect(deliveredAccepted).toBe(true);
+
+    // The canonical (lower) commit arrives late → rewind to it AND retract the
+    // app payload that decrypted only on the now-abandoned higher branch.
+    const invalidated: { id: string }[] = [];
+    for await (const res of group.ingest([lowerEvent])) {
+      if (res.kind === "invalidated") {
+        expect(res.disposition).toEqual({ kind: "invalidated" });
+        invalidated.push({ id: res.event.id });
+      }
+    }
+
+    // Converged onto the canonical branch.
+    expect(group.state.confirmationTag).toEqual(
+      expected.newState.confirmationTag,
+    );
+    // Exactly the losing-branch app payload was reported invalidated.
+    expect(invalidated).toEqual([{ id: losingAppEvent.id }]);
+  });
+
   it("converges onto a deeper competing branch whose child commit is encrypted under an unreached epoch", async () => {
     const adminPubkey = "a".repeat(64);
     const impl = await getCiphersuiteImpl(

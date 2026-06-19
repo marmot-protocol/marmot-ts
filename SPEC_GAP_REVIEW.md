@@ -236,12 +236,27 @@ Net: the library does **not** currently interop with a spec-conformant peer.
 
 ### M7 — `invalidated` disposition not emitted on rewind
 
+- **Status:** FIXED (2026-06-19, live engine path). Standalone of B5: Marmot v2 delivers app payloads eagerly (no
+  settle-then-release gate — that *is* B5), so a fork rewind that abandons a branch must *retract* the payloads
+  delivered on it. That is exactly the `invalidated` notification, and it is needed *because* delivery is eager.
 - **Spec:** `protocol-core/inbound-processing.md:102-110` + `convergence.md:189-190` — app payloads that decrypted
   only on an abandoned branch MUST be reported `invalidated` (+ a state notification). Rust:
   `distributed_convergence.rs:328-344` (`AppMessageInvalidated`).
-- **Code:** no `invalidated` arm in `ingestResultDisposition` (`src/client/group/marmot-group.ts:197-221`); rewinds
-  in `#resolveFork` never report invalidated payloads.
-- **Fix:** track app payloads applied on the losing branch and emit `invalidated` on rewind.
+- **Fix applied:** new `InvalidatedIngestResult` kind (`src/engine/types.ts`) + `invalidated` arm in
+  `ingestResultDisposition` (`src/engine/ingest-disposition.ts` → `disposition.invalidated()`). A small ledger
+  `DeliveredPayloadLedger` (`src/engine/delivered-payloads.ts`) remembers every app payload delivered as
+  `accepted`, keyed by its delivery state's epoch + confirmation tag (its branch identity); the ingest pipeline
+  records on delivery (`ingest.ts` applicationMessage branch). On a `recovered` fork resolution the engine
+  (`group-engine.ts` `#resolveFork`) computes the canonical branch's state tags (root + every applied child + tip)
+  and `invalidatedByRewind(forkEpoch, canonicalTags)` returns every delivered payload above the fork epoch whose
+  branch is not on the canonical chain; the pipeline yields those as `invalidated`. The ledger is pruned below the
+  retained anchor (a rewind can never reach there), so it stays bounded to the rollback horizon. Works cross-batch
+  (payload delivered one batch, retracted on a later batch's rewind). Tests: `ingest-commit-race.test.ts`
+  "reports an app payload delivered on an abandoned branch as invalidated on rewind (M7)" (end-to-end deliver →
+  rewind → invalidated), `delivered-payloads.test.ts` (ledger unit), `ingest-disposition.test.ts` (mapping).
+- **Note:** the library surfaces `invalidated` as the spec's "state notification" via the ingest generator; it does
+  not auto-delete the earlier-saved payload from group history (the `GroupSessionHistory` interface has no
+  delete-one), leaving the retraction action to the consuming app.
 
 ### M8 — Non-admin outbound commits fully blocked
 

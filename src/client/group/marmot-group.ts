@@ -54,6 +54,7 @@ export type {
   RejectedIngestResult,
   SkippedIngestResult,
   DeferredIngestResult,
+  InvalidatedIngestResult,
   UnreadableIngestResult,
 } from "../session/group-session.js";
 export { ingestResultDisposition } from "../session/group-session.js";

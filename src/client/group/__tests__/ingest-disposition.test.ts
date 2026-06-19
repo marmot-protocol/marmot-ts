@@ -63,4 +63,10 @@ describe("ingestResultDisposition", () => {
       ).toEqual({ kind: "deferred", reason });
     }
   });
+
+  it("maps invalidated to an invalidated disposition (M7)", () => {
+    expect(ingestResultDisposition({ kind: "invalidated", ...stub })).toEqual({
+      kind: "invalidated",
+    });
+  });
 });

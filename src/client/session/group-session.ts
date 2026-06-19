@@ -67,11 +67,18 @@ export type DeferredIngestResult = {
   reason: import("../../core/inbound.js").DeferredReason;
 };
 
+export type InvalidatedIngestResult = {
+  kind: "invalidated";
+  event: NostrEvent;
+  message: import("ts-mls").MlsMessage;
+};
+
 export type IngestResult =
   | ProcessedIngestResult
   | RejectedIngestResult
   | SkippedIngestResult
   | DeferredIngestResult
+  | InvalidatedIngestResult
   | UnreadableIngestResult;
 
 export type DispositionedIngestResult = IngestResult & {

@@ -128,12 +128,26 @@ export type DeferredIngestResult<TEnvelope> = {
   reason: DeferredReason;
 };
 
+/**
+ * An MLS application message that decrypted only on a branch a later
+ * convergence rewind abandoned (`protocol-core/inbound-processing.md`,
+ * `convergence.md`). The payload was tentatively delivered as `accepted`
+ * (Marmot v2 delivers eagerly); this result retracts it. It is reported, never
+ * delivered as accepted output.
+ */
+export type InvalidatedIngestResult<TEnvelope> = {
+  kind: "invalidated";
+  envelope: TEnvelope;
+  message: MlsMessage;
+};
+
 /** Result from ingesting group transport envelopes. */
 export type IngestResult<TEnvelope> =
   | ProcessedIngestResult<TEnvelope>
   | RejectedIngestResult<TEnvelope>
   | SkippedIngestResult<TEnvelope>
   | DeferredIngestResult<TEnvelope>
+  | InvalidatedIngestResult<TEnvelope>
   | UnreadableIngestResult<TEnvelope>;
 
 /** An {@link IngestResult} carrying its protocol-visible {@link Disposition}. */

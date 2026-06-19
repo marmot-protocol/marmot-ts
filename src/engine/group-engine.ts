@@ -25,6 +25,7 @@ import {
 } from "../core/group-lifecycle.js";
 import { logger } from "../utils/debug.js";
 import { createAdminCommitPolicyCallback } from "./admin-policy.js";
+import { DeliveredPayloadLedger } from "./delivered-payloads.js";
 import { ForkRecovery } from "./fork-recovery.js";
 import {
   type AppliedForkResolution,
@@ -73,6 +74,8 @@ export class MarmotGroupEngine<TEnvelope> {
   readonly #retained: RetainedHistoryStore;
   /** Convergence candidate-branch construction and selection. */
   readonly #forkRecovery: ForkRecovery<TEnvelope>;
+  /** App payloads delivered eagerly, retracted as `invalidated` on rewind (M7). */
+  readonly #delivered = new DeliveredPayloadLedger<TEnvelope>();
 
   readonly #onStateChanged?: (state: ClientState) => void;
   private log: Debugger;
@@ -359,6 +362,11 @@ export class MarmotGroupEngine<TEnvelope> {
       createAdminCallback: () => this.#createAdminVerificationCallback(),
       resolveFork: (forkEpoch, pool, encrypted, witnessEnvelopes) =>
         this.#resolveFork(forkEpoch, pool, encrypted, witnessEnvelopes),
+      recordDeliveredAppPayload: (epoch, stateTag, envelope, message) => {
+        this.#delivered.record({ epoch, stateTag, envelope, message });
+        const anchor = this.#retained.anchorEpoch();
+        if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
+      },
       toUnrecoverable: () => this.#toUnrecoverable(),
     };
   }
@@ -398,7 +406,7 @@ export class MarmotGroupEngine<TEnvelope> {
     pool: Parameters<ForkRecovery<TEnvelope>["resolveFork"]>[0]["pool"],
     encrypted: TEnvelope[],
     witnessEnvelopes: TEnvelope[],
-  ): Promise<AppliedForkResolution> {
+  ): Promise<AppliedForkResolution<TEnvelope>> {
     const resolution = await this.#forkRecovery.resolveFork({
       forkEpoch,
       pool,
@@ -413,6 +421,23 @@ export class MarmotGroupEngine<TEnvelope> {
       return { outcome: resolution.outcome };
     }
 
+    // The canonical branch's state identities (root + every applied child +
+    // the tip). Any app payload delivered above the fork epoch whose delivery
+    // state is not on this chain decrypted only on the abandoned branch, so it
+    // is retracted as `invalidated` (M7, convergence.md).
+    const canonicalTags = new Set<string>();
+    if (resolution.winnerChain.length > 0)
+      canonicalTags.add(
+        bytesToHex(resolution.winnerChain[0].parent.confirmationTag),
+      );
+    for (const link of resolution.winnerChain)
+      canonicalTags.add(bytesToHex(link.child.confirmationTag));
+    canonicalTags.add(bytesToHex(resolution.winnerTip.confirmationTag));
+    const invalidated = this.#delivered.invalidatedByRewind(
+      forkEpoch,
+      canonicalTags,
+    );
+
     this.#lifecycle = transitionLifecycle(
       this.#lifecycle,
       groupLifecycleStates.recovering,
@@ -425,7 +450,18 @@ export class MarmotGroupEngine<TEnvelope> {
       this.#lifecycle,
       groupLifecycleStates.stable,
     );
-    return { outcome: "recovered", result: resolution.result };
+
+    const anchor = this.#retained.anchorEpoch();
+    if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
+
+    return {
+      outcome: "recovered",
+      result: resolution.result,
+      invalidated: invalidated.map(({ envelope, message }) => ({
+        envelope,
+        message,
+      })),
+    };
   }
 
   #createAdminVerificationCallback(): IncomingMessageCallback {

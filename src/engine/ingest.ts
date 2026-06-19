@@ -1,4 +1,5 @@
 /** @module @category Engine */
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { Debugger } from "debug";
 import {
   acceptAll,
@@ -37,8 +38,13 @@ import { framedContentType, framedEpoch } from "./wire-format.js";
 type DeferredEntry = { message: MlsMessage; reason: DeferredReason };
 
 /** The applied outcome of a fork resolution, as the ingest loop consumes it. */
-export type AppliedForkResolution =
-  | { outcome: "recovered"; result: ProcessMessageResult }
+export type AppliedForkResolution<TEnvelope> =
+  | {
+      outcome: "recovered";
+      result: ProcessMessageResult;
+      /** App payloads abandoned by the rewind, to report as `invalidated` (M7). */
+      invalidated: { envelope: TEnvelope; message: MlsMessage }[];
+    }
   | { outcome: "superseded" | "skip" };
 
 /**
@@ -70,7 +76,18 @@ export interface IngestContext<TEnvelope> {
     pool: MlsMessage[],
     encrypted: TEnvelope[],
     witnessEnvelopes: TEnvelope[],
-  ): Promise<AppliedForkResolution>;
+  ): Promise<AppliedForkResolution<TEnvelope>>;
+  /**
+   * Remembers an application payload delivered as `accepted` on the current
+   * branch state, so a later rewind that abandons that branch can retract it
+   * as `invalidated` (M7).
+   */
+  recordDeliveredAppPayload(
+    epoch: number,
+    stateTag: string,
+    envelope: TEnvelope,
+    message: MlsMessage,
+  ): void;
   /** Drives the group to the terminal `Unrecoverable` lifecycle state. */
   toUnrecoverable(): void;
 }
@@ -384,6 +401,17 @@ export async function* ingestEnvelopes<TEnvelope>(
           };
           continue;
         }
+        // Remember this eager delivery keyed by the branch state it decrypted
+        // against (epoch + confirmation tag); a later rewind abandoning this
+        // branch retracts it as `invalidated` (M7). An app message advances the
+        // ratchet but not the epoch/confirmation tag, so newState identifies the
+        // delivery branch.
+        ctx.recordDeliveredAppPayload(
+          Number(result.newState.groupContext.epoch),
+          bytesToHex(result.newState.confirmationTag),
+          envelope,
+          message,
+        );
         log("application message envelope:%s", envelopeLabel(envelope));
         yield { kind: "processed", result, envelope, message };
       }
@@ -550,6 +578,18 @@ export async function* ingestEnvelopes<TEnvelope>(
             message: retainedPool[i].message,
             reason: "past-epoch",
           };
+        // App payloads delivered on the now-abandoned branch are retracted (M7).
+        for (const inv of resolution.invalidated) {
+          log(
+            "invalidate app payload envelope:%s",
+            envelopeLabel(inv.envelope),
+          );
+          yield {
+            kind: "invalidated",
+            envelope: inv.envelope,
+            message: inv.message,
+          };
+        }
       } else {
         for (const p of retainedPool)
           yield {

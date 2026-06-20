@@ -4,6 +4,10 @@ import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 
 import { App } from "./components/App.js";
+import {
+  installTimerTracking,
+  unrefBackgroundTimers,
+} from "./helpers/timers.js";
 import { MarmotProvider } from "./hooks/use-marmot.js";
 import { redirectDebugToFile, type LogFile } from "./marmot/logging.js";
 import type { MarmotController } from "./marmot/controller.js";
@@ -66,6 +70,12 @@ function Root(props: {
 }
 
 async function main(): Promise<void> {
+  // Record background timers from the very start so that, on quit, we can unref
+  // the ones applesauce leaves running (relay keepAlive/liveness, loader
+  // batching) and let the process exit cleanly instead of hanging. See
+  // ./helpers/timers.ts.
+  installTimerTracking();
+
   const argv = process.argv.slice(2);
   if (wantsHelp(argv)) {
     console.log(HELP_TEXT);
@@ -99,6 +109,10 @@ async function main(): Promise<void> {
     renderer.destroy();
     live.stop();
     logFile?.close();
+    // Everything with real I/O is now closed; unref the idle background timers
+    // applesauce leaves running so the event loop drains and we exit without a
+    // forced process.exit().
+    unrefBackgroundTimers();
     process.exitCode = 0;
   };
   process.on("exit", () => {

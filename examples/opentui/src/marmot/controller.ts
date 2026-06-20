@@ -21,30 +21,15 @@ import {
   type MarmotGroup,
   Proposals,
   type UnreadInvite,
+  type Unsubscribable,
   type WelcomeRecipient,
 } from "@internet-privacy/marmot-ts/client";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
-  AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
-  AGENT_TEXT_STREAM_QUIC_FANOUT_EXTENSION_TYPE,
-  AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
-  AGENT_TEXT_STREAM_QUIC_SEND_EXTENSION_TYPE,
-  AGENT_TEXT_STREAM_ROLE_FANOUT,
-  AGENT_TEXT_STREAM_ROLE_RECEIVE,
-  AGENT_TEXT_STREAM_ROLE_SEND,
   createInboxRelayListEvent,
   createNip65RelayListEvent,
-  getCredentialPubkey,
-  getKeyPackage,
   getKeyPackageIdentifier,
   getKeyPackageReference,
-  getMarmotGroupView,
-  getNostrGroupIdHex,
-  getWelcome,
-  getWelcomeGroupRelays,
-  getWelcomeKeyPackageEventId,
-  getWelcomeKeyPackageRefs,
-  GROUP_EVENT_KIND,
 } from "@internet-privacy/marmot-ts";
 import type { Proposal } from "@internet-privacy/marmot-ts/mls";
 
@@ -60,19 +45,11 @@ import {
   short,
 } from "./format.js";
 
-const GIFT_WRAP_KIND = 1059;
-
 /** Kind of the chat rumors {@link createChatRumor} produces (Marmot chat message). */
 const CHAT_MESSAGE_KIND = 9;
 
 /** How many of the newest messages the live history window holds per group. */
 const HISTORY_WINDOW = 50;
-
-/**
- * Group transport diagnostics (relays + h-tag for sub/publish).
- * Enable with `DEBUG=opentui:group-transport` (opentui enables `*` by default).
- */
-const transportLog = createDebug("opentui:group-transport");
 
 /**
  * Invite ingester diagnostics — gift-wrap subscription setup, every kind-1059
@@ -95,37 +72,6 @@ function hex(bytes: Uint8Array): string {
 function codePointHex(value: number): string {
   return `0x${value.toString(16).padStart(4, "0")}`;
 }
-
-/**
- * MLS `required_capabilities` GroupContext extension type (code point `0x0003`).
- * A LeafNode added to the group MUST advertise every extension/proposal/credential
- * listed here (capability-negotiation.md "enforce on add").
- */
-const REQUIRED_CAPABILITIES_EXTENSION_TYPE = 0x0003;
-
-/**
- * Maps each agent-text-stream-QUIC `required_member_roles` bit to the LeafNode
- * capability (extension type) a KeyPackage must advertise to satisfy it. A group
- * whose policy requires a role rejects any KeyPackage missing the marker
- * (agent-text-stream-quic-v1.md `do_send_invite`).
- */
-const ROLE_CAPABILITIES = [
-  {
-    bit: AGENT_TEXT_STREAM_ROLE_RECEIVE,
-    extension: AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
-    name: "receive",
-  },
-  {
-    bit: AGENT_TEXT_STREAM_ROLE_SEND,
-    extension: AGENT_TEXT_STREAM_QUIC_SEND_EXTENSION_TYPE,
-    name: "send",
-  },
-  {
-    bit: AGENT_TEXT_STREAM_ROLE_FANOUT,
-    extension: AGENT_TEXT_STREAM_QUIC_FANOUT_EXTENSION_TYPE,
-    name: "fanout",
-  },
-] as const;
 
 function normalizeRelays(relays: string[]): string[] {
   return relaySet(
@@ -203,7 +149,7 @@ function keyPackageDetails(pkg: ListedKeyPackage): KeyPackageDetails {
   };
 }
 
-export interface ControllerDeps {
+export interface MarmotControllerOptions {
   client: MarmotClient;
   pool: RelayPool;
   directory: Directory;
@@ -390,18 +336,6 @@ export interface InvitePreview {
   group: InvitePreviewGroup | null;
 }
 
-/** Pre-computed group state used to evaluate each {@link InviteCandidate}. */
-interface GroupInviteContext {
-  cipherSuite: number;
-  members: Set<string>;
-  required: {
-    extensionTypes: number[];
-    proposalTypes: number[];
-    credentialTypes: number[];
-  } | null;
-  requiredRoles: number;
-}
-
 /**
  * Immutable snapshot consumed by React via `useSyncExternalStore`. The group
  * and invite lists are intentionally NOT here: the React layer reads those
@@ -444,12 +378,22 @@ type Listener = () => void;
  * generators cannot express (relay I/O, per-group ingest, local echo).
  */
 export class MarmotController {
-  readonly #deps: ControllerDeps;
+  readonly #client: MarmotClient;
+  readonly #pool: RelayPool;
+  readonly #directory: Directory;
+  readonly #eventStore: EventStore;
+  readonly #signer: Signer;
+  readonly #pubkey: string;
+  readonly #relays: string[];
+  readonly #fresh: boolean;
+  readonly #clientId: string;
+  readonly #debug: boolean;
+  readonly #statusLog?: (line: StatusLine) => void;
+  readonly #dispose?: () => void;
+  readonly #initialProfileName?: string;
 
   readonly #groups = new Map<string, MarmotGroup>();
-  readonly #groupSubs = new Map<string, { unsubscribe(): void }>();
   readonly #bound = new Set<string>();
-  readonly #seenEvents = new Set<string>();
   /** Per-group rumor union (id → message), the source of the rendered timeline. */
   readonly #messageIndex = new Map<string, Map<string, ChatMessage>>();
   /** The rendered, oldest-first timeline projected from {@link #messageIndex}. */
@@ -490,20 +434,35 @@ export class MarmotController {
   #relayListsPromise?: Promise<void>;
 
   #watchAbort = false;
-  #inviteSub?: { unsubscribe(): void };
+  /** Library-owned inbound transport: group subscriptions (connectAll). */
+  #groupsConnection?: Unsubscribable;
+  /** Library-owned inbound transport: gift-wrap invite listener. */
+  #inviteConnection?: Unsubscribable;
 
   /** Cached snapshot; replaced (new reference) on every mutation. */
   #snapshot: ChatSnapshot;
 
-  constructor(deps: ControllerDeps) {
-    this.#deps = deps;
+  constructor(options: MarmotControllerOptions) {
+    this.#client = options.client;
+    this.#pool = options.pool;
+    this.#directory = options.directory;
+    this.#eventStore = options.eventStore;
+    this.#signer = options.signer;
+    this.#pubkey = options.pubkey;
+    this.#relays = options.relays;
+    this.#fresh = options.fresh;
+    this.#clientId = options.clientId;
+    this.#debug = options.debug;
+    this.#statusLog = options.statusLog;
+    this.#dispose = options.dispose;
+    this.#initialProfileName = options.initialProfileName;
     // A fresh account already operates on the relays the user chose, so seed its
     // advertised lists with them. A returning account starts with *unknown*
     // operating relays — NOT the bootstrap defaults — and adopts its published
     // NIP-65 outbox + kind-10050 inbox once #loadRelayLists resolves them, so we
     // never publish the user's events to a default relay they never configured.
-    this.#outboxRelays = deps.fresh ? deps.relays : [];
-    this.#inboxRelays = deps.fresh ? deps.relays : [];
+    this.#outboxRelays = this.#fresh ? this.#relays : [];
+    this.#inboxRelays = this.#fresh ? this.#relays : [];
     this.#snapshot = this.#buildSnapshot();
   }
 
@@ -517,12 +476,12 @@ export class MarmotController {
   getSnapshot = (): ChatSnapshot => this.#snapshot;
 
   get client(): MarmotClient {
-    return this.#deps.client;
+    return this.#client;
   }
 
   /** Shared reactive event cache, consumed by the React `useProfile` hook. */
   get eventStore(): EventStore {
-    return this.#deps.eventStore;
+    return this.#eventStore;
   }
 
   // --- lifecycle -------------------------------------------------------------
@@ -534,10 +493,20 @@ export class MarmotController {
     if (this.#watchAbort) return;
     await this.#restoreGroups();
     if (this.#watchAbort) return;
-    this.#subscribeInvites();
+    // The library owns inbound transport now: connectAll subscribes every group
+    // to its kind-445 events (backfill + live, draining ingest), and invites
+    // listen() subscribes for gift-wraps on our inbox relays. #watchGroups stays
+    // for app-side bookkeeping (stateChanged → snapshot, history projection).
+    this.#client.groups.on("unreadable", () =>
+      this.log("(dropped an unreadable group event)", "warn"),
+    );
+    this.#groupsConnection = this.#client.groups.connectAll({
+      fallbackRelays: this.#relays,
+    });
+    this.#relistenInvites();
     void this.#watchGroups();
-    this.log(`ready — you are ${npubEncode(this.#deps.pubkey)}`);
-    this.log(`bootstrap relays: ${this.#deps.relays.join(", ")}`);
+    this.log(`ready — you are ${npubEncode(this.#pubkey)}`);
+    this.log(`bootstrap relays: ${this.#relays.join(", ")}`);
     // Returning accounts discover their advertised relays in the background so the
     // invite subscription and future publishes follow the user's own relays, never
     // the bootstrap defaults. (#ensureKeyPackage already awaited this above if it
@@ -554,7 +523,7 @@ export class MarmotController {
    * KeyPackage. A no-op for returning accounts (no `initialProfileName`).
    */
   async #publishInitialIdentity(): Promise<void> {
-    const name = this.#deps.initialProfileName;
+    const name = this.#initialProfileName;
     if (!name) return;
     await this.saveProfile({ name });
     if (this.#watchAbort) return;
@@ -564,12 +533,12 @@ export class MarmotController {
   stop(): void {
     if (this.#watchAbort) return;
     this.#watchAbort = true;
-    this.#inviteSub?.unsubscribe();
-    for (const sub of this.#groupSubs.values()) sub.unsubscribe();
+    this.#inviteConnection?.unsubscribe();
+    this.#groupsConnection?.unsubscribe();
     for (const gen of this.#historySubs.values()) void gen.return(undefined);
     this.#historySubs.clear();
-    this.#deps.pool.close();
-    this.#deps.dispose?.();
+    this.#pool.close();
+    this.#dispose?.();
   }
 
   // --- actions ---------------------------------------------------------------
@@ -580,18 +549,15 @@ export class MarmotController {
     this.#publish();
   }
 
-  async createGroup(
-    name: string,
-    relays = this.#outboxRelays,
-  ): Promise<void> {
+  async createGroup(name: string, relays = this.#outboxRelays): Promise<void> {
     await this.#withBusy(async () => {
       const groupRelays = normalizeRelays(relays);
       if (!groupRelays.length)
         throw new Error("group needs at least one relay");
-      const group = await this.#deps.client.groups.create(name, {
+      const group = await this.#client.groups.create(name, {
         relays: groupRelays,
       });
-      await this.#attachGroup(group, false);
+      this.#attachGroup(group);
       this.#activeId = group.idStr;
       this.log(
         `created "${name}" (${short(group.idStr)}) on ${groupRelays.join(", ")} — now active`,
@@ -620,18 +586,18 @@ export class MarmotController {
       // back to public NIP-65 indexers, so this works even for peers we've
       // never shared a relay with.
       this.log(`discovering KeyPackages for ${npubShort(pubkeyHex)}…`);
-      const discovered = await this.#deps.directory.outboxes(
+      const discovered = await this.#directory.outboxes(
         pubkeyHex,
-        this.#deps.relays,
+        this.#relays,
       );
       this.log(
         discovered.length
           ? `NIP-65 outbox: ${discovered.join(", ")}`
           : `no NIP-65 outbox relays found; using session relays`,
       );
-      const searchRelays = relaySet(discovered, this.#deps.relays);
+      const searchRelays = relaySet(discovered, this.#relays);
       this.log(`fetching KeyPackages from ${searchRelays.join(", ")}`);
-      const kps = await this.#deps.pool.request(searchRelays, {
+      const kps = await this.#pool.request(searchRelays, {
         kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
         authors: [pubkeyHex],
       });
@@ -639,11 +605,10 @@ export class MarmotController {
         throw new Error(`no KeyPackage found for ${npubShort(pubkeyHex)}`);
       }
 
-      const context = this.#groupInviteContext(group);
       const candidates = kps
         .slice()
         .sort((a, b) => b.created_at - a.created_at)
-        .map((event) => this.#describeCandidate(context, event));
+        .map((event) => this.#describeCandidate(group, event));
       const invitable = candidates.filter((c) => c.invitable).length;
       this.log(
         `found ${candidates.length} KeyPackage(s) for ${npubShort(pubkeyHex)} — ${invitable} invitable to "${groupName(group)}"`,
@@ -683,7 +648,7 @@ export class MarmotController {
         keyPackageEventId: event.id,
         keyPackageEvent: event,
       }));
-      await this.#deps.client.groups.commit(group.id, {
+      await this.#client.groups.commit(group.id, {
         extraProposals: events.map((event) =>
           Proposals.proposeInviteUser(event),
         ),
@@ -695,119 +660,39 @@ export class MarmotController {
     });
   }
 
-  /** Snapshots the group state needed to evaluate KeyPackage add-eligibility. */
-  #groupInviteContext(group: MarmotGroup): GroupInviteContext {
-    const info = group.info;
-    const requiredExtension = group.state.groupContext.extensions.find(
-      (extension) =>
-        extension.extensionType === REQUIRED_CAPABILITIES_EXTENSION_TYPE,
-    );
-    const data = requiredExtension?.extensionData as
-      | {
-          extensionTypes?: number[];
-          proposalTypes?: number[];
-          credentialTypes?: number[];
-        }
-      | undefined;
-    const required = data
-      ? {
-          extensionTypes: data.extensionTypes ?? [],
-          proposalTypes: data.proposalTypes ?? [],
-          credentialTypes: data.credentialTypes ?? [],
-        }
-      : null;
-
-    const policy = info.app.components.find(
-      (component) => component.id === AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
-    )?.decoded as { requiredMemberRoles?: number } | undefined;
-
-    return {
-      cipherSuite: group.state.groupContext.cipherSuite,
-      members: new Set(info.members.pubkeys),
-      required,
-      requiredRoles: policy?.requiredMemberRoles ?? 0,
-    };
-  }
-
-  /** Evaluates one KeyPackage event against the group's add requirements. */
-  #describeCandidate(
-    context: GroupInviteContext,
-    event: NostrEvent,
-  ): InviteCandidate {
-    const reasons: string[] = [];
-    let alreadyMember = false;
-    let cipherSuite = "?";
-    const deviceId = getKeyPackageIdentifier(event) ?? null;
-    const refHex = getKeyPackageReference(event) ?? null;
-
-    try {
-      const keyPackage = getKeyPackage(event);
-      cipherSuite = codePointHex(keyPackage.cipherSuite);
-
-      const memberPubkey = getCredentialPubkey(keyPackage.leafNode.credential);
-      if (context.members.has(memberPubkey)) {
-        alreadyMember = true;
-        reasons.push("already a member");
-      }
-
-      if (keyPackage.cipherSuite !== context.cipherSuite) {
-        reasons.push(
-          `cipher suite ${codePointHex(keyPackage.cipherSuite)} ≠ group ${codePointHex(context.cipherSuite)}`,
-        );
-      }
-
-      const capabilities = keyPackage.leafNode.capabilities;
-      if (context.required) {
-        for (const type of context.required.extensionTypes)
-          if (!capabilities.extensions.includes(type))
-            reasons.push(`missing extension ${codePointHex(type)}`);
-        for (const type of context.required.proposalTypes)
-          if (!capabilities.proposals.includes(type))
-            reasons.push(`missing proposal ${codePointHex(type)}`);
-        for (const type of context.required.credentialTypes)
-          if (!capabilities.credentials.includes(type))
-            reasons.push(`missing credential ${codePointHex(type)}`);
-      }
-
-      for (const role of ROLE_CAPABILITIES) {
-        if (
-          context.requiredRoles & role.bit &&
-          !capabilities.extensions.includes(role.extension)
-        ) {
-          reasons.push(
-            `missing ${role.name} role ${codePointHex(role.extension)}`,
-          );
-        }
-      }
-    } catch (err) {
-      reasons.push(
-        `undecodable: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
+  /**
+   * Evaluates one KeyPackage event against the group's add requirements, using
+   * the library's {@link MarmotGroup.evaluateKeyPackage} eligibility engine and
+   * layering on the display-only fields (device slot, ref, hex cipher suite).
+   */
+  #describeCandidate(group: MarmotGroup, event: NostrEvent): InviteCandidate {
+    const eligibility = group.evaluateKeyPackage(event);
     return {
       id: event.id,
       event,
       createdAt: event.created_at,
-      deviceId,
-      refHex,
-      cipherSuite,
-      invitable: reasons.length === 0,
-      alreadyMember,
-      reasons,
+      deviceId: getKeyPackageIdentifier(event) ?? null,
+      refHex: getKeyPackageReference(event) ?? null,
+      cipherSuite:
+        eligibility.cipherSuite < 0
+          ? "?"
+          : codePointHex(eligibility.cipherSuite),
+      invitable: eligibility.eligible,
+      alreadyMember: eligibility.alreadyMember,
+      reasons: eligibility.reasons,
     };
   }
 
   async joinInvite(inviteId: string): Promise<void> {
     await this.#withBusy(async () => {
-      const unread = await this.#deps.client.invites.getUnread();
+      const unread = await this.#client.invites.getUnread();
       const rumor = unread.find((entry) => entry.id === inviteId);
       if (!rumor) throw new Error("invite not found (already accepted?)");
-      const { group } = await this.#deps.client.joinGroupFromWelcome({
+      const { group } = await this.#client.joinGroupFromWelcome({
         welcomeRumor: rumor,
       });
-      await this.#deps.client.invites.markAsRead(rumor.id);
-      await this.#attachGroup(group, true);
+      await this.#client.invites.markAsRead(rumor.id);
+      this.#attachGroup(group);
       this.#activeId = group.idStr;
       this.log(`joined "${groupName(group)}" — now active`);
     });
@@ -822,39 +707,7 @@ export class MarmotController {
    * failed preview just yields the fields it could read.
    */
   async previewInvite(invite: UnreadInvite): Promise<InvitePreview> {
-    const preview: InvitePreview = {
-      relays: getWelcomeGroupRelays(invite),
-      keyPackageEventId: getWelcomeKeyPackageEventId(invite),
-      group: null,
-    };
-
-    try {
-      const welcome = getWelcome(invite);
-      preview.cipherSuite = welcome.cipherSuite;
-      preview.recipientCount = welcome.secrets.length;
-    } catch {
-      // Unparseable Welcome — leave the MLS-struct fields undefined.
-    }
-
-    try {
-      const groupInfo = await this.#deps.client.readInviteGroupInfo(invite);
-      if (groupInfo) {
-        preview.epoch = groupInfo.groupContext.epoch;
-        const view = getMarmotGroupView(groupInfo);
-        if (view) {
-          preview.group = {
-            name: view.name,
-            description: view.description,
-            adminPubkeys: view.adminPubkeys,
-            relays: view.relays,
-          };
-        }
-      }
-    } catch {
-      // Best-effort preview; keep the rumor-level fields we already decoded.
-    }
-
-    return preview;
+    return this.#client.previewWelcome(invite);
   }
 
   /**
@@ -865,7 +718,7 @@ export class MarmotController {
    */
   async dismissInvite(inviteId: string): Promise<void> {
     try {
-      await this.#deps.client.invites.markAsRead(inviteId);
+      await this.#client.invites.markAsRead(inviteId);
       this.log("invite dismissed");
     } catch (err) {
       this.logError(err);
@@ -880,29 +733,7 @@ export class MarmotController {
    * user can confirm an invite arrived even after its KeyPackage rotated away.
    */
   async *watchInvites(): AsyncGenerator<InviteEntry[]> {
-    for await (const invites of this.#deps.client.invites.watchUnread()) {
-      const joinable = await Promise.all(
-        invites.map((invite) => this.#hasKeyPackageForInvite(invite)),
-      );
-      yield invites.map((invite, index) => ({
-        invite,
-        joinable: joinable[index]!,
-      }));
-    }
-  }
-
-  /** True when we hold the private KeyPackage a Welcome rumor is addressed to. */
-  async #hasKeyPackageForInvite(invite: UnreadInvite): Promise<boolean> {
-    try {
-      for (const ref of getWelcomeKeyPackageRefs(invite)) {
-        if (await this.#deps.client.keyPackages.has(ref)) return true;
-      }
-      return false;
-    } catch {
-      // An unparseable Welcome can't be joined either; treat it as unacceptable
-      // rather than letting it crash the watch generator.
-      return false;
-    }
+    yield* this.#client.watchInvites();
   }
 
   async leave(): Promise<void> {
@@ -912,7 +743,7 @@ export class MarmotController {
         "⚠ leave sends a plain MLS Remove; spec peers expect SelfRemove (gap B6) — divergent",
         "warn",
       );
-      await this.#deps.client.groups.leave(group.id);
+      await this.#client.groups.leave(group.id);
       this.#detachGroup(group.idStr);
       if (this.#activeId === group.idStr) {
         this.#activeId = [...this.#groups.keys()][0] ?? null;
@@ -928,7 +759,7 @@ export class MarmotController {
     await this.#withBusy(async () => {
       const group = this.#groups.get(groupId);
       if (!group) throw new Error("group is not loaded");
-      if (!groupIsAdmin(group, this.#deps.pubkey)) {
+      if (!groupIsAdmin(group, this.#pubkey)) {
         throw new Error("only group admins can update group info");
       }
 
@@ -936,7 +767,7 @@ export class MarmotController {
         group.session.proposalContext(),
       );
       if (!proposal) return;
-      await this.#deps.client.groups.commit(group.id, {
+      await this.#client.groups.commit(group.id, {
         extraProposals: [proposal],
       });
       this.log(`updated group info for "${fields.name}"`);
@@ -957,7 +788,7 @@ export class MarmotController {
     await this.#withBusy(async () => {
       const group = this.#groups.get(groupId);
       if (!group) throw new Error("group is not loaded");
-      if (!groupIsAdmin(group, this.#deps.pubkey)) {
+      if (!groupIsAdmin(group, this.#pubkey)) {
         throw new Error("only group admins can change admins");
       }
       const current = group.groupData?.adminPubkeys ?? [];
@@ -973,7 +804,7 @@ export class MarmotController {
         adminPubkeys: next,
       })(group.session.proposalContext());
       if (!proposal) return;
-      await this.#deps.client.groups.commit(group.id, {
+      await this.#client.groups.commit(group.id, {
         extraProposals: [proposal],
       });
       this.log(
@@ -992,10 +823,10 @@ export class MarmotController {
     await this.#withBusy(async () => {
       const group = this.#groups.get(groupId);
       if (!group) throw new Error("group is not loaded");
-      if (!groupIsAdmin(group, this.#deps.pubkey)) {
+      if (!groupIsAdmin(group, this.#pubkey)) {
         throw new Error("only group admins can remove members");
       }
-      if (pubkey === this.#deps.pubkey) {
+      if (pubkey === this.#pubkey) {
         throw new Error("use leave to remove yourself");
       }
 
@@ -1012,7 +843,7 @@ export class MarmotController {
         if (metadata) extraProposals.push(metadata);
       }
 
-      await this.#deps.client.groups.commit(group.id, { extraProposals });
+      await this.#client.groups.commit(group.id, { extraProposals });
       this.log(`removed ${npubShort(pubkey)} from "${groupName(group)}"`);
     });
   }
@@ -1025,7 +856,7 @@ export class MarmotController {
     // `send` saves the rumor to group.history, which the per-group
     // history.subscribe() loop projects into the timeline — including this
     // self-sent message — so no manual local echo is needed here.
-    await this.#deps.client.groups.send(group.id, intent);
+    await this.#client.groups.send(group.id, intent);
   }
 
   /**
@@ -1079,7 +910,7 @@ export class MarmotController {
   async publishKeyPackage(): Promise<void> {
     await this.#withBusy(async () => {
       const relays = await this.#requirePublishRelays();
-      const kp = await this.#deps.client.keyPackages.create({ relays });
+      const kp = await this.#client.keyPackages.create({ relays });
       await this.#refreshKeyPackageSummary();
       this.log(
         `published KeyPackage ${hexShort(kp.keyPackageRef)} (slot ${kp.identifier ?? "?"}) to ${relays.join(", ")}`,
@@ -1089,14 +920,14 @@ export class MarmotController {
 
   async rotateKeyPackage(): Promise<void> {
     await this.#withBusy(async () => {
-      const list = await this.#deps.client.keyPackages.list();
+      const list = await this.#client.keyPackages.list();
       const current =
-        list.find((p) => !p.used && p.identifier === this.#deps.clientId) ??
+        list.find((p) => !p.used && p.identifier === this.#clientId) ??
         list.find((p) => !p.used) ??
         list[0];
       if (!current) throw new Error("no KeyPackage to rotate");
       const relays = await this.#requirePublishRelays();
-      const rotated = await this.#deps.client.keyPackages.rotate(
+      const rotated = await this.#client.keyPackages.rotate(
         current.keyPackageRef,
         { relays },
       );
@@ -1141,7 +972,7 @@ export class MarmotController {
       this.#inboxRelays = nextInbox;
       // Follow the new kind-10050 inbox list with the invite subscription so
       // future Welcomes land where we're actually listening.
-      if (inboxChanged) this.#subscribeInvites();
+      if (inboxChanged) this.#relistenInvites();
       this.log(
         `published relay lists — outbox: ${nextOutbox.join(", ")} · inbox: ${nextInbox.join(", ")}`,
       );
@@ -1159,10 +990,7 @@ export class MarmotController {
       const relays = await this.#requirePublishRelays();
       // Merge over the latest kind 0 already in the shared store so values this
       // UI doesn't expose (banner, lud16, …) survive a save.
-      const existing = this.#deps.eventStore.getReplaceable(
-        0,
-        this.#deps.pubkey,
-      );
+      const existing = this.#eventStore.getReplaceable(0, this.#pubkey);
       const merged: ProfileContent = {
         ...(existing ? getProfileContent(existing) : {}),
       };
@@ -1171,15 +999,15 @@ export class MarmotController {
         if (text === "" || text == null) delete (merged as any)[key];
         else (merged as any)[key] = text;
       }
-      const event = await this.#deps.signer.signEvent({
+      const event = await this.#signer.signEvent({
         kind: 0,
         content: JSON.stringify(merged),
         tags: [],
         created_at: Math.floor(Date.now() / 1000),
       });
-      await this.#deps.pool.publish(relays, event);
+      await this.#pool.publish(relays, event);
       // Feed the new event into the store so `useProfile` updates immediately.
-      this.#deps.eventStore.add(event);
+      this.#eventStore.add(event);
       this.log(`published profile (${merged.name || "no name"})`);
     });
   }
@@ -1188,12 +1016,12 @@ export class MarmotController {
   log(text: string, level: StatusLine["level"] = "info"): void {
     const line = { id: this.#statusSeq++, level, text, at: Date.now() };
     this.#status = [...this.#status.slice(-200), line];
-    this.#deps.statusLog?.(line);
+    this.#statusLog?.(line);
     this.#publish();
   }
 
   logError(err: unknown): void {
-    this.log(formatError(err, this.#deps.debug), "error");
+    this.log(formatError(err, this.#debug), "error");
   }
 
   // --- internals -------------------------------------------------------------
@@ -1220,7 +1048,7 @@ export class MarmotController {
    * already operate on the relays the user chose.
    */
   async #ensureRelayListsLoaded(): Promise<void> {
-    if (this.#deps.fresh || this.#relayListsLoaded) return;
+    if (this.#fresh || this.#relayListsLoaded) return;
     if (!this.#relayListsPromise) {
       this.#relayListsPromise = this.#loadRelayLists().then(
         () => {
@@ -1257,8 +1085,8 @@ export class MarmotController {
   /** Load advertised relay lists in the background and adopt them if present. */
   async #loadRelayLists(): Promise<void> {
     const [outbox, inbox] = await Promise.all([
-      this.#deps.directory.outboxes(this.#deps.pubkey, this.#deps.relays),
-      this.#deps.directory.welcomeInboxes(this.#deps.pubkey, this.#deps.relays),
+      this.#directory.outboxes(this.#pubkey, this.#relays),
+      this.#directory.welcomeInboxes(this.#pubkey, this.#relays),
     ]);
     if (this.#watchAbort) return;
 
@@ -1281,7 +1109,7 @@ export class MarmotController {
         "advertised inbox relays changed — re-subscribing (inbox=%o)",
         this.#inboxRelays,
       );
-      this.#subscribeInvites();
+      this.#relistenInvites();
     }
     this.#publish();
   }
@@ -1291,11 +1119,11 @@ export class MarmotController {
    * to `targets` — the user's own write relays, never the bootstrap defaults.
    */
   async #publishOutboxList(relays: string[], targets: string[]): Promise<void> {
-    const event = await this.#deps.signer.signEvent(
-      createNip65RelayListEvent({ pubkey: this.#deps.pubkey, relays }),
+    const event = await this.#signer.signEvent(
+      createNip65RelayListEvent({ pubkey: this.#pubkey, relays }),
     );
-    await this.#deps.pool.publish(targets, event);
-    this.#deps.eventStore.add(event);
+    await this.#pool.publish(targets, event);
+    this.#eventStore.add(event);
   }
 
   /**
@@ -1303,15 +1131,15 @@ export class MarmotController {
    * `targets` — the user's own write relays, never the bootstrap defaults.
    */
   async #publishInboxList(relays: string[], targets: string[]): Promise<void> {
-    const event = await this.#deps.signer.signEvent(
-      createInboxRelayListEvent({ pubkey: this.#deps.pubkey, relays }),
+    const event = await this.#signer.signEvent(
+      createInboxRelayListEvent({ pubkey: this.#pubkey, relays }),
     );
-    await this.#deps.pool.publish(targets, event);
-    this.#deps.eventStore.add(event);
+    await this.#pool.publish(targets, event);
+    this.#eventStore.add(event);
   }
 
   async #ensureKeyPackage(): Promise<void> {
-    const existing = await this.#deps.client.keyPackages.list();
+    const existing = await this.#client.keyPackages.list();
     if (this.#watchAbort) return;
     if (existing.some((pkg) => !pkg.used)) {
       this.#setKeyPackageSummary(existing);
@@ -1331,7 +1159,7 @@ export class MarmotController {
       );
       return;
     }
-    await this.#deps.client.keyPackages.create({ relays });
+    await this.#client.keyPackages.create({ relays });
     if (this.#watchAbort) return;
     await this.#refreshKeyPackageSummary();
     this.log(
@@ -1340,7 +1168,7 @@ export class MarmotController {
   }
 
   async #refreshKeyPackageSummary(): Promise<void> {
-    this.#setKeyPackageSummary(await this.#deps.client.keyPackages.list());
+    this.#setKeyPackageSummary(await this.#client.keyPackages.list());
     this.#publish();
   }
 
@@ -1348,9 +1176,7 @@ export class MarmotController {
     packages: Awaited<ReturnType<MarmotClient["keyPackages"]["list"]>>,
   ): void {
     const current =
-      packages.find(
-        (pkg) => !pkg.used && pkg.identifier === this.#deps.clientId,
-      ) ??
+      packages.find((pkg) => !pkg.used && pkg.identifier === this.#clientId) ??
       packages.find((pkg) => !pkg.used) ??
       packages[0];
     const newestPublished = packages
@@ -1371,11 +1197,11 @@ export class MarmotController {
   }
 
   async #restoreGroups(): Promise<void> {
-    const groups = await this.#deps.client.groups.loadAll();
+    const groups = await this.#client.groups.loadAll();
     if (this.#watchAbort) return;
     for (const group of groups) {
       if (this.#watchAbort) return;
-      await this.#attachGroup(group, true);
+      this.#attachGroup(group);
     }
     if (this.#watchAbort) return;
     if (groups.length && !this.#activeId) this.#activeId = groups[0].idStr;
@@ -1389,13 +1215,13 @@ export class MarmotController {
    */
   async #watchGroups(): Promise<void> {
     try {
-      for await (const groups of this.#deps.client.groups.watch()) {
+      for await (const groups of this.#client.groups.watch()) {
         if (this.#watchAbort) break;
         const live = new Set(groups.map((g) => g.idStr));
         for (const group of groups) {
           if (this.#watchAbort) break;
           if (!this.#groups.has(group.idStr)) {
-            await this.#attachGroup(group, true);
+            this.#attachGroup(group);
           }
         }
         if (this.#watchAbort) break;
@@ -1408,7 +1234,14 @@ export class MarmotController {
     }
   }
 
-  async #attachGroup(group: MarmotGroup, catchUp: boolean): Promise<void> {
+  /**
+   * App-side bookkeeping when a group enters the loaded set: track it, bind
+   * `stateChanged` to the snapshot, and start projecting its rumor history into
+   * the timeline. Inbound relay transport (backfill + live kind-445 ingest) is
+   * owned by the library's `groups.connectAll()` (installed in {@link start});
+   * this no longer touches the network.
+   */
+  #attachGroup(group: MarmotGroup): void {
     if (this.#watchAbort) return;
     const id = group.idStr;
     this.#groups.set(id, group);
@@ -1417,50 +1250,15 @@ export class MarmotController {
       group.on("stateChanged", () => this.#publish());
       this.#bound.add(id);
     }
-    // Project the group's persisted + live rumor history into the timeline.
-    // This replaces the old `applicationMessage` echo: both self-sent (via
-    // `send`) and ingested messages are saved to group.history, and the
-    // subscription below delivers them. The first yield is the persisted
-    // backlog from disk, so reopening a group shows its history instantly.
+    // Project the group's persisted + live rumor history into the timeline: both
+    // self-sent (via `send`) and ingested messages are saved to group.history.
+    // The first yield is the persisted backlog from disk, so reopening a group
+    // shows its history instantly.
     this.#startHistory(group);
-    const relays = group.relays?.length
-      ? relaySet(group.relays)
-      : this.#deps.relays;
-    const h = getNostrGroupIdHex(group.state);
-    transportLog(
-      "attach group=%s h=%s epoch=%s catchUp=%s relays(%s)=%o group.relays=%o",
-      id,
-      h,
-      String(group.state.groupContext.epoch),
-      catchUp,
-      group.relays?.length ? "group" : "fallback",
-      relays,
-      group.relays,
-    );
-    if (catchUp) {
-      const backlog = await this.#deps.pool.request(relays, {
-        kinds: [GROUP_EVENT_KIND],
-        "#h": [h],
-      });
-      if (this.#watchAbort) return;
-      await this.#drainIngest(group, backlog);
-      if (this.#watchAbort) return;
-    }
-    const sub = this.#deps.pool.subscription(relays, {
-      kinds: [GROUP_EVENT_KIND],
-      "#h": [h],
-    });
-    this.#groupSubs.get(id)?.unsubscribe();
-    this.#groupSubs.set(
-      id,
-      sub.subscribe({ next: (event) => void this.#onGroupEvent(group, event) }),
-    );
     this.#publish();
   }
 
   #detachGroup(id: string): void {
-    this.#groupSubs.get(id)?.unsubscribe();
-    this.#groupSubs.delete(id);
     const history = this.#historySubs.get(id);
     if (history) {
       this.#historySubs.delete(id);
@@ -1472,104 +1270,32 @@ export class MarmotController {
   }
 
   /**
-   * (Re)subscribe for gift-wrapped invites (kind 1059) on our *advertised
-   * kind-10050 inbox relays* — that's exactly where inviters deliver the Welcome
-   * (see `NostrWelcomeDelivery.deliver` → `getUserInboxRelays`). `#inboxRelays`
-   * is seeded with the bootstrap relays and updated to the published 10050 list
-   * once `#loadRelayLists` resolves it; this is idempotent (tears down any prior
-   * subscription first) so it can be re-run whenever that list changes.
-   * Subscribing anywhere else (e.g. the bootstrap/session relays) is the bug
-   * that made invites silently never arrive.
+   * (Re)start the library's gift-wrap invite listener on our *advertised
+   * kind-10050 inbox relays* — where inviters deliver Welcomes
+   * (`NostrWelcomeDelivery.deliver` → `getUserInboxRelays`). `#inboxRelays` is
+   * seeded with the bootstrap relays and updated to the published 10050 list once
+   * `#loadRelayLists` resolves it; this tears down any prior listener first, so it
+   * can be re-run whenever that list changes. `invites.listen` owns the kind-1059
+   * subscribe + ingest + decrypt loop (it also decrypts already-stored gift wraps
+   * on start); the invites panel updates itself via `watchInvites`.
    */
-  #subscribeInvites(): void {
+  #relistenInvites(): void {
     if (this.#watchAbort) return;
     const relays = relaySet(this.#inboxRelays);
     inviteLog(
-      "subscribe gift-wraps kind=%d p=%s relays=%o",
-      GIFT_WRAP_KIND,
-      this.#deps.pubkey.slice(0, 8),
+      "listen gift-wraps p=%s relays=%o",
+      this.#pubkey.slice(0, 8),
       relays,
     );
-    const sub = this.#deps.pool.subscription(relays, {
-      kinds: [GIFT_WRAP_KIND],
-      "#p": [this.#deps.pubkey],
-    });
-    this.#inviteSub?.unsubscribe();
-    this.#inviteSub = sub.subscribe({
-      next: (event) => void this.#onGiftWrap(event),
-    });
-    // Decrypt anything already stored so the invites panel shows it on startup.
-    void this.#deps.client.invites
-      .getReceived()
-      .then((received) => {
-        if (received.length)
-          inviteLog("decrypting %d stored gift-wrap(s)", received.length);
-        return this.#deps.client.invites.decryptGiftWraps();
+    this.#inviteConnection?.unsubscribe();
+    this.#inviteConnection = undefined;
+    void this.#client.invites
+      .listen(relays)
+      .then((handle) => {
+        if (this.#watchAbort) handle.unsubscribe();
+        else this.#inviteConnection = handle;
       })
-      .catch((err) => inviteLog("startup decrypt failed: %O", err));
-  }
-
-  async #onGiftWrap(event: NostrEvent): Promise<void> {
-    if (this.#seenEvents.has(event.id)) {
-      inviteLog("gift-wrap %s already seen this session — skip", event.id);
-      return;
-    }
-    this.#seenEvents.add(event.id);
-    inviteLog(
-      "gift-wrap inbound id=%s author=%s created_at=%d",
-      event.id,
-      event.pubkey.slice(0, 8),
-      event.created_at,
-    );
-    try {
-      const added = await this.#deps.client.invites.ingestEvent(event);
-      if (!added) {
-        inviteLog("gift-wrap %s already ingested (dedup) — skip", event.id);
-        return;
-      }
-      inviteLog("gift-wrap %s ingested — decrypting", event.id);
-      // decryptGiftWraps emits "decrypted", which the React watchUnread()
-      // generator is listening for, so the invites panel updates itself.
-      const decrypted = await this.#deps.client.invites.decryptGiftWraps();
-      inviteLog(
-        "gift-wrap %s decrypt produced %d unread invite(s)",
-        event.id,
-        decrypted.length,
-      );
-      this.log("📨 new invite received — see the Invites panel");
-    } catch (err) {
-      inviteLog("gift-wrap %s failed: %O", event.id, err);
-      this.logError(err);
-    }
-  }
-
-  async #onGroupEvent(group: MarmotGroup, event: NostrEvent): Promise<void> {
-    if (this.#seenEvents.has(event.id)) return;
-    this.#seenEvents.add(event.id);
-    transportLog(
-      "inbound kind-445 group=%s eventId=%s author=%s localEpoch=%s",
-      group.idStr,
-      event.id,
-      event.pubkey.slice(0, 8),
-      String(group.state.groupContext.epoch),
-    );
-    await this.#drainIngest(group, [event]);
-  }
-
-  /** Drive the {@link MarmotGroup.ingest} async generator over relay events. */
-  async #drainIngest(group: MarmotGroup, events: NostrEvent[]): Promise<void> {
-    if (!events.length) return;
-    try {
-      for await (const result of group.ingest(events)) {
-        // Application messages surface via the "applicationMessage" event;
-        // surface anything unreadable as a status line for the demo.
-        if (result.kind === "unreadable") {
-          this.log("(dropped an unreadable group event)", "warn");
-        }
-      }
-    } catch (err) {
-      this.logError(err);
-    }
+      .catch((err) => inviteLog("invite listen failed: %O", err));
   }
 
   /**
@@ -1579,11 +1305,11 @@ export class MarmotController {
    * ingested. Older messages beyond the window are loaded on demand by
    * {@link loadOlder}. Idempotent per group.
    *
-   * Note: relay backfill is the existing `#attachGroup(catchUp)` path — ingesting
-   * a kind-445 event saves its rumor to history, which this subscription
-   * delivers. Backfill can only decrypt epochs still retained by the engine's
-   * bounded rewind horizon; messages from pruned epochs surface as `unreadable`
-   * in {@link #drainIngest} and cannot be recovered.
+   * Note: relay backfill is owned by the library's `groups.connectAll()` —
+   * ingesting a kind-445 event saves its rumor to history, which this
+   * subscription delivers. Backfill can only decrypt epochs still retained by the
+   * engine's bounded rewind horizon; messages from pruned epochs surface via the
+   * `groups.on("unreadable")` event and cannot be recovered.
    */
   #startHistory(group: MarmotGroup): void {
     const id = group.idStr;
@@ -1639,7 +1365,7 @@ export class MarmotController {
   }
 
   #toChatMessage(group: MarmotGroup, rumor: Rumor): ChatMessage {
-    const mine = rumor.pubkey === this.#deps.pubkey;
+    const mine = rumor.pubkey === this.#pubkey;
     return {
       id: rumor.id,
       groupId: group.idStr,
@@ -1672,13 +1398,13 @@ export class MarmotController {
     const pagination: Record<string, PaginationState> = {};
     for (const [id, state] of this.#pagination) pagination[id] = { ...state };
     return {
-      me: { pubkey: this.#deps.pubkey, npub: npubEncode(this.#deps.pubkey) },
-      relays: this.#deps.relays,
-      connectedRelayCount: this.#deps.pool.relayCount,
+      me: { pubkey: this.#pubkey, npub: npubEncode(this.#pubkey) },
+      relays: this.#relays,
+      connectedRelayCount: this.#pool.relayCount,
       outboxRelays: this.#outboxRelays,
       inboxRelays: this.#inboxRelays,
       keyPackages: this.#keyPackages,
-      clientId: this.#deps.clientId,
+      clientId: this.#clientId,
       activeGroupId: this.#activeId,
       messages,
       pagination,

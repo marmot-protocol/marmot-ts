@@ -15,6 +15,7 @@ import type { ProposalAction, ProposalContext } from "../../engine/types.js";
 import type { MediaAttachment } from "../../core/media.js";
 import { mayReleaseOutbound } from "../../core/convergence-status.js";
 import type { ConvergenceScheduler } from "../../engine/group-engine.js";
+import type { RetainedHistoryStore } from "../../engine/retained-store.js";
 import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import {
@@ -124,6 +125,12 @@ export type MarmotGroupOptions<
 > = {
   /** The key-value backend where serialized group state bytes are persisted */
   store: GenericKeyValueStore<SerializedClientState>;
+  /**
+   * Dedicated backend for the rewind-history blob (one entry per group). When
+   * provided, the convergence rewind window survives a restart. Optional —
+   * omitted means rewind history is in-memory only (legacy behavior).
+   */
+  rewindStore?: GenericKeyValueStore<Uint8Array>;
   /** The signer used for the clients identity */
   signer: EventSigner;
   /** The ciphersuite implementation to use for the group */
@@ -153,6 +160,11 @@ export type MarmotGroupOptions<
    * Defaults to `setTimeout`; tests pass a controllable fake.
    */
   scheduler?: ConvergenceScheduler;
+  /**
+   * A retained-history store rehydrated from {@link rewindStore} on load. Set by
+   * the loader ({@link GroupRegistry}); not part of the public construction API.
+   */
+  retained?: RetainedHistoryStore;
 };
 
 /** Map of events that can be emitted by a MarmotGroup */
@@ -323,6 +335,8 @@ export class MarmotGroup<
       state,
       ciphersuite: this.ciphersuite,
       store: this.store,
+      rewindStore: options.rewindStore,
+      retained: options.retained,
       history: this.history,
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,

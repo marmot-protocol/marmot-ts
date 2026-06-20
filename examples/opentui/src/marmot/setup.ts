@@ -248,6 +248,9 @@ export async function createController(
     accountProofSigner: accountProofSignerFor(account),
     network: pool,
     groupStateStore: makeStore(db, "groups") as any,
+    // Persist the convergence rewind window so fork recovery survives a restart
+    // (otherwise a client on a minority branch at quit never rewinds on relaunch).
+    rewindStore: makeStore(db, "rewind") as any,
     keyPackageStore: makeStore(db, "keypackages") as any,
     inviteStore: makeStore(db, "invites") as any,
     historyFactory,

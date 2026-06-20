@@ -96,6 +96,14 @@ export type MarmotClientOptions<
   capabilities?: Capabilities;
   /** The backend to store and load the groups from */
   groupStateStore: GenericKeyValueStore<SerializedClientState>;
+  /**
+   * Dedicated backend for the per-group convergence rewind-history blob. When
+   * provided, the rewind window is persisted so fork recovery survives a
+   * restart; back it with the same durable (ideally encrypted) backend as
+   * `groupStateStore`. Optional — when omitted, rewind history is in-memory
+   * only and is rebuilt from the current tip after each restart.
+   */
+  rewindStore?: GenericKeyValueStore<Uint8Array>;
   /** The backend for key package private material and publish tracking */
   keyPackageStore: GenericKeyValueStore<StoredKeyPackage>;
   /** Key value store for the {@link InviteManager} class, if non is provided an {@link InMemoryKeyValueStore} is used */
@@ -166,6 +174,7 @@ export class MarmotClient<
 
     this.groups = new GroupsManager<THistory, TMedia>({
       store: options.groupStateStore,
+      rewindStore: options.rewindStore,
       signer: this.signer,
       accountProofSigner: options.accountProofSigner,
       network: this.network,

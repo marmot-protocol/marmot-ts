@@ -8,6 +8,7 @@ import {
   deserializeClientState,
   SerializedClientState,
 } from "../core/client-state.js";
+import { RetainedHistoryStore } from "../engine/retained-store.js";
 import { logger } from "../utils/debug.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
 import {
@@ -27,6 +28,8 @@ export type GroupRegistryOptions<
   TMedia extends BaseGroupMedia | undefined = undefined,
 > = {
   store: GenericKeyValueStore<SerializedClientState>;
+  /** Dedicated store for the per-group rewind-history blob (optional). */
+  rewindStore?: GenericKeyValueStore<Uint8Array>;
   signer: EventSigner;
   network: NostrNetworkInterface;
   cryptoProvider?: CryptoProvider;
@@ -59,6 +62,7 @@ export class GroupRegistry<
   TMedia extends BaseGroupMedia | undefined = any,
 > extends EventEmitter<GroupRegistryEvents<THistory, TMedia>> {
   readonly store: GenericKeyValueStore<SerializedClientState>;
+  readonly rewindStore?: GenericKeyValueStore<Uint8Array>;
   readonly signer: EventSigner;
   readonly network: NostrNetworkInterface;
   readonly cryptoProvider: CryptoProvider;
@@ -83,6 +87,7 @@ export class GroupRegistry<
   constructor(options: GroupRegistryOptions<THistory, TMedia>) {
     super();
     this.store = options.store;
+    this.rewindStore = options.rewindStore;
     this.signer = options.signer;
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
@@ -105,9 +110,14 @@ export class GroupRegistry<
   }
 
   /** Builds a group instance from a {@link ClientState} (not cached). */
-  async build(state: ClientState): Promise<MarmotGroup<THistory, TMedia>> {
+  async build(
+    state: ClientState,
+    retained?: RetainedHistoryStore,
+  ): Promise<MarmotGroup<THistory, TMedia>> {
     return MarmotGroup.fromClientState<THistory, TMedia>(state, {
       store: this.store,
+      rewindStore: this.rewindStore,
+      retained,
       signer: this.signer,
       cryptoProvider: this.cryptoProvider,
       network: this.network,
@@ -121,12 +131,51 @@ export class GroupRegistry<
     groupId: Uint8Array | string,
   ): Promise<MarmotGroup<THistory, TMedia>> {
     const id = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
-    log("loading group %s from store", bytesToHex(id));
-    const stateBytes = await this.store.getItem(bytesToHex(id));
+    const idHex = bytesToHex(id);
+    log("loading group %s from store", idHex);
+    const stateBytes = await this.store.getItem(idHex);
 
-    if (!stateBytes) throw new Error(`Group ${bytesToHex(id)} not found`);
+    if (!stateBytes) throw new Error(`Group ${idHex} not found`);
 
-    return this.build(deserializeClientState(stateBytes));
+    const state = deserializeClientState(stateBytes);
+    const retained = await this.#loadRetained(idHex, state);
+
+    return this.build(state, retained);
+  }
+
+  /**
+   * Rehydrates the rewind-history store for a group, or returns `undefined` to
+   * cold-start (tip-only seed). Guards against a torn/stale rewind blob: if its
+   * highest retained epoch does not match the loaded tip epoch, it is discarded
+   * rather than fed into convergence.
+   */
+  async #loadRetained(
+    idHex: string,
+    state: ClientState,
+  ): Promise<RetainedHistoryStore | undefined> {
+    if (!this.rewindStore) return undefined;
+
+    const rewindBytes = await this.rewindStore.getItem(idHex);
+    if (!rewindBytes) return undefined;
+
+    try {
+      const snapshot = RetainedHistoryStore.deserialize(rewindBytes);
+      const store = new RetainedHistoryStore(snapshot);
+      const tipEpoch = Number(state.groupContext.epoch);
+      if (store.tipEpoch() !== tipEpoch) {
+        log(
+          "discarding stale rewind history for %s (snapshot tip %s != state %s)",
+          idHex,
+          store.tipEpoch(),
+          tipEpoch,
+        );
+        return undefined;
+      }
+      return store;
+    } catch (error) {
+      log("failed to rehydrate rewind history for %s: %o", idHex, error);
+      return undefined;
+    }
   }
 
   /** Caches a group instance and subscribes to its destroy event. */

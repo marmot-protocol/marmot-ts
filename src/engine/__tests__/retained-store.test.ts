@@ -1,0 +1,124 @@
+import {
+  createCommit,
+  defaultCryptoProvider,
+  defaultProposalTypes,
+  getCiphersuiteImpl,
+  unsafeTestingAuthenticationService,
+} from "ts-mls";
+import { describe, expect, it } from "vitest";
+
+import { createCredential } from "../../core/credential.js";
+import { createSimpleGroup } from "../../core/group.js";
+import { generateKeyPackage } from "../../core/key-package.js";
+import { RetainedHistoryStore } from "../retained-store.js";
+
+/**
+ * Builds a 2-member group and advances the admin two epochs, recording each
+ * transition into a fresh {@link RetainedHistoryStore} (states {0,1,2},
+ * applied commits {0,1}).
+ */
+async function buildStoreWithHistory() {
+  const adminPubkey = "a".repeat(64);
+  const impl = await getCiphersuiteImpl(
+    "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+    defaultCryptoProvider,
+  );
+  const ctx = {
+    cipherSuite: impl,
+    authService: unsafeTestingAuthenticationService,
+  };
+
+  const adminKp = await generateKeyPackage({
+    credential: createCredential(adminPubkey),
+    ciphersuiteImpl: impl,
+  });
+  const { clientState: epoch0 } = await createSimpleGroup(
+    adminKp,
+    impl,
+    "Test Group",
+    { adminPubkeys: [adminPubkey], relays: [] },
+  );
+
+  const memberKp = await generateKeyPackage({
+    credential: createCredential("e".repeat(64)),
+    ciphersuiteImpl: impl,
+  });
+  const add = await createCommit({
+    context: ctx,
+    state: epoch0,
+    wireAsPublicMessage: false,
+    extraProposals: [
+      {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: memberKp.publicPackage },
+      },
+    ],
+    ratchetTreeExtension: true,
+  });
+  const epoch1 = add.newState;
+
+  const update = await createCommit({
+    context: ctx,
+    state: epoch1,
+    extraProposals: [],
+  });
+  const epoch2 = update.newState;
+
+  const store = new RetainedHistoryStore(epoch0);
+  store.record(epoch0, add.commit, epoch1);
+  store.record(epoch1, update.commit, epoch2);
+
+  return { store, epoch0, epoch1, epoch2 };
+}
+
+describe("RetainedHistoryStore serialization", () => {
+  it("round-trips states and applied commits", async () => {
+    const { store, epoch0, epoch1, epoch2 } = await buildStoreWithHistory();
+
+    const snapshot = RetainedHistoryStore.deserialize(store.serialize());
+    const restored = new RetainedHistoryStore(snapshot);
+
+    // Anchor / tip preserved.
+    expect(restored.anchorEpoch()).toBe(0);
+    expect(restored.tipEpoch()).toBe(2);
+    expect(restored.size).toBe(3);
+
+    // Each retained state round-trips (compare by confirmation tag + epoch).
+    for (const [epoch, original] of [
+      [0, epoch0],
+      [1, epoch1],
+      [2, epoch2],
+    ] as const) {
+      const state = restored.stateAt(epoch);
+      expect(state, `state at epoch ${epoch}`).toBeDefined();
+      expect(Number(state!.groupContext.epoch)).toBe(epoch);
+      expect(state!.confirmationTag).toEqual(original.confirmationTag);
+    }
+
+    // Applied commits round-trip and reconstruct the branch range.
+    expect(restored.hasState(1)).toBe(true);
+    expect(restored.hasState(99)).toBe(false);
+    expect(restored.appliedCommitsBetween(0, 2)).toHaveLength(2);
+  });
+
+  it("rejects an unknown snapshot version byte", async () => {
+    const { store } = await buildStoreWithHistory();
+    const bytes = store.serialize();
+    bytes[0] = 0xff; // corrupt the version byte
+    expect(() => RetainedHistoryStore.deserialize(bytes)).toThrow(
+      /unknown snapshot version/,
+    );
+  });
+
+  it("round-trips an empty-applied-commits store (tip only)", async () => {
+    const { epoch0 } = await buildStoreWithHistory();
+    const fresh = new RetainedHistoryStore(epoch0); // seeded with the tip only
+
+    const restored = new RetainedHistoryStore(
+      RetainedHistoryStore.deserialize(fresh.serialize()),
+    );
+    expect(restored.tipEpoch()).toBe(0);
+    expect(restored.size).toBe(1);
+    expect(restored.appliedCommitsBetween(0, 1)).toHaveLength(0);
+  });
+});

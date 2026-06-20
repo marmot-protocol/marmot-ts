@@ -27,6 +27,8 @@ export type GroupFactoryOptions<
   TMedia extends BaseGroupMedia | undefined = undefined,
 > = {
   store: GenericKeyValueStore<SerializedClientState>;
+  /** Dedicated store for the per-group rewind-history blob (optional). */
+  rewindStore?: GenericKeyValueStore<Uint8Array>;
   signer: EventSigner;
   network: NostrNetworkInterface;
   cryptoProvider?: CryptoProvider;
@@ -50,6 +52,7 @@ export class GroupFactory<
   TMedia extends BaseGroupMedia | undefined = any,
 > {
   readonly #store: GenericKeyValueStore<SerializedClientState>;
+  readonly #rewindStore?: GenericKeyValueStore<Uint8Array>;
   readonly #signer: EventSigner;
   readonly #network: NostrNetworkInterface;
   readonly #cryptoProvider: CryptoProvider;
@@ -59,6 +62,7 @@ export class GroupFactory<
 
   constructor(options: GroupFactoryOptions<THistory, TMedia>) {
     this.#store = options.store;
+    this.#rewindStore = options.rewindStore;
     this.#signer = options.signer;
     this.#network = options.network;
     this.#cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
@@ -110,6 +114,7 @@ export class GroupFactory<
     const group = new MarmotGroup<THistory, TMedia>(clientState, {
       ciphersuite: ciphersuiteImpl,
       store: this.#store,
+      rewindStore: this.#rewindStore,
       signer: this.#signer,
       network: this.#network,
       history: this.#historyFactory,

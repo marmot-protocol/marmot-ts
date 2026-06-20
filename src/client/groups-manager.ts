@@ -70,6 +70,11 @@ export type GroupsManagerOptions<
 > = {
   /** The backend storing serialized group state bytes */
   store: GenericKeyValueStore<SerializedClientState>;
+  /**
+   * Dedicated backend for the per-group rewind-history blob. When provided, the
+   * convergence rewind window is persisted and survives a restart. Optional.
+   */
+  rewindStore?: GenericKeyValueStore<Uint8Array>;
   /** The signer used for the clients identity */
   signer: EventSigner;
   /**
@@ -162,6 +167,7 @@ export class GroupsManager<
 
     this.#registry = new GroupRegistry<THistory, TMedia>({
       store: options.store,
+      rewindStore: options.rewindStore,
       signer: options.signer,
       network: options.network,
       cryptoProvider: this.cryptoProvider,
@@ -171,6 +177,7 @@ export class GroupsManager<
 
     this.#factory = new GroupFactory<THistory, TMedia>({
       store: options.store,
+      rewindStore: options.rewindStore,
       signer: options.signer,
       network: options.network,
       cryptoProvider: this.cryptoProvider,

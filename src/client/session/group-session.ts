@@ -11,6 +11,7 @@ import {
 } from "../../core/client-state.js";
 import type { Disposition } from "../../core/inbound.js";
 import { MarmotGroupEngine } from "../../engine/group-engine.js";
+import type { RetainedHistoryStore } from "../../engine/retained-store.js";
 import { ingestResultDisposition as engineIngestResultDisposition } from "../../engine/ingest-disposition.js";
 import type {
   DispositionedIngestResult as EngineDispositionedIngestResult,
@@ -112,6 +113,15 @@ export type GroupSessionOptions<
   state: ClientState;
   ciphersuite: CiphersuiteImpl;
   store: GenericKeyValueStore<SerializedClientState>;
+  /**
+   * Dedicated store for the rewind-history blob (one entry per group, keyed by
+   * hex group id). When set, the retained rewind window is persisted on
+   * {@link GroupSession.save} and survives a restart. Optional — when omitted,
+   * rewind history is in-memory only (legacy behavior).
+   */
+  rewindStore?: GenericKeyValueStore<Uint8Array>;
+  /** A retained-history store rehydrated from {@link rewindStore} on load. */
+  retained?: RetainedHistoryStore;
   history?: THistory;
   onStateChanged?: (state: ClientState) => void;
   onStateSaved?: () => void;
@@ -147,6 +157,7 @@ export class GroupSession<
 > {
   readonly ciphersuite: CiphersuiteImpl;
   readonly store: GenericKeyValueStore<SerializedClientState>;
+  readonly rewindStore?: GenericKeyValueStore<Uint8Array>;
   readonly history: THistory;
 
   readonly #engine: MarmotGroupEngine<NostrEvent>;
@@ -164,6 +175,7 @@ export class GroupSession<
   constructor(options: GroupSessionOptions<THistory>) {
     this.ciphersuite = options.ciphersuite;
     this.store = options.store;
+    this.rewindStore = options.rewindStore;
     this.history = options.history as THistory;
     this.#onStateChanged = options.onStateChanged;
     this.#onStateSaved = options.onStateSaved;
@@ -175,6 +187,7 @@ export class GroupSession<
       state: options.state,
       ciphersuite: this.ciphersuite,
       peeler: this.#peeler,
+      retained: options.retained,
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,
       scheduler: options.scheduler,
@@ -228,15 +241,23 @@ export class GroupSession<
   async save(force = false): Promise<void> {
     if (!force && !this.#dirty) return;
 
+    const idHex = bytesToHex(this.id);
     const stateBytes = serializeClientState(this.state);
-    await this.store.setItem(bytesToHex(this.id), stateBytes);
+    await this.store.setItem(idHex, stateBytes);
+    // Persist the rewind window so fork recovery survives a restart. Written
+    // after the tip; a torn write is tolerated by the load-time epoch guard.
+    if (this.rewindStore) {
+      await this.rewindStore.setItem(idHex, this.#engine.serializeRetained());
+    }
     this.#dirty = false;
     this.#onStateSaved?.();
   }
 
   async destroyLocalState(): Promise<void> {
     await this.history?.purgeMessages();
-    await this.store.removeItem(bytesToHex(this.id));
+    const idHex = bytesToHex(this.id);
+    await this.store.removeItem(idHex);
+    await this.rewindStore?.removeItem(idHex);
   }
 
   /** Releases engine resources (the settle-check timer); call on teardown (B5). */

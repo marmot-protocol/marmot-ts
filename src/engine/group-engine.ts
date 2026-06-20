@@ -83,6 +83,12 @@ export type MarmotGroupEngineOptions<TEnvelope> = {
   peeler: GroupPeeler<TEnvelope>;
   onStateChanged?: (state: ClientState) => void;
   /**
+   * A pre-populated retained-history store, rehydrated from persistence so the
+   * rewind window survives a restart. When omitted the store is seeded with only
+   * the current tip (no past-epoch rewind until new commits accrue).
+   */
+  retained?: RetainedHistoryStore;
+  /**
    * Injectable wall-clock (ms) for the convergence-status quiescence window
    * (B5). Defaults to `Date.now`; tests pass a fake clock for determinism.
    */
@@ -161,7 +167,8 @@ export class MarmotGroupEngine<TEnvelope> {
     this.#scheduler = options.scheduler ?? DEFAULT_SCHEDULER;
     this.#onSettleCheck = options.onSettleCheck;
 
-    this.#retained = new RetainedHistoryStore(options.state);
+    this.#retained =
+      options.retained ?? new RetainedHistoryStore(options.state);
     this.#forkRecovery = new ForkRecovery(options.ciphersuite, options.peeler);
   }
 
@@ -171,6 +178,15 @@ export class MarmotGroupEngine<TEnvelope> {
 
   set state(newState: ClientState) {
     this.#setState(newState);
+  }
+
+  /**
+   * Serializes the retained-history rewind window for persistence (states +
+   * applied commits, bounded to the rollback horizon). Pair with
+   * {@link MarmotGroupEngineOptions.retained} to restore it on reload.
+   */
+  serializeRetained(): Uint8Array {
+    return this.#retained.serialize();
   }
 
   /**

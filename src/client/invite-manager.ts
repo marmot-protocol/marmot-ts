@@ -12,6 +12,10 @@ import { WELCOME_EVENT_KIND } from "../core/protocol.js";
 import { getWelcome } from "../core/welcome.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
 import { logger } from "../utils/debug.js";
+import type {
+  NostrNetworkInterface,
+  Unsubscribable,
+} from "./nostr-interface.js";
 
 /** A received gift wrap event (kind 1059) that hasn't been decrypted yet */
 export interface ReceivedGiftWrap extends KnownEvent<kinds.GiftWrap> {}
@@ -64,6 +68,9 @@ export interface InviteManagerOptions {
 
   /** Storage backend for invite entries */
   store: GenericKeyValueStore<StoredInviteEntry>;
+
+  /** The nostr relay pool, used by {@link InviteManager.listen}. */
+  network: NostrNetworkInterface;
 }
 
 /**
@@ -93,6 +100,7 @@ export interface InviteManagerOptions {
 export class InviteManager extends EventEmitter<InviteManagerEvents> {
   private signer: EventSigner;
   private store: GenericKeyValueStore<StoredInviteEntry>;
+  private network: NostrNetworkInterface;
   private seenCache: Set<string> | null = null;
 
   #log = logger.extend("InviteManager");
@@ -101,6 +109,45 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
     super();
     this.signer = options.signer;
     this.store = options.store;
+    this.network = options.network;
+  }
+
+  /**
+   * Subscribes for gift-wrapped invites (kind 1059) addressed to this account on
+   * the given relays — the inbound counterpart the app would otherwise hand-wire.
+   * Each new gift wrap is {@link ingestEvent | ingested} (de-duplicated) and then
+   * {@link decryptGiftWraps | decrypted}, so `watchUnread` / the `decrypted` event
+   * update on their own. Any already-stored gift wraps are decrypted once on
+   * start. Call `.unsubscribe()` on the result to stop listening.
+   *
+   * `relays` should be the account's advertised kind-10050 inbox relays — where
+   * inviters deliver Welcomes. Subscribing elsewhere silently misses invites.
+   */
+  async listen(relays: string[]): Promise<Unsubscribable> {
+    const pubkey = await this.signer.getPublicKey();
+
+    const handle = async (event: NostrEvent): Promise<void> => {
+      try {
+        const added = await this.ingestEvent(event);
+        if (added) await this.decryptGiftWraps();
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.emit("error", err, event.id);
+      }
+    };
+
+    const sub = this.network
+      .subscription(relays, { kinds: [kinds.GiftWrap], "#p": [pubkey] })
+      .subscribe({ next: (event) => void handle(event) });
+
+    // Decrypt anything already stored so the unread list is populated on start.
+    void this.getReceived()
+      .then((received) =>
+        received.length ? this.decryptGiftWraps() : undefined,
+      )
+      .catch((err) => this.#log("startup decrypt failed: %O", err));
+
+    return { unsubscribe: () => sub.unsubscribe() };
   }
 
   /** Lazily load the seen set from store into memory */

@@ -153,6 +153,7 @@ describe("exports", () => {
         "encryptedMediaEntry",
         "ensureLastResortExtension",
         "ensureMarmotCapabilities",
+        "evaluateKeyPackageForGroup",
         "extendedExtensionTypes",
         "formatMlsTimestamp",
         "generateKeyPackage",

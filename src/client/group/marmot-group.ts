@@ -22,6 +22,10 @@ import {
   type MarmotGroupInfo,
   type SerializedClientState,
 } from "../../core/client-state.js";
+import {
+  evaluateKeyPackageForGroup,
+  type KeyPackageEligibility,
+} from "../../core/key-package-eligibility.js";
 import { GroupRuntime } from "../runtime/group-runtime.js";
 import type {
   GroupPublishResult,
@@ -262,6 +266,17 @@ export class MarmotGroup<
   /** Complete group info/debug model for chat panels and diagnostics. */
   get info(): MarmotGroupInfo {
     return getMarmotGroupInfo(this.state);
+  }
+
+  /**
+   * Evaluates whether a candidate's KeyPackage event (kind 30443) can be added
+   * to this group — cipher-suite match, `required_capabilities`,
+   * agent-text-stream-QUIC `required_member_roles`, and already-a-member. Use
+   * this before {@link GroupsManager.invite} to surface why a KeyPackage can't be
+   * added; an `eligible: true` result is safe to invite. Never throws.
+   */
+  evaluateKeyPackage(keyPackageEvent: NostrEvent): KeyPackageEligibility {
+    return evaluateKeyPackageForGroup(this.state, keyPackageEvent);
   }
 
   get unappliedProposals() {

@@ -5,9 +5,27 @@ import type {
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Filter } from "applesauce-core/helpers/filter";
 import type {
+  Observer,
   Subscribable,
   Unsubscribable,
 } from "../../client/nostr-interface.js";
+
+/** True when `event` matches at least one of the given filters (kinds/authors/#tags). */
+function matchesFilters(event: NostrEvent, filters: Filter[]): boolean {
+  return filters.some((filter) => {
+    if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
+    if (filter.authors && !filter.authors.includes(event.pubkey)) return false;
+    for (const key of ["#h", "#e", "#p"] as const) {
+      const values = filter[key];
+      if (!values) continue;
+      const list = Array.isArray(values) ? values : [values];
+      const tag = key.slice(1);
+      if (!event.tags.some((t: any) => t[0] === tag && list.includes(t[1])))
+        return false;
+    }
+    return true;
+  });
+}
 
 /**
  * Simple mock implementation of NostrNetworkInterface for testing.
@@ -17,16 +35,27 @@ export class MockNetwork implements NostrNetworkInterface {
   // Shared events array - simulates relay storage
   public events: NostrEvent[] = [];
 
+  /** Live subscriptions, notified per-event on subsequent publishes. */
+  #subscribers = new Set<{
+    filters: Filter[];
+    observer: Partial<Observer<NostrEvent>>;
+  }>();
+
   constructor(public relayUrls: string[] = ["wss://mock-relay.test"]) {}
 
   /**
-   * Publish an event to the mock network (adds to events array)
+   * Publish an event to the mock network (adds to events array), and deliver it
+   * to any live subscription whose filters match.
    */
   async publish(
     relays: string[],
     event: NostrEvent,
   ): Promise<Record<string, PublishResponse>> {
     this.events.push(event);
+
+    for (const sub of this.#subscribers) {
+      if (matchesFilters(event, sub.filters)) sub.observer.next?.(event);
+    }
 
     // Return success for all requested relays
     const result: Record<string, PublishResponse> = {};
@@ -44,58 +73,12 @@ export class MockNetwork implements NostrNetworkInterface {
     filters: Filter | Filter[],
   ): Promise<NostrEvent[]> {
     const filterArray = Array.isArray(filters) ? filters : [filters];
-
-    // For mock, just check if any filter matches
-    return this.events.filter((event) => {
-      return filterArray.some((filter) => {
-        if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
-        if (filter.authors && !filter.authors.includes(event.pubkey))
-          return false;
-
-        // Handle tag filters (e.g., #h, #e)
-        // Tag values can be string or string[] - match if ANY value matches
-        if (filter["#h"]) {
-          const filterValues = Array.isArray(filter["#h"])
-            ? filter["#h"]
-            : [filter["#h"]];
-          if (
-            !event.tags.some(
-              (t: any) => t[0] === "h" && filterValues.includes(t[1]),
-            )
-          )
-            return false;
-        }
-        if (filter["#e"]) {
-          const filterValues = Array.isArray(filter["#e"])
-            ? filter["#e"]
-            : [filter["#e"]];
-          if (
-            !event.tags.some(
-              (t: any) => t[0] === "e" && filterValues.includes(t[1]),
-            )
-          )
-            return false;
-        }
-
-        if (filter["#p"]) {
-          const filterValues = Array.isArray(filter["#p"])
-            ? filter["#p"]
-            : [filter["#p"]];
-          if (
-            !event.tags.some(
-              (t: any) => t[0] === "p" && filterValues.includes(t[1]),
-            )
-          )
-            return false;
-        }
-
-        return true;
-      });
-    });
+    return this.events.filter((event) => matchesFilters(event, filterArray));
   }
 
   /**
-   * Subscribe to events (simplified - just returns existing events)
+   * Subscribe to events: replays currently-matching events one-by-one, then
+   * delivers each future matching publish until unsubscribed.
    */
   subscription(
     relays: string[],
@@ -103,26 +86,19 @@ export class MockNetwork implements NostrNetworkInterface {
   ): Subscribable<NostrEvent> {
     const filterArray = Array.isArray(filters) ? filters : [filters];
 
-    // Find matching events
-    const matchingEvents = this.events.filter((event) => {
-      return filterArray.some((filter) => {
-        if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
-        if (filter.authors && !filter.authors.includes(event.pubkey))
-          return false;
-        return true;
-      });
-    });
-
     return {
-      subscribe: (observer: any): Unsubscribable => {
-        // Immediately send matching events
-        if (observer.next && matchingEvents.length > 0) {
-          observer.next(matchingEvents);
+      subscribe: (observer: Partial<Observer<NostrEvent>>): Unsubscribable => {
+        // Replay the existing matching events individually.
+        for (const event of this.events) {
+          if (matchesFilters(event, filterArray)) observer.next?.(event);
         }
+
+        const entry = { filters: filterArray, observer };
+        this.#subscribers.add(entry);
 
         return {
           unsubscribe: () => {
-            // No-op for mock
+            this.#subscribers.delete(entry);
           },
         };
       },

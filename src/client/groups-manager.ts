@@ -11,8 +11,12 @@ import {
   joinGroup,
   Welcome,
 } from "ts-mls";
-import { SerializedClientState } from "../core/client-state.js";
+import {
+  getNostrGroupIdHex,
+  SerializedClientState,
+} from "../core/client-state.js";
 import type { MarmotGroupInfo } from "../core/client-state.js";
+import { GROUP_EVENT_KIND } from "../core/protocol.js";
 import {
   type AccountIdentityProofSigner,
   verifyAllLeafAccountIdentityProofs,
@@ -44,9 +48,20 @@ import type {
 import type {
   NostrNetworkInterface,
   PublishResponse,
+  Unsubscribable,
 } from "./nostr-interface.js";
 
 const log = logger.extend("GroupsManager");
+
+/** Options for {@link GroupsManager.connect} / {@link GroupsManager.connectAll}. */
+export interface ConnectOptions {
+  /**
+   * Relays to subscribe on when a group carries no relays of its own. A group
+   * with neither its own relays nor a fallback is skipped (it cannot receive,
+   * just as it cannot send).
+   */
+  fallbackRelays?: string[];
+}
 
 /** Options for creating a new GroupsManager */
 export type GroupsManagerOptions<
@@ -101,6 +116,13 @@ export type GroupsManagerEvents<
    * call {@link GroupsManager.destroy} to purge it.
    */
   removed: (groupId: Uint8Array) => void;
+  /**
+   * Emitted by a {@link GroupsManager.connect} subscription when a received
+   * transport event could not be read (e.g. an epoch beyond the retained
+   * rewind horizon). Lets the app surface dropped events instead of the
+   * connection loop logging them.
+   */
+  unreadable: (groupId: Uint8Array, event: NostrEvent) => void;
 };
 
 /**
@@ -281,6 +303,140 @@ export class GroupsManager<
   /** Loads all groups from the store and returns them */
   async loadAll(): Promise<MarmotGroup<THistory, TMedia>[]> {
     return this.#registry.loadAll();
+  }
+
+  /**
+   * Connects a single group to its relays: backfills its kind-445 transport
+   * events (by `#h` routing tag) and drains them through {@link MarmotGroup.ingest},
+   * then opens a live subscription that ingests each subsequent event. Inbound
+   * events are de-duplicated, and unreadable ones surface via the `unreadable`
+   * event. Call `.unsubscribe()` on the result to disconnect.
+   *
+   * This is the inbound counterpart to the library's outbound publishing — the
+   * relay-subscription/backfill/drain loop an app would otherwise hand-write.
+   */
+  async connect(
+    groupId: Uint8Array | string,
+    options?: ConnectOptions,
+  ): Promise<Unsubscribable> {
+    return this.#connectGroup(await this.get(groupId), options);
+  }
+
+  /**
+   * Connects every loaded group (see {@link connect}) and keeps the set of
+   * connections in lockstep with the loaded groups: newly created/joined/
+   * imported/loaded groups are connected automatically, and
+   * destroyed/left/unloaded/removed groups are disconnected. Returns a handle
+   * whose `.unsubscribe()` tears down every connection and stops tracking.
+   */
+  connectAll(options?: ConnectOptions): Unsubscribable {
+    const records = new Map<
+      string,
+      { cancelled: boolean; sub?: Unsubscribable }
+    >();
+
+    const connect = (group: MarmotGroup<THistory, TMedia>) => {
+      if (records.has(group.idStr)) return;
+      const record: { cancelled: boolean; sub?: Unsubscribable } = {
+        cancelled: false,
+      };
+      records.set(group.idStr, record);
+      void this.#connectGroup(group, options)
+        .then((sub) => {
+          if (record.cancelled) sub.unsubscribe();
+          else record.sub = sub;
+        })
+        .catch((err) => {
+          log("connectAll: failed to connect %s: %o", group.idStr, err);
+          records.delete(group.idStr);
+        });
+    };
+
+    const disconnect = (groupId: Uint8Array) => {
+      const hex = bytesToHex(groupId);
+      const record = records.get(hex);
+      if (!record) return;
+      record.cancelled = true;
+      record.sub?.unsubscribe();
+      records.delete(hex);
+    };
+
+    for (const group of this.loaded) connect(group);
+
+    this.on("created", connect);
+    this.on("joined", connect);
+    this.on("imported", connect);
+    this.on("loaded", connect);
+    this.on("destroyed", disconnect);
+    this.on("left", disconnect);
+    this.on("unloaded", disconnect);
+    this.on("removed", disconnect);
+
+    return {
+      unsubscribe: () => {
+        this.off("created", connect);
+        this.off("joined", connect);
+        this.off("imported", connect);
+        this.off("loaded", connect);
+        this.off("destroyed", disconnect);
+        this.off("left", disconnect);
+        this.off("unloaded", disconnect);
+        this.off("removed", disconnect);
+        for (const record of records.values()) {
+          record.cancelled = true;
+          record.sub?.unsubscribe();
+        }
+        records.clear();
+      },
+    };
+  }
+
+  /** Backfill + live-subscribe a single group instance to its transport events. */
+  async #connectGroup(
+    group: MarmotGroup<THistory, TMedia>,
+    options?: ConnectOptions,
+  ): Promise<Unsubscribable> {
+    const noop: Unsubscribable = { unsubscribe: () => {} };
+    const relays =
+      (group.relays?.length ? group.relays : options?.fallbackRelays) ?? [];
+    if (!relays.length) {
+      log("connect: group %s has no relays — skipping", group.idStr);
+      return noop;
+    }
+
+    let h: string;
+    try {
+      h = getNostrGroupIdHex(group.state);
+    } catch {
+      log("connect: group %s has no nostr routing — skipping", group.idStr);
+      return noop;
+    }
+
+    const filter = { kinds: [GROUP_EVENT_KIND], "#h": [h] };
+    const seen = new Set<string>();
+    const drain = async (events: NostrEvent[]): Promise<void> => {
+      const fresh = events.filter((event) => !seen.has(event.id));
+      for (const event of fresh) seen.add(event.id);
+      if (!fresh.length) return;
+      try {
+        for await (const result of group.ingest(fresh)) {
+          if (result.kind === "unreadable")
+            this.emit("unreadable", group.id, result.event);
+        }
+      } catch (err) {
+        log("connect: ingest failed for group %s: %o", group.idStr, err);
+      }
+    };
+
+    // Backfill before subscribing (mirrors the proven attach order): the backlog
+    // ingests as one batch so out-of-order commits resolve together.
+    await drain(await this.network.request(relays, filter));
+
+    const sub = this.network
+      .subscription(relays, filter)
+      .subscribe({ next: (event) => void drain([event]) });
+
+    return { unsubscribe: () => sub.unsubscribe() };
   }
 
   /**

@@ -9,9 +9,18 @@ import {
   Welcome,
 } from "ts-mls";
 import { type AccountIdentityProofSigner } from "../core/account-identity-proof.js";
-import { SerializedClientState } from "../core/client-state.js";
+import {
+  getMarmotGroupView,
+  SerializedClientState,
+} from "../core/client-state.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
-import { getWelcome, readWelcomeGroupInfo } from "../core/welcome.js";
+import {
+  getWelcome,
+  getWelcomeGroupRelays,
+  getWelcomeKeyPackageEventId,
+  getWelcomeKeyPackageRefs,
+  readWelcomeGroupInfo,
+} from "../core/welcome.js";
 import { logger } from "../utils/debug.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
 import {
@@ -22,13 +31,53 @@ import {
   MarmotGroup,
 } from "./group/marmot-group.js";
 import { GroupsManager } from "./groups-manager.js";
-import { InviteManager, StoredInviteEntry } from "./invite-manager.js";
+import {
+  InviteManager,
+  StoredInviteEntry,
+  type UnreadInvite,
+} from "./invite-manager.js";
 import type { StoredKeyPackage } from "./key-package-manager.js";
 import { KeyPackageManager } from "./key-package-manager.js";
 import type { NostrNetworkInterface } from "./nostr-interface.js";
 import { InMemoryKeyValueStore } from "../extra/in-memory-key-value-store.js";
 
 const log = logger.extend("client");
+
+/** Decrypted group metadata previewed from a Welcome before joining. */
+export interface WelcomePreviewGroup {
+  name: string;
+  description: string;
+  adminPubkeys: string[];
+  relays: string[];
+}
+
+/**
+ * Everything that can be surfaced about an invite *before* committing to join —
+ * see {@link MarmotClient.previewWelcome}. The rumor-level fields decode without
+ * key material; `group` requires decrypting the Welcome with a held KeyPackage
+ * and is null when none matches or the decode fails.
+ */
+export interface WelcomePreview {
+  /** Group relay URLs from the Welcome's `relays` tag. */
+  relays: string[];
+  /** Kind-30443 KeyPackage event id this Welcome consumed, if tagged. */
+  keyPackageEventId?: string;
+  /** MLS cipher suite id from the Welcome struct. */
+  cipherSuite?: number;
+  /** Number of recipients the Welcome targets. */
+  recipientCount?: number;
+  /** Group epoch from the previewed GroupInfo. */
+  epoch?: bigint;
+  /** Decrypted group metadata, or null when unavailable. */
+  group: WelcomePreviewGroup | null;
+}
+
+/** An unread invite annotated with whether we can act on it (see {@link MarmotClient.watchInvites}). */
+export interface AnnotatedInvite {
+  invite: UnreadInvite;
+  /** True iff we still hold the KeyPackage the Welcome is addressed to. */
+  joinable: boolean;
+}
 
 export type MarmotClientOptions<
   THistory extends BaseGroupHistory | undefined = undefined,
@@ -128,6 +177,7 @@ export class MarmotClient<
     this.invites = new InviteManager({
       signer: this.signer,
       store: options.inviteStore || new InMemoryKeyValueStore(),
+      network: this.network,
     });
   }
 
@@ -174,6 +224,85 @@ export class MarmotClient<
     }
 
     return null;
+  }
+
+  /**
+   * Whether we still hold the private KeyPackage a Welcome is addressed to —
+   * i.e. whether {@link joinGroupFromWelcome} can succeed for this invite.
+   * Accepting an invite whose KeyPackage we no longer hold (e.g. it rotated
+   * away) would fail with "No matching KeyPackage found". Never throws: an
+   * unparseable Welcome yields `false`.
+   */
+  async canJoinInvite(invite: UnreadInvite): Promise<boolean> {
+    try {
+      for (const ref of getWelcomeKeyPackageRefs(invite)) {
+        if (await this.keyPackages.has(ref)) return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Decodes everything showable about an invite *before* committing to join.
+   * Rumor-level fields (relays, KeyPackage event id, cipher suite, recipient
+   * count) decode without key material; the `group` block requires decrypting
+   * the Welcome with a held KeyPackage via {@link readInviteGroupInfo} and is
+   * null when we don't hold it. Never throws — a malformed Welcome or failed
+   * preview just yields the fields it could read.
+   */
+  async previewWelcome(invite: UnreadInvite): Promise<WelcomePreview> {
+    const preview: WelcomePreview = {
+      relays: getWelcomeGroupRelays(invite),
+      keyPackageEventId: getWelcomeKeyPackageEventId(invite),
+      group: null,
+    };
+
+    try {
+      const welcome = getWelcome(invite);
+      preview.cipherSuite = welcome.cipherSuite;
+      preview.recipientCount = welcome.secrets.length;
+    } catch {
+      // Unparseable Welcome — leave the MLS-struct fields undefined.
+    }
+
+    try {
+      const groupInfo = await this.readInviteGroupInfo(invite);
+      if (groupInfo) {
+        preview.epoch = groupInfo.groupContext.epoch;
+        const view = getMarmotGroupView(groupInfo);
+        if (view) {
+          preview.group = {
+            name: view.name,
+            description: view.description,
+            adminPubkeys: view.adminPubkeys,
+            relays: view.relays,
+          };
+        }
+      }
+    } catch {
+      // Best-effort preview; keep the rumor-level fields already decoded.
+    }
+
+    return preview;
+  }
+
+  /**
+   * Like {@link InviteManager.watchUnread}, but annotates each invite with
+   * whether it's {@link canJoinInvite | joinable}. Lets an app default to showing
+   * only acceptable invites while still being able to reveal the rest.
+   */
+  async *watchInvites(): AsyncGenerator<AnnotatedInvite[]> {
+    for await (const invites of this.invites.watchUnread()) {
+      const joinable = await Promise.all(
+        invites.map((invite) => this.canJoinInvite(invite)),
+      );
+      yield invites.map((invite, index) => ({
+        invite,
+        joinable: joinable[index]!,
+      }));
+    }
   }
 
   /**

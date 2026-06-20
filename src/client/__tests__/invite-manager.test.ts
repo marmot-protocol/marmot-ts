@@ -10,6 +10,7 @@ import type {
 } from "../invite-manager.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { WELCOME_EVENT_KIND } from "../../core/protocol.js";
+import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 
 /**
  * Simple in-memory backend for testing
@@ -96,6 +97,7 @@ describe("InviteManager", () => {
     inviteManager = new InviteManager({
       signer: account.signer,
       store,
+      network: new MockNetwork(),
     });
   });
 

@@ -256,6 +256,24 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     };
   }
 
+  /**
+   * Ensures this client has at least one unused KeyPackage published, so peers
+   * can always invite it. A no-op (returning the existing unused KeyPackage)
+   * when one already exists; otherwise creates and publishes a fresh one to
+   * `options.relays` via {@link create}. Idempotent — safe to call on every
+   * startup.
+   *
+   * @returns The existing unused KeyPackage, or the freshly created one.
+   */
+  async ensurePublished(
+    options: CreateKeyPackageOptions,
+  ): Promise<ListedKeyPackage> {
+    const existing = await this.list();
+    const unused = existing.find((pkg) => !pkg.used);
+    if (unused) return unused;
+    return this.create(options);
+  }
+
   // ---------------------------------------------------------------------------
   // Rotation
   // ---------------------------------------------------------------------------

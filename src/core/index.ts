@@ -13,6 +13,7 @@ export * from "./group-members.js";
 export * from "./group-message.js";
 export * from "./group.js";
 export * from "./key-package-event.js";
+export * from "./key-package-eligibility.js";
 export * from "./key-package.js";
 export * from "./relay-lists.js";
 export * from "./media.js";

@@ -15,6 +15,7 @@ import { GroupDebugModal } from "./GroupDebugModal.js";
 import { GroupInfoModal } from "./GroupInfoModal.js";
 import { Header } from "./Header.js";
 import { HelpOverlay } from "./HelpOverlay.js";
+import { InviteDetailsModal } from "./InviteDetailsModal.js";
 import { InviteModal } from "./InviteModal.js";
 import { KeyPackageModal } from "./KeyPackageModal.js";
 import { KeybindingFooter, type KeyHint } from "./KeybindingFooter.js";
@@ -36,6 +37,7 @@ type Modal =
   | { kind: "new-manual-relays"; name: string }
   | { kind: "invite" }
   | { kind: "invite-select"; data: InviteCandidates }
+  | { kind: "invite-details"; inviteId: string }
   | { kind: "keypkg" }
   | { kind: "groupdebug"; groupId: string }
   | { kind: "groupinfo"; groupId: string }
@@ -102,8 +104,17 @@ export function App(props: {
   const [focus, setFocus] = useState<Pane>("groups");
   const [groupIndex, setGroupIndex] = useState(0);
   const [inviteIndex, setInviteIndex] = useState(0);
+  const [showAllInvites, setShowAllInvites] = useState(false);
   const [modal, setModal] = useState<Modal>(null);
   const [composing, setComposing] = useState(false);
+
+  // The panel hides non-joinable invites (ones whose KeyPackage we no longer
+  // hold) by default. Toggling `showAllInvites` reveals them so the user can see
+  // that an invite arrived even when they can't accept it. `joinableInvites` is
+  // what the header counts — only those are actually actionable.
+  const joinableInvites = invites.filter((entry) => entry.joinable);
+  const visibleInvites = showAllInvites ? invites : joinableInvites;
+  const hiddenInviteCount = invites.length - joinableInvites.length;
 
   useEffect(() => {
     if (started.current) return;
@@ -116,12 +127,12 @@ export function App(props: {
     [groups],
   );
   useEffect(
-    () => setInviteIndex((index) => clamp(index, invites.length)),
-    [invites],
+    () => setInviteIndex((index) => clamp(index, visibleInvites.length)),
+    [visibleInvites],
   );
   const selectedGroup = groups[groupIndex];
   const activeGroup = groups.find((group) => group.idStr === activeGroupId);
-  const selectedInvite = invites[inviteIndex];
+  const selectedInvite = visibleInvites[inviteIndex];
   const selectedGroupIsAdmin = selectedGroup
     ? groupIsAdmin(selectedGroup, me.pubkey)
     : false;
@@ -151,7 +162,7 @@ export function App(props: {
     if (focus === "groups") {
       setGroupIndex((index) => clamp(index + delta, groups.length));
     } else if (focus === "invites") {
-      setInviteIndex((index) => clamp(index + delta, invites.length));
+      setInviteIndex((index) => clamp(index + delta, visibleInvites.length));
     }
   };
 
@@ -166,15 +177,21 @@ export function App(props: {
     setModal({ kind: "invite" });
   };
 
-  const acceptInvite = (): void => {
+  // Accepting goes through the details modal: review the group/inviter first,
+  // then confirm the join from there (see InviteDetailsModal's onAccept).
+  const openInviteDetails = (): void => {
     if (!selectedInvite) return;
-    void controller.joinInvite(selectedInvite.id);
-    setFocus("chat");
+    setModal({ kind: "invite-details", inviteId: selectedInvite.invite.id });
   };
 
   const dismissInvite = (): void => {
     if (!selectedInvite) return;
-    void controller.dismissInvite(selectedInvite.id);
+    void controller.dismissInvite(selectedInvite.invite.id);
+  };
+
+  const toggleShowAllInvites = (): void => {
+    setShowAllInvites((value) => !value);
+    setInviteIndex(0);
   };
 
   const panelHints: Record<Pane, KeyHint[]> = {
@@ -189,11 +206,13 @@ export function App(props: {
     ],
     invites: [
       { key: "j/k", label: "move" },
-      { key: "enter", label: "accept" },
-      { key: "a", label: "accept" },
+      { key: "enter", label: "details" },
+      { key: "a", label: "details" },
       { key: "d", label: "dismiss" },
-      { key: "r", label: "relays" },
-      { key: "p", label: "profile" },
+      {
+        key: "f",
+        label: showAllInvites ? "joinable only" : "show all",
+      },
     ],
     chat: composing
       ? [
@@ -296,7 +315,7 @@ export function App(props: {
     }
     if (matches(key, "enter")) {
       if (focus === "groups") activateGroup();
-      else if (focus === "invites") acceptInvite();
+      else if (focus === "invites") openInviteDetails();
       else if (focus === "chat") setComposing(true);
       return;
     }
@@ -310,10 +329,9 @@ export function App(props: {
         setModal({ kind: "groupinfo", groupId: selectedGroup.idStr });
       } else if (matches(key, "L")) void controller.leave();
     } else if (focus === "invites") {
-      if (matches(key, "a")) acceptInvite();
+      if (matches(key, "a")) openInviteDetails();
       else if (matches(key, "d")) dismissInvite();
-      else if (matches(key, "r")) setModal({ kind: "relays" });
-      else if (matches(key, "p")) setModal({ kind: "profile" });
+      else if (matches(key, "f")) toggleShowAllInvites();
     } else if (focus === "chat") {
       if (matches(key, "n")) setComposing(true);
       else if (matches(key, "u") && activeGroupId)
@@ -346,14 +364,21 @@ export function App(props: {
     >
       <Header
         groupCount={groups.length}
-        inviteCount={invites.length}
+        inviteCount={joinableInvites.length}
         onShowQr={() => setModal({ kind: "myqr" })}
       />
 
       <box flexGrow={1} flexDirection="row">
         <Sidebar
           groups={groups}
-          invites={invites}
+          invites={visibleInvites}
+          invitesTitle={
+            showAllInvites
+              ? `invites (${invites.length}) · all`
+              : hiddenInviteCount > 0
+                ? `invites (${joinableInvites.length}) · +${hiddenInviteCount} hidden`
+                : `invites (${joinableInvites.length})`
+          }
           activeId={activeGroupId}
           focus={focus}
           groupIndex={groupIndex}
@@ -458,6 +483,26 @@ export function App(props: {
           onCancel={() => setModal(null)}
         />
       )}
+      {modal?.kind === "invite-details" &&
+        (() => {
+          const inviteId = modal.inviteId;
+          const entry = invites.find((e) => e.invite.id === inviteId);
+          return entry ? (
+            <InviteDetailsModal
+              entry={entry}
+              onAccept={() => {
+                setModal(null);
+                void controller.joinInvite(inviteId);
+                setFocus("chat");
+              }}
+              onDismiss={() => {
+                setModal(null);
+                void controller.dismissInvite(inviteId);
+              }}
+              onClose={() => setModal(null)}
+            />
+          ) : null;
+        })()}
       {modal?.kind === "groupinfo" &&
         groups.find((group) => group.idStr === modal.groupId) && (
           <GroupInfoModal

@@ -5,12 +5,13 @@ import {
   type ReactNode,
 } from "react";
 
-import type {
-  MarmotGroup,
-  UnreadInvite,
-} from "@internet-privacy/marmot-ts/client";
+import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
 
-import type { ChatSnapshot, MarmotController } from "../marmot/controller.js";
+import type {
+  ChatSnapshot,
+  InviteEntry,
+  MarmotController,
+} from "../marmot/controller.js";
 import { useAsyncIterable } from "./use-async-iterable.js";
 
 const ControllerContext = createContext<MarmotController | null>(null);
@@ -55,15 +56,12 @@ export function useWatchedGroups(): MarmotGroup[] {
 }
 
 /**
- * The live unread-invite list. Driven by the controller's
- * `watchAcceptableInvites()` — `invites.watchUnread()` filtered down to invites
- * whose target KeyPackage we still hold, so the panel never lists one that would
- * fail to accept.
+ * The live unread-invite list, each entry annotated with whether it's
+ * `joinable` (we still hold its target KeyPackage). Driven by the controller's
+ * `watchInvites()`. The panel filters on `joinable` itself so the user can
+ * toggle non-joinable invites into view.
  */
-export function useWatchedInvites(): UnreadInvite[] {
+export function useWatchedInvites(): InviteEntry[] {
   const controller = useController();
-  return useAsyncIterable<UnreadInvite[]>(
-    () => controller.watchAcceptableInvites(),
-    [],
-  );
+  return useAsyncIterable<InviteEntry[]>(() => controller.watchInvites(), []);
 }

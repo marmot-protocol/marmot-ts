@@ -1,6 +1,7 @@
 import type { KeyHint } from "./KeybindingFooter.js";
 import { useChat } from "../hooks/use-marmot.js";
 import { useProfile } from "../hooks/use-profile.js";
+import { short } from "../marmot/format.js";
 
 function ageLabel(timestamp: number | null): string {
   if (!timestamp) return "unknown";
@@ -72,6 +73,9 @@ export function ProfilePanel(props: {
       {row("stored", keyPackages.total)}
       {row("unused", keyPackages.unused)}
       {row("published", ageLabel(keyPackages.newestPublishedAt))}
+      {keyPackages.newestPublishedId
+        ? row("latest id", short(keyPackages.newestPublishedId))
+        : null}
 
       <box height={1} />
       <text fg="#888">manage yourself</text>

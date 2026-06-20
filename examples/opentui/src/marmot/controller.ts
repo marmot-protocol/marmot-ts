@@ -38,7 +38,11 @@ import {
   getKeyPackage,
   getKeyPackageIdentifier,
   getKeyPackageReference,
+  getMarmotGroupView,
   getNostrGroupIdHex,
+  getWelcome,
+  getWelcomeGroupRelays,
+  getWelcomeKeyPackageEventId,
   getWelcomeKeyPackageRefs,
   GROUP_EVENT_KIND,
 } from "@internet-privacy/marmot-ts";
@@ -207,7 +211,20 @@ export interface ControllerDeps {
   eventStore: EventStore;
   signer: Signer;
   pubkey: string;
+  /**
+   * Bootstrap/discovery relays — where a returning account reads its own
+   * advertised relay lists from on startup. Read-only: never a publish target.
+   * For a fresh account these are the relays the user chose, which also seed the
+   * operating ({@link MarmotController}'s outbox/inbox) lists.
+   */
   relays: string[];
+  /**
+   * True for a freshly-created account. A fresh account already operates on the
+   * relays the user chose (so its outbox/inbox are seeded from {@link relays}); a
+   * returning account starts with *unknown* operating relays and discovers them
+   * before publishing, so it never publishes to the bootstrap defaults.
+   */
+  fresh: boolean;
   /** This device's key-package slot (`d` tag / clientId). */
   clientId: string;
   /** When true, error logs include the full stack trace and cause chain. */
@@ -260,6 +277,8 @@ export interface KeyPackageSummary {
   unused: number;
   slot: string | null;
   newestPublishedAt: number | null;
+  /** Event id (hex) of the most recently published KeyPackage, if any. */
+  newestPublishedId: string | null;
   current: KeyPackageDetails | null;
 }
 
@@ -329,6 +348,46 @@ export interface InviteCandidates {
   groupId: string;
   groupName: string;
   candidates: InviteCandidate[];
+}
+
+/**
+ * An unread invite annotated with whether we can actually act on it. `joinable`
+ * is true iff we still hold the target KeyPackage the Welcome is addressed to;
+ * non-joinable invites are hidden by default but can be revealed in the panel
+ * (e.g. to confirm an invite arrived even if its KeyPackage has since rotated).
+ */
+export interface InviteEntry {
+  invite: UnreadInvite;
+  joinable: boolean;
+}
+
+/** Decrypted group metadata previewed from a Welcome before joining. */
+export interface InvitePreviewGroup {
+  name: string;
+  description: string;
+  adminPubkeys: string[];
+  relays: string[];
+}
+
+/**
+ * Everything we can surface about an invite *before* committing to join it —
+ * see {@link MarmotController.previewInvite}. Rumor-level fields decode without
+ * key material; `group` requires decrypting the Welcome with our matching
+ * KeyPackage and is null when we don't hold it or the decode fails.
+ */
+export interface InvitePreview {
+  /** Group relay URLs from the Welcome's `relays` tag. */
+  relays: string[];
+  /** Kind-30443 KeyPackage event id this Welcome consumed, if tagged. */
+  keyPackageEventId?: string;
+  /** MLS cipher suite id from the Welcome struct. */
+  cipherSuite?: number;
+  /** Number of recipients the Welcome targets. */
+  recipientCount?: number;
+  /** Group epoch from the previewed GroupInfo. */
+  epoch?: bigint;
+  /** Decrypted group metadata, or null when unavailable. */
+  group: InvitePreviewGroup | null;
 }
 
 /** Pre-computed group state used to evaluate each {@link InviteCandidate}. */
@@ -409,14 +468,26 @@ export class MarmotController {
     unused: 0,
     slot: null,
     newestPublishedAt: null,
+    newestPublishedId: null,
     current: null,
   };
-  /** Advertised NIP-65 outbox list (kind 10002); seeded with operating relays. */
+  /**
+   * Advertised NIP-65 outbox list (kind 10002) — the user's own write relays,
+   * where their KeyPackages/profile/relay-lists are published and discovered.
+   * Seeded from the chosen relays for a fresh account; empty (unknown) for a
+   * returning account until {@link #loadRelayLists} resolves it.
+   */
   #outboxRelays: string[];
-  /** Advertised inbox list for welcomes (kind 10050); seeded with operating relays. */
+  /** Advertised inbox list for welcomes (kind 10050); seeded like {@link #outboxRelays}. */
   #inboxRelays: string[];
   #busy = false;
   #statusSeq = 0;
+
+  /** True once a returning account's advertised relay lists have been loaded. */
+  #relayListsLoaded = false;
+  /** In-flight {@link #loadRelayLists}, so the background load and an on-demand
+   * publish share one discovery pass instead of racing two. */
+  #relayListsPromise?: Promise<void>;
 
   #watchAbort = false;
   #inviteSub?: { unsubscribe(): void };
@@ -426,8 +497,13 @@ export class MarmotController {
 
   constructor(deps: ControllerDeps) {
     this.#deps = deps;
-    this.#outboxRelays = deps.relays;
-    this.#inboxRelays = deps.relays;
+    // A fresh account already operates on the relays the user chose, so seed its
+    // advertised lists with them. A returning account starts with *unknown*
+    // operating relays — NOT the bootstrap defaults — and adopts its published
+    // NIP-65 outbox + kind-10050 inbox once #loadRelayLists resolves them, so we
+    // never publish the user's events to a default relay they never configured.
+    this.#outboxRelays = deps.fresh ? deps.relays : [];
+    this.#inboxRelays = deps.fresh ? deps.relays : [];
     this.#snapshot = this.#buildSnapshot();
   }
 
@@ -461,8 +537,14 @@ export class MarmotController {
     this.#subscribeInvites();
     void this.#watchGroups();
     this.log(`ready — you are ${npubEncode(this.#deps.pubkey)}`);
-    this.log(`relays: ${this.#deps.relays.join(", ")}`);
-    void this.#loadRelayListsInBackground();
+    this.log(`bootstrap relays: ${this.#deps.relays.join(", ")}`);
+    // Returning accounts discover their advertised relays in the background so the
+    // invite subscription and future publishes follow the user's own relays, never
+    // the bootstrap defaults. (#ensureKeyPackage already awaited this above if it
+    // needed to publish a KeyPackage.)
+    void this.#ensureRelayListsLoaded().catch((err) => {
+      if (!this.#watchAbort) this.logError(err);
+    });
   }
 
   /**
@@ -498,7 +580,10 @@ export class MarmotController {
     this.#publish();
   }
 
-  async createGroup(name: string, relays = this.#deps.relays): Promise<void> {
+  async createGroup(
+    name: string,
+    relays = this.#outboxRelays,
+  ): Promise<void> {
     await this.#withBusy(async () => {
       const groupRelays = normalizeRelays(relays);
       if (!groupRelays.length)
@@ -729,6 +814,50 @@ export class MarmotController {
   }
 
   /**
+   * Decode everything we can show about an invite *before* committing to join.
+   * The rumor-level fields (relays, KeyPackage event id, cipher suite, recipient
+   * count) decode synchronously; the `group` block requires decrypting the
+   * Welcome with our matching KeyPackage via {@link MarmotClient.readInviteGroupInfo}
+   * and is null when we don't hold it. Never throws — a malformed Welcome or a
+   * failed preview just yields the fields it could read.
+   */
+  async previewInvite(invite: UnreadInvite): Promise<InvitePreview> {
+    const preview: InvitePreview = {
+      relays: getWelcomeGroupRelays(invite),
+      keyPackageEventId: getWelcomeKeyPackageEventId(invite),
+      group: null,
+    };
+
+    try {
+      const welcome = getWelcome(invite);
+      preview.cipherSuite = welcome.cipherSuite;
+      preview.recipientCount = welcome.secrets.length;
+    } catch {
+      // Unparseable Welcome — leave the MLS-struct fields undefined.
+    }
+
+    try {
+      const groupInfo = await this.#deps.client.readInviteGroupInfo(invite);
+      if (groupInfo) {
+        preview.epoch = groupInfo.groupContext.epoch;
+        const view = getMarmotGroupView(groupInfo);
+        if (view) {
+          preview.group = {
+            name: view.name,
+            description: view.description,
+            adminPubkeys: view.adminPubkeys,
+            relays: view.relays,
+          };
+        }
+      }
+    } catch {
+      // Best-effort preview; keep the rumor-level fields we already decoded.
+    }
+
+    return preview;
+  }
+
+  /**
    * Dismiss an invite without joining: drop it from the unread list so it stops
    * showing in the panel. Reuses the library's `markAsRead` primitive — the same
    * call {@link joinInvite} makes after a successful join — minus the join. The
@@ -744,17 +873,21 @@ export class MarmotController {
   }
 
   /**
-   * Like the library's `invites.watchUnread()`, but drops invites whose target
-   * KeyPackage we no longer hold — accepting one of those would fail with "No
-   * matching KeyPackage found" (see {@link joinInvite}). The UI watches this so
-   * the panel only ever lists invites the user can actually accept.
+   * Like the library's `invites.watchUnread()`, but annotates each invite with
+   * whether its target KeyPackage we still hold — accepting one we don't would
+   * fail with "No matching KeyPackage found" (see {@link joinInvite}). The UI
+   * defaults to showing only `joinable` entries, but can reveal the rest so the
+   * user can confirm an invite arrived even after its KeyPackage rotated away.
    */
-  async *watchAcceptableInvites(): AsyncGenerator<UnreadInvite[]> {
+  async *watchInvites(): AsyncGenerator<InviteEntry[]> {
     for await (const invites of this.#deps.client.invites.watchUnread()) {
-      const held = await Promise.all(
+      const joinable = await Promise.all(
         invites.map((invite) => this.#hasKeyPackageForInvite(invite)),
       );
-      yield invites.filter((_, index) => held[index]);
+      yield invites.map((invite, index) => ({
+        invite,
+        joinable: joinable[index]!,
+      }));
     }
   }
 
@@ -945,12 +1078,11 @@ export class MarmotController {
 
   async publishKeyPackage(): Promise<void> {
     await this.#withBusy(async () => {
-      const kp = await this.#deps.client.keyPackages.create({
-        relays: this.#deps.relays,
-      });
+      const relays = await this.#requirePublishRelays();
+      const kp = await this.#deps.client.keyPackages.create({ relays });
       await this.#refreshKeyPackageSummary();
       this.log(
-        `published KeyPackage ${hexShort(kp.keyPackageRef)} (slot ${kp.identifier ?? "?"})`,
+        `published KeyPackage ${hexShort(kp.keyPackageRef)} (slot ${kp.identifier ?? "?"}) to ${relays.join(", ")}`,
       );
     });
   }
@@ -963,9 +1095,10 @@ export class MarmotController {
         list.find((p) => !p.used) ??
         list[0];
       if (!current) throw new Error("no KeyPackage to rotate");
+      const relays = await this.#requirePublishRelays();
       const rotated = await this.#deps.client.keyPackages.rotate(
         current.keyPackageRef,
-        { relays: this.#deps.relays },
+        { relays },
       );
       await this.#refreshKeyPackageSummary();
       this.log(
@@ -992,9 +1125,17 @@ export class MarmotController {
           "inbox (kind 10050) list needs at least one valid relay",
         );
       }
-      await this.#publishOutboxList(nextOutbox);
-      await this.#publishInboxList(nextInbox);
+      // Announce both lists to the union of the new and previously-known outbox
+      // relays so old and new readers pick up the change — but never the
+      // bootstrap defaults. (nextOutbox is non-empty, validated above, so this is
+      // always non-empty and won't trip the pool's empty-list fallback.)
+      const announce = relaySet(nextOutbox, this.#outboxRelays);
+      await this.#publishOutboxList(nextOutbox, announce);
+      await this.#publishInboxList(nextInbox, announce);
       this.#outboxRelays = nextOutbox;
+      // These lists are now authoritative — a returning account that had not yet
+      // discovered its relays must not overwrite them with a later background load.
+      this.#relayListsLoaded = true;
       const inboxChanged =
         relaySet(nextInbox).join(",") !== relaySet(this.#inboxRelays).join(",");
       this.#inboxRelays = nextInbox;
@@ -1014,6 +1155,8 @@ export class MarmotController {
    */
   async saveProfile(fields: ProfileContent): Promise<void> {
     await this.#withBusy(async () => {
+      // Publish to the user's own write relays, never the bootstrap defaults.
+      const relays = await this.#requirePublishRelays();
       // Merge over the latest kind 0 already in the shared store so values this
       // UI doesn't expose (banner, lud16, …) survive a save.
       const existing = this.#deps.eventStore.getReplaceable(
@@ -1034,7 +1177,7 @@ export class MarmotController {
         tags: [],
         created_at: Math.floor(Date.now() / 1000),
       });
-      await this.#deps.pool.publish(this.#deps.relays, event);
+      await this.#deps.pool.publish(relays, event);
       // Feed the new event into the store so `useProfile` updates immediately.
       this.#deps.eventStore.add(event);
       this.log(`published profile (${merged.name || "no name"})`);
@@ -1069,12 +1212,46 @@ export class MarmotController {
     }
   }
 
-  async #loadRelayListsInBackground(): Promise<void> {
-    try {
-      await this.#loadRelayLists();
-    } catch (err) {
-      if (!this.#watchAbort) this.logError(err);
+  /**
+   * Discover and adopt a returning account's advertised relay lists exactly
+   * once, memoising the in-flight pass so the background load and an on-demand
+   * publish (e.g. {@link #ensureKeyPackage}, {@link #requirePublishRelays}) share
+   * one discovery rather than racing two. A no-op for fresh accounts, which
+   * already operate on the relays the user chose.
+   */
+  async #ensureRelayListsLoaded(): Promise<void> {
+    if (this.#deps.fresh || this.#relayListsLoaded) return;
+    if (!this.#relayListsPromise) {
+      this.#relayListsPromise = this.#loadRelayLists().then(
+        () => {
+          this.#relayListsLoaded = true;
+        },
+        (err) => {
+          // Allow a later call to retry after a failed discovery.
+          this.#relayListsPromise = undefined;
+          throw err;
+        },
+      );
     }
+    await this.#relayListsPromise;
+  }
+
+  /**
+   * The user's own write relays (NIP-65 outbox) — where their KeyPackages,
+   * profile, and relay lists are published. Discovers a returning account's
+   * advertised relays first, then refuses to publish at all when none are known
+   * rather than silently falling back to the bootstrap defaults the user never
+   * configured.
+   */
+  async #requirePublishRelays(): Promise<string[]> {
+    await this.#ensureRelayListsLoaded();
+    const relays = relaySet(this.#outboxRelays);
+    if (!relays.length) {
+      throw new Error(
+        "no outbox relays configured — press r to set your relays before publishing",
+      );
+    }
+    return relays;
   }
 
   /** Load advertised relay lists in the background and adopt them if present. */
@@ -1109,21 +1286,27 @@ export class MarmotController {
     this.#publish();
   }
 
-  /** Sign and publish the NIP-65 outbox list (kind 10002) to the operating relays. */
-  async #publishOutboxList(relays: string[]): Promise<void> {
+  /**
+   * Sign the NIP-65 outbox list (kind 10002) declaring `relays`, and publish it
+   * to `targets` — the user's own write relays, never the bootstrap defaults.
+   */
+  async #publishOutboxList(relays: string[], targets: string[]): Promise<void> {
     const event = await this.#deps.signer.signEvent(
       createNip65RelayListEvent({ pubkey: this.#deps.pubkey, relays }),
     );
-    await this.#deps.pool.publish(this.#deps.relays, event);
+    await this.#deps.pool.publish(targets, event);
     this.#deps.eventStore.add(event);
   }
 
-  /** Sign and publish the inbox list (kind 10050) to the operating relays. */
-  async #publishInboxList(relays: string[]): Promise<void> {
+  /**
+   * Sign the inbox list (kind 10050) declaring `relays`, and publish it to
+   * `targets` — the user's own write relays, never the bootstrap defaults.
+   */
+  async #publishInboxList(relays: string[], targets: string[]): Promise<void> {
     const event = await this.#deps.signer.signEvent(
       createInboxRelayListEvent({ pubkey: this.#deps.pubkey, relays }),
     );
-    await this.#deps.pool.publish(this.#deps.relays, event);
+    await this.#deps.pool.publish(targets, event);
     this.#deps.eventStore.add(event);
   }
 
@@ -1134,10 +1317,26 @@ export class MarmotController {
       this.#setKeyPackageSummary(existing);
       return;
     }
-    await this.#deps.client.keyPackages.create({ relays: this.#deps.relays });
+    // We have no unused KeyPackage to offer, so publish a fresh one — to the
+    // user's OWN outbox relays. Discover them first (returning accounts) so this
+    // never lands on the bootstrap defaults; if the account has no advertised
+    // relays at all, skip rather than publish somewhere the user doesn't know.
+    await this.#ensureRelayListsLoaded();
+    if (this.#watchAbort) return;
+    const relays = relaySet(this.#outboxRelays);
+    if (!relays.length) {
+      this.log(
+        "no outbox relays found — skipping KeyPackage publish; press r to set your relays so others can invite you",
+        "warn",
+      );
+      return;
+    }
+    await this.#deps.client.keyPackages.create({ relays });
     if (this.#watchAbort) return;
     await this.#refreshKeyPackageSummary();
-    this.log("published a fresh KeyPackage so others can invite you");
+    this.log(
+      `published a fresh KeyPackage to ${relays.join(", ")} so others can invite you`,
+    );
   }
 
   async #refreshKeyPackageSummary(): Promise<void> {
@@ -1154,17 +1353,19 @@ export class MarmotController {
       ) ??
       packages.find((pkg) => !pkg.used) ??
       packages[0];
-    const newestPublishedAt = Math.max(
-      0,
-      ...packages.flatMap((pkg) =>
-        (pkg.published ?? []).map((event) => event.created_at),
-      ),
-    );
+    const newestPublished = packages
+      .flatMap((pkg) => pkg.published ?? [])
+      .reduce<NostrEvent | null>(
+        (newest, event) =>
+          !newest || event.created_at > newest.created_at ? event : newest,
+        null,
+      );
     this.#keyPackages = {
       total: packages.length,
       unused: packages.filter((pkg) => !pkg.used).length,
       slot: current?.identifier ?? null,
-      newestPublishedAt: newestPublishedAt || null,
+      newestPublishedAt: newestPublished?.created_at ?? null,
+      newestPublishedId: newestPublished?.id ?? null,
       current: current ? keyPackageDetails(current) : null,
     };
   }

@@ -1,9 +1,13 @@
-import type {
-  MarmotGroup,
-  UnreadInvite,
-} from "@internet-privacy/marmot-ts/client";
+import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
 
-import { groupEpoch, groupMemberCount, groupName, npubShort } from "../marmot/format.js";
+import type { InviteEntry } from "../marmot/controller.js";
+import {
+  groupEpoch,
+  groupMemberCount,
+  groupName,
+  npubShort,
+  relativeTime,
+} from "../marmot/format.js";
 import { useDisplayName } from "../hooks/use-profile.js";
 import { ListPanel } from "./ListPanel.js";
 import type { Pane } from "./focus.js";
@@ -15,7 +19,8 @@ function InviteName(props: { pubkey: string }) {
 
 export function Sidebar(props: {
   groups: MarmotGroup[];
-  invites: UnreadInvite[];
+  invites: InviteEntry[];
+  invitesTitle: string;
   activeId: string | null;
   focus: Pane;
   groupIndex: number;
@@ -38,11 +43,15 @@ export function Sidebar(props: {
         onFocus={() => props.onFocusPane("groups")}
       />
       <ListPanel
-        title={`invites (${props.invites.length})`}
+        title={props.invitesTitle}
         focused={props.focus === "invites"}
-        items={props.invites.map((invite) => ({
+        items={props.invites.map(({ invite, joinable }) => ({
           id: invite.id,
           label: <InviteName pubkey={invite.pubkey} />,
+          detail: joinable
+            ? relativeTime(invite.created_at)
+            : `${relativeTime(invite.created_at)} · no key pkg`,
+          level: joinable ? undefined : "warn",
         }))}
         selectedIndex={props.inviteIndex}
         empty="none yet"

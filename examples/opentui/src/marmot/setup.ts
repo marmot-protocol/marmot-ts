@@ -173,10 +173,12 @@ export async function createController(
   const fresh = Boolean(newAccount);
   // A fresh account operates on the relays the user just chose (falling back to
   // the default whitenoise relay). A returning account only needs somewhere to
-  // bootstrap discovery from: it connects to the defaults, then adopts its own
-  // advertised NIP-65 outbox + kind-10050 inbox relays once they're loaded (see
-  // MarmotController#loadRelayLists). These bootstrap relays are NOT where
-  // invites are watched — that follows the kind-10050 inbox list.
+  // bootstrap *discovery* from: it connects to the defaults to read its own
+  // advertised NIP-65 outbox + kind-10050 inbox relays, then publishes
+  // everything (KeyPackages, profile, relay lists) to those — never back to the
+  // defaults the user never configured (see MarmotController). These bootstrap
+  // relays are read-only: they are NOT a publish target, and NOT where invites
+  // are watched — that follows the kind-10050 inbox list.
   const chosenRelays = fresh
     ? normalizeRelayList(
         newAccount!.relays.length
@@ -257,6 +259,7 @@ export async function createController(
     signer: account.signer,
     pubkey,
     relays: bootstrapRelays,
+    fresh,
     clientId,
     debug: opts.debug,
     statusLog: onStatus,

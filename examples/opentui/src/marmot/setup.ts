@@ -206,7 +206,13 @@ export async function createController(
   const account = PrivateKeyAccount.fromKey(secretHex);
   const pubkey = await account.signer.getPublicKey();
 
-  const nostr = new AsRelayPool();
+  // keepAlive: 0 so a relay's health-watcher pipeline tears down immediately
+  // once nothing subscribes to it, instead of arming a 30s timer that would
+  // hold the event loop open after we close the pool on quit. The app keeps
+  // long-lived subscriptions (groups/invites/history) open the whole time it
+  // runs, so the relay refcount only reaches zero at shutdown — this never
+  // causes connection churn during normal use, only a clean exit.
+  const nostr = new AsRelayPool({ keepAlive: 0 });
 
   // One in-memory EventStore powers both the reactive UI (via `castUser().*$`
   // and `use$`) and the imperative {@link Directory} lookups. Attaching a

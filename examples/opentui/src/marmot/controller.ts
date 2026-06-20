@@ -544,6 +544,12 @@ export class MarmotController {
     this.#groupsConnection?.unsubscribe();
     for (const gen of this.#historySubs.values()) void gen.return(undefined);
     this.#historySubs.clear();
+    // Tear down the EventStore before the pool: dispose() drops the attached
+    // event loader (its batching timers + in-flight warm relay requests) and
+    // the model keep-warm timers, then pool.close() shuts the relay sockets and
+    // their keepAlive/liveness timers. Together these let the process exit on
+    // its own — no residual-timer unref workaround needed.
+    this.#eventStore.dispose();
     this.#pool.close();
     this.#dispose?.();
   }

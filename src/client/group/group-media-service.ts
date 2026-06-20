@@ -9,17 +9,17 @@ import {
   deriveMediaEncryptionKey,
   encryptMediaFile,
   type MediaAttachment,
-  MIP04_VERSION,
 } from "../../core/media.js";
 import type { BaseGroupMedia, StoredMedia } from "./marmot-group.js";
 
 export type EncryptMediaMetadata = {
   filename: string;
+  /** MIME type; falls back to `blob.type` when omitted. */
   type?: string;
-  dimensions?: string;
-  blurhash?: string;
-  alt?: string;
-  size?: number;
+  /** Optional `<width>x<height>` render hint. */
+  dim?: string;
+  /** Optional thumbhash preview value. */
+  thumbhash?: string;
 };
 
 export type GroupMediaServiceOptions<
@@ -30,7 +30,15 @@ export type GroupMediaServiceOptions<
   getCiphersuite: () => CiphersuiteImpl;
 };
 
-/** Optional group-scoped encrypted media helper and plaintext cache adapter. */
+/**
+ * Optional group-scoped encrypted-media helper and plaintext cache adapter.
+ *
+ * Note: key derivation here uses the group's CURRENT `ClientState`. On send
+ * that is correct (the source epoch is the current epoch). On receive of media
+ * from an older epoch, the caller must supply the source-epoch state instead;
+ * source-epoch media-secret retention is tracked separately (see
+ * `features/encrypted-media.md` — Key Derivation).
+ */
 export class GroupMediaService<
   TMedia extends BaseGroupMedia | undefined = undefined,
 > {
@@ -46,6 +54,12 @@ export class GroupMediaService<
     this.#getCiphersuite = options.getCiphersuite;
   }
 
+  /**
+   * Encrypts a blob for sharing in a group message. The returned attachment has
+   * its hashes, nonce, media type, and filename set but no locators — the
+   * caller uploads `encrypted` to a blob store, adds a {@link MediaAttachment}
+   * locator, then serializes it with `encodeMediaImetaTag`.
+   */
   async encryptMedia(
     blob: Blob,
     metadata: EncryptMediaMetadata,
@@ -58,45 +72,42 @@ export class GroupMediaService<
     }
 
     const plaintext = new Uint8Array(await blob.arrayBuffer());
-    const plaintextHash = bytesToHex(sha256(plaintext));
-
-    const skeleton: MediaAttachment = {
-      sha256: plaintextHash,
-      type: canonicalizeMimeType(mimeType),
+    const fields = {
+      plaintextSha256: bytesToHex(sha256(plaintext)),
+      mediaType: canonicalizeMimeType(mimeType),
       filename: metadata.filename,
-      nonce: "",
-      version: MIP04_VERSION,
-      size: metadata.size ?? blob.size,
-      ...(metadata.dimensions !== undefined
-        ? { dimensions: metadata.dimensions }
+      ...(metadata.dim !== undefined ? { dim: metadata.dim } : {}),
+      ...(metadata.thumbhash !== undefined
+        ? { thumbhash: metadata.thumbhash }
         : {}),
-      ...(metadata.blurhash !== undefined
-        ? { blurhash: metadata.blurhash }
-        : {}),
-      ...(metadata.alt !== undefined ? { alt: metadata.alt } : {}),
     };
 
     const fileKey = await deriveMediaEncryptionKey(
       this.#getState(),
       this.#getCiphersuite(),
-      skeleton,
+      fields,
     );
 
-    return encryptMediaFile(plaintext, fileKey, skeleton);
+    return encryptMediaFile(plaintext, fileKey, fields);
   }
 
+  /**
+   * Decrypts a fetched blob for a parsed attachment, verifying its ciphertext
+   * and plaintext hashes, and caches the plaintext keyed by `ciphertextSha256`.
+   */
   async decryptMedia(
     encrypted: Uint8Array,
     attachment: MediaAttachment,
   ): Promise<StoredMedia> {
-    if (!attachment.sha256) {
-      throw new Error("decryptMedia: attachment.sha256 is required");
+    const key = attachment.ciphertextSha256;
+    if (!key) {
+      throw new Error("decryptMedia: attachment.ciphertextSha256 is required");
     }
 
-    const cached = await this.media?.getMedia(attachment.sha256);
+    const cached = await this.media?.getMedia(key);
     if (cached) return cached;
 
-    const inFlight = this.#decryptingMedia.get(attachment.sha256);
+    const inFlight = this.#decryptingMedia.get(key);
     if (inFlight) return inFlight;
 
     const decryptPromise = (async () => {
@@ -107,7 +118,7 @@ export class GroupMediaService<
       );
       const plaintext = decryptMediaFile(encrypted, fileKey, attachment);
 
-      await this.media?.addMedia(attachment.sha256, {
+      await this.media?.addMedia(key, {
         data: plaintext,
         attachment,
       });
@@ -115,12 +126,12 @@ export class GroupMediaService<
       return { data: plaintext, attachment };
     })();
 
-    this.#decryptingMedia.set(attachment.sha256, decryptPromise);
+    this.#decryptingMedia.set(key, decryptPromise);
 
     try {
       return await decryptPromise;
     } finally {
-      this.#decryptingMedia.delete(attachment.sha256);
+      this.#decryptingMedia.delete(key);
     }
   }
 }

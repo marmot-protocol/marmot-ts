@@ -1,9 +1,11 @@
 /** @module @category Core - Encrypted Media */
 
-// Type model for MIP-04 v2 media attachments.
+// Type model for encrypted-media-v1 attachments.
 export {
-  MIP04_VERSION,
+  ENCRYPTED_MEDIA_VERSION,
+  BLOSSOM_LOCATOR_KIND,
   type MediaAttachment,
+  type MediaLocator,
   type EncryptMediaFileResult,
 } from "./media/types.js";
 
@@ -18,9 +20,18 @@ export {
   decryptMediaFile,
 } from "./media/crypto.js";
 
-// NIP-92 / NIP-94 imeta tag read I/O.
+// imeta tag (de)serialization and strict validation.
 export {
+  encodeMediaImetaTag,
   parseMediaImetaTag,
   getMediaAttachments,
-  getMediaAttachmentFromFileEvent,
 } from "./media/imeta.js";
+
+// Locator fetchability + blob-endpoint fallback resolution.
+export {
+  SUPPORTED_LOCATOR_KINDS,
+  selectFetchableLocators,
+  buildFallbackFetchUrls,
+  resolveMediaFetchUrls,
+  type FetchableLocatorOptions,
+} from "./media/locator.js";

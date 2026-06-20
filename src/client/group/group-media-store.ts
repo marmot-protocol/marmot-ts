@@ -20,11 +20,12 @@ export type GroupMediaStoreEvents = {
 
 /**
  * A group-scoped cache of decrypted {@link StoredMedia} entries used by
- * {@link MarmotGroup} to avoid redundant MIP-04 key-derivation and
- * decryption on repeated reads of the same media attachment.
+ * {@link MarmotGroup} to avoid redundant key-derivation and decryption on
+ * repeated reads of the same media attachment.
  *
- * The lookup key is the hex-encoded SHA-256 of the **plaintext** bytes,
- * matching the `sha256` / `x` field stored in the MIP-04 `imeta` tag.
+ * The lookup key is the hex-encoded SHA-256 of the **ciphertext** bytes,
+ * matching the `ciphertext_sha256` field of the `encrypted-media-v1` `imeta`
+ * tag (the preferred blob content id).
  *
  * Emits events whenever the cache state changes, enabling reactive UIs to
  * update without polling.
@@ -48,10 +49,10 @@ export class GroupMediaStore
    *
    * Emits `mediaAdded` when a new entry is stored. If an entry for the given
    * key already exists the call is a no-op and no event is emitted.
-   * The key is the hex-encoded SHA-256 of the plaintext.
+   * The key is the hex-encoded SHA-256 of the ciphertext.
    *
-   * @param sha256Hex - Hex-encoded SHA-256 of the plaintext blob
-   * @param entry - The plaintext data and its MIP-04 attachment metadata
+   * @param sha256Hex - Hex-encoded SHA-256 of the ciphertext blob
+   * @param entry - The plaintext data and its attachment metadata
    */
   async addMedia(sha256Hex: string, entry: StoredMedia): Promise<void> {
     const existing = await this.backend.getItem(sha256Hex);
@@ -62,10 +63,10 @@ export class GroupMediaStore
   }
 
   /**
-   * Retrieves the cached blob for the given plaintext SHA-256 hex key.
+   * Retrieves the cached blob for the given ciphertext SHA-256 hex key.
    * Returns `null` if the entry is not cached.
    *
-   * @param sha256Hex - Hex-encoded SHA-256 of the plaintext blob
+   * @param sha256Hex - Hex-encoded SHA-256 of the ciphertext blob
    */
   async getMedia(sha256Hex: string): Promise<StoredMedia | null> {
     return this.backend.getItem(sha256Hex);
@@ -74,7 +75,7 @@ export class GroupMediaStore
   /**
    * Returns `true` if a cached entry exists for the given key.
    *
-   * @param sha256Hex - Hex-encoded SHA-256 of the plaintext blob
+   * @param sha256Hex - Hex-encoded SHA-256 of the ciphertext blob
    */
   async hasMedia(sha256Hex: string): Promise<boolean> {
     return (await this.backend.getItem(sha256Hex)) !== null;
@@ -84,7 +85,7 @@ export class GroupMediaStore
    * Removes the cached entry for the given key.
    * Emits `mediaRemoved` if an entry existed.
    *
-   * @param sha256 - Hex-encoded SHA-256 of the plaintext blob
+   * @param sha256 - Hex-encoded SHA-256 of the ciphertext blob
    */
   async removeMedia(sha256: string): Promise<void> {
     const existing = await this.backend.getItem(sha256);

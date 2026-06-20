@@ -1,91 +1,195 @@
 /** @module @category Core - Encrypted Media */
 import {
-  getFileMetadataFromImetaTag,
-  parseFileMetadataTags,
-} from "applesauce-common/helpers";
-import type { NostrEvent } from "applesauce-core/helpers";
-import { isValidHex, isValidMimeType } from "./canonical.js";
-import { MIP04_VERSION, type MediaAttachment } from "./types.js";
+  isLoopbackHost,
+  rejectNonRoutableHost,
+} from "../components/host-safety.js";
+import { canonicalizeMimeType, isValidHex } from "./canonical.js";
+import {
+  BLOSSOM_LOCATOR_KIND,
+  ENCRYPTED_MEDIA_VERSION,
+  type MediaAttachment,
+  type MediaLocator,
+} from "./types.js";
+
+/** Single-occurrence `imeta` field names for `encrypted-media-v1`. */
+const SINGLE_FIELDS = [
+  "v",
+  "ciphertext_sha256",
+  "plaintext_sha256",
+  "nonce",
+  "m",
+  "filename",
+  "dim",
+  "thumbhash",
+] as const;
 
 /**
- * Splits the space-separated entries of an `imeta` tag into a key→value map.
+ * Serializes a {@link MediaAttachment} into an `encrypted-media-v1` `imeta`
+ * tag array (`features/encrypted-media.md` — Message Shape).
  *
- * Each entry after the leading `"imeta"` element has the form `"key value"`.
- * applesauce uses the same approach internally; we replicate it here to
- * extract MIP-04-specific fields (`filename`, `n`, `v`) that applesauce does
- * not know about and therefore silently drops from its returned
- * {@link FileMetadata} object.
+ * Field order follows the spec: `v`, `locator`…, `ciphertext_sha256`,
+ * `plaintext_sha256`, `nonce`, `m`, `filename`, optional `dim`, optional
+ * `thumbhash`. The attachment MUST carry at least one locator.
  *
- * @internal
+ * @param attachment - A populated attachment (locators filled in after upload)
+ * @returns A Nostr tag array beginning with `"imeta"`
  */
-function parseRawImetaEntries(tag: string[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const part of tag.slice(1)) {
-    const match = part.match(/^(.+?)\s(.+)$/);
-    if (match) map.set(match[1], match[2]);
+export function encodeMediaImetaTag(attachment: MediaAttachment): string[] {
+  if (attachment.locators.length === 0) {
+    throw new Error("encodeMediaImetaTag: attachment has no locators");
   }
-  return map;
+  const parts: string[] = ["imeta", `v ${ENCRYPTED_MEDIA_VERSION}`];
+  for (const locator of attachment.locators) {
+    parts.push(`locator ${locator.kind} ${locator.value}`);
+  }
+  parts.push(`ciphertext_sha256 ${attachment.ciphertextSha256}`);
+  parts.push(`plaintext_sha256 ${attachment.plaintextSha256}`);
+  parts.push(`nonce ${attachment.nonce}`);
+  parts.push(`m ${attachment.mediaType}`);
+  parts.push(`filename ${attachment.filename}`);
+  if (attachment.dim !== undefined) parts.push(`dim ${attachment.dim}`);
+  if (attachment.thumbhash !== undefined)
+    parts.push(`thumbhash ${attachment.thumbhash}`);
+  return parts;
 }
 
 /**
- * Parses an `imeta` tag array into a {@link MediaAttachment}.
+ * Throws if a `blossom-v1` locator URL points at a hostile fetch target — an
+ * unsafe host or cleartext `http` (`features/encrypted-media.md` — Validation;
+ * `foundation/host-safety.md`). Unlike the policy component's dev endpoints,
+ * loopback is unsafe here, so the only acceptable blossom locator is `https`
+ * to a routable host. This is the one locator property that invalidates a
+ * reference, because the fetch request itself is the harm.
  *
- * The MIP-04-specific fields (`filename`, `n`, `v`) are read directly from
- * the raw tag entries because applesauce's {@link getFileMetadataFromImetaTag}
- * only copies known NIP-92 fields and silently drops unknown keys. Standard
- * NIP-92 fields (`url`, `type`/`m`, `sha256`/`x`, `size`, `dimensions`/`dim`,
- * `blurhash`, `thumbnail`/`thumb`, `alt`, etc.) are delegated to applesauce.
- *
- * Returns `null` if:
- * - The tag is not a valid `imeta` tag (first element is not `"imeta"`)
- * - The `v` field is absent or does not match {@link MIP04_VERSION}
- * - The `n` (nonce) field is absent or is not exactly 24 characters (hex-encoded 12-byte nonce)
- * - The `filename` field is absent or empty
- * - The `x` (sha256) field is absent or is not exactly 64 characters (hex-encoded 32-byte hash)
- * - The `m` (MIME type) field is absent or is not a valid `type/subtype` string
- *
- * Per the MIP-04 spec, clients MUST reject deprecated `mip04-v1` tags.
- *
- * @param tag - A raw `imeta` tag array from a Nostr event (e.g. `rumor.tags`)
- * @returns A fully-typed {@link MediaAttachment}, or `null` if the tag is
- *   not a valid MIP-04 v2 attachment
+ * @internal
  */
-export function parseMediaImetaTag(tag: string[]): MediaAttachment | null {
-  if (tag[0] !== "imeta") return null;
+function rejectUnsafeBlossomLocator(url: URL): void {
+  const scheme = url.protocol.replace(/:$/, "");
+  if (scheme !== "https") {
+    // Cleartext http (loopback or not) and any non-https scheme are rejected.
+    throw new Error("blossom-v1 locator must use https");
+  }
+  // Rejects loopback, private, CGNAT, link-local, documentation, multicast, etc.
+  rejectNonRoutableHost(url.hostname, "blossom-v1 locator");
+  // Defensive: rejectNonRoutableHost already covers loopback IPs/localhost.
+  if (isLoopbackHost(url.hostname)) {
+    throw new Error("blossom-v1 locator must not point at loopback");
+  }
+}
 
-  // Parse raw entries to read MIP-04 fields that applesauce strips.
-  const raw = parseRawImetaEntries(tag);
+/** Parses one `locator <kind> <value>` field value into a {@link MediaLocator}. */
+function parseLocator(value: string): MediaLocator {
+  const sp = value.indexOf(" ");
+  if (sp <= 0) throw new Error("locator must be '<kind> <value>'");
+  const kind = value.slice(0, sp);
+  const locValue = value.slice(sp + 1).trim();
+  if (kind.length === 0) throw new Error("locator kind must not be empty");
+  if (locValue.length === 0) throw new Error("locator value must not be empty");
+  if (!URL.canParse(locValue))
+    throw new Error("locator value must parse as a URL");
+  if (kind === BLOSSOM_LOCATOR_KIND) {
+    rejectUnsafeBlossomLocator(new URL(locValue));
+  }
+  return { kind, value: locValue };
+}
 
-  const version = raw.get("v");
-  const nonce = raw.get("n");
-  const filename = raw.get("filename");
+/**
+ * Strictly decodes an `encrypted-media-v1` attachment from an `imeta` tag.
+ *
+ * Throws on any structural-integrity or host-safety violation
+ * (`features/encrypted-media.md` — Validation): wrong/legacy/missing version,
+ * `blurhash` present, a duplicated single-occurrence field, malformed hashes or
+ * nonce, missing required fields, no locator, a malformed locator, or a
+ * `blossom-v1` locator pointing at an unsafe host. Fetchability of a locator
+ * kind against group policy is NOT checked here (see `selectFetchableLocators`).
+ *
+ * @internal
+ */
+function decodeMediaImetaTag(tag: string[]): MediaAttachment {
+  if (tag[0] !== "imeta") throw new Error("not an imeta tag");
 
-  if (version !== MIP04_VERSION) return null;
-  if (!nonce || !isValidHex(nonce, 12)) return null;
-  if (!filename || filename.length === 0) return null;
+  const single = new Map<string, string>();
+  const locators: MediaLocator[] = [];
 
-  // Delegate standard NIP-92 field parsing to applesauce.
-  const base = getFileMetadataFromImetaTag(tag);
+  for (const part of tag.slice(1)) {
+    const sp = part.indexOf(" ");
+    const key = sp === -1 ? part : part.slice(0, sp);
+    const value = sp === -1 ? "" : part.slice(sp + 1);
 
-  if (!base.sha256 || !isValidHex(base.sha256, 32)) return null;
-  // m must be a valid MIME type
-  if (!base.type || !isValidMimeType(base.type)) return null;
+    if (key === "blurhash") {
+      throw new Error("blurhash is invalid in encrypted-media-v1");
+    }
+    if (key === "locator") {
+      locators.push(parseLocator(value));
+      continue;
+    }
+    if ((SINGLE_FIELDS as readonly string[]).includes(key)) {
+      if (single.has(key)) {
+        throw new Error(`duplicate single-occurrence field: ${key}`);
+      }
+      single.set(key, value);
+    }
+    // Unknown fields are ignored (only blurhash is explicitly forbidden).
+  }
+
+  if (single.get("v") !== ENCRYPTED_MEDIA_VERSION) {
+    throw new Error("missing or non-encrypted-media-v1 version");
+  }
+  if (locators.length === 0) throw new Error("no locator present");
+
+  const ciphertextSha256 = single.get("ciphertext_sha256");
+  const plaintextSha256 = single.get("plaintext_sha256");
+  const nonce = single.get("nonce");
+  const mediaTypeRaw = single.get("m");
+  const filename = single.get("filename");
+
+  if (!ciphertextSha256 || !isValidHex(ciphertextSha256, 32))
+    throw new Error("ciphertext_sha256 must be a 32-byte hex value");
+  if (!plaintextSha256 || !isValidHex(plaintextSha256, 32))
+    throw new Error("plaintext_sha256 must be a 32-byte hex value");
+  if (!nonce || !isValidHex(nonce, 12))
+    throw new Error("nonce must be 24 hex characters");
+  if (!mediaTypeRaw) throw new Error("m (media type) is required");
+  if (!filename) throw new Error("filename is required");
+
+  // Canonicalize the media type (also rejects an empty / slash-less value).
+  const mediaType = canonicalizeMimeType(mediaTypeRaw);
 
   return {
-    ...base,
-    sha256: base.sha256,
-    type: base.type,
-    filename,
+    version: ENCRYPTED_MEDIA_VERSION,
+    locators,
+    ciphertextSha256,
+    plaintextSha256,
     nonce,
-    version: MIP04_VERSION,
+    mediaType,
+    filename,
+    ...(single.has("dim") ? { dim: single.get("dim")! } : {}),
+    ...(single.has("thumbhash") ? { thumbhash: single.get("thumbhash")! } : {}),
   };
 }
 
 /**
- * Extracts all valid MIP-04 v2 attachments from a tag list.
+ * Parses an `imeta` tag into a {@link MediaAttachment}, or returns `null` if the
+ * tag is not a valid `encrypted-media-v1` attachment.
  *
- * Non-`imeta` tags and `imeta` tags that fail MIP-04 validation (wrong or
- * absent `v` field, missing `n`/`filename`) are silently skipped.
+ * A `null` result means the media reference is invalid and MUST be dropped (the
+ * containing message should be dropped too for a host-safety failure). See
+ * {@link decodeMediaImetaTag} for the exact conditions.
+ *
+ * @param tag - A raw `imeta` tag array from a Nostr event
+ */
+export function parseMediaImetaTag(tag: string[]): MediaAttachment | null {
+  try {
+    return decodeMediaImetaTag(tag);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extracts all valid `encrypted-media-v1` attachments from a tag list.
+ *
+ * Non-`imeta` tags and `imeta` tags that fail validation are skipped.
  *
  * @param tags - The `tags` array from a Nostr event or rumor
  * @returns Array of valid {@link MediaAttachment} objects (may be empty)
@@ -95,57 +199,4 @@ export function getMediaAttachments(tags: string[][]): MediaAttachment[] {
     .filter((t) => t[0] === "imeta")
     .map(parseMediaImetaTag)
     .filter((a): a is MediaAttachment => a !== null);
-}
-
-/**
- * Extracts a MIP-04 v2 attachment from a NIP-94 kind 1063 file-metadata event.
- *
- * Kind 1063 events use flat tags (`url`, `m`, `x`, `filename`, `n`, `v`, …)
- * rather than the space-separated `imeta` format. Standard NIP-94 fields are
- * parsed by applesauce's {@link parseFileMetadataTags}; the MIP-04-specific fields
- * (`filename`, `n`, `v`) are read directly from the flat tag list.
- *
- * Returns `null` if:
- * - The `v` tag is absent or does not match {@link MIP04_VERSION}
- * - The `n` (nonce) tag is absent or is not exactly 24 characters (hex-encoded 12-byte nonce)
- * - The `filename` tag is absent or empty
- * - The `x` (sha256) tag is absent or is not exactly 64 characters (hex-encoded 32-byte hash)
- * - The `m` (MIME type) tag is absent or is not a valid `type/subtype` string
- *
- * @param event - A kind 1063 Nostr event
- * @returns A fully-typed {@link MediaAttachment}, or `null` if the event
- *   does not carry a valid MIP-04 v2 attachment
- */
-export function getMediaAttachmentFromFileEvent(
-  event: NostrEvent,
-): MediaAttachment | null {
-  /** Helper: return the value of the first tag with the given name, or undefined. */
-  const getTag = (name: string): string | undefined =>
-    event.tags.find((t) => t[0] === name)?.[1];
-
-  const version = getTag("v");
-  const nonce = getTag("n");
-  const filename = getTag("filename");
-
-  if (version !== MIP04_VERSION) return null;
-  if (!nonce || !isValidHex(nonce, 12)) return null;
-  if (!filename || filename.length === 0) return null;
-
-  // Delegate standard NIP-94 tag parsing to applesauce. Parse the flat tags
-  // directly rather than via `getFileMetadata`, which requires a `url` tag that
-  // a MIP-04 attachment event may legitimately omit.
-  const base = parseFileMetadataTags(event.tags);
-
-  if (!base.sha256 || !isValidHex(base.sha256, 32)) return null;
-  // m must be a valid MIME type
-  if (!base.type || !isValidMimeType(base.type)) return null;
-
-  return {
-    ...base,
-    sha256: base.sha256,
-    type: base.type,
-    filename,
-    nonce,
-    version: MIP04_VERSION,
-  };
 }

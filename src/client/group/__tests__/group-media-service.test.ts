@@ -24,16 +24,16 @@ async function createState(impl: CiphersuiteImpl) {
   return clientState;
 }
 
-/** Minimal in-memory media cache that records call counts. */
+/** Minimal in-memory media cache (keyed by ciphertextSha256) that records calls. */
 function makeMediaCache(): BaseGroupMedia {
   const entries = new Map<string, StoredMedia>();
   return {
-    addMedia: vi.fn(async (sha256: string, entry: StoredMedia) => {
-      entries.set(sha256, entry);
+    addMedia: vi.fn(async (key: string, entry: StoredMedia) => {
+      entries.set(key, entry);
     }),
-    getMedia: vi.fn(async (sha256: string) => entries.get(sha256) ?? null),
-    removeMedia: vi.fn(async (sha256: string) => {
-      entries.delete(sha256);
+    getMedia: vi.fn(async (key: string) => entries.get(key) ?? null),
+    removeMedia: vi.fn(async (key: string) => {
+      entries.delete(key);
     }),
     listMedia: vi.fn(async () =>
       [...entries.values()].map((e) => e.attachment),
@@ -108,12 +108,12 @@ describe("GroupMediaService", () => {
     expect(cache.addMedia).toHaveBeenCalledOnce();
   });
 
-  it("throws when decrypting an attachment without a sha256", async () => {
+  it("throws when decrypting an attachment without a ciphertextSha256", async () => {
     const service = await makeService();
     await expect(
       service.decryptMedia(new Uint8Array(), {
-        sha256: "",
+        ciphertextSha256: "",
       } as MediaAttachment),
-    ).rejects.toThrow(/sha256 is required/);
+    ).rejects.toThrow(/ciphertextSha256 is required/);
   });
 });

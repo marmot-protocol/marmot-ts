@@ -10,79 +10,94 @@ import {
   randomBytes,
 } from "@noble/hashes/utils.js";
 import { mlsExporter, type CiphersuiteImpl, type ClientState } from "ts-mls";
-import type { FileMetadataFields } from "applesauce-common/helpers";
 import { canonicalizeMimeType } from "./canonical.js";
 import {
-  MIP04_VERSION,
+  ENCRYPTED_MEDIA_VERSION,
   type EncryptMediaFileResult,
   type MediaAttachment,
 } from "./types.js";
 
 const enc = new TextEncoder();
 
-/** Scheme label used in all MIP-04 v2 cryptographic contexts. */
-const MIP04_V2_SCHEME = enc.encode("mip04-v2");
+/** Scheme label used in all `encrypted-media-v1` cryptographic contexts. */
+const SCHEME = enc.encode(ENCRYPTED_MEDIA_VERSION);
+const SEP = new Uint8Array([0x00]);
 
-/** MLS exporter label and context used to obtain the base exporter secret. */
+/** MLS exporter label and context used to obtain the base media secret. */
 const MLS_EXPORTER_LABEL = "marmot";
 const MLS_EXPORTER_CONTEXT = enc.encode("encrypted-media");
 
+/** The crypto-relevant subset of a {@link MediaAttachment}. */
+type MediaCryptoFields = Pick<
+  MediaAttachment,
+  "plaintextSha256" | "mediaType" | "filename"
+>;
+
 /**
- * Builds the ChaCha20-Poly1305 AAD for MIP-04 v2 from a {@link MediaAttachment}.
+ * Builds the `0x00`-separated field block shared by the key-derivation context
+ * and the AEAD AAD: `plaintext_sha256_bytes || 0x00 || media_type || 0x00 ||
+ * filename`. The MIME type is canonicalized; no length prefixes are used.
  *
  * @internal
  */
-function buildMip04Aad(attachment: MediaAttachment): Uint8Array {
-  const fileHashBytes = hexToBytes(attachment.sha256!);
-  const canonicalMime = enc.encode(canonicalizeMimeType(attachment.type!));
-  const filenameBytes = enc.encode(attachment.filename);
-  const sep = new Uint8Array([0x00]);
+function mediaFieldBlock(fields: MediaCryptoFields): Uint8Array {
+  if (!fields.plaintextSha256)
+    throw new Error("attachment.plaintextSha256 is required");
+  if (!fields.mediaType) throw new Error("attachment.mediaType is required");
 
-  // aad = "mip04-v2" || 0x00 || file_hash_bytes || 0x00 || mime_type_bytes || 0x00 || filename_bytes
+  const plaintextHashBytes = hexToBytes(fields.plaintextSha256);
+  const canonicalMime = enc.encode(canonicalizeMimeType(fields.mediaType));
+  const filenameBytes = enc.encode(fields.filename);
+
   return concatBytes(
-    MIP04_V2_SCHEME,
-    sep,
-    fileHashBytes,
-    sep,
+    plaintextHashBytes,
+    SEP,
     canonicalMime,
-    sep,
+    SEP,
     filenameBytes,
   );
 }
 
 /**
- * Derives the per-file encryption key for a media file shared in a group
- * message (MIP-04 v2).
+ * Builds the ChaCha20-Poly1305 AAD for `encrypted-media-v1`:
+ * `"encrypted-media-v1" || 0x00 || plaintext_sha256_bytes || 0x00 ||
+ * media_type || 0x00 || filename`.
  *
- * Key derivation:
+ * @internal
+ */
+function buildAad(fields: MediaCryptoFields): Uint8Array {
+  return concatBytes(SCHEME, SEP, mediaFieldBlock(fields));
+}
+
+/**
+ * Derives the per-file encryption key for an `encrypted-media-v1` attachment.
+ *
  * ```
- * exporter_secret = MLS-Exporter("marmot", "encrypted-media", 32)
- * context = "mip04-v2" || 0x00 || file_hash_bytes || 0x00 ||
- *           mime_type_bytes || 0x00 || filename_bytes || 0x00 || "key"
- * file_key = HKDF-Expand(exporter_secret, context, 32)
+ * media_secret = MLS-Exporter("marmot", "encrypted-media", 32) at source_epoch
+ * file_key     = HKDF-Expand(media_secret,
+ *                  "encrypted-media-v1" || 0x00 || plaintext_sha256_bytes ||
+ *                  0x00 || media_type || 0x00 || filename || 0x00 || "key", 32)
  * ```
  *
- * The key is deterministic for a given epoch + file, so re-encrypting the
- * same file in the same epoch produces the same key but a different
- * ciphertext (due to the random nonce).
+ * HKDF is HKDF-SHA256 with `media_secret` used directly as the PRK (Expand
+ * only, no Extract). The key is deterministic for a given source epoch + file.
  *
- * The `sha256`, `type`, and `filename` fields of the attachment must be set.
- * The MIME type is canonicalized automatically.
+ * The source epoch is the MLS epoch of the application message that carried the
+ * attachment. The caller MUST pass the `ClientState` for that epoch: on send,
+ * the current state; on receive, the retained state for the message's source
+ * epoch (see `features/encrypted-media.md` — Key Derivation).
  *
- * @param clientState - The current MLS `ClientState` for the group
+ * @param clientState - The MLS `ClientState` for the attachment's source epoch
  * @param ciphersuite - The ciphersuite implementation used by the group
- * @param attachment - The attachment containing `sha256`, `type`, and `filename`
+ * @param attachment - Provides `plaintextSha256`, `mediaType`, and `filename`
  * @returns 32-byte ChaCha20-Poly1305 encryption key
  */
 export async function deriveMediaEncryptionKey(
   clientState: ClientState,
   ciphersuite: CiphersuiteImpl,
-  attachment: Pick<MediaAttachment, "sha256" | "type" | "filename">,
+  attachment: MediaCryptoFields,
 ): Promise<Uint8Array> {
-  if (!attachment.sha256) throw new Error("attachment.sha256 is required");
-  if (!attachment.type) throw new Error("attachment.type is required");
-
-  const exporterSecret = await mlsExporter(
+  const mediaSecret = await mlsExporter(
     clientState.keySchedule.exporterSecret,
     MLS_EXPORTER_LABEL,
     MLS_EXPORTER_CONTEXT,
@@ -90,109 +105,90 @@ export async function deriveMediaEncryptionKey(
     ciphersuite,
   );
 
-  const fileHashBytes = hexToBytes(attachment.sha256);
-  const canonicalMime = enc.encode(canonicalizeMimeType(attachment.type));
-  const filenameBytes = enc.encode(attachment.filename);
-  const sep = new Uint8Array([0x00]);
-
-  const context = concatBytes(
-    MIP04_V2_SCHEME,
-    sep,
-    fileHashBytes,
-    sep,
-    canonicalMime,
-    sep,
-    filenameBytes,
-    sep,
+  // info = scheme || 0x00 || plaintext_sha256 || 0x00 || media_type || 0x00 ||
+  //        filename || 0x00 || "key"
+  const info = concatBytes(
+    SCHEME,
+    SEP,
+    mediaFieldBlock(attachment),
+    SEP,
     enc.encode("key"),
   );
 
-  return hkdf_expand(sha256, exporterSecret, context, 32);
+  return hkdf_expand(sha256, mediaSecret, info, 32);
 }
 
 /**
- * Encrypts a media file for sharing in a Marmot group message (MIP-04 v2).
+ * Encrypts a media file for an `encrypted-media-v1` attachment.
  *
- * Uses ChaCha20-Poly1305 AEAD with a randomly generated nonce. The
- * associated data (AAD) binds the scheme version, file hash, MIME type, and
- * filename to prevent metadata tampering.
- *
- * Typical usage:
- * ```ts
- * import { sha256 } from "@noble/hashes/sha2";
- * import { bytesToHex } from "@noble/hashes/utils";
- * import { createImetaTagForAttachment } from "applesauce-common/helpers";
- *
- * const attachment: Mip04MediaAttachment = {
- *   sha256: bytesToHex(sha256(fileBytes)),
- *   type: "image/jpeg",
- *   filename: "photo.jpg",
- *   nonce: "",          // filled by encryptMediaFile
- *   version: MIP04_VERSION,
- * };
- * const fileKey = await deriveMip04FileKey(clientState, ciphersuite, attachment);
- * const { encrypted, attachment: filled } = encryptMediaFile(fileBytes, fileKey, attachment);
- * // Upload `encrypted` to Blossom, then:
- * const imetaTag = createImetaTagForAttachment({ ...filled, url: blossomUrl });
- * ```
+ * Uses ChaCha20-Poly1305 AEAD with a random 12-byte nonce. The AAD binds the
+ * scheme version, plaintext hash, canonical MIME type, and filename. Computes
+ * `ciphertextSha256 = SHA256(encrypted)` and returns a {@link MediaAttachment}
+ * with `locators` left empty for the caller to fill after upload.
  *
  * @param file - The plaintext file bytes to encrypt
  * @param fileKey - 32-byte key from {@link deriveMediaEncryptionKey}
- * @param attachment - Attachment metadata; must have `sha256`, `type`, and `filename` set
- * @returns Encrypted blob and a fully populated {@link MediaAttachment}
+ * @param fields - Provides `plaintextSha256`, `mediaType`, and `filename`;
+ *   optional `dim`/`thumbhash` are carried through onto the result
+ * @returns Encrypted blob and a populated {@link MediaAttachment}
  */
 export function encryptMediaFile(
   file: Uint8Array,
   fileKey: Uint8Array,
-  attachment: Pick<MediaAttachment, "sha256" | "type" | "filename"> &
-    Partial<FileMetadataFields>,
+  fields: MediaCryptoFields &
+    Pick<Partial<MediaAttachment>, "dim" | "thumbhash">,
 ): EncryptMediaFileResult {
-  if (!attachment.sha256) throw new Error("attachment.sha256 is required");
-  if (!attachment.type) throw new Error("attachment.type is required");
+  if (!fields.plaintextSha256)
+    throw new Error("attachment.plaintextSha256 is required");
+  if (!fields.mediaType) throw new Error("attachment.mediaType is required");
 
-  const full: MediaAttachment = {
-    ...attachment,
-    filename: attachment.filename,
-    type: canonicalizeMimeType(attachment.type),
-    sha256: attachment.sha256,
-    nonce: "", // filled below
-    version: MIP04_VERSION,
-  };
-
+  const mediaType = canonicalizeMimeType(fields.mediaType);
   const nonce = randomBytes(12);
-  full.nonce = bytesToHex(nonce);
-
-  const aad = buildMip04Aad(full);
+  const aad = buildAad({ ...fields, mediaType });
   const encrypted = chacha20poly1305(fileKey, nonce, aad).encrypt(file);
 
-  return { encrypted, attachment: full };
+  const attachment: MediaAttachment = {
+    version: ENCRYPTED_MEDIA_VERSION,
+    locators: [],
+    ciphertextSha256: bytesToHex(sha256(encrypted)),
+    plaintextSha256: fields.plaintextSha256,
+    nonce: bytesToHex(nonce),
+    mediaType,
+    filename: fields.filename,
+    ...(fields.dim !== undefined ? { dim: fields.dim } : {}),
+    ...(fields.thumbhash !== undefined ? { thumbhash: fields.thumbhash } : {}),
+  };
+
+  return { encrypted, attachment };
 }
 
 /**
- * Decrypts a media file received in a Marmot group message (MIP-04 v2).
+ * Decrypts a fetched `encrypted-media-v1` blob.
  *
- * Verifies the ChaCha20-Poly1305 authentication tag and then confirms the
- * SHA-256 of the decrypted content matches the `sha256` field from the
- * attachment, as required by MIP-04.
+ * Performs the receive-side integrity checks in order
+ * (`features/encrypted-media.md` — Validation):
  *
- * The `sha256`, `type`, `filename`, and `nonce` fields must all be present.
- * Parse these from the `imeta` tag using `getFileMetadataFromImetaTag` from
- * applesauce, then cast/extend to {@link MediaAttachment}.
+ * 1. the fetched bytes match `ciphertextSha256`
+ * 2. ChaCha20-Poly1305 authentication succeeds
+ * 3. the decrypted bytes match `plaintextSha256`
  *
- * @param encrypted - The encrypted blob downloaded from Blossom
+ * @param encrypted - The encrypted blob downloaded from a blob store
  * @param fileKey - 32-byte key from {@link deriveMediaEncryptionKey}
- * @param attachment - The MIP-04 attachment from the group message's `imeta` tag
+ * @param attachment - The parsed attachment from the message's `imeta` tag
  * @returns The decrypted file bytes
- * @throws If AEAD authentication fails, required fields are missing, or the
- *         decrypted content hash does not match `attachment.sha256`
+ * @throws If any integrity check fails or required fields are missing
  */
 export function decryptMediaFile(
   encrypted: Uint8Array,
   fileKey: Uint8Array,
   attachment: MediaAttachment,
 ): Uint8Array {
-  if (!attachment.sha256) throw new Error("attachment.sha256 is required");
-  if (!attachment.type) throw new Error("attachment.type is required");
+  if (!attachment.plaintextSha256)
+    throw new Error("attachment.plaintextSha256 is required");
+  if (!attachment.ciphertextSha256)
+    throw new Error("attachment.ciphertextSha256 is required");
+  if (!attachment.mediaType)
+    throw new Error("attachment.mediaType is required");
   if (!attachment.nonce) throw new Error("attachment.nonce is required");
 
   const nonce = hexToBytes(attachment.nonce);
@@ -202,13 +198,21 @@ export function decryptMediaFile(
     );
   }
 
-  const aad = buildMip04Aad(attachment);
+  // 1. Ciphertext integrity: fetched bytes MUST match ciphertext_sha256.
+  if (!equalBytes(sha256(encrypted), hexToBytes(attachment.ciphertextSha256))) {
+    throw new Error(
+      "encrypted-media-v1 integrity check failed: ciphertext hash does not match ciphertext_sha256",
+    );
+  }
+
+  // 2. AEAD authentication (also binds scheme/plaintext-hash/type/filename).
+  const aad = buildAad(attachment);
   const decrypted = chacha20poly1305(fileKey, nonce, aad).decrypt(encrypted);
 
-  // MIP-04 §Integrity Verification: SHA256(decrypted_content) MUST equal sha256 field
-  if (!equalBytes(sha256(decrypted), hexToBytes(attachment.sha256))) {
+  // 3. Plaintext integrity: SHA256(plaintext) MUST match plaintext_sha256.
+  if (!equalBytes(sha256(decrypted), hexToBytes(attachment.plaintextSha256))) {
     throw new Error(
-      "MIP-04 integrity check failed: decrypted content hash does not match expected hash",
+      "encrypted-media-v1 integrity check failed: plaintext hash does not match plaintext_sha256",
     );
   }
 

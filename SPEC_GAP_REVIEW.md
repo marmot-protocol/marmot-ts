@@ -36,20 +36,29 @@ lifecycle are spec-conformant and tested. Resolved since the original review:
 
 ## MAJOR — remaining
 
-### M9 — Encrypted media still on MIP-04 v2 wire, not `encrypted-media-v1`
+### M9 — Encrypted media: wire migrated to `encrypted-media-v1`; source-epoch secret retention still open
 
 - **Spec:** `features/encrypted-media.md` — version/scheme label `encrypted-media-v1`
   (MUST-reject legacy); attachments use `locator <kind> <value>` + `ciphertext_sha256`
   + `plaintext_sha256`; `default_blob_endpoints` fallback; source-epoch exporter-secret
   selection.
-- **Code:** `src/core/media/` (`types.ts` `MIP04_VERSION`, `crypto.ts`, `imeta.ts`)
-  still encodes MIP-04 v2 (NIP-92 `url`/`x` attachments); key derivation reads only the
-  live `ClientState` (no source-epoch selection). The **group-policy component**
-  `marmot.group.encrypted-media.v1` (0x8008) codec is already done
-  (`src/core/components/encrypted-media.ts`) — only the message/imeta layer is unmigrated.
-- **Fix:** migrate the imeta/message layer to `encrypted-media-v1`; add source-epoch
-  media-secret selection and blob-endpoint fallback; reject the legacy scheme on receive.
-- **Note:** this is the last substantive single-device wire-interop gap.
+- **DONE:** the message/imeta + crypto layer is migrated (`src/core/media/`):
+  `encrypted-media-v1` scheme label and key derivation/AAD; `MediaAttachment` rebuilt
+  around `locators` + `ciphertextSha256`/`plaintextSha256`/`nonce`/`mediaType`/`filename`
+  (+ optional `dim`/`thumbhash`); `encodeMediaImetaTag`/`parseMediaImetaTag` with strict
+  validation (legacy-version reject, `blurhash` reject, duplicate single-occurrence field
+  reject, host-safety on `blossom-v1` locators, unknown-kind locators kept = unfetchable
+  not invalid); `image/jpg`→`image/jpeg` alias; `ciphertextSha256` compute on encrypt +
+  verify on decrypt; locator fetchability + `default_blob_endpoints` fallback
+  (`src/core/media/locator.ts`). Client `GroupMediaService`/`GroupMediaStore` rewired,
+  cache keyed by `ciphertextSha256`. The 0x8008 policy codec was already done.
+- **REMAINING:** source-epoch media-secret selection. `deriveMediaEncryptionKey` already
+  takes the source-epoch `ClientState`, but `GroupMediaService` passes the *live* state on
+  receive. True source-epoch selection needs retained per-epoch exporter secrets plumbed
+  from the engine/retained-history into the media service (ties into m4). Until then,
+  media from an older epoch than the local tip cannot be decrypted.
+- **Note:** the wire format is now interop-complete; only the receive-side epoch-secret
+  retention remains.
 
 ---
 

@@ -90,7 +90,7 @@ export interface BaseGroupHistory extends GroupSessionHistory {
 export type StoredMedia = {
   /** Plaintext (decrypted) file bytes. */
   data: Uint8Array;
-  /** The full MIP-04 attachment metadata associated with this blob. */
+  /** The full encrypted-media-v1 attachment metadata associated with this blob. */
   attachment: MediaAttachment;
 };
 
@@ -579,18 +579,17 @@ export class MarmotGroup<
   }
 
   /**
-   * Encrypts a media file for sharing in a group message (MIP-04 v2).
+   * Encrypts a media file for sharing in a group message (encrypted-media-v1).
    *
    * Derives the per-file key from the current MLS epoch, encrypts with
-   * ChaCha20-Poly1305, and returns the ciphertext alongside a fully
-   * populated {@link MediaAttachment} ready to be serialised into an
-   * `imeta` tag via `createImetaTagForAttachment` from applesauce.
+   * ChaCha20-Poly1305, and returns the ciphertext alongside a populated
+   * {@link MediaAttachment} (hashes, nonce, media type, filename) with no
+   * locators yet.
    *
    * **Caller responsibilities:**
-   * 1. Upload `encrypted` to Blossom (or any content-addressed store).
-   * 2. Set `attachment.url` to the resulting upload URL.
-   * 3. Pass `attachment` (with `url`) to `createImetaTagForAttachment` and
-   *    include the resulting tag on the group message rumor.
+   * 1. Upload `encrypted` to a blob store (`ciphertextSha256` is the content id).
+   * 2. Push a locator (`{ kind, value }`) onto `attachment.locators`.
+   * 3. Serialize with `encodeMediaImetaTag` and include the tag on the rumor.
    */
   async encryptMedia(
     blob: Blob,
@@ -600,12 +599,13 @@ export class MarmotGroup<
   }
 
   /**
-   * Decrypts a MIP-04 v2 media attachment downloaded from Blossom.
+   * Decrypts an encrypted-media-v1 attachment downloaded from a blob store.
    *
    * On the first call for a given file the plaintext bytes are derived via
-   * key-derivation + ChaCha20-Poly1305 decryption and stored in
-   * {`@link` media}. Subsequent calls for the same `attachment.sha256`
-   * are served directly from the cache, skipping key-derivation entirely.
+   * key-derivation + ChaCha20-Poly1305 decryption (after verifying the
+   * ciphertext and plaintext hashes) and stored in {`@link` media}. Subsequent
+   * calls for the same `attachment.ciphertextSha256` are served directly from
+   * the cache, skipping key-derivation entirely.
    */
   async decryptMedia(
     encrypted: Uint8Array,

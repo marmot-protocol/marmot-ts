@@ -8,19 +8,26 @@ import { GroupMediaStore } from "../../client/group/group-media-store.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import { SerializedClientState } from "../client-state";
+import {
+  encryptedMediaBlossomDefault,
+  type EncryptedMediaPolicyV1,
+} from "../components/encrypted-media.js";
 import { createCredential } from "../credential.js";
 import { createSimpleGroup } from "../group.js";
 import { generateKeyPackage } from "../key-package.js";
 import {
+  buildFallbackFetchUrls,
   canonicalizeMimeType,
   decryptMediaFile,
   deriveMediaEncryptionKey,
+  encodeMediaImetaTag,
+  ENCRYPTED_MEDIA_VERSION,
   encryptMediaFile,
-  getMediaAttachmentFromFileEvent,
   getMediaAttachments,
   type MediaAttachment,
-  MIP04_VERSION,
   parseMediaImetaTag,
+  resolveMediaFetchUrls,
+  selectFetchableLocators,
 } from "../media.js";
 
 // ---------------------------------------------------------------------------
@@ -42,19 +49,36 @@ async function makeClientState() {
   return { clientState, ciphersuite: impl };
 }
 
-/** Build a minimal valid MediaAttachment for a given file. */
-function makeAttachment(
+/** Crypto fields (plaintextSha256/mediaType/filename) for a given file. */
+function cryptoFields(
   file: Uint8Array,
-  mimeType = "image/jpeg",
+  mediaType = "image/jpeg",
   filename = "photo.jpg",
-): MediaAttachment {
-  return {
-    sha256: bytesToHex(sha256(file)),
-    type: mimeType,
-    filename,
-    nonce: "",
-    version: MIP04_VERSION,
-  };
+) {
+  return { plaintextSha256: bytesToHex(sha256(file)), mediaType, filename };
+}
+
+const BLOSSOM_URL = "https://blossom.example.com";
+
+/** Encrypts a file and returns a fully populated attachment with one locator. */
+async function makeEncrypted(
+  file: Uint8Array,
+  mediaType = "image/jpeg",
+  filename = "photo.jpg",
+) {
+  const { clientState, ciphersuite } = await makeClientState();
+  const fields = cryptoFields(file, mediaType, filename);
+  const fileKey = await deriveMediaEncryptionKey(
+    clientState,
+    ciphersuite,
+    fields,
+  );
+  const { encrypted, attachment } = encryptMediaFile(file, fileKey, fields);
+  attachment.locators.push({
+    kind: "blossom-v1",
+    value: `${BLOSSOM_URL}/${attachment.ciphertextSha256}`,
+  });
+  return { encrypted, attachment, fileKey };
 }
 
 // ---------------------------------------------------------------------------
@@ -67,23 +91,29 @@ describe("canonicalizeMimeType", () => {
   });
 
   it("trims whitespace", () => {
-    expect(canonicalizeMimeType("  image/jpeg  ")).toBe("image/jpeg");
+    expect(canonicalizeMimeType("  image/png  ")).toBe("image/png");
   });
 
   it("strips parameters", () => {
-    expect(canonicalizeMimeType("image/jpeg; charset=utf-8")).toBe(
-      "image/jpeg",
-    );
-  });
-
-  it("handles combined cases", () => {
-    expect(canonicalizeMimeType("  TEXT/PLAIN ; charset=US-ASCII  ")).toBe(
+    expect(canonicalizeMimeType("text/plain; charset=utf-8")).toBe(
       "text/plain",
     );
   });
 
-  it("leaves a clean mime type unchanged", () => {
-    expect(canonicalizeMimeType("video/mp4")).toBe("video/mp4");
+  it("applies the image/jpg → image/jpeg alias", () => {
+    expect(canonicalizeMimeType("image/jpg")).toBe("image/jpeg");
+    expect(canonicalizeMimeType("IMAGE/JPG")).toBe("image/jpeg");
+  });
+
+  it("handles combined cases", () => {
+    expect(canonicalizeMimeType("  IMAGE/JPG ; q=1  ")).toBe("image/jpeg");
+  });
+
+  it("rejects an empty or slash-less media type", () => {
+    expect(() => canonicalizeMimeType("")).toThrow();
+    expect(() => canonicalizeMimeType("notamimetype")).toThrow();
+    expect(() => canonicalizeMimeType("image/")).toThrow();
+    expect(() => canonicalizeMimeType("/jpeg")).toThrow();
   });
 });
 
@@ -97,7 +127,7 @@ describe("deriveMediaEncryptionKey", () => {
     const key = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      makeAttachment(randomBytes(100)),
+      cryptoFields(randomBytes(100)),
     );
     expect(key).toBeInstanceOf(Uint8Array);
     expect(key.length).toBe(32);
@@ -105,65 +135,47 @@ describe("deriveMediaEncryptionKey", () => {
 
   it("is deterministic for the same epoch + file metadata", async () => {
     const { clientState, ciphersuite } = await makeClientState();
-    const attachment = makeAttachment(randomBytes(100));
+    const fields = cryptoFields(randomBytes(100));
+    const a = await deriveMediaEncryptionKey(clientState, ciphersuite, fields);
+    const b = await deriveMediaEncryptionKey(clientState, ciphersuite, fields);
+    expect(bytesToHex(a)).toBe(bytesToHex(b));
+  });
+
+  it("produces different keys for different plaintext hashes", async () => {
+    const { clientState, ciphersuite } = await makeClientState();
     const a = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      attachment,
+      cryptoFields(randomBytes(100)),
     );
     const b = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      attachment,
+      cryptoFields(randomBytes(100)),
     );
-    expect(bytesToHex(a)).toBe(bytesToHex(b));
+    expect(bytesToHex(a)).not.toBe(bytesToHex(b));
   });
 
-  it("produces different keys for different file hashes", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
-    const keyA = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      makeAttachment(randomBytes(100)),
-    );
-    const keyB = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      makeAttachment(randomBytes(100)),
-    );
-    expect(bytesToHex(keyA)).not.toBe(bytesToHex(keyB));
-  });
-
-  it("produces different keys for different MIME types", async () => {
+  it("produces different keys for different MIME types and filenames", async () => {
     const { clientState, ciphersuite } = await makeClientState();
     const file = randomBytes(100);
-    const keyA = await deriveMediaEncryptionKey(
+    const a = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      makeAttachment(file, "image/jpeg"),
+      cryptoFields(file, "image/jpeg", "a.jpg"),
     );
-    const keyB = await deriveMediaEncryptionKey(
+    const b = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      makeAttachment(file, "video/mp4"),
+      cryptoFields(file, "video/mp4", "a.jpg"),
     );
-    expect(bytesToHex(keyA)).not.toBe(bytesToHex(keyB));
-  });
-
-  it("produces different keys for different filenames", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
-    const file = randomBytes(100);
-    const keyA = await deriveMediaEncryptionKey(
+    const c = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      makeAttachment(file, "image/jpeg", "photo.jpg"),
+      cryptoFields(file, "image/jpeg", "b.jpg"),
     );
-    const keyB = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      makeAttachment(file, "image/jpeg", "other.jpg"),
-    );
-    expect(bytesToHex(keyA)).not.toBe(bytesToHex(keyB));
+    expect(bytesToHex(a)).not.toBe(bytesToHex(b));
+    expect(bytesToHex(a)).not.toBe(bytesToHex(c));
   });
 
   it("canonicalizes MIME type before key derivation", async () => {
@@ -172,42 +184,40 @@ describe("deriveMediaEncryptionKey", () => {
     const keyLower = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      makeAttachment(file, "image/jpeg"),
+      cryptoFields(file, "image/jpeg"),
     );
     const keyUpper = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      makeAttachment(file, "IMAGE/JPEG"),
+      cryptoFields(file, "IMAGE/JPEG"),
     );
-    const keyParams = await deriveMediaEncryptionKey(
+    const keyAlias = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      makeAttachment(file, "image/jpeg; charset=utf-8"),
+      cryptoFields(file, "image/jpg"),
     );
     expect(bytesToHex(keyLower)).toBe(bytesToHex(keyUpper));
-    expect(bytesToHex(keyLower)).toBe(bytesToHex(keyParams));
+    expect(bytesToHex(keyLower)).toBe(bytesToHex(keyAlias));
   });
 
-  it("throws when sha256 is missing", async () => {
+  it("throws when plaintextSha256 is missing", async () => {
     const { clientState, ciphersuite } = await makeClientState();
-    const attachment = {
-      type: "image/jpeg",
-      filename: "photo.jpg",
-    } as unknown as MediaAttachment;
     await expect(
-      deriveMediaEncryptionKey(clientState, ciphersuite, attachment),
-    ).rejects.toThrow("sha256");
+      deriveMediaEncryptionKey(clientState, ciphersuite, {
+        mediaType: "image/jpeg",
+        filename: "a.jpg",
+      } as MediaAttachment),
+    ).rejects.toThrow("plaintextSha256");
   });
 
-  it("throws when type is missing", async () => {
+  it("throws when mediaType is missing", async () => {
     const { clientState, ciphersuite } = await makeClientState();
-    const attachment = {
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      filename: "photo.jpg",
-    } as unknown as MediaAttachment;
     await expect(
-      deriveMediaEncryptionKey(clientState, ciphersuite, attachment),
-    ).rejects.toThrow("type");
+      deriveMediaEncryptionKey(clientState, ciphersuite, {
+        plaintextSha256: bytesToHex(sha256(randomBytes(32))),
+        filename: "a.jpg",
+      } as MediaAttachment),
+    ).rejects.toThrow("mediaType");
   });
 });
 
@@ -217,501 +227,310 @@ describe("deriveMediaEncryptionKey", () => {
 
 describe("encryptMediaFile / decryptMediaFile", () => {
   it("round-trips a small file", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
     const file = new Uint8Array([10, 20, 30, 40, 50]);
-    const attachment = makeAttachment(
+    const { encrypted, attachment, fileKey } = await makeEncrypted(
       file,
       "application/octet-stream",
       "data.bin",
     );
-
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
-    );
-    const { encrypted, attachment: filled } = encryptMediaFile(
-      file,
-      fileKey,
-      attachment,
-    );
-    expect(decryptMediaFile(encrypted, fileKey, filled)).toEqual(file);
+    expect(decryptMediaFile(encrypted, fileKey, attachment)).toEqual(file);
   });
 
   it("round-trips a larger file", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
     const file = randomBytes(16384);
-    const attachment = makeAttachment(file, "image/png", "large.png");
-
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
-    );
-    const { encrypted, attachment: filled } = encryptMediaFile(
+    const { encrypted, attachment, fileKey } = await makeEncrypted(
       file,
-      fileKey,
-      attachment,
+      "image/png",
+      "large.png",
     );
-    expect(decryptMediaFile(encrypted, fileKey, filled)).toEqual(file);
+    expect(decryptMediaFile(encrypted, fileKey, attachment)).toEqual(file);
   });
 
   it("populated attachment has correct fields", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
     const file = randomBytes(64);
-    const attachment = makeAttachment(file, "image/jpeg", "img.jpg");
-
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
+    const { encrypted, attachment } = await makeEncrypted(
+      file,
+      "image/jpeg",
+      "img.jpg",
     );
-    const { attachment: filled } = encryptMediaFile(file, fileKey, attachment);
-
-    expect(filled.version).toBe(MIP04_VERSION);
-    expect(filled.nonce).toMatch(/^[0-9a-f]{24}$/); // 12 bytes hex-encoded
-    expect(filled.sha256).toBe(attachment.sha256);
-    expect(filled.type).toBe("image/jpeg");
-    expect(filled.filename).toBe("img.jpg");
+    expect(attachment.version).toBe(ENCRYPTED_MEDIA_VERSION);
+    expect(attachment.nonce).toMatch(/^[0-9a-f]{24}$/);
+    expect(attachment.plaintextSha256).toBe(bytesToHex(sha256(file)));
+    expect(attachment.ciphertextSha256).toBe(bytesToHex(sha256(encrypted)));
+    expect(attachment.mediaType).toBe("image/jpeg");
+    expect(attachment.filename).toBe("img.jpg");
   });
 
-  it("canonicalizes the MIME type on the returned attachment", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
+  it("canonicalizes the MIME type (incl. jpg alias) on the result", async () => {
     const file = randomBytes(32);
-    const attachment = makeAttachment(file, "IMAGE/JPEG", "img.jpg");
-
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
-    );
-    const { attachment: filled } = encryptMediaFile(file, fileKey, attachment);
-    expect(filled.type).toBe("image/jpeg");
+    const { attachment } = await makeEncrypted(file, "IMAGE/JPG", "img.jpg");
+    expect(attachment.mediaType).toBe("image/jpeg");
   });
 
   it("each encryption produces a unique nonce", async () => {
     const { clientState, ciphersuite } = await makeClientState();
     const file = randomBytes(64);
-    const attachment = makeAttachment(file);
-
+    const fields = cryptoFields(file);
     const fileKey = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      attachment,
+      fields,
     );
-    const { attachment: a } = encryptMediaFile(file, fileKey, attachment);
-    const { attachment: b } = encryptMediaFile(file, fileKey, attachment);
+    const { attachment: a } = encryptMediaFile(file, fileKey, fields);
+    const { attachment: b } = encryptMediaFile(file, fileKey, fields);
     expect(a.nonce).not.toBe(b.nonce);
   });
 
   it("encrypted length is plaintext length + 16 (Poly1305 tag)", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
     const file = randomBytes(100);
-    const attachment = makeAttachment(
+    const { encrypted } = await makeEncrypted(
       file,
       "application/octet-stream",
       "test.bin",
     );
-
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
-    );
-    const { encrypted } = encryptMediaFile(file, fileKey, attachment);
     expect(encrypted.length).toBe(file.length + 16);
   });
 
-  it("extra FileMetadata fields are preserved on the returned attachment", async () => {
+  it("carries optional dim/thumbhash through", async () => {
     const { clientState, ciphersuite } = await makeClientState();
     const file = randomBytes(32);
-    const attachment: MediaAttachment = {
-      ...makeAttachment(file),
-      url: "https://example.com/blob",
-      dimensions: "800x600",
-      blurhash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
-      alt: "A test image",
+    const fields = {
+      ...cryptoFields(file),
+      dim: "800x600",
+      thumbhash: "abc123",
     };
-
     const fileKey = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      attachment,
+      fields,
     );
-    const { attachment: filled } = encryptMediaFile(file, fileKey, attachment);
-
-    expect(filled.url).toBe("https://example.com/blob");
-    expect(filled.dimensions).toBe("800x600");
-    expect(filled.blurhash).toBe("LEHV6nWB2yk8pyo0adR*.7kCMdnj");
-    expect(filled.alt).toBe("A test image");
+    const { attachment } = encryptMediaFile(file, fileKey, fields);
+    expect(attachment.dim).toBe("800x600");
+    expect(attachment.thumbhash).toBe("abc123");
   });
 
-  it("throws when ciphertext is tampered (AEAD failure)", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
+  it("throws when the ciphertext is tampered (hash mismatch / AEAD failure)", async () => {
     const file = randomBytes(64);
-    const attachment = makeAttachment(file);
-
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
-    );
-    const { encrypted, attachment: filled } = encryptMediaFile(
-      file,
-      fileKey,
-      attachment,
-    );
+    const { encrypted, attachment, fileKey } = await makeEncrypted(file);
     encrypted[0] ^= 0xff;
-    expect(() => decryptMediaFile(encrypted, fileKey, filled)).toThrow();
+    expect(() => decryptMediaFile(encrypted, fileKey, attachment)).toThrow();
   });
 
-  it("throws when filename is tampered (AAD mismatch)", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
+  it("throws when the filename is tampered (AAD mismatch)", async () => {
     const file = randomBytes(64);
-    const attachment = makeAttachment(file, "image/jpeg", "real.jpg");
-
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
-    );
-    const { encrypted, attachment: filled } = encryptMediaFile(
+    const { encrypted, attachment, fileKey } = await makeEncrypted(
       file,
-      fileKey,
-      attachment,
+      "image/jpeg",
+      "real.jpg",
     );
     expect(() =>
       decryptMediaFile(encrypted, fileKey, {
-        ...filled,
+        ...attachment,
         filename: "tampered.jpg",
       }),
     ).toThrow();
   });
 
-  it("throws when MIME type is tampered (AAD mismatch)", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
+  it("throws when the MIME type is tampered (AAD mismatch)", async () => {
     const file = randomBytes(64);
-    const attachment = makeAttachment(file, "image/jpeg", "file.jpg");
-
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
-    );
-    const { encrypted, attachment: filled } = encryptMediaFile(
-      file,
-      fileKey,
-      attachment,
-    );
+    const { encrypted, attachment, fileKey } = await makeEncrypted(file);
     expect(() =>
-      decryptMediaFile(encrypted, fileKey, { ...filled, type: "image/png" }),
+      decryptMediaFile(encrypted, fileKey, {
+        ...attachment,
+        mediaType: "image/png",
+      }),
     ).toThrow();
   });
 
-  it("throws when wrong key is used", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
+  it("throws when the wrong key is used", async () => {
     const file = randomBytes(64);
-    const attachment = makeAttachment(file);
-
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
-    );
-    const { encrypted, attachment: filled } = encryptMediaFile(
-      file,
-      fileKey,
-      attachment,
-    );
+    const { encrypted, attachment } = await makeEncrypted(file);
     expect(() =>
-      decryptMediaFile(encrypted, randomBytes(32), filled),
+      decryptMediaFile(encrypted, randomBytes(32), attachment),
     ).toThrow();
   });
 
-  it("throws when nonce is missing from attachment", () => {
-    const attachment: MediaAttachment = {
-      ...makeAttachment(randomBytes(32)),
-      nonce: "",
-    };
+  it("throws when the nonce is missing", async () => {
+    const file = randomBytes(32);
+    const { encrypted, attachment, fileKey } = await makeEncrypted(file);
     expect(() =>
-      decryptMediaFile(randomBytes(48), randomBytes(32), attachment),
+      decryptMediaFile(encrypted, fileKey, { ...attachment, nonce: "" }),
     ).toThrow("nonce");
   });
 
-  it("throws when fileHash in attachment is wrong (AAD mismatch)", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
+  it("throws when ciphertextSha256 does not match the fetched bytes", async () => {
     const file = randomBytes(64);
-    const attachment = makeAttachment(file);
-
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
-    );
-    const { encrypted, attachment: filled } = encryptMediaFile(
-      file,
-      fileKey,
-      attachment,
-    );
+    const { encrypted, attachment, fileKey } = await makeEncrypted(file);
     expect(() =>
       decryptMediaFile(encrypted, fileKey, {
-        ...filled,
-        sha256: bytesToHex(sha256(randomBytes(64))),
+        ...attachment,
+        ciphertextSha256: bytesToHex(sha256(randomBytes(64))),
       }),
-    ).toThrow();
+    ).toThrow(/ciphertext/);
+  });
+
+  it("throws when plaintextSha256 does not match the decrypted bytes", async () => {
+    // Tamper plaintextSha256 only in the validation step by re-deriving with a
+    // matching key but a different declared plaintext hash is impossible (the
+    // key binds it). Instead verify the check rejects a wrong plaintext hash on
+    // an attachment whose AAD still authenticates via the real fields.
+    const file = randomBytes(64);
+    const { encrypted, attachment, fileKey } = await makeEncrypted(file);
+    // Keep AAD valid (same fields) but lie about plaintext hash → step 3 fails.
+    const lying = {
+      ...attachment,
+      plaintextSha256: bytesToHex(sha256(randomBytes(64))),
+    };
+    // The lie changes the AAD too, so AEAD fails first — either way it throws.
+    expect(() => decryptMediaFile(encrypted, fileKey, lying)).toThrow();
   });
 });
 
 // ---------------------------------------------------------------------------
-// Helpers for imeta parsing tests
+// imeta encode / parse
 // ---------------------------------------------------------------------------
 
-/**
- * Builds a valid MIP-04 v2 `imeta` tag array from a {@link MediaAttachment}.
- * Mirrors what `createImetaTagForAttachment` from applesauce would emit for the
- * standard NIP-92 fields, with the MIP-04 extensions appended.
- */
-function buildImetaTag(attachment: MediaAttachment): string[] {
-  const parts: string[] = ["imeta"];
-  if (attachment.url) parts.push(`url ${attachment.url}`);
-  if (attachment.type) parts.push(`m ${attachment.type}`);
-  if (attachment.sha256) parts.push(`x ${attachment.sha256}`);
-  if (attachment.size !== undefined) parts.push(`size ${attachment.size}`);
-  if (attachment.dimensions) parts.push(`dim ${attachment.dimensions}`);
-  if (attachment.blurhash) parts.push(`blurhash ${attachment.blurhash}`);
-  if (attachment.alt) parts.push(`alt ${attachment.alt}`);
-  parts.push(`filename ${attachment.filename}`);
-  parts.push(`n ${attachment.nonce}`);
-  parts.push(`v ${attachment.version}`);
-  return parts;
+/** A valid imeta tag for a freshly-encrypted attachment. */
+async function validImetaTag(
+  overrides?: Partial<MediaAttachment>,
+): Promise<string[]> {
+  const { attachment } = await makeEncrypted(randomBytes(64));
+  return encodeMediaImetaTag({ ...attachment, ...overrides });
 }
 
-/** Minimal valid MIP-04 v2 imeta tag with only the required MIP-04 fields. */
-function minimalImetaTag(overrides?: Partial<MediaAttachment>): string[] {
-  const base: MediaAttachment = {
-    sha256: bytesToHex(sha256(randomBytes(32))),
-    type: "image/jpeg",
-    filename: "photo.jpg",
-    nonce: bytesToHex(randomBytes(12)),
-    version: MIP04_VERSION,
-    ...overrides,
-  };
-  return buildImetaTag(base);
-}
+describe("encodeMediaImetaTag / parseMediaImetaTag", () => {
+  it("round-trips a populated attachment", async () => {
+    const { attachment } = await makeEncrypted(
+      randomBytes(128),
+      "image/png",
+      "snap.png",
+    );
+    attachment.dim = "10x10";
+    attachment.thumbhash = "th";
+    const tag = encodeMediaImetaTag(attachment);
+    const parsed = parseMediaImetaTag(tag);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.version).toBe(ENCRYPTED_MEDIA_VERSION);
+    expect(parsed!.mediaType).toBe("image/png");
+    expect(parsed!.filename).toBe("snap.png");
+    expect(parsed!.nonce).toBe(attachment.nonce);
+    expect(parsed!.ciphertextSha256).toBe(attachment.ciphertextSha256);
+    expect(parsed!.plaintextSha256).toBe(attachment.plaintextSha256);
+    expect(parsed!.dim).toBe("10x10");
+    expect(parsed!.thumbhash).toBe("th");
+    expect(parsed!.locators).toEqual(attachment.locators);
+  });
 
-// ---------------------------------------------------------------------------
-// parseMediaImetaTag
-// ---------------------------------------------------------------------------
+  it("preserves multiple locators in order (incl. unknown kinds)", async () => {
+    const { attachment } = await makeEncrypted(randomBytes(64));
+    attachment.locators = [
+      { kind: "blossom-v1", value: `${BLOSSOM_URL}/a` },
+      { kind: "future-v1", value: "https://other.example.com/b" },
+    ];
+    const parsed = parseMediaImetaTag(encodeMediaImetaTag(attachment));
+    expect(parsed!.locators).toEqual(attachment.locators);
+  });
 
-describe("parseMediaImetaTag", () => {
   it("returns null for non-imeta tags", () => {
     expect(parseMediaImetaTag(["p", "pubkey"])).toBeNull();
-    expect(parseMediaImetaTag(["e", "eventid"])).toBeNull();
     expect(parseMediaImetaTag([])).toBeNull();
   });
 
-  it("returns null when v field is absent", () => {
-    const tag = [
-      "imeta",
-      "x abcdef1234",
-      "m image/jpeg",
-      "filename photo.jpg",
-      "n " + bytesToHex(randomBytes(12)),
-    ];
+  it("rejects a missing version", async () => {
+    const tag = (await validImetaTag()).filter((p) => !p.startsWith("v "));
     expect(parseMediaImetaTag(tag)).toBeNull();
   });
 
-  it("returns null when v field does not match MIP04_VERSION", () => {
-    const tag = minimalImetaTag();
-    // Replace v field with legacy version
-    const tampered = tag.map((p) => (p.startsWith("v ") ? "v mip04-v1" : p));
-    expect(parseMediaImetaTag(tampered)).toBeNull();
-  });
-
-  it("returns null when n (nonce) is absent", () => {
-    const tag = [
-      "imeta",
-      "x " + bytesToHex(sha256(randomBytes(32))),
-      "m image/jpeg",
-      "filename photo.jpg",
-      "v " + MIP04_VERSION,
-    ];
-    expect(parseMediaImetaTag(tag)).toBeNull();
-  });
-
-  it("returns null when n is too short (not 12 bytes encoded)", () => {
-    const tag = [
-      "imeta",
-      "x " + bytesToHex(sha256(randomBytes(32))),
-      "m image/jpeg",
-      "filename photo.jpg",
-      "n " + bytesToHex(randomBytes(11)), // 22 chars — one byte short
-      "v " + MIP04_VERSION,
-    ];
-    expect(parseMediaImetaTag(tag)).toBeNull();
-  });
-
-  it("returns null when n is too long (more than 12 bytes encoded)", () => {
-    const tag = [
-      "imeta",
-      "x " + bytesToHex(sha256(randomBytes(32))),
-      "m image/jpeg",
-      "filename photo.jpg",
-      "n " + bytesToHex(randomBytes(13)), // 26 chars — one byte over
-      "v " + MIP04_VERSION,
-    ];
-    expect(parseMediaImetaTag(tag)).toBeNull();
-  });
-
-  it("returns null when n is not valid hex", () => {
-    const tag = [
-      "imeta",
-      "x " + bytesToHex(sha256(randomBytes(32))),
-      "m image/jpeg",
-      "filename photo.jpg",
-      "n zzzzzzzzzzzzzzzzzzzzzzzz",
-      "v " + MIP04_VERSION,
-    ];
-    expect(parseMediaImetaTag(tag)).toBeNull();
-  });
-
-  it("returns null when x (sha256) is absent", () => {
-    const tag = [
-      "imeta",
-      "m image/jpeg",
-      "filename photo.jpg",
-      "n " + bytesToHex(randomBytes(12)),
-      "v " + MIP04_VERSION,
-    ];
-    expect(parseMediaImetaTag(tag)).toBeNull();
-  });
-
-  it("returns null when x is wrong length", () => {
-    const tag = [
-      "imeta",
-      "x " + bytesToHex(randomBytes(31)), // 62 chars instead of 64
-      "m image/jpeg",
-      "filename photo.jpg",
-      "n " + bytesToHex(randomBytes(12)),
-      "v " + MIP04_VERSION,
-    ];
-    expect(parseMediaImetaTag(tag)).toBeNull();
-  });
-
-  it("returns null when x is not valid hex", () => {
-    const tag = [
-      "imeta",
-      "x " + "g".repeat(64),
-      "m image/jpeg",
-      "filename photo.jpg",
-      "n " + bytesToHex(randomBytes(12)),
-      "v " + MIP04_VERSION,
-    ];
-    expect(parseMediaImetaTag(tag)).toBeNull();
-  });
-
-  it("returns null when m (MIME type) is absent", () => {
-    const tag = [
-      "imeta",
-      "x " + bytesToHex(sha256(randomBytes(32))),
-      "filename photo.jpg",
-      "n " + bytesToHex(randomBytes(12)),
-      "v " + MIP04_VERSION,
-    ];
-    expect(parseMediaImetaTag(tag)).toBeNull();
-  });
-
-  it("returns null when m is not a valid MIME type", () => {
-    const tag = [
-      "imeta",
-      "x " + bytesToHex(sha256(randomBytes(32))),
-      "m notamimetype",
-      "filename photo.jpg",
-      "n " + bytesToHex(randomBytes(12)),
-      "v " + MIP04_VERSION,
-    ];
-    expect(parseMediaImetaTag(tag)).toBeNull();
-  });
-
-  it("returns null when filename is absent", () => {
-    const tag = [
-      "imeta",
-      "x " + bytesToHex(sha256(randomBytes(32))),
-      "m image/jpeg",
-      "n " + bytesToHex(randomBytes(12)),
-      "v " + MIP04_VERSION,
-    ];
-    expect(parseMediaImetaTag(tag)).toBeNull();
-  });
-
-  it("returns a valid attachment for a well-formed tag", () => {
-    const sha = bytesToHex(sha256(randomBytes(32)));
-    const nonce = bytesToHex(randomBytes(12));
-    const tag = [
-      "imeta",
-      `url https://example.com/blob/${sha}`,
-      `x ${sha}`,
-      "m image/jpeg",
-      "filename photo.jpg",
-      `n ${nonce}`,
-      `v ${MIP04_VERSION}`,
-    ];
-
-    const result = parseMediaImetaTag(tag);
-    expect(result).not.toBeNull();
-    expect(result!.filename).toBe("photo.jpg");
-    expect(result!.nonce).toBe(nonce);
-    expect(result!.version).toBe(MIP04_VERSION);
-    expect(result!.sha256).toBe(sha);
-    expect(result!.type).toBe("image/jpeg");
-    expect(result!.url).toBe(`https://example.com/blob/${sha}`);
-  });
-
-  it("copies standard NIP-92 fields via applesauce", () => {
-    const sha = bytesToHex(sha256(randomBytes(32)));
-    const nonce = bytesToHex(randomBytes(12));
-    const tag = [
-      "imeta",
-      `x ${sha}`,
-      "m video/mp4",
-      "dim 1920x1080",
-      "blurhash LEHV6nWB2yk8",
-      "alt A test video",
-      "size 4096",
-      "filename clip.mp4",
-      `n ${nonce}`,
-      `v ${MIP04_VERSION}`,
-    ];
-
-    const result = parseMediaImetaTag(tag);
-    expect(result).not.toBeNull();
-    expect(result!.dimensions).toBe("1920x1080");
-    expect(result!.blurhash).toBe("LEHV6nWB2yk8");
-    expect(result!.alt).toBe("A test video");
-    expect(result!.size).toBe(4096);
-    expect(result!.type).toBe("video/mp4");
-    expect(result!.sha256).toBe(sha);
-  });
-
-  it("round-trips through encryptMediaFile → buildImetaTag → parseMediaImetaTag", async () => {
-    const { clientState, ciphersuite } = await makeClientState();
-    const file = randomBytes(256);
-    const attachment = makeAttachment(file, "image/png", "snap.png");
-    const fileKey = await deriveMediaEncryptionKey(
-      clientState,
-      ciphersuite,
-      attachment,
+  it("rejects a legacy version string", async () => {
+    const tag = (await validImetaTag()).map((p) =>
+      p.startsWith("v ") ? "v mip04-v2" : p,
     );
-    const { attachment: filled } = encryptMediaFile(file, fileKey, attachment);
-    const tag = buildImetaTag(filled);
-    const parsed = parseMediaImetaTag(tag);
+    expect(parseMediaImetaTag(tag)).toBeNull();
+  });
 
+  it("rejects a present blurhash field", async () => {
+    const tag = [...(await validImetaTag()), "blurhash LEHV6nWB2yk8"];
+    expect(parseMediaImetaTag(tag)).toBeNull();
+  });
+
+  it("rejects a duplicated single-occurrence field", async () => {
+    const tag = [...(await validImetaTag()), "filename dup.jpg"];
+    expect(parseMediaImetaTag(tag)).toBeNull();
+  });
+
+  it("rejects when no locator is present", async () => {
+    const tag = (await validImetaTag()).filter(
+      (p) => !p.startsWith("locator "),
+    );
+    expect(parseMediaImetaTag(tag)).toBeNull();
+  });
+
+  it("rejects a locator with an empty value or non-URL value", async () => {
+    const base = await validImetaTag();
+    const noValue = base.map((p) =>
+      p.startsWith("locator ") ? "locator blossom-v1" : p,
+    );
+    const notUrl = base.map((p) =>
+      p.startsWith("locator ") ? "locator blossom-v1 not a url" : p,
+    );
+    expect(parseMediaImetaTag(noValue)).toBeNull();
+    expect(parseMediaImetaTag(notUrl)).toBeNull();
+  });
+
+  it("rejects a blossom-v1 locator on an unsafe / cleartext host", async () => {
+    const base = await validImetaTag();
+    for (const bad of [
+      "http://blossom.example.com/x",
+      "https://127.0.0.1/x",
+      "https://localhost/x",
+      "https://10.0.0.1/x",
+      "https://[::1]/x",
+    ]) {
+      const tag = base.map((p) =>
+        p.startsWith("locator ") ? `locator blossom-v1 ${bad}` : p,
+      );
+      expect(parseMediaImetaTag(tag), bad).toBeNull();
+    }
+  });
+
+  it("keeps a structurally-valid locator of an unknown kind", async () => {
+    const base = await validImetaTag();
+    const tag = base.map((p) =>
+      p.startsWith("locator ")
+        ? "locator future-v1 https://other.example.com/x"
+        : p,
+    );
+    const parsed = parseMediaImetaTag(tag);
     expect(parsed).not.toBeNull();
-    expect(parsed!.filename).toBe("snap.png");
-    expect(parsed!.nonce).toBe(filled.nonce);
-    expect(parsed!.sha256).toBe(filled.sha256);
-    expect(parsed!.type).toBe("image/png");
-    expect(parsed!.version).toBe(MIP04_VERSION);
+    expect(parsed!.locators[0].kind).toBe("future-v1");
+  });
+
+  it("rejects malformed hashes and nonce", async () => {
+    const base = await validImetaTag();
+    const badCipher = base.map((p) =>
+      p.startsWith("ciphertext_sha256 ") ? "ciphertext_sha256 abc" : p,
+    );
+    const badPlain = base.map((p) =>
+      p.startsWith("plaintext_sha256 ")
+        ? `plaintext_sha256 ${"g".repeat(64)}`
+        : p,
+    );
+    const badNonce = base.map((p) =>
+      p.startsWith("nonce ") ? `nonce ${bytesToHex(randomBytes(11))}` : p,
+    );
+    expect(parseMediaImetaTag(badCipher)).toBeNull();
+    expect(parseMediaImetaTag(badPlain)).toBeNull();
+    expect(parseMediaImetaTag(badNonce)).toBeNull();
+  });
+
+  it("rejects missing m or filename", async () => {
+    const base = await validImetaTag();
+    expect(
+      parseMediaImetaTag(base.filter((p) => !p.startsWith("m "))),
+    ).toBeNull();
+    expect(
+      parseMediaImetaTag(base.filter((p) => !p.startsWith("filename "))),
+    ).toBeNull();
   });
 });
 
@@ -721,293 +540,80 @@ describe("parseMediaImetaTag", () => {
 
 describe("getMediaAttachments", () => {
   it("returns an empty array when there are no imeta tags", () => {
-    const tags = [
-      ["p", "pubkey"],
-      ["e", "eventid"],
-    ];
-    expect(getMediaAttachments(tags)).toEqual([]);
+    expect(getMediaAttachments([["p", "pubkey"]])).toEqual([]);
   });
 
-  it("skips non-imeta tags", () => {
-    const tags = [["p", "pubkey"], minimalImetaTag()];
-    expect(getMediaAttachments(tags)).toHaveLength(1);
-  });
-
-  it("skips imeta tags that fail MIP-04 validation", () => {
-    const valid = minimalImetaTag();
-    const noVersion = valid.filter((p) => !p.startsWith("v "));
-    const noNonce = valid.filter((p) => !p.startsWith("n "));
-    const tags = [noVersion, noNonce, valid];
-    expect(getMediaAttachments(tags)).toHaveLength(1);
-  });
-
-  it("returns all valid MIP-04 v2 attachments", () => {
-    const tags = [minimalImetaTag(), minimalImetaTag(), minimalImetaTag()];
-    const results = getMediaAttachments(tags);
-    expect(results).toHaveLength(3);
-    for (const r of results) {
-      expect(r.version).toBe(MIP04_VERSION);
-    }
+  it("skips non-imeta and invalid imeta tags", async () => {
+    const valid = await validImetaTag();
+    const invalid = valid.filter((p) => !p.startsWith("v "));
+    const results = getMediaAttachments([["p", "x"], invalid, valid]);
+    expect(results).toHaveLength(1);
+    expect(results[0].version).toBe(ENCRYPTED_MEDIA_VERSION);
   });
 });
 
 // ---------------------------------------------------------------------------
-// getMediaAttachmentFromFileEvent
+// locator fetchability + fallback
 // ---------------------------------------------------------------------------
 
-describe("getMediaAttachmentFromFileEvent", () => {
-  /** Builds a minimal kind 1063 event from a MediaAttachment. */
-  function buildKind1063Event(
-    attachment: MediaAttachment,
-    overrideTags?: string[][],
-  ): Parameters<typeof getMediaAttachmentFromFileEvent>[0] {
-    const tags: string[][] = [
-      ...(attachment.url ? [["url", attachment.url]] : []),
-      ...(attachment.type ? [["m", attachment.type]] : []),
-      ...(attachment.sha256 ? [["x", attachment.sha256]] : []),
-      ...(attachment.size !== undefined
-        ? [["size", String(attachment.size)]]
-        : []),
-      ...(attachment.dimensions ? [["dim", attachment.dimensions]] : []),
-      ...(attachment.blurhash ? [["blurhash", attachment.blurhash]] : []),
-      ...(attachment.alt ? [["alt", attachment.alt]] : []),
-      ["filename", attachment.filename],
-      ["n", attachment.nonce],
-      ["v", attachment.version],
-      ...(overrideTags ?? []),
-    ];
+describe("locator resolution", () => {
+  const policy: EncryptedMediaPolicyV1 = encryptedMediaBlossomDefault([
+    "https://blossom.primal.net",
+  ]);
+
+  function attachmentWith(locators: MediaAttachment["locators"]) {
     return {
-      kind: 1063,
-      content: "",
-      tags,
-      id: "0".repeat(64),
-      pubkey: "0".repeat(64),
-      created_at: 0,
-      sig: "0".repeat(128),
-    };
+      version: ENCRYPTED_MEDIA_VERSION,
+      locators,
+      ciphertextSha256: "a".repeat(64),
+      plaintextSha256: "b".repeat(64),
+      nonce: "c".repeat(24),
+      mediaType: "image/jpeg",
+      filename: "x.jpg",
+    } satisfies MediaAttachment;
   }
 
-  it("returns null when v tag is absent", () => {
-    const event = buildKind1063Event({
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
+  it("selects only supported + allowed locator kinds", () => {
+    const att = attachmentWith([
+      { kind: "blossom-v1", value: "https://a.example.com/x" },
+      { kind: "future-v1", value: "https://b.example.com/x" },
+    ]);
+    const sel = selectFetchableLocators(att, {
+      allowedLocatorKinds: policy.allowedLocatorKinds,
     });
-    // Remove the v tag
-    event.tags = event.tags.filter((t) => t[0] !== "v");
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
+    expect(sel).toHaveLength(1);
+    expect(sel[0].kind).toBe("blossom-v1");
   });
 
-  it("returns null when v tag does not match MIP04_VERSION", () => {
-    const sha = bytesToHex(sha256(randomBytes(32)));
-    const event = {
-      kind: 1063,
-      content: "",
-      tags: [
-        ["x", sha],
-        ["m", "image/jpeg"],
-        ["filename", "photo.jpg"],
-        ["n", bytesToHex(randomBytes(12))],
-        ["v", "mip04-v1"],
-      ],
-      id: "0".repeat(64),
-      pubkey: "0".repeat(64),
-      created_at: 0,
-      sig: "0".repeat(128),
-    };
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
+  it("builds fallback fetch URLs from the policy endpoints", () => {
+    const att = attachmentWith([
+      { kind: "blossom-v1", value: "https://a.example.com/x" },
+    ]);
+    const urls = buildFallbackFetchUrls(att, policy);
+    expect(urls).toEqual([
+      `https://blossom.primal.net/${att.ciphertextSha256}`,
+    ]);
   });
 
-  it("returns null when n tag is absent", () => {
-    const attachment: MediaAttachment = {
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
-    };
-    const event = buildKind1063Event(attachment);
-    event.tags = event.tags.filter((t) => t[0] !== "n");
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
-  });
-
-  it("returns null when n is too short (not 12 bytes encoded)", () => {
-    const event = buildKind1063Event({
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
-    });
-    // Replace n with an 11-byte (22 char) nonce
-    event.tags = event.tags.map((t) =>
-      t[0] === "n" ? ["n", bytesToHex(randomBytes(11))] : t,
-    );
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
-  });
-
-  it("returns null when n is too long (more than 12 bytes encoded)", () => {
-    const event = buildKind1063Event({
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
-    });
-    // Replace n with a 13-byte (26 char) nonce
-    event.tags = event.tags.map((t) =>
-      t[0] === "n" ? ["n", bytesToHex(randomBytes(13))] : t,
-    );
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
-  });
-
-  it("returns null when n is not valid hex", () => {
-    const event = buildKind1063Event({
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
-    });
-    event.tags = event.tags.map((t) =>
-      t[0] === "n" ? ["n", "zzzzzzzzzzzzzzzzzzzzzzzz"] : t,
-    );
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
-  });
-
-  it("returns null when x (sha256) tag is absent", () => {
-    const attachment: MediaAttachment = {
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
-    };
-    const event = buildKind1063Event(attachment);
-    event.tags = event.tags.filter((t) => t[0] !== "x");
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
-  });
-
-  it("returns null when x is wrong length", () => {
-    const event = buildKind1063Event({
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
-    });
-    // Replace x with a 31-byte (62 char) hash
-    event.tags = event.tags.map((t) =>
-      t[0] === "x" ? ["x", bytesToHex(randomBytes(31))] : t,
-    );
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
-  });
-
-  it("returns null when x is not valid hex", () => {
-    const event = buildKind1063Event({
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
-    });
-    event.tags = event.tags.map((t) =>
-      t[0] === "x" ? ["x", "g".repeat(64)] : t,
-    );
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
-  });
-
-  it("returns null when m (MIME type) tag is absent", () => {
-    const attachment: MediaAttachment = {
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
-    };
-    const event = buildKind1063Event(attachment);
-    event.tags = event.tags.filter((t) => t[0] !== "m");
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
-  });
-
-  it("returns null when m is not a valid MIME type", () => {
-    const event = buildKind1063Event({
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
-    });
-    event.tags = event.tags.map((t) =>
-      t[0] === "m" ? ["m", "notamimetype"] : t,
-    );
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
-  });
-
-  it("returns null when filename tag is absent", () => {
-    const attachment: MediaAttachment = {
-      sha256: bytesToHex(sha256(randomBytes(32))),
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce: bytesToHex(randomBytes(12)),
-      version: MIP04_VERSION,
-    };
-    const event = buildKind1063Event(attachment);
-    event.tags = event.tags.filter((t) => t[0] !== "filename");
-    expect(getMediaAttachmentFromFileEvent(event)).toBeNull();
-  });
-
-  it("returns a valid attachment for a well-formed event", () => {
-    const sha = bytesToHex(sha256(randomBytes(32)));
-    const nonce = bytesToHex(randomBytes(12));
-    const attachment: MediaAttachment = {
-      url: `https://example.com/blob/${sha}`,
-      sha256: sha,
-      type: "image/jpeg",
-      filename: "photo.jpg",
-      nonce,
-      version: MIP04_VERSION,
-    };
-    const event = buildKind1063Event(attachment);
-    const result = getMediaAttachmentFromFileEvent(event);
-
-    expect(result).not.toBeNull();
-    expect(result!.filename).toBe("photo.jpg");
-    expect(result!.nonce).toBe(nonce);
-    expect(result!.version).toBe(MIP04_VERSION);
-    expect(result!.sha256).toBe(sha);
-    expect(result!.type).toBe("image/jpeg");
-    expect(result!.url).toBe(`https://example.com/blob/${sha}`);
-  });
-
-  it("copies standard NIP-94 fields via applesauce", () => {
-    const sha = bytesToHex(sha256(randomBytes(32)));
-    const nonce = bytesToHex(randomBytes(12));
-    const attachment: MediaAttachment = {
-      sha256: sha,
-      type: "video/mp4",
-      dimensions: "1280x720",
-      blurhash: "LEHV6nWB2yk8",
-      alt: "A test clip",
-      size: 8192,
-      filename: "clip.mp4",
-      nonce,
-      version: MIP04_VERSION,
-    };
-    const event = buildKind1063Event(attachment);
-    const result = getMediaAttachmentFromFileEvent(event);
-
-    expect(result).not.toBeNull();
-    expect(result!.dimensions).toBe("1280x720");
-    expect(result!.blurhash).toBe("LEHV6nWB2yk8");
-    expect(result!.alt).toBe("A test clip");
-    expect(result!.size).toBe(8192);
-    expect(result!.type).toBe("video/mp4");
-    expect(result!.sha256).toBe(sha);
+  it("resolves explicit locators first, then fallbacks, deduped", () => {
+    const att = attachmentWith([
+      { kind: "blossom-v1", value: "https://a.example.com/x" },
+      {
+        kind: "blossom-v1",
+        value: `https://blossom.primal.net/${"a".repeat(64)}`,
+      },
+    ]);
+    const urls = resolveMediaFetchUrls(att, policy);
+    expect(urls[0]).toBe("https://a.example.com/x");
+    // The duplicate of the fallback URL appears once.
+    expect(urls).toHaveLength(2);
+    expect(new Set(urls).size).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// MarmotGroup.decryptMedia
+// ---------------------------------------------------------------------------
 
 describe("MarmotGroup.decryptMedia", () => {
   it("deduplicates concurrent decrypts for the same attachment", async () => {
@@ -1032,22 +638,18 @@ describe("MarmotGroup.decryptMedia", () => {
     });
 
     const file = randomBytes(128);
-    const attachment = makeAttachment(file, "image/png", "image.png");
+    const fields = cryptoFields(file, "image/png", "image.png");
     const fileKey = await deriveMediaEncryptionKey(
       clientState,
       ciphersuite,
-      attachment,
+      fields,
     );
-    const { encrypted, attachment: filled } = encryptMediaFile(
-      file,
-      fileKey,
-      attachment,
-    );
+    const { encrypted, attachment } = encryptMediaFile(file, fileKey, fields);
 
     const addMediaSpy = vi.spyOn(group.media, "addMedia");
     const [first, second] = await Promise.all([
-      group.decryptMedia(encrypted, filled),
-      group.decryptMedia(encrypted, filled),
+      group.decryptMedia(encrypted, attachment),
+      group.decryptMedia(encrypted, attachment),
     ]);
 
     expect(first.data).toEqual(file);

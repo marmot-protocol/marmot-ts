@@ -81,7 +81,22 @@ export function useAppKeybindings(props: {
     }
 
     if (nav.composing) {
-      if (matches(key, "esc")) nav.setComposing(false);
+      // A single Escape cancels composing and any in-progress reply.
+      if (matches(key, "esc")) {
+        nav.setComposing(false);
+        nav.setReplyTarget(undefined);
+      }
+      return;
+    }
+
+    // Reply-select is a modal sub-mode of the chat panel: j/k move the timeline
+    // cursor, Enter confirms the target (and starts composing), Esc cancels.
+    // Every other key is swallowed so it can't trigger a panel action.
+    if (nav.replySelecting) {
+      if (matches(key, "esc")) nav.cancelReplySelect();
+      else if (matches(key, "down") || matches(key, "j")) nav.moveSelection(1);
+      else if (matches(key, "up") || matches(key, "k")) nav.moveSelection(-1);
+      else if (matches(key, "enter")) nav.confirmReplySelect();
       return;
     }
 
@@ -129,7 +144,10 @@ export function useAppKeybindings(props: {
         setModal({ kind: "groupdebug", groupId: activeGroupId });
       } else if (matches(key, "e") && nav.activeGroupIsAdmin && activeGroupId) {
         setModal({ kind: "groupinfo", groupId: activeGroupId });
-      } else if (matches(key, "r")) setModal({ kind: "relays" });
+      } else if (matches(key, "r")) {
+        // Enter reply-select mode to pick which message to reply to.
+        nav.startReplySelect();
+      } else if (matches(key, "R")) setModal({ kind: "relays" });
       else if (matches(key, "p")) setModal({ kind: "profile" });
       else if (matches(key, "K")) setModal({ kind: "keypkg" });
     } else if (nav.focus === "profile") {

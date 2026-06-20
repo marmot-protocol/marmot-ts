@@ -34,6 +34,7 @@ export function ProfilePanel() {
   const nip05 = profile?.dnsIdentity;
   const hints = panelHints({
     composing: nav.composing,
+    replySelecting: nav.replySelecting,
     showAllInvites: nav.showAllInvites,
     selectedGroupIsAdmin: nav.selectedGroupIsAdmin,
     activeGroupIsAdmin: nav.activeGroupIsAdmin,

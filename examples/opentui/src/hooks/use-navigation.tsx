@@ -9,7 +9,7 @@ import {
 
 import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
 
-import type { InviteEntry } from "../marmot/controller.js";
+import type { ChatMessage, InviteEntry } from "../marmot/controller.js";
 import { groupIsAdmin } from "../marmot/format.js";
 import { nextPane, prevPane, type Pane } from "../components/focus.js";
 import {
@@ -52,6 +52,25 @@ export type Navigation = {
   /** Move the cursor of whichever list panel currently has focus. */
   moveSelection: (delta: number) => void;
 
+  /**
+   * True while picking a message to reply to (entered with `r` in the chat
+   * panel). Only in this mode is the timeline cursor active and shown.
+   */
+  replySelecting: boolean;
+  /** Cursor into the active group's timeline (defaults to the newest). */
+  selectedMessageIndex: number;
+  /** The message the chat cursor points at, if any. */
+  selectedMessage?: ChatMessage;
+  /** Enter reply-select mode (no-op when there's nothing to reply to). */
+  startReplySelect: () => void;
+  /** Leave reply-select mode without choosing a target. */
+  cancelReplySelect: () => void;
+  /** Confirm the cursor's message as the reply target and start composing. */
+  confirmReplySelect: () => void;
+  /** The message a new send should reply to (NIP-C7 `q` tag), if any. */
+  replyTarget?: ChatMessage;
+  setReplyTarget: (message: ChatMessage | undefined) => void;
+
   composing: boolean;
   setComposing: (value: boolean) => void;
 
@@ -66,13 +85,21 @@ const NavigationContext = createContext<Navigation | null>(null);
 
 export function NavigationProvider(props: { children: ReactNode }) {
   const controller = useController();
-  const { me, activeGroupId } = useChat();
+  const { me, activeGroupId, messages } = useChat();
   const groups = useWatchedGroups();
   const invites = useWatchedInvites();
 
   const [focus, setFocus] = useState<Pane>("groups");
   const [showAllInvites, setShowAllInvites] = useState(false);
   const [composing, setComposing] = useState(false);
+  // Reply-select mode: only while picking a reply target is the timeline cursor
+  // active. `messageCursor === null` resolves to the newest message, so the
+  // picker starts at the bottom (matching the sticky scroll) and j/k walk up.
+  const [replySelecting, setReplySelecting] = useState(false);
+  const [messageCursor, setMessageCursor] = useState<number | null>(null);
+  const [replyTarget, setReplyTarget] = useState<ChatMessage | undefined>(
+    undefined,
+  );
 
   const joinableInvites = useMemo(
     () => invites.filter((entry) => entry.joinable),
@@ -93,6 +120,42 @@ export function NavigationProvider(props: { children: ReactNode }) {
   const activeGroupIsAdmin = activeGroup
     ? groupIsAdmin(activeGroup, me.pubkey)
     : false;
+
+  const activeMessages = activeGroupId ? (messages[activeGroupId] ?? []) : [];
+  // Resolve the cursor: an explicit pick (clamped) or the newest message.
+  const selectedMessageIndex =
+    activeMessages.length === 0
+      ? 0
+      : messageCursor === null
+        ? activeMessages.length - 1
+        : Math.max(0, Math.min(messageCursor, activeMessages.length - 1));
+  const selectedMessage = activeMessages[selectedMessageIndex];
+
+  const startReplySelect = () => {
+    if (!selectedMessage) return; // nothing in the timeline to reply to
+    setMessageCursor(null); // (re)start the picker at the newest message
+    setReplySelecting(true);
+  };
+  const cancelReplySelect = () => {
+    setReplySelecting(false);
+    setMessageCursor(null);
+  };
+  const confirmReplySelect = () => {
+    if (selectedMessage) {
+      setReplyTarget(selectedMessage);
+      setComposing(true);
+    }
+    setReplySelecting(false);
+    setMessageCursor(null);
+  };
+
+  // Switching groups exits reply-select, resets the cursor, and drops any
+  // pending reply target (it belonged to the previous group's timeline).
+  useEffect(() => {
+    setReplySelecting(false);
+    setMessageCursor(null);
+    setReplyTarget(undefined);
+  }, [activeGroupId]);
 
   // While the groups panel has focus, the active group follows the selection so
   // the chat panel previews each group as the user scrolls with j/k. Guarded on
@@ -130,7 +193,21 @@ export function NavigationProvider(props: { children: ReactNode }) {
     moveSelection: (delta) => {
       if (focus === "groups") groupSel.move(delta);
       else if (focus === "invites") inviteSel.move(delta);
+      else if (focus === "chat")
+        setMessageCursor((cursor) => {
+          if (activeMessages.length === 0) return null;
+          const from = cursor ?? activeMessages.length - 1;
+          return Math.max(0, Math.min(from + delta, activeMessages.length - 1));
+        });
     },
+    replySelecting,
+    selectedMessageIndex,
+    selectedMessage,
+    startReplySelect,
+    cancelReplySelect,
+    confirmReplySelect,
+    replyTarget,
+    setReplyTarget,
     composing,
     setComposing,
     selectedGroup,

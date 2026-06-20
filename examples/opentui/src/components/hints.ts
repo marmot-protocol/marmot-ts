@@ -16,6 +16,7 @@ export const GLOBAL_HINTS: KeyHint[] = [
  */
 export function panelHints(opts: {
   composing: boolean;
+  replySelecting: boolean;
   showAllInvites: boolean;
   selectedGroupIsAdmin: boolean;
   activeGroupIsAdmin: boolean;
@@ -42,19 +43,26 @@ export function panelHints(opts: {
           { key: "enter", label: "send" },
           { key: "esc", label: "stop composing" },
         ]
-      : [
-          { key: "n", label: "compose" },
-          { key: "u", label: "load older" },
-          { key: "i", label: "invite" },
-          { key: "m", label: "members" },
-          { key: "g", label: "group info" },
-          ...(opts.activeGroupIsAdmin
-            ? [{ key: "e", label: "edit info" }]
-            : []),
-          { key: "r", label: "relays" },
-          { key: "p", label: "profile" },
-          { key: "K", label: "key package" },
-        ],
+      : opts.replySelecting
+        ? [
+            { key: "j/k", label: "select message" },
+            { key: "enter", label: "reply" },
+            { key: "esc", label: "cancel" },
+          ]
+        : [
+            { key: "r", label: "reply" },
+            { key: "n", label: "compose" },
+            { key: "u", label: "load older" },
+            { key: "i", label: "invite" },
+            { key: "m", label: "members" },
+            { key: "g", label: "group info" },
+            ...(opts.activeGroupIsAdmin
+              ? [{ key: "e", label: "edit info" }]
+              : []),
+            { key: "R", label: "relays" },
+            { key: "p", label: "profile" },
+            { key: "K", label: "key package" },
+          ],
     profile: [
       { key: "i", label: "invite QR" },
       { key: "p", label: "edit profile" },

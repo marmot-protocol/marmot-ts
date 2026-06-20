@@ -16,12 +16,12 @@ updating reactively as protocol state changes.
 It is a testbed for the library's **React / async-generator integration**. The
 UI is driven by three of the library's own async surfaces:
 
-| Library surface                  | Type            | Consumed by                                       |
-| -------------------------------- | --------------- | ------------------------------------------------- |
-| `client.groups.watch()`          | async generator | `useWatchedGroups()` → the sidebar group list     |
+| Library surface                  | Type            | Consumed by                                                                    |
+| -------------------------------- | --------------- | ------------------------------------------------------------------------------ |
+| `client.groups.watch()`          | async generator | `useWatchedGroups()` → the sidebar group list                                  |
 | `client.invites.watchUnread()`   | async generator | `useWatchedInvites()` → the pending-invite list (filtered to held KeyPackages) |
-| `group.ingest(events)`           | async generator | the controller, to decrypt incoming relay events  |
-| `group.on("applicationMessage")` | event emitter   | the controller, to append to the message timeline |
+| `group.ingest(events)`           | async generator | the controller, to decrypt incoming relay events                               |
+| `group.on("applicationMessage")` | event emitter   | the controller, to append to the message timeline                              |
 
 The generic [`useAsyncIterable`](src/hooks/use-async-iterable.ts) hook is the
 bridge: it pumps each value an `async *` generator yields into React state and
@@ -80,14 +80,14 @@ into this directory and run `bun run src/index.tsx --name alice`.)
 
 ### Flags
 
-| Flag             | Default                                 | Meaning                                                             |
-| ---------------- | --------------------------------------- | ------------------------------------------------------------------- |
-| `--name <label>` | `default`                               | Profile name; data + identity live in `~/.marmot-opentui/<label>/`. |
-| `--sec <hex>`    | (generated)                             | Use a specific 32-byte hex Nostr secret key.                        |
-| `--ephemeral`    | off                                     | Keep all state in memory (nothing written to disk).                 |
-| `--debug`        | off                                     | Include full stack traces (and `cause` chains) in status errors.    |
-| `--logs <path>`  | off                                     | Enable `debug` logging and append status/debug lines to this file.  |
-| `--help`, `-h`   | off                                     | Print the options and exit without starting the OpenTUI UI.         |
+| Flag             | Default     | Meaning                                                             |
+| ---------------- | ----------- | ------------------------------------------------------------------- |
+| `--name <label>` | `default`   | Profile name; data + identity live in `~/.marmot-opentui/<label>/`. |
+| `--sec <hex>`    | (generated) | Use a specific 32-byte hex Nostr secret key.                        |
+| `--ephemeral`    | off         | Keep all state in memory (nothing written to disk).                 |
+| `--debug`        | off         | Include full stack traces (and `cause` chains) in status errors.    |
+| `--logs <path>`  | off         | Enable `debug` logging and append status/debug lines to this file.  |
+| `--help`, `-h`   | off         | Print the options and exit without starting the OpenTUI UI.         |
 
 Relays are no longer chosen with a flag. The app bootstraps discovery from a
 default set (`wss://relay.damus.io`, `wss://nos.lol`) and then operates on the
@@ -164,10 +164,14 @@ the footer shows the keys that apply right now.
   still hold are listed; ones you can't accept are filtered out.
 - **Chat** — **n** or **Enter** starts composing a message; the input stays
   focused after each **Enter** so you can send several in a row, and **Esc**
-  stops composing. **i** invites to the active group, **m** opens the members
-  list, **g** opens the group debug view, **e** edits the active group's info
-  when you are an admin, **r** opens relay settings, **p** opens profile
-  settings, and **K** opens the KeyPackage publish/rotate chooser.
+  stops composing. **r** enters reply-select mode: **j/k** move a cursor
+  through the timeline (starting at the newest message), **Enter** picks the
+  highlighted message and starts composing the reply, and **Esc** cancels. The
+  reply carries a NIP-C7 `q` tag quoting the target and a banner names it while
+  you type. **i** invites to the active group, **m** opens the
+  members list, **g** opens the group debug view, **e** edits the active
+  group's info when you are an admin, **R** opens relay settings, **p** opens
+  profile settings, and **K** opens the KeyPackage publish/rotate chooser.
 - **Profile** — **i** shows your invite QR, **p** edits your profile, **r** edits
   your relays, **K** opens the KeyPackage chooser, and **o** logs out and creates
   a fresh account (prompting for a name and optional relays).

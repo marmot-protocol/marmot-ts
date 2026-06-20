@@ -1,9 +1,22 @@
+import { useMemo } from "react";
+
 import type { ChatMessage } from "../marmot/controller.js";
-import { groupEpoch, groupMemberCount, groupName } from "../marmot/format.js";
+import {
+  groupEpoch,
+  groupMemberCount,
+  groupName,
+  npubShort,
+} from "../marmot/format.js";
 import { useChat } from "../hooks/use-marmot.js";
 import { useNavigation } from "../hooks/use-navigation.js";
 import { useDisplayName } from "../hooks/use-profile.js";
 import { InputBar } from "./InputBar.js";
+
+/** Collapse a multi-line message to a single short preview line. */
+function previewText(text: string, max = 50): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+}
 
 /**
  * The main timeline for the active group, with the message composer docked at
@@ -19,6 +32,14 @@ export function ChatView() {
   const group = nav.activeGroup;
   const list = group ? (messages[group.idStr] ?? []) : [];
   const pager = group ? pagination[group.idStr] : undefined;
+  // The timeline cursor only appears while picking a reply target (press `r`),
+  // so it isn't noise during normal reading and composing.
+  const cursorVisible = nav.replySelecting;
+  // Resolve reply quotes against messages currently in the timeline.
+  const byId = useMemo(
+    () => new Map(list.map((message) => [message.id, message])),
+    [list],
+  );
   const title = group
     ? ` ${groupName(group)} · epoch ${groupEpoch(group)} · ${groupMemberCount(group)} members `
     : " no active group ";
@@ -49,8 +70,15 @@ export function ChatView() {
                   ? "— start of history —"
                   : "↑ press u to load older messages"}
             </text>
-            {list.map((message) => (
-              <MessageRow key={message.id} message={message} />
+            {list.map((message, index) => (
+              <MessageRow
+                key={message.id}
+                message={message}
+                parent={
+                  message.replyToId ? byId.get(message.replyToId) : undefined
+                }
+                selected={cursorVisible && index === nav.selectedMessageIndex}
+              />
             ))}
           </>
         )}
@@ -60,20 +88,54 @@ export function ChatView() {
   );
 }
 
-function MessageRow(props: { message: ChatMessage }) {
-  const { message } = props;
+function MessageRow(props: {
+  message: ChatMessage;
+  parent?: ChatMessage;
+  selected: boolean;
+}) {
+  const { message, parent, selected } = props;
   const time = new Date(message.createdAt * 1000).toLocaleTimeString();
   // Resolve the author's kind 0 display name reactively, falling back to the
   // short-npub label the controller precomputed while it loads. Own messages
   // keep the "you" label.
   const resolved = useDisplayName(message.authorPubkey, message.authorLabel);
   const author = message.mine ? message.authorLabel : resolved;
+  // The pubkey to attribute the quote to: the loaded parent's, or the one the
+  // `q` tag carried when the parent isn't in the current window.
+  const quotePubkey = parent?.authorPubkey ?? message.replyToPubkey;
   return (
-    <text>
-      <span fg="#444">{time} </span>
-      <span fg={message.mine ? "#7CFC00" : "#5FAFFF"}>{author}</span>
-      <span fg="#555">: </span>
-      {message.content}
-    </text>
+    <box flexDirection="column">
+      {message.replyToId &&
+        (quotePubkey ? (
+          <QuotedLine
+            pubkey={quotePubkey}
+            fallbackLabel={parent?.authorLabel ?? npubShort(quotePubkey)}
+            preview={parent?.content}
+          />
+        ) : (
+          <text fg="#555">{"  ↳ replying to an earlier message"}</text>
+        ))}
+      <text>
+        <span fg={selected ? "#FFD700" : "#444"}>{selected ? "› " : "  "}</span>
+        <span fg="#444">{time} </span>
+        <span fg={message.mine ? "#7CFC00" : "#5FAFFF"}>{author}</span>
+        <span fg="#555">: </span>
+        {message.content}
+      </text>
+    </box>
   );
+}
+
+/** The dim "↳ replying to …" line rendered above a reply's own text. */
+function QuotedLine(props: {
+  pubkey: string;
+  fallbackLabel: string;
+  preview?: string;
+}) {
+  const name = useDisplayName(props.pubkey, props.fallbackLabel);
+  const body =
+    props.preview !== undefined
+      ? `${name}: ${previewText(props.preview)}`
+      : `replying to ${name}`;
+  return <text fg="#555">{`  ↳ ${body}`}</text>;
 }

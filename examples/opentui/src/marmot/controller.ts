@@ -201,6 +201,13 @@ export interface ChatMessage {
   createdAt: number;
   /** True when this client authored the message (local echo). */
   mine: boolean;
+  /**
+   * The rumor id of the message this one replies to, parsed from the NIP-C7
+   * `q` tag. Undefined for top-level messages.
+   */
+  replyToId?: string;
+  /** The pubkey of the replied-to author, from the `q` tag (index 3). */
+  replyToPubkey?: string;
 }
 
 /** Per-group state for loading older (off-window) messages on demand. */
@@ -848,10 +855,19 @@ export class MarmotController {
     });
   }
 
-  async sendText(text: string): Promise<void> {
+  /**
+   * Send a chat message to the active group. When `replyTo` is provided, the
+   * outgoing kind 9 rumor carries a NIP-C7 `q` tag quoting that message:
+   * `["q", <id>, <relay-url>, <pubkey>]`. The relay-url is empty because the
+   * rumor travels over MLS rather than a relay.
+   */
+  async sendText(text: string, replyTo?: ChatMessage): Promise<void> {
     const group = this.#requireActive();
     const pubkey = await group.signer.getPublicKey();
-    const rumor = createChatRumor({ pubkey, content: text });
+    const tags = replyTo
+      ? [["q", replyTo.id, "", replyTo.authorPubkey]]
+      : undefined;
+    const rumor = createChatRumor({ pubkey, content: text, tags });
     const intent = createApplicationMessageIntent(rumor);
     // `send` saves the rumor to group.history, which the per-group
     // history.subscribe() loop projects into the timeline — including this
@@ -1366,6 +1382,9 @@ export class MarmotController {
 
   #toChatMessage(group: MarmotGroup, rumor: Rumor): ChatMessage {
     const mine = rumor.pubkey === this.#pubkey;
+    // NIP-C7: a reply is a kind 9 that quotes its parent with a `q` tag,
+    // shaped ["q", <event-id>, <relay-url>, <pubkey>].
+    const q = rumor.tags.find((tag) => tag[0] === "q" && tag[1]);
     return {
       id: rumor.id,
       groupId: group.idStr,
@@ -1374,6 +1393,8 @@ export class MarmotController {
       content: rumor.content,
       createdAt: rumor.created_at,
       mine,
+      replyToId: q?.[1],
+      replyToPubkey: q?.[3] || undefined,
     };
   }
 

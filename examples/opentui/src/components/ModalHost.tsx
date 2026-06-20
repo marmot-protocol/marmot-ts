@@ -64,6 +64,7 @@ export function ModalHost(props: {
     case "help": {
       const hints = panelHints({
         composing: nav.composing,
+        replySelecting: nav.replySelecting,
         showAllInvites: nav.showAllInvites,
         selectedGroupIsAdmin: nav.selectedGroupIsAdmin,
         activeGroupIsAdmin: nav.activeGroupIsAdmin,

@@ -2,23 +2,8 @@ import { useKeyboard } from "@opentui/react";
 
 import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
 
-function shortHex(value: string, max = 96): string {
-  if (value.length <= max) return value || "empty";
-  return `${value.slice(0, max)}...`;
-}
-
-function componentId(id: number): string {
-  return `0x${id.toString(16).padStart(4, "0")}`;
-}
-
-function row(label: string, value: string | number | boolean) {
-  return (
-    <text>
-      <span fg="#666">{label}: </span>
-      <span fg="#d7dde8">{String(value)}</span>
-    </text>
-  );
-}
+import { hexId, shortHex } from "../marmot/format.js";
+import { ModalOverlay, Row } from "./primitives.js";
 
 function formatDecoded(value: unknown): string {
   if (value === undefined) return "not decoded";
@@ -52,102 +37,89 @@ export function GroupDebugModal(props: {
   });
 
   return (
-    <box
-      position="absolute"
-      top={0}
-      left={0}
-      width="100%"
-      height="100%"
-      zIndex={100}
-      shouldFill={false}
-      justifyContent="center"
-      alignItems="center"
+    <ModalOverlay
+      title="group debug info"
+      width={112}
+      height="86%"
+      footer="esc/q: close"
     >
-      <box
-        border
-        borderColor="#FFD700"
-        backgroundColor="#15151f"
-        padding={1}
-        width={112}
-        height="86%"
-        flexDirection="column"
-        title=" group debug info "
-      >
-        <scrollbox flexGrow={1} paddingX={1}>
-          <box flexDirection="column">
-            <text fg="#FFD700">MLS</text>
-            {row("group id", info.mls.groupIdHex)}
-            {row("epoch", info.mls.epochString)}
-            {row(
-              "cipher suite",
-              info.mls.cipherSuiteName ?? componentId(info.mls.cipherSuite),
-            )}
-            {row("lifecycle", props.group.lifecycle)}
-            {row("member count", info.mls.memberCount)}
-            {row("pending proposals", info.mls.proposalCount)}
-            {row("tree hash", shortHex(info.mls.treeHashHex))}
-            {row(
-              "transcript hash",
-              shortHex(info.mls.confirmedTranscriptHashHex),
-            )}
-            {row(
-              "confirmation tag",
-              shortHex(info.mls.confirmationTagHex ?? ""),
-            )}
-            {row(
-              "historical epochs",
-              info.mls.historicalEpochs.join(", ") || "none",
-            )}
+      <scrollbox flexGrow={1} paddingX={1}>
+        <box flexDirection="column">
+          <text fg="#FFD700">MLS</text>
+          <Row label="group id" value={info.mls.groupIdHex} />
+          <Row label="epoch" value={info.mls.epochString} />
+          <Row
+            label="cipher suite"
+            value={info.mls.cipherSuiteName ?? hexId(info.mls.cipherSuite)}
+          />
+          <Row label="lifecycle" value={props.group.lifecycle} />
+          <Row label="member count" value={info.mls.memberCount} />
+          <Row label="pending proposals" value={info.mls.proposalCount} />
+          <Row label="tree hash" value={shortHex(info.mls.treeHashHex)} />
+          <Row
+            label="transcript hash"
+            value={shortHex(info.mls.confirmedTranscriptHashHex)}
+          />
+          <Row
+            label="confirmation tag"
+            value={shortHex(info.mls.confirmationTagHex ?? "")}
+          />
+          <Row
+            label="historical epochs"
+            value={info.mls.historicalEpochs.join(", ") || "none"}
+          />
 
-            <text fg="#666"> </text>
-            <text fg="#FFD700">Nostr Transport</text>
-            {row("routing present", info.nostr.hasRouting)}
-            {row("nostr group id", info.nostr.groupIdHex ?? "none")}
-            {row("relay count", info.nostr.relayCount)}
-            {info.nostr.relays.length ? (
-              info.nostr.relays.map((relay) => (
-                <text key={`relay:${relay}`}>
-                  <span fg="#666">relay: </span>
-                  <span fg="#d7dde8">{relay}</span>
-                </text>
-              ))
-            ) : (
-              <text fg="#666">no relays</text>
-            )}
+          <text fg="#666"> </text>
+          <text fg="#FFD700">Nostr Transport</text>
+          <Row label="routing present" value={info.nostr.hasRouting} />
+          <Row label="nostr group id" value={info.nostr.groupIdHex ?? "none"} />
+          <Row label="relay count" value={info.nostr.relayCount} />
+          {info.nostr.relays.length ? (
+            info.nostr.relays.map((relay) => (
+              <text key={`relay:${relay}`}>
+                <span fg="#666">relay: </span>
+                <span fg="#d7dde8">{relay}</span>
+              </text>
+            ))
+          ) : (
+            <text fg="#666">no relays</text>
+          )}
 
-            <text fg="#666"> </text>
-            <text fg="#FFD700">App Components</text>
-            {row("component count", info.app.componentCount)}
-            {row(
-              "required ids",
-              info.app.requiredComponentIds.map(componentId).join(", ") ||
-                "none",
-            )}
-            {info.app.decodeError &&
-              row("dictionary decode error", info.app.decodeError)}
-            {info.app.components.map((component) => (
-              <box
-                key={`${component.idHex}:${component.name}`}
-                flexDirection="column"
-                marginTop={1}
-              >
-                <text fg="#9aa9b8">
-                  {component.idHex} {component.name}
-                </text>
-                {row("bytes", component.dataLength)}
-                {row("raw", shortHex(component.dataHex))}
-                {component.decodeError
-                  ? row("decode error", component.decodeError)
-                  : row(
-                      "decoded",
-                      shortHex(formatDecoded(component.decoded), 180),
-                    )}
-              </box>
-            ))}
-          </box>
-        </scrollbox>
-        <text fg="#666">esc/q: close</text>
-      </box>
-    </box>
+          <text fg="#666"> </text>
+          <text fg="#FFD700">App Components</text>
+          <Row label="component count" value={info.app.componentCount} />
+          <Row
+            label="required ids"
+            value={
+              info.app.requiredComponentIds.map(hexId).join(", ") || "none"
+            }
+          />
+          {info.app.decodeError && (
+            <Row label="dictionary decode error" value={info.app.decodeError} />
+          )}
+          {info.app.components.map((component) => (
+            <box
+              key={`${component.idHex}:${component.name}`}
+              flexDirection="column"
+              marginTop={1}
+            >
+              <text fg="#9aa9b8">
+                {component.idHex} {component.name}
+              </text>
+              <Row label="bytes" value={component.dataLength} />
+              <Row label="raw" value={shortHex(component.dataHex)} />
+              {component.decodeError ? (
+                <Row label="decode error" value={component.decodeError} />
+              ) : (
+                <Row
+                  label="decoded"
+                  value={shortHex(formatDecoded(component.decoded), 180)}
+                />
+              )}
+            </box>
+          ))}
+        </box>
+      </scrollbox>
+    </ModalOverlay>
   );
 }

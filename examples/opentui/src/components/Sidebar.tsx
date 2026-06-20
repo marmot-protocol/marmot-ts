@@ -1,6 +1,6 @@
-import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
-
-import type { InviteEntry } from "../marmot/controller.js";
+import { useChat } from "../hooks/use-marmot.js";
+import { useNavigation } from "../hooks/use-navigation.js";
+import { useDisplayName } from "../hooks/use-profile.js";
 import {
   groupEpoch,
   groupMemberCount,
@@ -8,44 +8,43 @@ import {
   npubShort,
   relativeTime,
 } from "../marmot/format.js";
-import { useDisplayName } from "../hooks/use-profile.js";
 import { ListPanel } from "./ListPanel.js";
-import type { Pane } from "./focus.js";
 
 /** Resolves an inviter's display name reactively, falling back to a short npub. */
 function InviteName(props: { pubkey: string }) {
   return <>{useDisplayName(props.pubkey, npubShort(props.pubkey))}</>;
 }
 
-export function Sidebar(props: {
-  groups: MarmotGroup[];
-  invites: InviteEntry[];
-  invitesTitle: string;
-  activeId: string | null;
-  focus: Pane;
-  groupIndex: number;
-  inviteIndex: number;
-  onFocusPane: (pane: Pane) => void;
-}) {
+/** The left column: the groups list above the invites list. */
+export function Sidebar() {
+  const { activeGroupId } = useChat();
+  const nav = useNavigation();
+
+  const invitesTitle = nav.showAllInvites
+    ? `invites (${nav.invites.length}) · all`
+    : nav.hiddenInviteCount > 0
+      ? `invites (${nav.joinableInvites.length}) · +${nav.hiddenInviteCount} hidden`
+      : `invites (${nav.joinableInvites.length})`;
+
   return (
     <box flexDirection="column" width={32}>
       <ListPanel
-        title={`groups (${props.groups.length})`}
-        focused={props.focus === "groups"}
-        items={props.groups.map((group) => ({
+        title={`groups (${nav.groups.length})`}
+        focused={nav.focus === "groups"}
+        items={nav.groups.map((group) => ({
           id: group.idStr,
           label: groupName(group),
-          detail: `${group.idStr === props.activeId ? "active · " : ""}e${groupEpoch(group)} · ${groupMemberCount(group)}m`,
+          detail: `${group.idStr === activeGroupId ? "active · " : ""}e${groupEpoch(group)} · ${groupMemberCount(group)}m`,
         }))}
-        selectedIndex={props.groupIndex}
+        selectedIndex={nav.groupIndex}
         empty="no groups yet"
         flexGrow={1}
-        onFocus={() => props.onFocusPane("groups")}
+        onFocus={() => nav.setFocus("groups")}
       />
       <ListPanel
-        title={props.invitesTitle}
-        focused={props.focus === "invites"}
-        items={props.invites.map(({ invite, joinable }) => ({
+        title={invitesTitle}
+        focused={nav.focus === "invites"}
+        items={nav.visibleInvites.map(({ invite, joinable }) => ({
           id: invite.id,
           label: <InviteName pubkey={invite.pubkey} />,
           detail: joinable
@@ -53,10 +52,10 @@ export function Sidebar(props: {
             : `${relativeTime(invite.created_at)} · no key pkg`,
           level: joinable ? undefined : "warn",
         }))}
-        selectedIndex={props.inviteIndex}
+        selectedIndex={nav.inviteIndex}
         empty="none yet"
         height={8}
-        onFocus={() => props.onFocusPane("invites")}
+        onFocus={() => nav.setFocus("invites")}
       />
     </box>
   );

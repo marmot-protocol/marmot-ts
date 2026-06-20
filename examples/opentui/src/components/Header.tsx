@@ -1,13 +1,11 @@
 import { useChat } from "../hooks/use-marmot.js";
+import { useNavigation } from "../hooks/use-navigation.js";
 import { useDisplayName } from "../hooks/use-profile.js";
 
 /** The top status bar: identity (profile name when set), live counts, busy. */
-export function Header(props: {
-  groupCount: number;
-  inviteCount: number;
-  onShowQr: () => void;
-}) {
+export function Header(props: { onShowQr: () => void }) {
   const { me, relays, busy } = useChat();
+  const { groups, joinableInvites } = useNavigation();
   const name = useDisplayName(me.pubkey);
   return (
     <box backgroundColor="#1b1b2b" flexDirection="column">
@@ -16,7 +14,7 @@ export function Header(props: {
           ⬡ marmot · react tui {busy ? "· …working" : ""}
         </text>
         <text fg="#9aa9b8">
-          {props.groupCount} groups · {props.inviteCount} invites ·{" "}
+          {groups.length} groups · {joinableInvites.length} invites ·{" "}
           {relays.length} relays
         </text>
       </box>

@@ -1,11 +1,11 @@
-import { useState } from "react";
-
 import { useKeyboard } from "@opentui/react";
 
 import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
 
+import { useListSelection } from "../hooks/use-list-selection.js";
 import { useProfile } from "../hooks/use-profile.js";
 import { groupIsAdmin, groupName, npubShort } from "../marmot/format.js";
+import { ModalOverlay } from "./primitives.js";
 
 /**
  * A single group member. The display name resolves reactively through the shared
@@ -61,8 +61,7 @@ export function MembersModal(props: {
   const members = props.group.info.members.pubkeys;
   const admins = props.group.groupData?.adminPubkeys ?? [];
   const iAmAdmin = groupIsAdmin(props.group, props.mePubkey);
-  const [cursor, setCursor] = useState(0);
-  const index = members.length ? Math.min(cursor, members.length - 1) : 0;
+  const { index, move } = useListSelection(members.length);
   const selected = members[index];
   const selectedIsAdmin = selected ? admins.includes(selected) : false;
   const selectedIsSelf = selected === props.mePubkey;
@@ -73,11 +72,11 @@ export function MembersModal(props: {
       return;
     }
     if (key.name === "down" || key.name === "j") {
-      setCursor((c) => Math.min(c + 1, Math.max(0, members.length - 1)));
+      move(1);
       return;
     }
     if (key.name === "up" || key.name === "k") {
-      setCursor((c) => Math.max(0, c - 1));
+      move(-1);
       return;
     }
     if (!iAmAdmin || !selected) return;
@@ -97,59 +96,41 @@ export function MembersModal(props: {
   const adminHint = selectedIsAdmin ? "demote" : "make";
 
   return (
-    <box
-      position="absolute"
-      top={0}
-      left={0}
-      width="100%"
-      height="100%"
-      zIndex={100}
-      shouldFill={false}
-      justifyContent="center"
-      alignItems="center"
+    <ModalOverlay
+      title="group members"
+      width={84}
+      height="70%"
+      footer={
+        iAmAdmin
+          ? `j/k: move · a: ${adminHint} admin${selectedIsSelf ? "" : " · x: remove"} · esc: close`
+          : "j/k: move · esc: close · only admins can manage members"
+      }
     >
-      <box
-        border
-        borderColor="#FFD700"
-        backgroundColor="#15151f"
-        padding={1}
-        width={84}
-        height="70%"
-        flexDirection="column"
-        title=" group members "
-      >
-        <text fg="#FFD700">
-          {groupName(props.group)}
-          <span fg="#666">
-            {" · "}
-            {members.length} member(s) · {admins.length} admin(s)
-          </span>
-        </text>
+      <text fg="#FFD700">
+        {groupName(props.group)}
+        <span fg="#666">
+          {" · "}
+          {members.length} member(s) · {admins.length} admin(s)
+        </span>
+      </text>
 
-        <scrollbox flexGrow={1} marginTop={1} paddingX={1}>
-          <box flexDirection="column">
-            {members.length ? (
-              members.map((pubkey, i) => (
-                <MemberRow
-                  key={pubkey}
-                  pubkey={pubkey}
-                  isAdmin={admins.includes(pubkey)}
-                  isSelf={pubkey === props.mePubkey}
-                  active={i === index}
-                />
-              ))
-            ) : (
-              <text fg="#666">no members decoded</text>
-            )}
-          </box>
-        </scrollbox>
-
-        <text fg="#666">
-          {iAmAdmin
-            ? `j/k: move · a: ${adminHint} admin${selectedIsSelf ? "" : " · x: remove"} · esc: close`
-            : "j/k: move · esc: close · only admins can manage members"}
-        </text>
-      </box>
-    </box>
+      <scrollbox flexGrow={1} marginTop={1} paddingX={1}>
+        <box flexDirection="column">
+          {members.length ? (
+            members.map((pubkey, i) => (
+              <MemberRow
+                key={pubkey}
+                pubkey={pubkey}
+                isAdmin={admins.includes(pubkey)}
+                isSelf={pubkey === props.mePubkey}
+                active={i === index}
+              />
+            ))
+          ) : (
+            <text fg="#666">no members decoded</text>
+          )}
+        </box>
+      </scrollbox>
+    </ModalOverlay>
   );
 }

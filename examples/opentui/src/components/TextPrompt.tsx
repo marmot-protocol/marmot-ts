@@ -1,9 +1,11 @@
 import { useKeyboard } from "@opentui/react";
 
+import { ModalOverlay } from "./primitives.js";
+
 /**
  * A centered modal that collects a single line of text (group name, npub).
- * Enter submits, Esc cancels. Rendered as an absolutely-positioned overlay so
- * the chat stays visible behind it.
+ * Enter submits, Esc cancels. Rendered as an overlay so the chat stays visible
+ * behind it.
  */
 export function TextPrompt(props: {
   title: string;
@@ -16,33 +18,16 @@ export function TextPrompt(props: {
   });
 
   return (
-    <box
-      position="absolute"
-      top={0}
-      left={0}
-      width="100%"
-      height="100%"
-      zIndex={100}
-      shouldFill={false}
-      justifyContent="center"
-      alignItems="center"
+    <ModalOverlay
+      title={props.title}
+      width={60}
+      footer="enter: confirm · esc: cancel"
     >
-      <box
-        border
-        borderColor="#FFD700"
-        backgroundColor="#15151f"
-        padding={1}
-        width={60}
-        flexDirection="column"
-        title={` ${props.title} `}
-      >
-        <input
-          focused
-          placeholder={props.placeholder}
-          onSubmit={((value: string) => props.onSubmit(value)) as any}
-        />
-        <text fg="#666">enter: confirm · esc: cancel</text>
-      </box>
-    </box>
+      <input
+        focused
+        placeholder={props.placeholder}
+        onSubmit={((value: string) => props.onSubmit(value)) as any}
+      />
+    </ModalOverlay>
   );
 }

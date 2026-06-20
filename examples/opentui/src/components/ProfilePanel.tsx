@@ -1,7 +1,9 @@
-import type { KeyHint } from "./KeybindingFooter.js";
 import { useChat } from "../hooks/use-marmot.js";
+import { useNavigation } from "../hooks/use-navigation.js";
 import { useProfile } from "../hooks/use-profile.js";
 import { short } from "../marmot/format.js";
+import { panelHints } from "./hints.js";
+import { Row } from "./primitives.js";
 
 function ageLabel(timestamp: number | null): string {
   if (!timestamp) return "unknown";
@@ -15,20 +17,7 @@ function ageLabel(timestamp: number | null): string {
   return "just now";
 }
 
-function row(label: string, value: string | number) {
-  return (
-    <text>
-      <span fg="#666">{label}: </span>
-      <span fg="#d7dde8">{value}</span>
-    </text>
-  );
-}
-
-export function ProfilePanel(props: {
-  focused: boolean;
-  hints: KeyHint[];
-  onFocus: () => void;
-}) {
+export function ProfilePanel() {
   const {
     me,
     relays,
@@ -38,20 +27,27 @@ export function ProfilePanel(props: {
     keyPackages,
     clientId,
   } = useChat();
+  const nav = useNavigation();
   const profile = useProfile(me.pubkey);
   const displayName = profile?.displayName || profile?.name || "not set";
   const about = profile?.about ?? "";
   const nip05 = profile?.dnsIdentity;
+  const hints = panelHints({
+    composing: nav.composing,
+    showAllInvites: nav.showAllInvites,
+    selectedGroupIsAdmin: nav.selectedGroupIsAdmin,
+    activeGroupIsAdmin: nav.activeGroupIsAdmin,
+  }).profile;
 
   return (
     <box
       width={36}
       flexDirection="column"
       border
-      borderColor={props.focused ? "#FFD700" : "#444"}
+      borderColor={nav.focus === "profile" ? "#FFD700" : "#444"}
       title=" profile "
       paddingX={1}
-      onMouseDown={props.onFocus}
+      onMouseDown={() => nav.setFocus("profile")}
     >
       <text fg="#FFD700">{displayName}</text>
       <text fg="#7fd1ff" selectable>
@@ -62,24 +58,24 @@ export function ProfilePanel(props: {
 
       <box height={1} />
       <text fg="#888">relays</text>
-      {row("session", relays.length)}
-      {row("connected", connectedRelayCount)}
-      {row("outbox", outboxRelays.length)}
-      {row("inbox", inboxRelays.length)}
+      <Row label="session" value={relays.length} />
+      <Row label="connected" value={connectedRelayCount} />
+      <Row label="outbox" value={outboxRelays.length} />
+      <Row label="inbox" value={inboxRelays.length} />
 
       <box height={1} />
       <text fg="#888">key package</text>
-      {row("slot", keyPackages.slot ?? clientId)}
-      {row("stored", keyPackages.total)}
-      {row("unused", keyPackages.unused)}
-      {row("published", ageLabel(keyPackages.newestPublishedAt))}
-      {keyPackages.newestPublishedId
-        ? row("latest id", short(keyPackages.newestPublishedId))
-        : null}
+      <Row label="slot" value={keyPackages.slot ?? clientId} />
+      <Row label="stored" value={keyPackages.total} />
+      <Row label="unused" value={keyPackages.unused} />
+      <Row label="published" value={ageLabel(keyPackages.newestPublishedAt)} />
+      {keyPackages.newestPublishedId ? (
+        <Row label="latest id" value={short(keyPackages.newestPublishedId)} />
+      ) : null}
 
       <box height={1} />
       <text fg="#888">manage yourself</text>
-      {props.hints.map((hint) => (
+      {hints.map((hint) => (
         <text key={`${hint.key}:${hint.label}`} fg="#9aa9b8">
           <span fg="#7fd1ff">{hint.key}</span> {hint.label}
         </text>

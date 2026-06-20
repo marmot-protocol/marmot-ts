@@ -15,6 +15,22 @@ export function short(value: string): string {
   return value.slice(0, 8);
 }
 
+/** Truncate a long hex string for display, keeping `empty` readable. */
+export function shortHex(value: string, max = 96): string {
+  if (value.length <= max) return value || "empty";
+  return `${value.slice(0, max)}...`;
+}
+
+/** Format a numeric MLS/component id as a `0x….` 4-digit hex label. */
+export function hexId(id: number): string {
+  return `0x${id.toString(16).padStart(4, "0")}`;
+}
+
+/** Split a free-form field into relay URLs (whitespace/comma separated). */
+export function parseRelays(text: string): string[] {
+  return text.split(/[\s,]+/).filter(Boolean);
+}
+
 /** Compact "Ns/m/h/d ago" label for a unix-seconds timestamp. */
 export function relativeTime(seconds: number): string {
   const delta = Math.max(0, Math.floor(Date.now() / 1000) - seconds);

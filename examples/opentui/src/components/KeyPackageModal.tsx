@@ -5,34 +5,34 @@ import type {
   KeyPackageDetails,
   KeyPackageSummary,
 } from "../marmot/controller.js";
+import { shortHex } from "../marmot/format.js";
+import { ModalOverlay, Row } from "./primitives.js";
 
 function valueList(values: string[]): string {
   return values.length ? values.join(", ") : "none";
-}
-
-function shortHex(value: string, max = 96): string {
-  if (value.length <= max) return value || "empty";
-  return `${value.slice(0, max)}...`;
-}
-
-function row(label: string, value: string | number | boolean) {
-  return (
-    <text>
-      <span fg="#666">{label}: </span>
-      <span fg="#d7dde8">{String(value)}</span>
-    </text>
-  );
 }
 
 function capabilityRows(details: KeyPackageDetails) {
   return (
     <box flexDirection="column" marginTop={1}>
       <text fg="#888">MLS capabilities</text>
-      {row("versions", valueList(details.capabilities.versions))}
-      {row("ciphersuites", valueList(details.capabilities.ciphersuites))}
-      {row("extensions", valueList(details.capabilities.extensions))}
-      {row("proposals", valueList(details.capabilities.proposals))}
-      {row("credentials", valueList(details.capabilities.credentials))}
+      <Row label="versions" value={valueList(details.capabilities.versions)} />
+      <Row
+        label="ciphersuites"
+        value={valueList(details.capabilities.ciphersuites)}
+      />
+      <Row
+        label="extensions"
+        value={valueList(details.capabilities.extensions)}
+      />
+      <Row
+        label="proposals"
+        value={valueList(details.capabilities.proposals)}
+      />
+      <Row
+        label="credentials"
+        value={valueList(details.capabilities.credentials)}
+      />
     </box>
   );
 }
@@ -75,88 +75,70 @@ export function KeyPackageModal(props: {
   });
 
   return (
-    <box
-      position="absolute"
-      top={0}
-      left={0}
-      width="100%"
-      height="100%"
-      zIndex={100}
-      shouldFill={false}
-      justifyContent="center"
-      alignItems="center"
+    <ModalOverlay
+      title="key package"
+      width={84}
+      footer="up/down: choose | enter: select | esc: cancel"
     >
-      <box
-        border
-        borderColor="#FFD700"
-        backgroundColor="#15151f"
-        padding={1}
-        width={84}
-        flexDirection="column"
-        title=" key package "
-      >
-        <text fg="#FFD700">current app KeyPackage</text>
-        {row("stored", props.summary.total)}
-        {row("unused", props.summary.unused)}
+      <text fg="#FFD700">current app KeyPackage</text>
+      <Row label="stored" value={props.summary.total} />
+      <Row label="unused" value={props.summary.unused} />
 
-        {details ? (
-          <box flexDirection="column">
-            {row("slot", details.slot ?? "none")}
-            {row("used", details.used)}
-            {row("published events", details.publishedCount)}
-            {row("ref", details.refHex)}
-            {row("cipher suite", details.cipherSuite)}
-            {row("init key", shortHex(details.initKeyHex))}
-            {row("signature", shortHex(details.signatureHex))}
+      {details ? (
+        <box flexDirection="column">
+          <Row label="slot" value={details.slot ?? "none"} />
+          <Row label="used" value={details.used} />
+          <Row label="published events" value={details.publishedCount} />
+          <Row label="ref" value={details.refHex} />
+          <Row label="cipher suite" value={details.cipherSuite} />
+          <Row label="init key" value={shortHex(details.initKeyHex)} />
+          <Row label="signature" value={shortHex(details.signatureHex)} />
 
-            {capabilityRows(details)}
-            {extensionRows(
-              "KeyPackage extensions",
-              details.keyPackageExtensions,
+          {capabilityRows(details)}
+          {extensionRows("KeyPackage extensions", details.keyPackageExtensions)}
+          {extensionRows("LeafNode extensions", details.leafNodeExtensions)}
+
+          <box flexDirection="column" marginTop={1}>
+            <text fg="#888">required_capabilities extension</text>
+            {details.requiredCapabilities ? (
+              <box flexDirection="column">
+                <Row
+                  label="extension types"
+                  value={valueList(details.requiredCapabilities.extensionTypes)}
+                />
+                <Row
+                  label="proposal types"
+                  value={valueList(details.requiredCapabilities.proposalTypes)}
+                />
+                <Row
+                  label="credential types"
+                  value={valueList(
+                    details.requiredCapabilities.credentialTypes,
+                  )}
+                />
+              </box>
+            ) : (
+              <text fg="#666">not present on this KeyPackage</text>
             )}
-            {extensionRows("LeafNode extensions", details.leafNodeExtensions)}
-
-            <box flexDirection="column" marginTop={1}>
-              <text fg="#888">required_capabilities extension</text>
-              {details.requiredCapabilities ? (
-                <box flexDirection="column">
-                  {row(
-                    "extension types",
-                    valueList(details.requiredCapabilities.extensionTypes),
-                  )}
-                  {row(
-                    "proposal types",
-                    valueList(details.requiredCapabilities.proposalTypes),
-                  )}
-                  {row(
-                    "credential types",
-                    valueList(details.requiredCapabilities.credentialTypes),
-                  )}
-                </box>
-              ) : (
-                <text fg="#666">not present on this KeyPackage</text>
-              )}
-            </box>
           </box>
-        ) : (
-          <text fg="#666">no local KeyPackage found yet</text>
-        )}
-
-        <box marginTop={1} flexDirection="column">
-          <text fg="#888">actions</text>
-          <select
-            focused
-            height={options.length}
-            showDescription={false}
-            options={options}
-            onSelect={(index: number) => {
-              if (index === 0) props.onPublish();
-              else props.onRotate();
-            }}
-          />
         </box>
-        <text fg="#666">up/down: choose | enter: select | esc: cancel</text>
+      ) : (
+        <text fg="#666">no local KeyPackage found yet</text>
+      )}
+
+      <box marginTop={1} flexDirection="column">
+        <text fg="#888">actions</text>
+        <select
+          focused
+          height={options.length}
+          showDescription={false}
+          options={options}
+          onSelect={(index: number) => {
+            if (index === 0) props.onPublish();
+            else props.onRotate();
+          }}
+        />
       </box>
-    </box>
+    </ModalOverlay>
   );
 }

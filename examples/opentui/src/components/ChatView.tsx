@@ -1,8 +1,7 @@
-import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
-
 import type { ChatMessage } from "../marmot/controller.js";
 import { groupEpoch, groupMemberCount, groupName } from "../marmot/format.js";
 import { useChat } from "../hooks/use-marmot.js";
+import { useNavigation } from "../hooks/use-navigation.js";
 import { useDisplayName } from "../hooks/use-profile.js";
 import { InputBar } from "./InputBar.js";
 
@@ -13,14 +12,11 @@ import { InputBar } from "./InputBar.js";
  * async generator and the `applicationMessage` event), and the scrollbox sticks
  * to the bottom so new messages stay in view.
  */
-export function ChatView(props: {
-  activeGroup?: MarmotGroup;
-  focused: boolean;
-  composing: boolean;
-  onFocusInput: () => void;
-}) {
+export function ChatView() {
   const { messages, pagination } = useChat();
-  const group = props.activeGroup;
+  const nav = useNavigation();
+  const focusInput = () => nav.setFocus("chat");
+  const group = nav.activeGroup;
   const list = group ? (messages[group.idStr] ?? []) : [];
   const pager = group ? pagination[group.idStr] : undefined;
   const title = group
@@ -32,9 +28,9 @@ export function ChatView(props: {
       flexGrow={1}
       flexDirection="column"
       border
-      borderColor={props.focused ? "#FFD700" : "#444"}
+      borderColor={nav.focus === "chat" ? "#FFD700" : "#444"}
       title={title}
-      onMouseDown={() => props.onFocusInput()}
+      onMouseDown={focusInput}
     >
       <scrollbox flexGrow={1} paddingX={1} stickyScroll stickyStart="bottom">
         {!group ? (
@@ -59,7 +55,7 @@ export function ChatView(props: {
           </>
         )}
       </scrollbox>
-      <InputBar focused={props.composing} onFocus={props.onFocusInput} />
+      <InputBar focused={nav.composing} onFocus={focusInput} />
     </box>
   );
 }

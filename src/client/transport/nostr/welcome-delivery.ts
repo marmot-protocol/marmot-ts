@@ -1,6 +1,6 @@
 /** @module @category Client - Nostr */
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-import type { EventSigner } from "applesauce-core/event-factory";
+import type { EventSigner } from "applesauce-core/factories";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Welcome } from "ts-mls";
 

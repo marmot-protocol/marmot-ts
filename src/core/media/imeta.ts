@@ -1,7 +1,7 @@
 /** @module @category Core - Encrypted Media */
 import {
-  getFileMetadata,
   getFileMetadataFromImetaTag,
+  parseFileMetadataTags,
 } from "applesauce-common/helpers";
 import type { NostrEvent } from "applesauce-core/helpers";
 import { isValidHex, isValidMimeType } from "./canonical.js";
@@ -102,7 +102,7 @@ export function getMediaAttachments(tags: string[][]): MediaAttachment[] {
  *
  * Kind 1063 events use flat tags (`url`, `m`, `x`, `filename`, `n`, `v`, …)
  * rather than the space-separated `imeta` format. Standard NIP-94 fields are
- * parsed by applesauce's {@link getFileMetadata}; the MIP-04-specific fields
+ * parsed by applesauce's {@link parseFileMetadataTags}; the MIP-04-specific fields
  * (`filename`, `n`, `v`) are read directly from the flat tag list.
  *
  * Returns `null` if:
@@ -131,8 +131,10 @@ export function getMediaAttachmentFromFileEvent(
   if (!nonce || !isValidHex(nonce, 12)) return null;
   if (!filename || filename.length === 0) return null;
 
-  // Delegate standard NIP-94 tag parsing to applesauce.
-  const base = getFileMetadata(event);
+  // Delegate standard NIP-94 tag parsing to applesauce. Parse the flat tags
+  // directly rather than via `getFileMetadata`, which requires a `url` tag that
+  // a MIP-04 attachment event may legitimately omit.
+  const base = parseFileMetadataTags(event.tags);
 
   if (!base.sha256 || !isValidHex(base.sha256, 32)) return null;
   // m must be a valid MIME type

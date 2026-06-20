@@ -103,8 +103,6 @@ export class RelayPool implements NostrNetworkInterface {
     if (this.#closed) return;
     this.#closed = true;
     this.#directory.close();
-    for (const relay of [...this.#pool.relays.values()]) {
-      this.#pool.remove(relay, true);
-    }
+    this.#pool.close();
   }
 }

@@ -1,5 +1,5 @@
 /** @module @category Client - Group */
-import type { EventSigner } from "applesauce-core/event-factory";
+import type { EventSigner } from "applesauce-core/factories";
 import { bytesToHex, type NostrEvent } from "applesauce-core/helpers/event";
 import { Debugger } from "debug";
 import { EventEmitter } from "eventemitter3";

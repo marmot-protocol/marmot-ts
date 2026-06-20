@@ -1,4 +1,4 @@
-import type { EventSigner } from "applesauce-core/event-factory";
+import type { EventSigner } from "applesauce-core/factories";
 import { describe, expect, it } from "vitest";
 
 import { GroupsManager } from "../client/groups-manager.js";

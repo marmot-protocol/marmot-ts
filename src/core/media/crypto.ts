@@ -10,7 +10,7 @@ import {
   randomBytes,
 } from "@noble/hashes/utils.js";
 import { mlsExporter, type CiphersuiteImpl, type ClientState } from "ts-mls";
-import type { FileMetadata } from "applesauce-common/helpers";
+import type { FileMetadataFields } from "applesauce-common/helpers";
 import { canonicalizeMimeType } from "./canonical.js";
 import {
   MIP04_VERSION,
@@ -145,7 +145,7 @@ export function encryptMediaFile(
   file: Uint8Array,
   fileKey: Uint8Array,
   attachment: Pick<MediaAttachment, "sha256" | "type" | "filename"> &
-    Partial<FileMetadata>,
+    Partial<FileMetadataFields>,
 ): EncryptMediaFileResult {
   if (!attachment.sha256) throw new Error("attachment.sha256 is required");
   if (!attachment.type) throw new Error("attachment.type is required");

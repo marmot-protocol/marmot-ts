@@ -1,11 +1,11 @@
 /** @module @category Core - Encrypted Media */
-import type { FileMetadata } from "applesauce-common/helpers";
+import type { FileMetadataFields } from "applesauce-common/helpers";
 
 /** The version string written to the `v` field of MIP-04 imeta tags. */
 export const MIP04_VERSION = "mip04-v2" as const;
 
 /**
- * MIP-04 media attachment — a {@link FileMetadata} extended with the extra
+ * MIP-04 media attachment — a {@link FileMetadataFields} extended with the extra
  * fields required by the MIP-04 v2 encryption scheme.
  *
  * Use `createImetaTagForAttachment` from applesauce to serialize this into
@@ -13,8 +13,8 @@ export const MIP04_VERSION = "mip04-v2" as const;
  * parse it back. The `n` and `v` fields are passed through via the imeta
  * name-value pair format defined in NIP-92.
  */
-export type MediaAttachment = Omit<FileMetadata, "sha256" | "type"> &
-  Required<Pick<FileMetadata, "sha256" | "type">> & {
+export type MediaAttachment = Omit<FileMetadataFields, "sha256" | "type"> &
+  Required<Pick<FileMetadataFields, "sha256" | "type">> & {
     /**
      * Original filename (e.g. `"photo.jpg"`).
      * Used in key derivation and AEAD associated data — must match exactly.

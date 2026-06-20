@@ -1,8 +1,8 @@
 /** @module @category Utilities */
-import { GiftWrapBlueprint } from "applesauce-common/blueprints/gift-wrap";
+import { GiftWrapFactory } from "applesauce-common/factories/gift-wrap";
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { GiftWrapOptions } from "applesauce-common/operations/gift-wrap";
-import { createEvent, EventSigner } from "applesauce-core/event-factory";
+import { EventSigner } from "applesauce-core/factories";
 import { NostrEvent } from "applesauce-core/helpers/event";
 import { PublishResponse } from "../client/nostr-interface.js";
 
@@ -42,14 +42,8 @@ export async function createGiftWrap(
 ): Promise<NostrEvent> {
   const { rumor, recipient, signer, opts } = options;
 
-  // Use the GiftWrapBlueprint to create the gift wrap
-  return await createEvent(
-    { signer },
-    GiftWrapBlueprint,
-    recipient,
-    rumor,
-    opts,
-  );
+  // Use the GiftWrapFactory to create the gift wrap
+  return await GiftWrapFactory.create(signer, recipient, rumor, opts);
 }
 
 /** Returns the current Unix timestamp in seconds */

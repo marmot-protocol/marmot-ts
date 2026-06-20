@@ -1,7 +1,7 @@
 /** @module @category Client - Invite Manager */
 import { unlockGiftWrap } from "applesauce-common/helpers/gift-wrap";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-import type { EventSigner } from "applesauce-core/event-factory";
+import type { EventSigner } from "applesauce-core/factories";
 import {
   kinds,
   KnownEvent,

@@ -141,8 +141,8 @@ describe("MarmotGroupEngine history tree (full-fork retention)", () => {
     // its state rehydrates from the tree.
     const tipTag = bytesToHex(engine.state.confirmationTag);
     expect(children).toContain(tipTag);
-    expect(bytesToHex(engine.history.stateAt(tipTag)!.confirmationTag)).toBe(
-      tipTag,
-    );
+    expect(
+      bytesToHex((await engine.history.stateAt(tipTag))!.confirmationTag),
+    ).toBe(tipTag);
   });
 });

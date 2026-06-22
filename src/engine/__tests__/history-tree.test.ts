@@ -14,6 +14,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
+import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import { GroupHistoryTree } from "../history-tree.js";
 
 const ADMIN = "a".repeat(64);
@@ -157,19 +158,19 @@ describe("GroupHistoryTree", () => {
     const rootTag = bytesToHex(memberE1.confirmationTag);
     const tagA = tree.recordCommit(rootTag, commitA, childA);
 
-    const s1 = tree.stateAt(tagA)!;
-    const s2 = tree.stateAt(tagA)!;
+    const s1 = (await tree.stateAt(tagA))!;
+    const s2 = (await tree.stateAt(tagA))!;
     expect(s1).not.toBe(s2);
     expect(bytesToHex(s1.confirmationTag)).toBe(tagA);
     expect(bytesToHex(s2.confirmationTag)).toBe(tagA);
     expect(Number(s1.groupContext.epoch)).toBe(2);
 
     // The retained commit message round-trips.
-    expect(tree.commitMessageOf(tagA)).toBeDefined();
-    expect(tree.commitBytesOf(tagA)).toBeDefined();
+    expect(await tree.commitMessageOf(tagA)).toBeDefined();
+    expect(await tree.commitBytesOf(tagA)).toBeDefined();
   });
 
-  it("round-trips through serialize/deserialize preserving structure", async () => {
+  it("flushes incrementally and reloads structure + lazy snapshots from a store", async () => {
     const { memberE1, commitA, commitB, childA, childB } =
       await buildFork(impl);
     const tree = new GroupHistoryTree(memberE1);
@@ -177,7 +178,16 @@ describe("GroupHistoryTree", () => {
     const tagA = tree.recordCommit(rootTag, commitA, childA);
     const tagB = tree.recordCommit(rootTag, commitB, childB);
 
-    const restored = GroupHistoryTree.deserialize(tree.serialize());
+    const store = new InMemoryKeyValueStore<Uint8Array>();
+    tree.bindStore(store);
+    expect(tree.isDirty).toBe(true);
+    await tree.flush();
+    expect(tree.isDirty).toBe(false);
+
+    const restored = (await GroupHistoryTree.load(
+      store,
+      bytesToHex(memberE1.groupContext.groupId),
+    ))!;
 
     expect(restored.rootTag).toBe(rootTag);
     expect(restored.size).toBe(3);
@@ -186,11 +196,14 @@ describe("GroupHistoryTree", () => {
     );
     expect(new Set(restored.tips())).toEqual(new Set([tagA, tagB]));
     expect(restored.epochOf(tagB)).toBe(2);
-    expect(bytesToHex(restored.stateAt(tagA)!.confirmationTag)).toBe(tagA);
     expect(restored.node(tagA)?.edge?.commitDigest).toEqual(
       tree.node(tagA)?.edge?.commitDigest,
     );
-    expect(restored.commitMessageOf(tagB)).toBeDefined();
+    // Heavy material is lazy-loaded from the store on demand.
+    expect(bytesToHex((await restored.stateAt(tagA))!.confirmationTag)).toBe(
+      tagA,
+    );
+    expect(await restored.commitMessageOf(tagB)).toBeDefined();
   });
 
   it("throws when recording a commit from an unknown parent", async () => {

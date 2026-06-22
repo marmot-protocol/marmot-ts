@@ -11,6 +11,7 @@ import {
 } from "../../core/client-state.js";
 import type { Disposition } from "../../core/inbound.js";
 import { MarmotGroupEngine } from "../../engine/group-engine.js";
+import { GroupHistoryTree } from "../../engine/history-tree.js";
 import type { RetainedHistoryStore } from "../../engine/retained-store.js";
 import { ingestResultDisposition as engineIngestResultDisposition } from "../../engine/ingest-disposition.js";
 import type {
@@ -122,6 +123,12 @@ export type GroupSessionOptions<
   rewindStore?: GenericKeyValueStore<Uint8Array>;
   /** A retained-history store rehydrated from {@link rewindStore} on load. */
   retained?: RetainedHistoryStore;
+  /**
+   * A full-fork history tree rehydrated from {@link rewindStore} on load. When
+   * omitted and a `rewindStore` is set, a fresh tree is bound to that store and
+   * flushed on {@link GroupSession.save}.
+   */
+  historyTree?: GroupHistoryTree;
   history?: THistory;
   onStateChanged?: (state: ClientState) => void;
   onStateSaved?: () => void;
@@ -188,6 +195,7 @@ export class GroupSession<
       ciphersuite: this.ciphersuite,
       peeler: this.#peeler,
       retained: options.retained,
+      historyTree: options.historyTree,
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,
       scheduler: options.scheduler,
@@ -198,6 +206,12 @@ export class GroupSession<
         this.#onStateChanged?.(newState);
       },
     });
+
+    // Persist the full-fork history tree to the rewind store. A rehydrated tree
+    // (loaded form) is already bound; a fresh one is bound here so its nodes
+    // flush on the next save.
+    if (this.rewindStore && !options.historyTree)
+      this.#engine.history.bindStore(this.rewindStore);
   }
 
   get id(): Uint8Array {
@@ -230,6 +244,11 @@ export class GroupSession<
     return this.groupData?.relays;
   }
 
+  /** The full-fork history tree (every observed state, canonical + forks). */
+  get historyTree(): GroupHistoryTree {
+    return this.#engine.history;
+  }
+
   get unappliedProposals() {
     return this.state.unappliedProposals;
   }
@@ -239,7 +258,11 @@ export class GroupSession<
   }
 
   async save(force = false): Promise<void> {
-    if (!force && !this.#dirty) return;
+    // The history tree can grow without the canonical state changing — a fork
+    // whose incoming branch is superseded still records the losing branch — so
+    // a dirty tree must trigger a save even when `#dirty` (state-changed) is not.
+    const treeDirty = !!this.rewindStore && this.#engine.history.isDirty;
+    if (!force && !this.#dirty && !treeDirty) return;
 
     const idHex = bytesToHex(this.id);
     const stateBytes = serializeClientState(this.state);
@@ -248,6 +271,8 @@ export class GroupSession<
     // after the tip; a torn write is tolerated by the load-time epoch guard.
     if (this.rewindStore) {
       await this.rewindStore.setItem(idHex, this.#engine.serializeRetained());
+      // Append-only flush of any new fork-tree nodes (O(new nodes)).
+      await this.#engine.history.flush();
     }
     this.#dirty = false;
     this.#onStateSaved?.();
@@ -258,6 +283,7 @@ export class GroupSession<
     const idHex = bytesToHex(this.id);
     await this.store.removeItem(idHex);
     await this.rewindStore?.removeItem(idHex);
+    if (this.rewindStore) await GroupHistoryTree.purge(this.rewindStore, idHex);
   }
 
   /** Releases engine resources (the settle-check timer); call on teardown (B5). */

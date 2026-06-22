@@ -15,9 +15,21 @@ import {
   serializeClientState,
 } from "../core/client-state.js";
 import { commitDigest } from "../core/convergence.js";
+import type { GenericKeyValueStore } from "../utils/key-value.js";
 
-/** Wire-format version byte for {@link GroupHistoryTree.serialize}. */
+/** Wire-format version byte for a persisted node-edge / meta record. */
 const HISTORY_TREE_VERSION = 1;
+
+/** Default number of heavy snapshots kept rehydrated in memory at once. */
+const DEFAULT_SNAPSHOT_CACHE = 128;
+
+/** The store backing a tree's heavy material. A `GenericKeyValueStore<Uint8Array>`. */
+type HistoryTreeStore = GenericKeyValueStore<Uint8Array>;
+
+const metaKey = (gid: string) => `${gid}/meta`;
+const edgeKey = (gid: string, tag: string) => `${gid}/edge/${tag}`;
+const stateKey = (gid: string, tag: string) => `${gid}/state/${tag}`;
+const commitKey = (gid: string, tag: string) => `${gid}/commit/${tag}`;
 
 /**
  * Protocol-level metadata for one edge — the commit that produced a node from
@@ -84,33 +96,51 @@ interface MutableNode {
   edge?: HistoryEdge;
 }
 
+/** In-memory heavy material for a node (snapshot, and commit for non-root). */
+interface HeavyEntry {
+  snapshot: Uint8Array;
+  commit?: Uint8Array;
+}
+
 /**
  * The retained group history tree (Marmot v2 full-fork history). Holds every
  * group state ever observed — the canonical branch and every fork — as a tree
- * of serialized {@link ClientState} snapshots linked by commit edges.
+ * of {@link ClientState} snapshots linked by commit edges. No pruning is
+ * performed: the tree retains everything.
+ *
+ * The **light index** (per-node epoch/parent/edge metadata) is always resident.
+ * **Heavy material** (serialized snapshots + commit bytes) is kept in a bounded
+ * in-memory LRU and otherwise fetched from a backing key-value store on demand,
+ * so memory stays bounded even as the tree grows without limit. Newly recorded
+ * nodes are pinned in memory until {@link flush} persists them.
  *
  * Snapshots are stored as bytes, never as live `ClientState` objects: ts-mls
  * zeroes a parent state's consumed secrets in place when a commit is processed
  * from it, so a retained live object could be corrupted out from under a
- * sibling-branch replay. Re-deriving a state ({@link stateAt}) deserializes a
- * fresh, independent object every call.
- *
- * This is the structural core only — convergence (choosing which tip is
- * canonical) and the inbound wiring that grows the tree live in the engine
- * layers that consume it. No pruning is performed: the tree retains everything.
+ * sibling-branch replay. Re-deriving a state ({@link stateAt}) decodes a fresh,
+ * independent object every call.
  */
 export class GroupHistoryTree {
   /** The resident light index — node metadata, always in memory. */
   readonly #nodes = new Map<string, MutableNode>();
-  /** Serialized `ClientState` snapshot per node tag (the heavy material). */
-  readonly #snapshots = new Map<string, Uint8Array>();
-  /** Serialized commit `MlsMessage` per child tag (the edge that made it). */
-  readonly #commitBytes = new Map<string, Uint8Array>();
+  /** Bounded LRU of heavy material; dirty (unflushed) entries are never evicted. */
+  readonly #heavy = new Map<string, HeavyEntry>();
+  /** Tags whose light + heavy material has not yet been flushed to the store. */
+  readonly #dirty = new Set<string>();
+  /** Max heavy entries kept resident (excluding pinned dirty entries). */
+  readonly #cacheMax: number;
   /** The root node tag, or `undefined` while the tree is empty. */
   #rootTag: string | undefined;
+  /** Hex group id, derived from the root state; the persistence key prefix. */
+  #gid: string | undefined;
+  /** Whether the root pointer (meta) needs flushing. */
+  #rootDirty = false;
+  /** Backing store for heavy material, once bound. */
+  #store: HistoryTreeStore | undefined;
 
   /** Seeds an empty tree, optionally with a root {@link ClientState}. */
-  constructor(root?: ClientState) {
+  constructor(root?: ClientState, options?: { snapshotCacheSize?: number }) {
+    this.#cacheMax = options?.snapshotCacheSize ?? DEFAULT_SNAPSHOT_CACHE;
     if (root) this.setRoot(root);
   }
 
@@ -122,6 +152,11 @@ export class GroupHistoryTree {
   /** Number of nodes (states) retained in the tree. */
   get size(): number {
     return this.#nodes.size;
+  }
+
+  /** Whether unflushed changes are pending. */
+  get isDirty(): boolean {
+    return this.#dirty.size > 0 || this.#rootDirty;
   }
 
   /**
@@ -139,9 +174,12 @@ export class GroupHistoryTree {
         epoch: Number(state.groupContext.epoch),
         childTags: [],
       });
-      this.#snapshots.set(tag, serializeClientState(state));
+      this.#putHeavy(tag, { snapshot: serializeClientState(state) });
+      this.#dirty.add(tag);
     }
     this.#rootTag = tag;
+    this.#gid = bytesToHex(state.groupContext.groupId);
+    this.#rootDirty = true;
     return tag;
   }
 
@@ -250,29 +288,54 @@ export class GroupHistoryTree {
     return undefined;
   }
 
-  /** The serialized `ClientState` snapshot for a node, or `undefined`. */
-  snapshotOf(tag: string): Uint8Array | undefined {
-    return this.#snapshots.get(tag);
+  /**
+   * The serialized `ClientState` snapshot bytes for a node, or `undefined` if
+   * absent. Served from the in-memory cache, else fetched from the store.
+   */
+  async snapshotOf(tag: string): Promise<Uint8Array | undefined> {
+    if (!this.#nodes.has(tag)) return undefined;
+    const cached = this.#heavy.get(tag);
+    if (cached) {
+      this.#touch(tag);
+      return cached.snapshot;
+    }
+    if (!this.#store || !this.#gid) return undefined;
+    const bytes = await this.#store.getItem(stateKey(this.#gid, tag));
+    if (!bytes) return undefined;
+    this.#putHeavy(tag, { snapshot: bytes });
+    return bytes;
   }
 
   /**
-   * Rehydrates a node's state into a fresh, independent {@link ClientState}.
-   * Returns `undefined` if the node has no retained snapshot. Each call decodes
-   * a new object, so callers may mutate/advance it without affecting the tree.
+   * Rehydrates a node's state into a fresh, independent {@link ClientState}, or
+   * `undefined` if no snapshot is retained. Each call decodes a new object, so
+   * callers may mutate/advance it without affecting the tree.
    */
-  stateAt(tag: string): ClientState | undefined {
-    const bytes = this.#snapshots.get(tag);
+  async stateAt(tag: string): Promise<ClientState | undefined> {
+    const bytes = await this.snapshotOf(tag);
     return bytes ? deserializeClientState(bytes) : undefined;
   }
 
   /** The serialized commit bytes that produced a node, or `undefined`. */
-  commitBytesOf(childTag: string): Uint8Array | undefined {
-    return this.#commitBytes.get(childTag);
+  async commitBytesOf(childTag: string): Promise<Uint8Array | undefined> {
+    const node = this.#nodes.get(childTag);
+    if (!node || !node.parentTag) return undefined;
+    const cached = this.#heavy.get(childTag);
+    if (cached?.commit) {
+      this.#touch(childTag);
+      return cached.commit;
+    }
+    if (!this.#store || !this.#gid) return undefined;
+    // Fetched on demand (rare — for replay/debug); not cached, to avoid
+    // displacing a hot snapshot or polluting the LRU with commit-only entries.
+    return (
+      (await this.#store.getItem(commitKey(this.#gid, childTag))) ?? undefined
+    );
   }
 
   /** Decodes the commit `MlsMessage` that produced a node, or `undefined`. */
-  commitMessageOf(childTag: string): MlsMessage | undefined {
-    const bytes = this.#commitBytes.get(childTag);
+  async commitMessageOf(childTag: string): Promise<MlsMessage | undefined> {
+    const bytes = await this.commitBytesOf(childTag);
     if (!bytes) return undefined;
     const message = decode(mlsMessageDecoder, bytes);
     if (!message)
@@ -310,8 +373,11 @@ export class GroupHistoryTree {
         childTags: [],
         edge: { commitDigest: commitDigest(bytes), senderLeafIndex },
       });
-      this.#snapshots.set(childTag, serializeClientState(childState));
-      this.#commitBytes.set(childTag, bytes);
+      this.#putHeavy(childTag, {
+        snapshot: serializeClientState(childState),
+        commit: bytes,
+      });
+      this.#dirty.add(childTag);
     }
     if (!parent.childTags.includes(childTag)) parent.childTags.push(childTag);
     return childTag;
@@ -339,8 +405,11 @@ export class GroupHistoryTree {
           senderLeafIndex: edge.senderLeafIndex,
         },
       });
-      this.#snapshots.set(edge.childTag, edge.childSnapshot);
-      this.#commitBytes.set(edge.childTag, edge.commitBytes);
+      this.#putHeavy(edge.childTag, {
+        snapshot: edge.childSnapshot,
+        commit: edge.commitBytes,
+      });
+      this.#dirty.add(edge.childTag);
     }
     if (!parent.childTags.includes(edge.childTag))
       parent.childTags.push(edge.childTag);
@@ -354,7 +423,8 @@ export class GroupHistoryTree {
    * does not change it). Throws if the node is absent or the tag would change.
    */
   updateSnapshot(tag: string, state: ClientState): void {
-    if (!this.#nodes.has(tag))
+    const node = this.#nodes.get(tag);
+    if (!node)
       throw new Error(
         `GroupHistoryTree: cannot update absent node ${tag.slice(0, 8)}`,
       );
@@ -363,93 +433,189 @@ export class GroupHistoryTree {
       throw new Error(
         "GroupHistoryTree: updateSnapshot would change the node identity",
       );
-    this.#snapshots.set(tag, serializeClientState(state));
+    const existing = this.#heavy.get(tag);
+    this.#putHeavy(tag, {
+      snapshot: serializeClientState(state),
+      commit: existing?.commit,
+    });
+    this.#dirty.add(tag);
   }
 
   /**
-   * Serializes the entire tree (every node snapshot + commit bytes + structure)
-   * to the Marmot binary profile. Child links are not stored; they are rebuilt
-   * from parent references on {@link deserialize}.
+   * Binds a backing store to a fresh, in-memory tree so its nodes can be flushed
+   * and its heavy material later evicted/reloaded. Marks every current node
+   * dirty so the first {@link flush} persists the whole tree. A no-op if the
+   * same store is already bound (e.g. on a tree loaded via {@link load}).
    */
-  serialize(): Uint8Array {
-    const records: Uint8Array[] = [];
-    for (const node of this.#nodes.values()) {
-      const w = new BinaryWriter();
-      w.opaque(hexToBytes(node.tag));
-      w.varint(node.epoch);
-      w.opaque(node.parentTag ? hexToBytes(node.parentTag) : new Uint8Array());
-      w.opaque(this.#snapshots.get(node.tag) ?? new Uint8Array());
-      // Edge fields are present iff the node has a parent (non-root).
-      if (node.parentTag) {
-        w.opaque(node.edge?.commitDigest ?? new Uint8Array());
-        w.opaque(this.#commitBytes.get(node.tag) ?? new Uint8Array());
-        if (node.edge?.senderLeafIndex !== undefined) {
-          w.uint8(1).varint(node.edge.senderLeafIndex);
-        } else {
-          w.uint8(0);
-        }
-      }
-      records.push(w.build());
-    }
-
-    return new BinaryWriter()
-      .uint8(HISTORY_TREE_VERSION)
-      .opaque(this.#rootTag ? hexToBytes(this.#rootTag) : new Uint8Array())
-      .vector(records)
-      .build();
+  bindStore(store: HistoryTreeStore): void {
+    if (this.#store === store) return;
+    this.#store = store;
+    this.#rootDirty = true;
+    for (const tag of this.#nodes.keys()) this.#dirty.add(tag);
   }
 
-  /** Decodes bytes from {@link serialize} into a tree. Throws on bad input. */
-  static deserialize(bytes: Uint8Array): GroupHistoryTree {
-    const reader = new BinaryReader(bytes);
-    const version = reader.uint8();
-    if (version !== HISTORY_TREE_VERSION)
-      throw new Error(`GroupHistoryTree: unknown version ${version}`);
+  /**
+   * Persists all unflushed nodes incrementally: each dirty node's light edge
+   * record, snapshot, and commit bytes are written under its own keys, plus the
+   * meta (root) record. Append-only — already-persisted nodes are untouched, so
+   * a save costs O(new nodes), not O(tree). Requires a bound store.
+   */
+  async flush(): Promise<void> {
+    if (!this.#store || !this.#gid)
+      throw new Error("GroupHistoryTree: flush requires a bound store");
+    const gid = this.#gid;
 
-    const tree = new GroupHistoryTree();
-    const rootBytes = reader.opaque();
-    const rootTag = rootBytes.length ? bytesToHex(rootBytes) : undefined;
+    for (const tag of this.#dirty) {
+      const node = this.#nodes.get(tag);
+      const heavy = this.#heavy.get(tag);
+      if (!node || !heavy) continue;
+      await this.#store.setItem(edgeKey(gid, tag), encodeEdgeRecord(node));
+      await this.#store.setItem(stateKey(gid, tag), heavy.snapshot);
+      if (node.parentTag && heavy.commit)
+        await this.#store.setItem(commitKey(gid, tag), heavy.commit);
+    }
+    if (this.#rootDirty && this.#rootTag) {
+      await this.#store.setItem(metaKey(gid), encodeMeta(this.#rootTag));
+      this.#rootDirty = false;
+    }
+    this.#dirty.clear();
+    // Flushed entries are now clean and may be evicted under cache pressure.
+    this.#evict();
+  }
 
-    const records = reader.vector((r) => {
-      const tag = bytesToHex(r.opaque());
-      const epoch = r.varint();
-      const parentBytes = r.opaque();
-      const parentTag = parentBytes.length
-        ? bytesToHex(parentBytes)
-        : undefined;
-      const snapshot = r.opaque();
-      let edge: HistoryEdge | undefined;
-      let commit: Uint8Array | undefined;
-      if (parentTag) {
-        const commitDigestBytes = r.opaque();
-        commit = r.opaque();
-        const senderPresent = r.uint8();
-        const senderLeafIndex = senderPresent ? r.varint() : undefined;
-        edge = { commitDigest: commitDigestBytes, senderLeafIndex };
-      }
-      return { tag, epoch, parentTag, snapshot, edge, commit };
-    });
-    reader.end();
+  /**
+   * Loads a tree's light index from a store (heavy material stays lazy). Returns
+   * `undefined` if no tree is persisted under `gid`. The store stays bound, so
+   * snapshots/commit bytes are fetched on demand.
+   */
+  static async load(
+    store: HistoryTreeStore,
+    gid: string,
+    options?: { snapshotCacheSize?: number },
+  ): Promise<GroupHistoryTree | undefined> {
+    const metaBytes = await store.getItem(metaKey(gid));
+    if (!metaBytes) return undefined;
+    const rootTag = decodeMeta(metaBytes);
 
-    for (const rec of records) {
-      tree.#nodes.set(rec.tag, {
-        tag: rec.tag,
+    const tree = new GroupHistoryTree(undefined, options);
+    tree.#store = store;
+    tree.#gid = gid;
+
+    const prefix = `${gid}/edge/`;
+    const keys = await store.keys();
+    for (const key of keys) {
+      if (!key.startsWith(prefix)) continue;
+      const tag = key.slice(prefix.length);
+      const bytes = await store.getItem(key);
+      if (!bytes) continue;
+      const rec = decodeEdgeRecord(bytes);
+      tree.#nodes.set(tag, {
+        tag,
         epoch: rec.epoch,
         parentTag: rec.parentTag,
         childTags: [],
         edge: rec.edge,
       });
-      tree.#snapshots.set(rec.tag, rec.snapshot);
-      if (rec.commit) tree.#commitBytes.set(rec.tag, rec.commit);
     }
-    // Rebuild child links from parent references.
     for (const node of tree.#nodes.values()) {
-      if (node.parentTag) {
-        const parent = tree.#nodes.get(node.parentTag);
-        if (parent) parent.childTags.push(node.tag);
-      }
+      if (node.parentTag)
+        tree.#nodes.get(node.parentTag)?.childTags.push(node.tag);
     }
     tree.#rootTag = rootTag;
+    // Loaded nodes are already persisted — nothing dirty.
     return tree;
   }
+
+  /** Removes every persisted key for a group's tree from the store. */
+  static async purge(store: HistoryTreeStore, gid: string): Promise<void> {
+    const prefix = `${gid}/`;
+    const keys = await store.keys();
+    for (const key of keys) {
+      if (key === metaKey(gid) || key.startsWith(prefix))
+        await store.removeItem(key);
+    }
+  }
+
+  /** Inserts/refreshes a heavy entry at the LRU tail, then evicts if needed. */
+  #putHeavy(tag: string, entry: HeavyEntry): void {
+    this.#heavy.delete(tag);
+    this.#heavy.set(tag, entry);
+    this.#evict();
+  }
+
+  /** Moves a heavy entry to the LRU tail (most-recently-used). */
+  #touch(tag: string): void {
+    const entry = this.#heavy.get(tag);
+    if (!entry) return;
+    this.#heavy.delete(tag);
+    this.#heavy.set(tag, entry);
+  }
+
+  /** Evicts clean (flushed) heavy entries oldest-first until within the cap. */
+  #evict(): void {
+    if (this.#heavy.size <= this.#cacheMax) return;
+    for (const tag of this.#heavy.keys()) {
+      if (this.#heavy.size <= this.#cacheMax) break;
+      if (this.#dirty.has(tag)) continue; // never evict unflushed material
+      this.#heavy.delete(tag);
+    }
+  }
+}
+
+/** Encodes a node's light edge record (everything but the heavy material). */
+function encodeEdgeRecord(node: MutableNode): Uint8Array {
+  const w = new BinaryWriter().uint8(HISTORY_TREE_VERSION).varint(node.epoch);
+  w.opaque(node.parentTag ? hexToBytes(node.parentTag) : new Uint8Array());
+  if (node.parentTag) {
+    w.opaque(node.edge?.commitDigest ?? new Uint8Array());
+    if (node.edge?.senderLeafIndex !== undefined) {
+      w.uint8(1).varint(node.edge.senderLeafIndex);
+    } else {
+      w.uint8(0);
+    }
+  }
+  return w.build();
+}
+
+/** Decodes a light edge record into its node fields. */
+function decodeEdgeRecord(bytes: Uint8Array): {
+  epoch: number;
+  parentTag?: string;
+  edge?: HistoryEdge;
+} {
+  const r = new BinaryReader(bytes);
+  const version = r.uint8();
+  if (version !== HISTORY_TREE_VERSION)
+    throw new Error(`GroupHistoryTree: unknown edge record version ${version}`);
+  const epoch = r.varint();
+  const parentBytes = r.opaque();
+  const parentTag = parentBytes.length ? bytesToHex(parentBytes) : undefined;
+  let edge: HistoryEdge | undefined;
+  if (parentTag) {
+    const commitDigestBytes = r.opaque();
+    const senderPresent = r.uint8();
+    const senderLeafIndex = senderPresent ? r.varint() : undefined;
+    edge = { commitDigest: commitDigestBytes, senderLeafIndex };
+  }
+  r.end();
+  return { epoch, parentTag, edge };
+}
+
+/** Encodes the meta record (the root tag pointer). */
+function encodeMeta(rootTag: string): Uint8Array {
+  return new BinaryWriter()
+    .uint8(HISTORY_TREE_VERSION)
+    .opaque(hexToBytes(rootTag))
+    .build();
+}
+
+/** Decodes the meta record into the root tag. */
+function decodeMeta(bytes: Uint8Array): string | undefined {
+  const r = new BinaryReader(bytes);
+  const version = r.uint8();
+  if (version !== HISTORY_TREE_VERSION)
+    throw new Error(`GroupHistoryTree: unknown meta version ${version}`);
+  const rootBytes = r.opaque();
+  r.end();
+  return rootBytes.length ? bytesToHex(rootBytes) : undefined;
 }

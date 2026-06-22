@@ -8,6 +8,7 @@ import {
   deserializeClientState,
   SerializedClientState,
 } from "../core/client-state.js";
+import { GroupHistoryTree } from "../engine/history-tree.js";
 import { RetainedHistoryStore } from "../engine/retained-store.js";
 import { logger } from "../utils/debug.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
@@ -113,11 +114,13 @@ export class GroupRegistry<
   async build(
     state: ClientState,
     retained?: RetainedHistoryStore,
+    historyTree?: GroupHistoryTree,
   ): Promise<MarmotGroup<THistory, TMedia>> {
     return MarmotGroup.fromClientState<THistory, TMedia>(state, {
       store: this.store,
       rewindStore: this.rewindStore,
       retained,
+      historyTree,
       signer: this.signer,
       cryptoProvider: this.cryptoProvider,
       network: this.network,
@@ -139,8 +142,34 @@ export class GroupRegistry<
 
     const state = deserializeClientState(stateBytes);
     const retained = await this.#loadRetained(idHex, state);
+    const historyTree = await this.#loadHistory(idHex, state);
 
-    return this.build(state, retained);
+    return this.build(state, retained, historyTree);
+  }
+
+  /**
+   * Rehydrates the full-fork history tree for a group, or `undefined` to start
+   * fresh. Discards a tree that does not contain the loaded tip state as a node
+   * (a torn write), so a fresh tree is seeded from the tip instead.
+   */
+  async #loadHistory(
+    idHex: string,
+    state: ClientState,
+  ): Promise<GroupHistoryTree | undefined> {
+    if (!this.rewindStore) return undefined;
+    try {
+      const tree = await GroupHistoryTree.load(this.rewindStore, idHex);
+      if (!tree) return undefined;
+      const tipTag = bytesToHex(state.confirmationTag);
+      if (!tree.hasNode(tipTag)) {
+        log("discarding stale history tree for %s (missing tip node)", idHex);
+        return undefined;
+      }
+      return tree;
+    } catch (error) {
+      log("failed to rehydrate history tree for %s: %o", idHex, error);
+      return undefined;
+    }
   }
 
   /**

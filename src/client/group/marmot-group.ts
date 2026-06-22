@@ -15,6 +15,7 @@ import type { ProposalAction, ProposalContext } from "../../engine/types.js";
 import type { MediaAttachment } from "../../core/media.js";
 import { mayReleaseOutbound } from "../../core/convergence-status.js";
 import type { ConvergenceScheduler } from "../../engine/group-engine.js";
+import type { GroupHistoryTree } from "../../engine/history-tree.js";
 import type { RetainedHistoryStore } from "../../engine/retained-store.js";
 import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
@@ -165,6 +166,11 @@ export type MarmotGroupOptions<
    * the loader ({@link GroupRegistry}); not part of the public construction API.
    */
   retained?: RetainedHistoryStore;
+  /**
+   * A full-fork history tree rehydrated from {@link rewindStore} on load. Set by
+   * the loader ({@link GroupRegistry}); not part of the public construction API.
+   */
+  historyTree?: GroupHistoryTree;
 };
 
 /** Map of events that can be emitted by a MarmotGroup */
@@ -337,6 +343,7 @@ export class MarmotGroup<
       store: this.store,
       rewindStore: options.rewindStore,
       retained: options.retained,
+      historyTree: options.historyTree,
       history: this.history,
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,

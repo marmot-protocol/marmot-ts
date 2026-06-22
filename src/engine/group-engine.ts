@@ -191,11 +191,6 @@ export class MarmotGroupEngine<TEnvelope> {
     return this.#tree;
   }
 
-  /** Serializes the full-fork history tree for persistence. */
-  serializeHistory(): Uint8Array {
-    return this.#tree.serialize();
-  }
-
   /**
    * Records an applied commit into both retained history and the history tree.
    * The freshly-produced `newState` is captured pristine; a tree hiccup (e.g. a

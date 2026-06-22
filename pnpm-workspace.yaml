@@ -9,5 +9,8 @@ allowBuilds:
 ignoredBuiltDependencies:
   - msw
 
+minimumReleaseAgeExclude:
+  - "@hono/node-server@2.0.6"
+
 onlyBuiltDependencies:
   - esbuild

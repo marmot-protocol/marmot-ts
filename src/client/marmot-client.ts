@@ -13,6 +13,7 @@ import {
   getMarmotGroupView,
   SerializedClientState,
 } from "../core/client-state.js";
+import type { ConvergencePolicy } from "../core/convergence.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
 import {
   getWelcome,
@@ -104,6 +105,14 @@ export type MarmotClientOptions<
    * only and is rebuilt from the current tip after each restart.
    */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
+  /**
+   * Convergence policy applied to every group: branch selection and the
+   * `maxRewindCommits` rollback horizon. Set `maxRewindCommits: Infinity` to
+   * preserve the whole MLS history and keep forks of any age eligible for
+   * re-convergence. Defaults to the profile-1 policy
+   * ({@link DEFAULT_CONVERGENCE_POLICY}).
+   */
+  convergencePolicy?: ConvergencePolicy;
   /** The backend for key package private material and publish tracking */
   keyPackageStore: GenericKeyValueStore<StoredKeyPackage>;
   /** Key value store for the {@link InviteManager} class, if non is provided an {@link InMemoryKeyValueStore} is used */
@@ -175,6 +184,7 @@ export class MarmotClient<
     this.groups = new GroupsManager<THistory, TMedia>({
       store: options.groupStateStore,
       rewindStore: options.rewindStore,
+      convergencePolicy: options.convergencePolicy,
       signer: this.signer,
       accountProofSigner: options.accountProofSigner,
       network: this.network,

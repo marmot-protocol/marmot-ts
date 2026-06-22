@@ -7,6 +7,7 @@ import {
   defaultCryptoProvider,
 } from "ts-mls";
 import type { SerializedClientState } from "../core/client-state.js";
+import type { ConvergencePolicy } from "../core/convergence.js";
 import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import { createCredential } from "../core/credential.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
@@ -35,6 +36,8 @@ export type GroupFactoryOptions<
   accountProofSigner?: AccountIdentityProofSigner;
   historyFactory?: GroupHistoryFactory<THistory>;
   mediaFactory?: GroupMediaFactory<TMedia>;
+  /** Convergence policy applied to newly created/imported groups. */
+  convergencePolicy?: ConvergencePolicy;
 };
 
 export type CreateGroupOptions = SimpleGroupOptions & {
@@ -59,10 +62,12 @@ export class GroupFactory<
   readonly #accountProofSigner?: AccountIdentityProofSigner;
   readonly #historyFactory: GroupHistoryFactory<THistory>;
   readonly #mediaFactory: GroupMediaFactory<TMedia>;
+  readonly #convergencePolicy?: ConvergencePolicy;
 
   constructor(options: GroupFactoryOptions<THistory, TMedia>) {
     this.#store = options.store;
     this.#rewindStore = options.rewindStore;
+    this.#convergencePolicy = options.convergencePolicy;
     this.#signer = options.signer;
     this.#network = options.network;
     this.#cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
@@ -115,6 +120,7 @@ export class GroupFactory<
       ciphersuite: ciphersuiteImpl,
       store: this.#store,
       rewindStore: this.#rewindStore,
+      convergencePolicy: this.#convergencePolicy,
       signer: this.#signer,
       network: this.#network,
       history: this.#historyFactory,

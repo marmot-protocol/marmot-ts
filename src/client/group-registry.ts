@@ -8,6 +8,7 @@ import {
   deserializeClientState,
   SerializedClientState,
 } from "../core/client-state.js";
+import type { ConvergencePolicy } from "../core/convergence.js";
 import { GroupHistoryTree } from "../engine/history-tree.js";
 import { RetainedHistoryStore } from "../engine/retained-store.js";
 import { logger } from "../utils/debug.js";
@@ -36,6 +37,8 @@ export type GroupRegistryOptions<
   cryptoProvider?: CryptoProvider;
   historyFactory?: GroupHistoryFactory<THistory>;
   mediaFactory?: GroupMediaFactory<TMedia>;
+  /** Convergence policy applied to loaded groups (rollback horizon, selection). */
+  convergencePolicy?: ConvergencePolicy;
 };
 
 /** Cache-level events emitted by {@link GroupRegistry}. */
@@ -69,6 +72,7 @@ export class GroupRegistry<
   readonly cryptoProvider: CryptoProvider;
   readonly historyFactory: GroupHistoryFactory<THistory>;
   readonly mediaFactory: GroupMediaFactory<TMedia>;
+  readonly convergencePolicy?: ConvergencePolicy;
 
   /** In-memory cache of loaded group instances, keyed by hex group id */
   #groups = new Map<string, MarmotGroup<THistory, TMedia>>();
@@ -95,6 +99,7 @@ export class GroupRegistry<
     this.historyFactory =
       options.historyFactory as GroupHistoryFactory<THistory>;
     this.mediaFactory = options.mediaFactory as GroupMediaFactory<TMedia>;
+    this.convergencePolicy = options.convergencePolicy;
   }
 
   /** Returns the list of currently loaded (cached) group instances. */
@@ -121,6 +126,7 @@ export class GroupRegistry<
       rewindStore: this.rewindStore,
       retained,
       historyTree,
+      convergencePolicy: this.convergencePolicy,
       signer: this.signer,
       cryptoProvider: this.cryptoProvider,
       network: this.network,
@@ -189,7 +195,7 @@ export class GroupRegistry<
 
     try {
       const snapshot = RetainedHistoryStore.deserialize(rewindBytes);
-      const store = new RetainedHistoryStore(snapshot);
+      const store = new RetainedHistoryStore(snapshot, this.convergencePolicy);
       const tipEpoch = Number(state.groupContext.epoch);
       if (store.tipEpoch() !== tipEpoch) {
         log(

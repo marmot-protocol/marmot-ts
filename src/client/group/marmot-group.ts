@@ -15,6 +15,7 @@ import type { ProposalAction, ProposalContext } from "../../engine/types.js";
 import type { MediaAttachment } from "../../core/media.js";
 import { mayReleaseOutbound } from "../../core/convergence-status.js";
 import type { ConvergenceScheduler } from "../../engine/group-engine.js";
+import type { ConvergencePolicy } from "../../core/convergence.js";
 import type { GroupHistoryTree } from "../../engine/history-tree.js";
 import type { RetainedHistoryStore } from "../../engine/retained-store.js";
 import { logger } from "../../utils/debug.js";
@@ -138,6 +139,12 @@ export type MarmotGroupOptions<
   ciphersuite: CiphersuiteImpl;
   /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
+  /**
+   * Convergence policy (branch selection + `maxRewindCommits` rollback horizon).
+   * Set `maxRewindCommits: Infinity` to keep forks of any age eligible for
+   * re-convergence. Defaults to the profile-1 policy.
+   */
+  convergencePolicy?: ConvergencePolicy;
   /** The storage interface for the groups application message history (optional) */
   history?: THistory | GroupHistoryFactory<THistory>;
   /**
@@ -344,6 +351,7 @@ export class MarmotGroup<
       rewindStore: options.rewindStore,
       retained: options.retained,
       historyTree: options.historyTree,
+      convergencePolicy: options.convergencePolicy,
       history: this.history,
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,

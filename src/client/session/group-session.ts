@@ -9,6 +9,7 @@ import {
   type MarmotGroupView,
   type SerializedClientState,
 } from "../../core/client-state.js";
+import type { ConvergencePolicy } from "../../core/convergence.js";
 import type { Disposition } from "../../core/inbound.js";
 import { MarmotGroupEngine } from "../../engine/group-engine.js";
 import { GroupHistoryTree } from "../../engine/history-tree.js";
@@ -129,6 +130,12 @@ export type GroupSessionOptions<
    * flushed on {@link GroupSession.save}.
    */
   historyTree?: GroupHistoryTree;
+  /**
+   * Convergence policy (branch selection + `maxRewindCommits` rollback horizon).
+   * Defaults to the profile-1 policy; set `maxRewindCommits: Infinity` to retain
+   * forks of any age for re-convergence.
+   */
+  convergencePolicy?: ConvergencePolicy;
   history?: THistory;
   onStateChanged?: (state: ClientState) => void;
   onStateSaved?: () => void;
@@ -196,6 +203,7 @@ export class GroupSession<
       peeler: this.#peeler,
       retained: options.retained,
       historyTree: options.historyTree,
+      convergencePolicy: options.convergencePolicy,
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,
       scheduler: options.scheduler,

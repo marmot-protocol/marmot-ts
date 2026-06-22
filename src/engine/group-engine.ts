@@ -28,7 +28,11 @@ import {
   type ConvergenceStatus,
   deriveConvergenceStatus,
 } from "../core/convergence-status.js";
-import { DEFAULT_CONVERGENCE_POLICY } from "../core/convergence.js";
+import {
+  type ConvergencePolicy,
+  DEFAULT_CONVERGENCE_POLICY,
+  validateConvergencePolicy,
+} from "../core/convergence.js";
 import {
   canTransitionLifecycle,
   type GroupLifecycleState,
@@ -96,6 +100,13 @@ export type MarmotGroupEngineOptions<TEnvelope> = {
    */
   historyTree?: GroupHistoryTree;
   /**
+   * The signed convergence policy governing branch selection and the rollback
+   * horizon (`maxRewindCommits`). Defaults to {@link DEFAULT_CONVERGENCE_POLICY}.
+   * Set `maxRewindCommits` to `Infinity` to never expire old forks (the full
+   * history tree retains everything regardless). Validated on construction.
+   */
+  convergencePolicy?: ConvergencePolicy;
+  /**
    * Injectable wall-clock (ms) for the convergence-status quiescence window
    * (B5). Defaults to `Date.now`; tests pass a fake clock for determinism.
    */
@@ -139,6 +150,8 @@ export class MarmotGroupEngine<TEnvelope> {
   readonly #retained: RetainedHistoryStore;
   /** Full-fork history tree: every observed state (canonical + every fork). */
   readonly #tree: GroupHistoryTree;
+  /** The active convergence policy (branch selection + rollback horizon). */
+  readonly #policy: ConvergencePolicy;
   /** Convergence candidate-branch construction and selection. */
   readonly #forkRecovery: ForkRecovery<TEnvelope>;
   /** App payloads delivered eagerly, retracted as `invalidated` on rewind (M7). */
@@ -176,10 +189,16 @@ export class MarmotGroupEngine<TEnvelope> {
     this.#scheduler = options.scheduler ?? DEFAULT_SCHEDULER;
     this.#onSettleCheck = options.onSettleCheck;
 
+    this.#policy = options.convergencePolicy ?? DEFAULT_CONVERGENCE_POLICY;
+    validateConvergencePolicy(this.#policy);
     this.#retained =
-      options.retained ?? new RetainedHistoryStore(options.state);
+      options.retained ?? new RetainedHistoryStore(options.state, this.#policy);
     this.#tree = options.historyTree ?? new GroupHistoryTree(options.state);
-    this.#forkRecovery = new ForkRecovery(options.ciphersuite, options.peeler);
+    this.#forkRecovery = new ForkRecovery(
+      options.ciphersuite,
+      options.peeler,
+      this.#policy,
+    );
   }
 
   /**
@@ -701,6 +720,7 @@ export class MarmotGroupEngine<TEnvelope> {
       ciphersuite: this.ciphersuite,
       peeler: this.peeler,
       retained: this.#retained,
+      maxRewindCommits: this.#policy.maxRewindCommits,
       log: this.#log(),
       getState: () => this.#state,
       setState: (state) => this.#setState(state),

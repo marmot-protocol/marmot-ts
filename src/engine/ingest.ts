@@ -24,7 +24,6 @@ import {
   type CommitOrderingKey,
   commitDigest,
   compareCommitOrderingKeys,
-  DEFAULT_CONVERGENCE_POLICY,
 } from "../core/convergence.js";
 import { getCredentialPubkey } from "../core/credential.js";
 import { type DeferredReason, deferredReasons } from "../core/inbound.js";
@@ -65,6 +64,8 @@ export interface IngestContext<TEnvelope> {
     }>;
   };
   retained: RetainedHistoryStore;
+  /** The rollback horizon (`maxRewindCommits`) from the active convergence policy. */
+  maxRewindCommits: number;
   log: Debugger;
   getState(): ClientState;
   setState(state: ClientState): void;
@@ -661,7 +662,7 @@ export async function* ingestEnvelopes<TEnvelope>(
           sourceEpoch: p.epoch,
           anchorEpoch,
           currentTipEpoch,
-          maxRewindCommits: DEFAULT_CONVERGENCE_POLICY.maxRewindCommits,
+          maxRewindCommits: ctx.maxRewindCommits,
           parentArrived: true,
           retainedParentStateAvailable: false,
         });

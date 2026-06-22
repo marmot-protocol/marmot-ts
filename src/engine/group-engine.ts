@@ -15,9 +15,13 @@ import {
   isSelfRemoveProposal,
   acceptAll,
   type LeafIndex,
+  type MlsMessage,
   nodeTypes,
+  processMessage,
+  type ProcessMessageResult,
   Proposal,
   selfRemoveProposalType,
+  wireformats,
 } from "ts-mls";
 
 import { marmotAuthService } from "../core/auth-service.js";
@@ -51,6 +55,7 @@ import {
   type AppliedForkResolution,
   type IngestContext,
   ingestEnvelopes,
+  isAuthenticApplicationMessage,
 } from "./ingest.js";
 import { ingestResultDisposition } from "./ingest-disposition.js";
 import { RetainedHistoryStore } from "./retained-store.js";
@@ -596,6 +601,11 @@ export class MarmotGroupEngine<TEnvelope> {
           : [];
     }
 
+    // Tree-targeted sweep: read/apply pooled events against any retained fork or
+    // past-epoch node state, so late-arriving old-epoch and divergent-fork
+    // messages are read and all reachable forks are grown into the tree.
+    if (this.#pool.size > 0) yield* this.#sweepTree();
+
     // Give up on entries aged past the retention window — surface them terminal.
     const evicted = this.#pool.evictStale(
       Number(this.#state.groupContext.epoch),
@@ -611,6 +621,148 @@ export class MarmotGroupEngine<TEnvelope> {
         ],
       };
     }
+  }
+
+  /**
+   * Reads/applies pooled events against retained history-tree node states (not
+   * just the current tip): an app message that decrypts on a node is read
+   * (`processed` if that node is on the canonical path, else `invalidated` per
+   * M7); a commit/proposal is applied against its node to grow that fork into
+   * the tree. Each `(event, node)` pair is tried at most once (memoized on the
+   * pool entry); growing the tree can unlock further pooled events, so it loops
+   * to a fixed point. This is the "read epoch-1 messages while on epoch 15" and
+   * "capture every reachable fork" path.
+   */
+  async *#sweepTree(): AsyncGenerator<IngestResult<TEnvelope>> {
+    const MAX_ITERS = 32;
+    const log = this.#log();
+    for (let iter = 0; iter < MAX_ITERS && this.#pool.size > 0; iter++) {
+      const canonicalPath = new Set(
+        this.#tree.path(bytesToHex(this.#state.confirmationTag)) ?? [],
+      );
+      // Recent epochs first — most pooled events sit near the current tip.
+      const tags = this.#tree
+        .tags()
+        .sort(
+          (a, b) => (this.#tree.epochOf(b) ?? 0) - (this.#tree.epochOf(a) ?? 0),
+        );
+
+      let progress = false;
+      for (const entry of this.#pool.entries()) {
+        for (const tag of tags) {
+          if (entry.triedTags.has(tag)) continue;
+          entry.triedTags.add(tag);
+          const state = await this.#tree.stateAt(tag);
+          if (!state) continue;
+
+          let message: MlsMessage | undefined;
+          try {
+            const peeled = await this.peeler.peelGroupMessages(
+              [entry.envelope],
+              state,
+            );
+            message = peeled.read[0]?.message;
+          } catch {
+            message = undefined;
+          }
+          // Only framed messages (commit/proposal/application) are processable.
+          if (
+            !message ||
+            (message.wireformat !== wireformats.mls_private_message &&
+              message.wireformat !== wireformats.mls_public_message)
+          )
+            continue;
+
+          const result = await this.#sweepResult(
+            entry.envelope,
+            tag,
+            state,
+            message,
+            canonicalPath.has(tag),
+            log,
+          );
+          if (!result) continue;
+          this.#pool.remove(entry.id);
+          progress = true;
+          yield result;
+          break;
+        }
+      }
+      if (!progress) break;
+    }
+  }
+
+  /**
+   * Processes a pooled message that decrypted against retained node `tag` and
+   * classifies the outcome. Returns `undefined` to keep trying other nodes (the
+   * message did not process against this state); otherwise the ingest result.
+   */
+  async #sweepResult(
+    envelope: TEnvelope,
+    tag: string,
+    state: ClientState,
+    message: MlsMessage,
+    onCanonical: boolean,
+    log: Debugger,
+  ): Promise<IngestResult<TEnvelope> | undefined> {
+    // Narrow to a framed message (the caller already guards this).
+    if (
+      message.wireformat !== wireformats.mls_private_message &&
+      message.wireformat !== wireformats.mls_public_message
+    )
+      return undefined;
+    const isCommit = framedContentType(message) === contentTypes.commit;
+    let result: ProcessMessageResult;
+    try {
+      result = await processMessage({
+        context: {
+          cipherSuite: this.ciphersuite,
+          authService: marmotAuthService,
+          externalPsks: {},
+        },
+        state,
+        message,
+        callback: isCommit
+          ? this.#createAdminVerificationCallback(state)
+          : acceptAll,
+      });
+    } catch {
+      return undefined; // decrypted but not processable against this node
+    }
+
+    if (result.kind === "newState") {
+      if (result.actionTaken === "reject")
+        return { kind: "rejected", result, envelope, message };
+      try {
+        if (isCommit) {
+          // Grow this fork into the tree (capture it, off node `tag`).
+          this.#tree.recordCommit(tag, message, result.newState);
+        } else {
+          // A proposal staged onto this node (its tag is unchanged).
+          this.#tree.updateSnapshot(tag, result.newState);
+        }
+      } catch (error) {
+        log("history tree sweep update failed: %o", error);
+      }
+      return { kind: "processed", result, envelope, message };
+    }
+
+    if (result.kind === "applicationMessage") {
+      if (!isAuthenticApplicationMessage(result, state, log, "sweep"))
+        return {
+          kind: "skipped",
+          envelope,
+          message,
+          reason: "invalid-app-payload",
+        };
+      // A read on the canonical path is delivered; one that only decrypts on a
+      // losing fork is reported as invalidated (M7), never delivered as accepted.
+      return onCanonical
+        ? { kind: "processed", result, envelope, message }
+        : { kind: "invalidated", envelope, message };
+    }
+
+    return undefined;
   }
 
   /**
@@ -915,12 +1067,14 @@ export class MarmotGroupEngine<TEnvelope> {
     };
   }
 
-  #createAdminVerificationCallback(): IncomingMessageCallback {
-    const groupData = getMarmotGroupView(this.state);
+  #createAdminVerificationCallback(
+    state: ClientState = this.state,
+  ): IncomingMessageCallback {
+    const groupData = getMarmotGroupView(state);
     if (!groupData) return acceptAll;
 
     return createAdminCommitPolicyCallback({
-      ratchetTree: this.state.ratchetTree,
+      ratchetTree: state.ratchetTree,
       adminPubkeys: groupData.adminPubkeys,
       ciphersuiteId: this.ciphersuite.id,
       onUnverifiableCommit: "retry",

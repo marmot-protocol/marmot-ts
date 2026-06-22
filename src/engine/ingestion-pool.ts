@@ -8,6 +8,11 @@ export interface PooledEntry<TEnvelope> {
   envelope: TEnvelope;
   /** The canonical tip epoch when the envelope was first pooled. */
   arrivalEpoch: number;
+  /**
+   * History-tree node tags this entry has already been peeled against without
+   * success, so the tree-targeted sweep tries each `(event, node)` pair once.
+   */
+  triedTags: Set<string>;
 }
 
 /** Tuning for {@link IngestionPool}. */
@@ -64,8 +69,13 @@ export class IngestionPool<TEnvelope> {
    */
   add(id: string, envelope: TEnvelope, arrivalEpoch: number): void {
     const existing = this.#entries.get(id);
-    if (existing) return; // keep original arrival epoch
-    this.#entries.set(id, { id, envelope, arrivalEpoch });
+    if (existing) return; // keep original arrival epoch + tried-tag memo
+    this.#entries.set(id, {
+      id,
+      envelope,
+      arrivalEpoch,
+      triedTags: new Set(),
+    });
     if (this.#entries.size > this.#maxSize) {
       const oldest = this.#entries.keys().next().value as string | undefined;
       if (oldest !== undefined) this.#entries.delete(oldest);

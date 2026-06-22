@@ -182,7 +182,7 @@ function terminalResult<TEnvelope>(
  * non-conformant payload — is `invalid_encoding`; the message is dropped, never
  * delivered.
  */
-function isAuthenticApplicationMessage(
+export function isAuthenticApplicationMessage(
   result: ProcessMessageResult & { kind: "applicationMessage" },
   state: ClientState,
   log: Debugger,

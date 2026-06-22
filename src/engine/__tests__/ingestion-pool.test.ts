@@ -1,4 +1,5 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   type CiphersuiteImpl,
   createCommit,
@@ -144,6 +145,103 @@ describe("MarmotGroupEngine ingestion pool", () => {
     expect(second.filter((r) => r.kind === "processed")).toHaveLength(2);
     expect(engine.pendingCount).toBe(0);
     expect(Number(engine.state.groupContext.epoch)).toBe(3);
+  });
+
+  it("sweeps a late fork commit against a retained node, growing the fork in the tree", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const ctx = {
+      cipherSuite: impl,
+      authService: unsafeTestingAuthenticationService,
+    };
+
+    const adminKp = await generateKeyPackage({
+      credential: createCredential(ADMIN),
+      ciphersuiteImpl: impl,
+    });
+    const { clientState: created } = await createSimpleGroup(
+      adminKp,
+      impl,
+      "Fork Group",
+      { adminPubkeys: [ADMIN], relays: ["wss://mock.test"] },
+    );
+    const memberKp = await generateKeyPackage({
+      credential: createCredential(MEMBER),
+      ciphersuiteImpl: impl,
+    });
+    const { newState: adminE1, welcome } = await createCommit({
+      context: ctx,
+      state: created,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: memberKp.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+    const memberE1 = await joinGroup({
+      context: ctx,
+      welcome: welcome!.welcome ?? (welcome as never),
+      keyPackage: memberKp.publicPackage,
+      privateKeys: memberKp.privatePackage,
+      ratchetTree: undefined,
+    });
+
+    // Two competing commits from the same epoch-1 admin state (a fork).
+    const commitA = await createCommit({
+      context: ctx,
+      state: adminE1,
+      extraProposals: [],
+    });
+    const commitB = await createCommit({
+      context: ctx,
+      state: adminE1,
+      extraProposals: [],
+    });
+    const eventA = await createGroupEvent({
+      message: commitA.commit,
+      state: adminE1,
+      ciphersuite: impl,
+    });
+    const eventB = await createGroupEvent({
+      message: commitB.commit,
+      state: adminE1,
+      ciphersuite: impl,
+    });
+
+    // maxRewindCommits 0 keeps the bounded convergence window at the tip only,
+    // so the epoch-1 fork commit B (which cannot peel against the epoch-2 tip)
+    // is pooled — and recovered only by the tree-targeted sweep against the
+    // retained epoch-1 root node.
+    const engine = new MarmotGroupEngine<NostrEvent>({
+      state: memberE1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+      convergencePolicy: {
+        ...(await import("../../core/convergence.js"))
+          .DEFAULT_CONVERGENCE_POLICY,
+        maxRewindCommits: 0,
+        maxWitnessOverrideDepth: 0,
+      },
+    });
+    const rootTag = bytesToHex(memberE1.confirmationTag);
+
+    await drain(engine.ingest([eventA]));
+    expect(Number(engine.state.groupContext.epoch)).toBe(2);
+
+    // The fork commit arrives late, after the window has moved past epoch 1.
+    await drain(engine.ingest([eventB]));
+
+    // The sweep peeled it against the retained epoch-1 root and grew the fork.
+    expect(engine.history.childrenOf(rootTag)).toHaveLength(2);
+    expect(engine.history.size).toBe(3);
+    expect(engine.pendingCount).toBe(0);
+    // The canonical tip is unchanged — the late fork is captured, not adopted.
+    expect(Number(engine.state.groupContext.epoch)).toBe(2);
   });
 
   it("bounds the pool by size and epoch-age", () => {

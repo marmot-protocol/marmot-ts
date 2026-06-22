@@ -3,6 +3,7 @@ import { npubEncode } from "applesauce-core/helpers/pointers";
 import type { EventStore } from "applesauce-core/event-store";
 
 import type {
+  ForkTreeNodeView,
   MarmotClient,
   MarmotGroup,
   Unsubscribable,
@@ -14,6 +15,19 @@ import {
   GROUP_EVENT_KIND,
 } from "@internet-privacy/marmot-ts";
 import type { GenericKeyValueStore } from "@internet-privacy/marmot-ts/utils";
+import { getCredentialPubkey } from "@internet-privacy/marmot-ts/core";
+import {
+  contentTypes,
+  defaultProposalTypes,
+  getCredentialFromLeafIndex,
+  selfRemoveProposalType,
+  wireformats,
+} from "@internet-privacy/marmot-ts/mls";
+import type {
+  ClientState,
+  LeafIndex,
+  ProposalOrRef,
+} from "@internet-privacy/marmot-ts/mls";
 
 import createDebug from "debug";
 
@@ -31,6 +45,46 @@ type Signer = {
   signEvent(draft: any): Promise<NostrEvent> | NostrEvent;
 };
 
+/**
+ * Where an application message was decrypted: the MLS epoch number and the
+ * fork-tree node tag (hex of the state's confirmation tag) of the exact state it
+ * decrypted at. The tag pins the message to a single branch — two same-epoch
+ * forks have distinct tags — so the UI can attribute messages per fork, not just
+ * per epoch number.
+ */
+export interface MessageMeta {
+  /** MLS epoch the message decrypted at. */
+  epoch: number;
+  /** Fork-tree node tag (hex confirmation tag), or `""` for legacy rows. */
+  tag: string;
+}
+
+/** A single proposal carried by a commit, summarized for the debugger UI. */
+export interface ProposalSummary {
+  /** Human label: `add`, `remove`, `update`, `self_remove`, `by reference`, … */
+  type: string;
+  /** True when the commit referenced a previously-published proposal by hash. */
+  byReference: boolean;
+  /** A resolvable target pubkey (added/removed/updated member), when known. */
+  pubkey?: string;
+  /** Extra free-text detail (leaf index, reference hash prefix, …). */
+  detail?: string;
+}
+
+/** Commit-level detail for one fork-tree node (epoch), for the per-epoch page. */
+export interface EpochDetail {
+  /** The fork-tree node, or `undefined` if the tag is unknown to this group. */
+  node?: ForkTreeNodeView;
+  /** The committer's MLS leaf index in the parent epoch, when known. */
+  committerLeaf?: number;
+  /** The committer's nostr pubkey, resolved from the parent epoch's roster. */
+  committerPubkey?: string;
+  /** The proposals the commit applied (empty for a bare self-update commit). */
+  proposals: ProposalSummary[];
+  /** Whether the commit message was available and decoded (public-message). */
+  commitDecoded: boolean;
+}
+
 export interface TunnelServerOptions {
   client: MarmotClient;
   pool: RelayPool;
@@ -42,8 +96,8 @@ export interface TunnelServerOptions {
   outboxRelays: string[];
   /** Welcome-inbox relays (kind 10050): where invites are watched + delivered. */
   inboxRelays: string[];
-  /** Sidecar index of the epoch each application message was decrypted at. */
-  epochStore: GenericKeyValueStore<number>;
+  /** Sidecar index of where (epoch + fork node) each app message decrypted. */
+  metaStore: GenericKeyValueStore<MessageMeta>;
   /** Teardown hook (closes the SQLite connection). */
   dispose?: () => void;
 }
@@ -69,7 +123,7 @@ export class TunnelServer {
   readonly #outboxRelays: string[];
   readonly #inboxRelays: string[];
   readonly #relays: string[];
-  readonly #epochStore: GenericKeyValueStore<number>;
+  readonly #metaStore: GenericKeyValueStore<MessageMeta>;
   readonly #dispose?: () => void;
 
   readonly #groups = new Map<string, MarmotGroup>();
@@ -79,8 +133,8 @@ export class TunnelServer {
   readonly #handledInvites = new Set<string>();
   /** Profile-name cache for member pubkeys (kind 0), populated lazily. */
   readonly #names = new Map<string, string>();
-  /** In-memory mirror of the epoch index, keyed `${groupHex}:${rumorId}`. */
-  readonly #epochCache = new Map<string, number>();
+  /** In-memory mirror of the message-meta index, keyed `${groupHex}:${rumorId}`. */
+  readonly #metaCache = new Map<string, MessageMeta>();
 
   #stopped = false;
   #inviteConnection?: Unsubscribable;
@@ -97,7 +151,7 @@ export class TunnelServer {
     this.#relays = [
       ...new Set([...options.outboxRelays, ...options.inboxRelays]),
     ];
-    this.#epochStore = options.epochStore;
+    this.#metaStore = options.metaStore;
     this.#dispose = options.dispose;
   }
 
@@ -321,11 +375,13 @@ export class TunnelServer {
             result.kind === "processed" &&
             result.result.kind === "applicationMessage"
           ) {
-            this.#recordEpoch(
-              group.idStr,
-              result.result.message,
-              Number(result.result.newState.groupContext.epoch),
-            );
+            const state = result.result.newState;
+            this.#recordMessageMeta(group.idStr, result.result.message, {
+              epoch: Number(state.groupContext.epoch),
+              // An application message never changes group state, so newState's
+              // confirmation tag is the fork-tree node it decrypted at.
+              tag: Buffer.from(state.confirmationTag).toString("hex"),
+            });
           }
         }
       } catch (err) {
@@ -349,11 +405,15 @@ export class TunnelServer {
   }
 
   /**
-   * Persist the epoch an application message was decrypted at, keyed by its
-   * rumor id. The payload is the raw application data; deserializing it yields
-   * the same rumor id the history store keys by, so the UI can join them.
+   * Persist where an application message decrypted (epoch + fork node), keyed by
+   * its rumor id. The payload is the raw application data; deserializing it
+   * yields the same rumor id the history store keys by, so the UI can join them.
    */
-  #recordEpoch(groupIdStr: string, payload: Uint8Array, epoch: number): void {
+  #recordMessageMeta(
+    groupIdStr: string,
+    payload: Uint8Array,
+    meta: MessageMeta,
+  ): void {
     let rumorId: string;
     try {
       rumorId = deserializeApplicationData(payload).id;
@@ -361,34 +421,82 @@ export class TunnelServer {
       return; // not a rumor payload (e.g. a non-NIP-59 application message)
     }
     const key = `${groupIdStr}:${rumorId}`;
-    if (this.#epochCache.get(key) === epoch) return;
-    this.#epochCache.set(key, epoch);
-    void this.#epochStore.setItem(key, epoch).catch(() => {});
+    const prev = this.#metaCache.get(key);
+    if (prev && prev.epoch === meta.epoch && prev.tag === meta.tag) return;
+    this.#metaCache.set(key, meta);
+    void this.#metaStore.setItem(key, meta).catch(() => {});
   }
 
   /**
-   * The epoch each of `rumorIds` was decrypted at, for one group. Reads the
-   * in-memory mirror first, falling back to the persisted index for messages
-   * captured in an earlier run.
+   * Where each of `rumorIds` decrypted (epoch + fork node tag), for one group.
+   * Reads the in-memory mirror first, falling back to the persisted index for
+   * messages captured in an earlier run. Legacy rows that stored a bare epoch
+   * number are normalized to a tagless {@link MessageMeta}.
    */
-  async epochsFor(
+  async messageMetaFor(
     groupIdStr: string,
     rumorIds: string[],
-  ): Promise<Record<string, number>> {
-    const out: Record<string, number> = {};
+  ): Promise<Record<string, MessageMeta>> {
+    const out: Record<string, MessageMeta> = {};
     await Promise.all(
       rumorIds.map(async (id) => {
         const key = `${groupIdStr}:${id}`;
-        const cached = this.#epochCache.get(key);
-        const epoch =
-          cached ?? (await this.#epochStore.getItem(key)) ?? undefined;
-        if (epoch !== undefined && epoch !== null) {
-          this.#epochCache.set(key, epoch);
-          out[id] = epoch;
+        let meta = this.#metaCache.get(key);
+        if (!meta) {
+          const stored = await this.#metaStore.getItem(key);
+          if (stored != null) meta = normalizeMeta(stored);
+        }
+        if (meta) {
+          this.#metaCache.set(key, meta);
+          out[id] = meta;
         }
       }),
     );
     return out;
+  }
+
+  /**
+   * Resolve commit-level detail for one fork-tree node (epoch): who created the
+   * commit and which proposals it applied. The committer leaf and any removed
+   * leaf are resolved against the *parent* epoch's roster (the tree the commit
+   * was applied to). Best-effort — anything undecodable is simply omitted.
+   */
+  async epochDetail(group: MarmotGroup, tag: string): Promise<EpochDetail> {
+    const node = group.forkTreeView().nodes.find((n) => n.tag === tag);
+    if (!node) return { proposals: [], commitDecoded: false };
+
+    let parentState: ClientState | undefined;
+    if (node.parentTag) {
+      try {
+        parentState = await group.forkTree.stateAt(node.parentTag);
+      } catch {
+        parentState = undefined;
+      }
+    }
+
+    const committerLeaf = node.commit?.senderLeafIndex;
+    const committerPubkey =
+      committerLeaf !== undefined && parentState
+        ? leafPubkey(parentState, committerLeaf)
+        : undefined;
+
+    const proposals: ProposalSummary[] = [];
+    let commitDecoded = false;
+    try {
+      const message = await group.forkTree.commitMessageOf(tag);
+      if (
+        message?.wireformat === wireformats.mls_public_message &&
+        message.publicMessage.content.contentType === contentTypes.commit
+      ) {
+        commitDecoded = true;
+        for (const por of message.publicMessage.content.commit.proposals)
+          proposals.push(summarizeProposal(por, parentState));
+      }
+    } catch {
+      // commit bytes unavailable (e.g. root) or undecodable — leave empty.
+    }
+
+    return { node, committerLeaf, committerPubkey, proposals, commitDecoded };
   }
 
   /**
@@ -437,6 +545,84 @@ export function groupName(group: MarmotGroup): string {
 
 function hex(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("hex");
+}
+
+/** Coerce a stored value (legacy bare epoch number or object) to MessageMeta. */
+function normalizeMeta(stored: MessageMeta | number): MessageMeta {
+  return typeof stored === "number" ? { epoch: stored, tag: "" } : stored;
+}
+
+/** The nostr pubkey at `leafIndex` in a state's ratchet tree, or undefined. */
+function leafPubkey(state: ClientState, leafIndex: number): string | undefined {
+  try {
+    return getCredentialPubkey(
+      getCredentialFromLeafIndex(state.ratchetTree, leafIndex as LeafIndex),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/** Summarize one proposal (inline or by-reference) carried by a commit. */
+function summarizeProposal(
+  por: ProposalOrRef,
+  parentState: ClientState | undefined,
+): ProposalSummary {
+  if ("reference" in por) {
+    return {
+      type: "by reference",
+      byReference: true,
+      detail: Buffer.from(por.reference).toString("hex").slice(0, 16),
+    };
+  }
+  // Narrow with the `in` operator: a value switch on `proposalType` can't
+  // exclude ProposalCustom (its `proposalType` is a plain `number`).
+  const p = por.proposal;
+  if ("add" in p) {
+    let pubkey: string | undefined;
+    try {
+      pubkey = getCredentialPubkey(p.add.keyPackage.leafNode.credential);
+    } catch {
+      pubkey = undefined;
+    }
+    return { type: "add", byReference: false, pubkey };
+  }
+  if ("remove" in p) {
+    return {
+      type: "remove",
+      byReference: false,
+      pubkey: parentState ? leafPubkey(parentState, p.remove.removed) : undefined,
+      detail: `leaf ${p.remove.removed}`,
+    };
+  }
+  if ("update" in p) {
+    let pubkey: string | undefined;
+    try {
+      pubkey = getCredentialPubkey(p.update.leafNode.credential);
+    } catch {
+      pubkey = undefined;
+    }
+    return { type: "update", byReference: false, pubkey };
+  }
+  return { type: proposalTypeName(p.proposalType), byReference: false };
+}
+
+/** A human label for a keyless / custom proposal type value. */
+function proposalTypeName(type: number): string {
+  switch (type) {
+    case defaultProposalTypes.psk:
+      return "psk";
+    case defaultProposalTypes.reinit:
+      return "reinit";
+    case defaultProposalTypes.external_init:
+      return "external_init";
+    case defaultProposalTypes.group_context_extensions:
+      return "group_context_extensions";
+    case selfRemoveProposalType:
+      return "self_remove";
+    default:
+      return `type ${type}`;
+  }
 }
 
 function npubShort(pubkey: string): string {

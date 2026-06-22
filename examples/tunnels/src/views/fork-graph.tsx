@@ -101,9 +101,17 @@ function nodeColor(n: ForkTreeNodeView): string {
 /**
  * Render a {@link ForkTreeView} as an inline SVG branching timeline. Canonical
  * nodes are blue (the live branch), abandoned fork tips green, fork points
- * ringed amber, and the live tip carries a double ring.
+ * ringed amber, and the live tip carries a double ring. Each node is a link to
+ * its own epoch page and is annotated with the number of application messages
+ * decrypted at that exact state.
  */
-export const ForkGraph: FC<{ view: ForkTreeView }> = ({ view }) => {
+export const ForkGraph: FC<{
+  view: ForkTreeView;
+  /** Group id, for building per-epoch links. */
+  groupId: string;
+  /** Application-message count keyed by node tag. */
+  countByTag: Map<string, number>;
+}> = ({ view, groupId, countByTag }) => {
   if (!view.nodes.length) {
     return <div class="empty">No history recorded yet.</div>;
   }
@@ -145,8 +153,12 @@ export const ForkGraph: FC<{ view: ForkTreeView }> = ({ view }) => {
           const y = cy(lane);
           const color = nodeColor(node);
           const isFork = node.childTags.length > 1;
+          const count = countByTag.get(node.tag) ?? 0;
           return (
-            <g>
+            <a href={`/${groupId}/${node.tag}`} class="node-link">
+              <title>
+                {`epoch ${node.epoch} · ${node.tag.slice(0, 12)} · ${count} message${count === 1 ? "" : "s"}`}
+              </title>
               {node.isCanonicalTip && (
                 <circle
                   cx={x}
@@ -195,7 +207,19 @@ export const ForkGraph: FC<{ view: ForkTreeView }> = ({ view }) => {
               >
                 {node.tag.slice(0, 6)}
               </text>
-            </g>
+              {count > 0 && (
+                <text
+                  x={x}
+                  y={y + R + 28}
+                  text-anchor="middle"
+                  font-size="9"
+                  fill="var(--accent)"
+                  font-family="var(--mono)"
+                >
+                  {count} msg
+                </text>
+              )}
+            </a>
           );
         })}
       </svg>

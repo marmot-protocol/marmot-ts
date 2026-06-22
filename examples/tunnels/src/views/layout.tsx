@@ -83,6 +83,31 @@ const STYLES = `
   .invite svg { border-radius: 6px; display: block; }
   .invite p { margin: 0 0 8px; color: var(--muted); }
   .invite .npub { font-size: 12px; word-break: break-all; color: var(--fg); }
+  .hint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .muted { color: var(--muted); }
+  .node-link { cursor: pointer; }
+  .node-link:hover circle { stroke: var(--fg); }
+  .panel h2 .pill { margin-left: 10px; vertical-align: middle; }
+  .panel h2 { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+  .sub-h { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 18px 0 10px; display: flex; align-items: center;
+    gap: 10px; }
+  .fork-card { border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; margin-bottom: 12px; background: var(--panel-2); }
+  .fork-hdr { display: flex; gap: 10px; align-items: center; margin-bottom: 8px;
+    flex-wrap: wrap; }
+  .fork-total { color: var(--accent); font-family: var(--mono); font-size: 12px;
+    margin-left: auto; }
+  .pill.behind { color: var(--fork); border-color: var(--fork); margin-left: 8px; }
+  .pill.caught-up { margin-left: 8px; }
+  .pill.prop { color: var(--accent); border-color: var(--accent-dim); }
+  .children { margin-top: 12px; display: flex; gap: 8px; align-items: center;
+    flex-wrap: wrap; }
+  .proposals { list-style: none; padding: 0; margin: 0; }
+  .proposals li { display: flex; gap: 10px; align-items: center; padding: 7px 0;
+    border-bottom: 1px solid var(--border); }
+  .proposals li:last-child { border-bottom: 0; }
+  .proposals .who { font-weight: 600; }
 `;
 
 /** The shared HTML shell: dark theme, top bar with the server identity. */

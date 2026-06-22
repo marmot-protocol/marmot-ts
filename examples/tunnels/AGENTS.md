@@ -14,11 +14,11 @@ Standalone package inside the `marmot-ts` pnpm workspace.
 
 ## Architecture
 
-- `src/index.tsx` — entrypoint: reads env config, builds + starts the server, mounts the Hono routes (`/` group list, `/:groupId` timeline).
+- `src/index.tsx` — entrypoint: reads env config, builds + starts the server, mounts the Hono routes (`/` group list, `/:groupId` fork-tree overview, `/:groupId/:tag` single-epoch page).
 - `src/marmot/setup.ts` — `configFromEnv` + `createServer`: wires SQLite stores, the applesauce relay pool + event loader, and a `MarmotClient` with **infinite retention** (`maxRewindCommits`/`appPayloadPastEpochLimit` = `Infinity`, ingestion-pool bounds = `Infinity`).
-- `src/marmot/server.ts` — `TunnelServer`: lifecycle (publish identity, create-or-rotate KeyPackage, follow + connect groups, auto-accept invites) and read accessors for the HTTP layer. It is a **passive observer** — never sends/commits/self-updates, so it doesn't disturb watched groups. It drives kind-445 ingest itself (instead of `connectAll`) so it can capture the epoch each application message decrypts at (`result.result.newState.groupContext.epoch`) — that epoch only lives on the ingest result, never on the stored rumor — and persists it in the `message_epochs` table keyed by `${groupId}:${rumorId}`.
-- `src/views/*.tsx` — Hono JSX: `layout` (shell + CSS), `group-list`, `group-timeline`, and `fork-graph` (the SVG branching-timeline renderer, laid out git-graph style from `group.forkTreeView()`).
-- `src/helpers/*` — `sqlite-store` (`node:sqlite` KV store), `relay-pool`, `discovery`, `prefixed-store`, `account-proof`, `format`.
+- `src/marmot/server.ts` — `TunnelServer`: lifecycle (publish identity, create-or-rotate KeyPackage, follow + connect groups, auto-accept invites) and read accessors for the HTTP layer. It is a **passive observer** — never sends/commits/self-updates, so it doesn't disturb watched groups. It drives kind-445 ingest itself (instead of `connectAll`) so it can capture, per application message, the `MessageMeta` (MLS epoch + fork-tree node tag = hex `newState.confirmationTag`) it decrypted at — neither lives on the stored rumor — and persists it in the `message_epochs` table keyed by `${groupId}:${rumorId}`. The node tag pins each message to a single fork (same-epoch forks have distinct tags), which the UI uses for per-fork attribution. Also exposes `messageMetaFor` and `epochDetail` (committer pubkey via the parent epoch's roster + decoded commit proposals).
+- `src/views/*.tsx` — Hono JSX: `layout` (shell + CSS), `group-list`, `group-overview` (per-group: metadata + the clickable fork tree + per-fork participant progress), `epoch` (single-epoch page: committer, proposals, messages), and `fork-graph` (the SVG branching-timeline renderer with per-node message counts and per-node `/:groupId/:tag` links, laid out git-graph style from `group.forkTreeView()`).
+- `src/helpers/*` — `fork-stats` (pure per-node/per-fork aggregation: `computeNodeStats`, `summarizeForks`), `sqlite-store` (`node:sqlite` KV store), `relay-pool`, `discovery`, `prefixed-store`, `account-proof`, `format`.
 
 ## Runtime requirements
 

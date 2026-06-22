@@ -24,6 +24,7 @@ import { PrefixedKeyValueStore } from "../helpers/prefixed-store.js";
 import { RelayPool } from "../helpers/relay-pool.js";
 import { SqliteKeyValueStore } from "../helpers/sqlite-store.js";
 import { TunnelServer } from "./server.js";
+import type { MessageMeta } from "./server.js";
 
 /** Relays used when neither the specific nor the shared relay var is set. */
 const DEFAULT_RELAYS = [
@@ -185,11 +186,12 @@ export async function createServer(
     pubkey,
     outboxRelays: config.outboxRelays,
     inboxRelays: config.inboxRelays,
-    // Sidecar index: the MLS epoch each application message was decrypted at,
-    // keyed by `${groupHex}:${rumorId}`. Captured during ingest (the epoch only
-    // lives on the ingest result, never on the stored rumor) so the UI can show
-    // which epoch a message was seen on.
-    epochStore: new SqliteKeyValueStore<number>(db, "message_epochs"),
+    // Sidecar index: where each application message decrypted — the MLS epoch
+    // and the fork-tree node tag — keyed by `${groupHex}:${rumorId}`. Captured
+    // during ingest (neither lives on the stored rumor) so the UI can attribute
+    // each message to a specific fork, not just an epoch number. The table name
+    // is unchanged so older epoch-only rows are read back via legacy coercion.
+    metaStore: new SqliteKeyValueStore<MessageMeta>(db, "message_epochs"),
     dispose: () => db.close(),
   });
 }

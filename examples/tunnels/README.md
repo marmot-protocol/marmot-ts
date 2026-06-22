@@ -17,10 +17,20 @@ renders each group's full history as a branching timeline.
 3. Ingests every kind-445 group event with the engine configured to retain and
    process everything (`maxRewindCommits` / `appPayloadPastEpochLimit` and both
    ingestion-pool bounds set to `Infinity`).
-4. Serves a web UI: `/` lists the followed groups, `/<group-id>` renders that
-   group's fork-history graph, current fork heads, and decrypted application
-   messages — each tagged with the MLS epoch it was decrypted at (captured
-   during ingest, since the stored rumor itself carries no epoch).
+4. Serves a web UI:
+   - `/` lists the followed groups.
+   - `/<group-id>` renders that group's **fork-history epoch tree** — each node
+     annotated with how many application messages decrypted at that exact state
+     and linking to its own epoch page — plus a per-fork breakdown of which
+     members have sent messages on each branch and the furthest epoch each
+     reached (so you can see where members sit across forks and how far down a
+     branch they have progressed).
+   - `/<group-id>/<node-tag>` is a single epoch's page: who created the commit,
+     the proposals it carried, and every application message decrypted there.
+
+   Each message is attributed to the exact fork node (and MLS epoch) it
+   decrypted at — captured during ingest, since the stored rumor carries neither
+   the node tag nor the epoch.
 
 ## Run
 
@@ -61,6 +71,7 @@ Marmot group from any Marmot client; the group appears at `/` within moments.
 All state lives in one SQLite database (`$TUNNELS_DATA/state.db`) via the
 built-in `node:sqlite` module, split into tables: `groups` (serialized MLS
 state), `rewind` (fork-history blobs), `keypackages`, `invites`, `messages`
-(per-group rumor history, namespaced by group id), and `message_epochs` (the
-epoch each message was decrypted at, keyed by `${groupId}:${rumorId}`). The
+(per-group rumor history, namespaced by group id), and `message_epochs` (where
+each message decrypted — its MLS epoch *and* fork-tree node tag — keyed by
+`${groupId}:${rumorId}`; legacy epoch-only rows are still read). The
 identity is reused across restarts, so the server keeps its group memberships.

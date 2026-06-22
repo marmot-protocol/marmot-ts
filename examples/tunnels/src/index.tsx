@@ -3,9 +3,11 @@ import { Hono } from "hono";
 
 import type { GroupRumorHistory } from "@internet-privacy/marmot-ts/client";
 
+import { computeNodeStats, summarizeForks } from "./helpers/fork-stats.js";
 import { configFromEnv, createServer } from "./marmot/setup.js";
+import { EpochPage } from "./views/epoch.js";
 import { GroupList, summarize } from "./views/group-list.js";
-import { GroupTimeline } from "./views/group-timeline.js";
+import { GroupOverview } from "./views/group-overview.js";
 import { Layout } from "./views/layout.js";
 
 const config = configFromEnv();
@@ -26,40 +28,79 @@ app.get("/", (c) => {
   );
 });
 
+/** 404 shell for an unknown group id. */
+function groupNotFound(groupId: string) {
+  return (
+    <Layout title="tunnels — not found" npub={server.npub}>
+      <section class="panel">
+        <h2>Group not found</h2>
+        <div class="empty">
+          <code>{groupId}</code> is not a group this server follows.{" "}
+          <a href="/">Back to all groups</a>.
+        </div>
+      </section>
+    </Layout>
+  );
+}
+
+/** Every decrypted rumor for a group, paired with its captured epoch+node meta. */
+async function loadMessages(groupId: string) {
+  const group = server.group(groupId)!;
+  // history is wired by the rumor-history factory in setup.ts, but the default
+  // MarmotGroup type erases it — narrow back to the concrete store.
+  const history = group.history as unknown as GroupRumorHistory | undefined;
+  const messages = history ? await history.queryRumors({}) : [];
+  const meta = await server.messageMetaFor(
+    groupId,
+    messages.map((m) => m.id),
+  );
+  return { messages, meta };
+}
+
 app.get("/:groupId", async (c) => {
   const groupId = c.req.param("groupId");
   const group = server.group(groupId);
   if (!group) {
     c.status(404);
-    return c.html(
-      <Layout title="tunnels — not found" npub={server.npub}>
-        <section class="panel">
-          <h2>Group not found</h2>
-          <div class="empty">
-            <code>{groupId}</code> is not a group this server follows.{" "}
-            <a href="/">Back to all groups</a>.
-          </div>
-        </section>
-      </Layout>,
-    );
+    return c.html(groupNotFound(groupId));
   }
 
-  // history is wired by the rumor-history factory in setup.ts, but the default
-  // MarmotGroup type erases it — narrow back to the concrete store.
-  const history = group.history as unknown as GroupRumorHistory | undefined;
-  const messages = history ? await history.queryRumors({}) : [];
-  const epochs = await server.epochsFor(
-    groupId,
-    messages.map((m) => m.id),
-  );
+  const { messages, meta } = await loadMessages(groupId);
+  const view = group.forkTreeView();
+  const stats = computeNodeStats(messages, meta);
 
   return c.html(
-    <GroupTimeline
+    <GroupOverview
       npub={server.npub}
       group={group}
-      view={group.forkTreeView()}
-      messages={messages}
-      epochs={epochs}
+      view={view}
+      countByTag={stats.countByTag}
+      forks={summarizeForks(view, stats)}
+      nameFor={(pubkey) => server.nameFor(pubkey)}
+    />,
+  );
+});
+
+app.get("/:groupId/:tag", async (c) => {
+  const groupId = c.req.param("groupId");
+  const tag = c.req.param("tag");
+  const group = server.group(groupId);
+  if (!group) {
+    c.status(404);
+    return c.html(groupNotFound(groupId));
+  }
+
+  const { messages, meta } = await loadMessages(groupId);
+  const here = messages.filter((m) => meta[m.id]?.tag === tag);
+  const detail = await server.epochDetail(group, tag);
+
+  return c.html(
+    <EpochPage
+      npub={server.npub}
+      group={group}
+      tag={tag}
+      detail={detail}
+      messages={here}
       nameFor={(pubkey) => server.nameFor(pubkey)}
     />,
   );

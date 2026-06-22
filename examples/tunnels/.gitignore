@@ -11,6 +11,16 @@
 # deps
 node_modules/
 
+# build output
+dist/
+
+# runtime state (SQLite db + generated identity key)
+data/
+*.db
+*.db-wal
+*.db-shm
+identity.key
+
 # env
 .env
 .env.production

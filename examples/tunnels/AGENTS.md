@@ -1,37 +1,52 @@
-# Agent Notes for tunnel-map
+# Agent Notes for tunnels
 
-Standalone Hono SSR example inside the `marmot-ts` pnpm workspace.
+A headless Marmot **group-history debugger** — a Hono SSR server with one MLS
+identity that gets invited into groups and renders their full fork history.
+Standalone package inside the `marmot-ts` pnpm workspace.
 
 ## Commands
 
-- `npm install` — install deps (the README uses npm, not pnpm; the workspace picks it up via `examples/*` but local deps are managed separately).
-- `npm run dev` — runs `tsx watch src/index.ts` (live-reload); server at `http://localhost:3000`.
-- `npm run build` — `tsc` into `dist/`.
-- `npm run start` — `node dist/index.js` (requires a prior build).
+- `pnpm install` — install deps (run from this dir or the workspace root).
+- `pnpm dev` — `tsx watch src/index.tsx` (live-reload); server at `http://localhost:3000`.
+- `pnpm build` — `tsc` into `dist/`.
+- `pnpm start` — `node dist/index.js` (requires a prior build).
+- `pnpm typecheck` — `tsc --noEmit`. **This is the verification step** (no tests, no lint).
 
-## Entrypoint
+## Architecture
 
-- The real entry file is `src/index.tsx` (not `src/index.ts`). The `package.json` `"dev"` script points to `src/index.ts`, but only `src/index.tsx` exists — `tsx` resolves it transparently, but `tsc` outputs to `dist/index.js`.
+- `src/index.tsx` — entrypoint: reads env config, builds + starts the server, mounts the Hono routes (`/` group list, `/:groupId` timeline).
+- `src/marmot/setup.ts` — `configFromEnv` + `createServer`: wires SQLite stores, the applesauce relay pool + event loader, and a `MarmotClient` with **infinite retention** (`maxRewindCommits`/`appPayloadPastEpochLimit` = `Infinity`, ingestion-pool bounds = `Infinity`).
+- `src/marmot/server.ts` — `TunnelServer`: lifecycle (publish identity, create-or-rotate KeyPackage, restore + connect groups, auto-accept invites) and read accessors for the HTTP layer. It is a **passive observer** — never sends/commits/self-updates, so it doesn't disturb watched groups.
+- `src/views/*.tsx` — Hono JSX: `layout` (shell + CSS), `group-list`, `group-timeline`, and `fork-graph` (the SVG branching-timeline renderer, laid out git-graph style from `group.forkTreeView()`).
+- `src/helpers/*` — `sqlite-store` (`node:sqlite` KV store), `relay-pool`, `discovery`, `prefixed-store`, `account-proof`, `format`.
+
+## Runtime requirements
+
+- **Node 22.5+** for the built-in `node:sqlite` module (developed on Node 24, where it needs no flag). `@types/node` must be ≥ 24 for the `node:sqlite` types.
+
+## Config (env vars)
+
+`TUNNELS_SECRET`, `TUNNELS_OUTBOX_RELAYS`, `TUNNELS_INBOX_RELAYS`, `TUNNELS_RELAYS`
+(shared fallback), `TUNNELS_DATA`, `PORT`. See `README.md` for the full table.
 
 ## JSX
 
-- JSX is configured for Hono's JSX runtime (`jsxImportSource: "hono/jsx"`). Do not switch to React or Preact imports.
-- Use `FC` from `hono/jsx` for component types, not `React.FC`.
+- Hono's JSX runtime (`jsxImportSource: "hono/jsx"`). Do not switch to React/Preact.
+- Use `FC` from `hono/jsx` for component types.
+- SVG elements are written as JSX; attribute names are kebab-case (`stroke-width`, `text-anchor`).
 - `verbatimModuleSyntax` is on — use `import type` for type-only imports.
 
 ## TypeScript
 
-- `module`/`moduleResolution` are both `NodeNext`. Relative imports must use `.js` extensions (even though source files are `.ts`/`.tsx`).
-- No `outDir` source maps or declaration files configured; build output goes to `dist/`.
+- `module`/`moduleResolution` are both `NodeNext`. Relative imports must use `.js` extensions (even from `.ts`/`.tsx` sources).
 - `skipLibCheck: true` — third-party type errors are suppressed.
+- The default `MarmotGroup` type erases the history store; narrow `group.history` back to `GroupRumorHistory` (as `index.tsx` does) to query rumors.
 
 ## Workspace context
 
-- This package is included in the root `pnpm-workspace.yaml` under `examples/*`.
-- It has no tests and no lint scripts. Verification = `npm run build` succeeds.
-- Root-level `pnpm build` / `pnpm test` do not run this example; work here is isolated.
+- Included in the root `pnpm-workspace.yaml` under `examples/*`. Root-level `pnpm build`/`pnpm test` do not run this example; work here is isolated.
 
 ## Git Workflow
 
-- Commit after completing a feature or significant change, once `npm run build` succeeds.
+- Commit after completing a feature or significant change, once `pnpm build` succeeds.
 - Do not commit on the `master` branch; branch first when needed.

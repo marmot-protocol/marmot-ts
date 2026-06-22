@@ -18,6 +18,7 @@ import type { ConvergenceScheduler } from "../../engine/group-engine.js";
 import type { ConvergencePolicy } from "../../core/convergence.js";
 import type { GroupHistoryTree } from "../../engine/history-tree.js";
 import type { RetainedHistoryStore } from "../../engine/retained-store.js";
+import { buildForkTreeView, type ForkTreeView } from "./fork-tree-view.js";
 import { logger } from "../../utils/debug.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import {
@@ -203,6 +204,13 @@ export type MarmotGroupEvents<
   removed: (group: MarmotGroup<THistory, TMedia>) => void;
   /** Emitted when history persistence fails (best-effort, non-blocking) */
   historyError: (error: Error) => void;
+  /**
+   * Emitted when the fork-history tree grew during ingest — a new commit or a
+   * newly observed fork branch. Fires even when the canonical state is
+   * unchanged (a superseded fork still adds nodes). Read {@link forkTreeView}
+   * to re-render.
+   */
+  historyChanged: (group: MarmotGroup<THistory, TMedia>) => void;
 };
 
 /**
@@ -291,6 +299,31 @@ export class MarmotGroup<
   /** Complete group info/debug model for chat panels and diagnostics. */
   get info(): MarmotGroupInfo {
     return getMarmotGroupInfo(this.state);
+  }
+
+  /**
+   * The live full-fork history tree: every group state observed (the canonical
+   * branch and every fork), keyed by MLS confirmation tag. Exposes synchronous
+   * structural queries (`node`, `childrenOf`, `tips`, `path`, `ancestors`,
+   * `lowestCommonAncestor`) and async snapshot access (`stateAt`,
+   * `commitMessageOf`). For a serializable rendering snapshot use
+   * {@link forkTreeView}.
+   */
+  get forkTree(): GroupHistoryTree {
+    return this.session.historyTree;
+  }
+
+  /**
+   * A plain, serializable snapshot of the fork-history tree for debugging UIs —
+   * every node with its epoch, parent/children, tip flag, and whether it lies on
+   * the canonical path to the live tip (the branch convergence settled on, i.e.
+   * the node matching {@link state}). Computed on demand.
+   */
+  forkTreeView(): ForkTreeView {
+    return buildForkTreeView(
+      this.session.historyTree,
+      bytesToHex(this.state.confirmationTag),
+    );
   }
 
   /**
@@ -574,6 +607,9 @@ export class MarmotGroup<
     events: NostrEvent[],
     options?: { maxRetries?: number },
   ): AsyncGenerator<DispositionedIngestResult> {
+    // The fork-history tree can grow during ingest (new commits / forks) without
+    // the canonical state changing — track its size to emit `historyChanged`.
+    const historySizeBefore = this.session.historyTree.size;
     for await (const result of this.session.ingest(events, options)) {
       // The engine elected us to commit a peer's departure (B6): publish the
       // staged self_remove-only commit (publish-before-apply). On publish
@@ -605,6 +641,8 @@ export class MarmotGroup<
       }
       yield result;
     }
+    if (this.session.historyTree.size !== historySizeBefore)
+      this.emit("historyChanged", this);
   }
 
   /**

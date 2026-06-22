@@ -89,6 +89,7 @@ describe("exports", () => {
         "buildAccountIdentityProofExtension",
         "buildAppDataDictionary",
         "buildFallbackFetchUrls",
+        "buildForkTreeView",
         "calculateKeyPackageRef",
         "canTransitionLifecycle",
         "canonicalizeMimeType",

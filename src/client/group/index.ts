@@ -1,6 +1,12 @@
 export * as Proposals from "./proposals/index.js";
 export * from "./application-message.js";
 export * from "./invite.js";
+export * from "./fork-tree-view.js";
+export type {
+  GroupHistoryTree,
+  HistoryNode,
+  HistoryEdge,
+} from "../../engine/history-tree.js";
 export * from "./group-media-service.js";
 export * from "./group-media-store.js";
 export * from "./marmot-group.js";

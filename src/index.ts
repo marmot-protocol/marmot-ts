@@ -11,6 +11,10 @@ export {
   type MarmotGroupEngineOptions,
 } from "./engine/group-engine.js";
 export type {
+  IngestionPoolOptions,
+  PooledEntry,
+} from "./engine/ingestion-pool.js";
+export type {
   GroupPeeler,
   PendingState,
   PeeledMessagePair,

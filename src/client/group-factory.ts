@@ -8,6 +8,7 @@ import {
 } from "ts-mls";
 import type { SerializedClientState } from "../core/client-state.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
+import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
 import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import { createCredential } from "../core/credential.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
@@ -38,6 +39,8 @@ export type GroupFactoryOptions<
   mediaFactory?: GroupMediaFactory<TMedia>;
   /** Convergence policy applied to newly created/imported groups. */
   convergencePolicy?: ConvergencePolicy;
+  /** Ingestion-pool tuning applied to newly created/imported groups. */
+  ingestionPool?: IngestionPoolOptions;
 };
 
 export type CreateGroupOptions = SimpleGroupOptions & {
@@ -63,11 +66,13 @@ export class GroupFactory<
   readonly #historyFactory: GroupHistoryFactory<THistory>;
   readonly #mediaFactory: GroupMediaFactory<TMedia>;
   readonly #convergencePolicy?: ConvergencePolicy;
+  readonly #ingestionPool?: IngestionPoolOptions;
 
   constructor(options: GroupFactoryOptions<THistory, TMedia>) {
     this.#store = options.store;
     this.#rewindStore = options.rewindStore;
     this.#convergencePolicy = options.convergencePolicy;
+    this.#ingestionPool = options.ingestionPool;
     this.#signer = options.signer;
     this.#network = options.network;
     this.#cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
@@ -121,6 +126,7 @@ export class GroupFactory<
       store: this.#store,
       rewindStore: this.#rewindStore,
       convergencePolicy: this.#convergencePolicy,
+      ingestionPool: this.#ingestionPool,
       signer: this.#signer,
       network: this.#network,
       history: this.#historyFactory,

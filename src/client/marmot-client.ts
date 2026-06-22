@@ -14,6 +14,7 @@ import {
   SerializedClientState,
 } from "../core/client-state.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
+import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
 import {
   getWelcome,
@@ -114,6 +115,13 @@ export type MarmotClientOptions<
    * ({@link DEFAULT_CONVERGENCE_POLICY}).
    */
   convergencePolicy?: ConvergencePolicy;
+  /**
+   * Ingestion-pool tuning applied to every group: max entries and max epoch-age
+   * for undecryptable events held and retried as history grows. Defaults bound
+   * it; a debugging tool that retains and processes everything can raise both
+   * (e.g. a large `maxSize` and a very large `maxEpochAge`).
+   */
+  ingestionPool?: IngestionPoolOptions;
   /** The backend for key package private material and publish tracking */
   keyPackageStore: GenericKeyValueStore<StoredKeyPackage>;
   /** Key value store for the {@link InviteManager} class, if non is provided an {@link InMemoryKeyValueStore} is used */
@@ -186,6 +194,7 @@ export class MarmotClient<
       store: options.groupStateStore,
       rewindStore: options.rewindStore,
       convergencePolicy: options.convergencePolicy,
+      ingestionPool: options.ingestionPool,
       signer: this.signer,
       accountProofSigner: options.accountProofSigner,
       network: this.network,

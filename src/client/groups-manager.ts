@@ -23,6 +23,7 @@ import {
 } from "../core/account-identity-proof.js";
 import { marmotAuthService } from "../core/auth-service.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
+import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
 import { logger } from "../utils/debug.js";
 import { hasAck } from "../utils/index.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
@@ -98,6 +99,12 @@ export type GroupsManagerOptions<
    * keep forks of any age eligible for re-convergence. Defaults to profile 1.
    */
   convergencePolicy?: ConvergencePolicy;
+  /**
+   * Ingestion-pool tuning applied to every group: max entries and max epoch-age
+   * for undecryptable events held for retry. Raise both for a debugging tool
+   * that aims to retain and process everything.
+   */
+  ingestionPool?: IngestionPoolOptions;
 };
 
 /** Events emitted by {@link GroupsManager} */
@@ -176,6 +183,7 @@ export class GroupsManager<
       store: options.store,
       rewindStore: options.rewindStore,
       convergencePolicy: options.convergencePolicy,
+      ingestionPool: options.ingestionPool,
       signer: options.signer,
       network: options.network,
       cryptoProvider: this.cryptoProvider,
@@ -187,6 +195,7 @@ export class GroupsManager<
       store: options.store,
       rewindStore: options.rewindStore,
       convergencePolicy: options.convergencePolicy,
+      ingestionPool: options.ingestionPool,
       signer: options.signer,
       network: options.network,
       cryptoProvider: this.cryptoProvider,

@@ -13,6 +13,7 @@ import {
   DEFAULT_CONVERGENCE_POLICY,
 } from "../core/convergence.js";
 import { GroupHistoryTree } from "../engine/history-tree.js";
+import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
 import { RetainedHistoryStore } from "../engine/retained-store.js";
 import { logger } from "../utils/debug.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
@@ -42,6 +43,8 @@ export type GroupRegistryOptions<
   mediaFactory?: GroupMediaFactory<TMedia>;
   /** Convergence policy applied to loaded groups (rollback horizon, selection). */
   convergencePolicy?: ConvergencePolicy;
+  /** Ingestion-pool tuning applied to loaded groups (size + epoch-age bounds). */
+  ingestionPool?: IngestionPoolOptions;
 };
 
 /** Cache-level events emitted by {@link GroupRegistry}. */
@@ -76,6 +79,7 @@ export class GroupRegistry<
   readonly historyFactory: GroupHistoryFactory<THistory>;
   readonly mediaFactory: GroupMediaFactory<TMedia>;
   readonly convergencePolicy?: ConvergencePolicy;
+  readonly ingestionPool?: IngestionPoolOptions;
 
   /** In-memory cache of loaded group instances, keyed by hex group id */
   #groups = new Map<string, MarmotGroup<THistory, TMedia>>();
@@ -103,6 +107,7 @@ export class GroupRegistry<
       options.historyFactory as GroupHistoryFactory<THistory>;
     this.mediaFactory = options.mediaFactory as GroupMediaFactory<TMedia>;
     this.convergencePolicy = options.convergencePolicy;
+    this.ingestionPool = options.ingestionPool;
   }
 
   /** Returns the list of currently loaded (cached) group instances. */
@@ -130,6 +135,7 @@ export class GroupRegistry<
       retained,
       historyTree,
       convergencePolicy: this.convergencePolicy,
+      ingestionPool: this.ingestionPool,
       signer: this.signer,
       cryptoProvider: this.cryptoProvider,
       network: this.network,

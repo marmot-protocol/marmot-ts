@@ -11,6 +11,7 @@ import {
 } from "../../core/client-state.js";
 import type { ConvergencePolicy } from "../../core/convergence.js";
 import type { Disposition } from "../../core/inbound.js";
+import type { IngestionPoolOptions } from "../../engine/ingestion-pool.js";
 import { MarmotGroupEngine } from "../../engine/group-engine.js";
 import { GroupHistoryTree } from "../../engine/history-tree.js";
 import type { RetainedHistoryStore } from "../../engine/retained-store.js";
@@ -140,6 +141,13 @@ export type GroupSessionOptions<
    * forks of any age for re-convergence.
    */
   convergencePolicy?: ConvergencePolicy;
+  /**
+   * Tuning for the persistent ingestion pool (undecryptable events held and
+   * retried as the history tree grows): max entries and max epoch-age before an
+   * unresolved entry is given up. Defaults bound it; a debugging tool that wants
+   * to retain everything can raise both.
+   */
+  ingestionPool?: IngestionPoolOptions;
   history?: THistory;
   onStateChanged?: (state: ClientState) => void;
   onStateSaved?: () => void;
@@ -208,6 +216,7 @@ export class GroupSession<
       retained: options.retained,
       historyTree: options.historyTree,
       convergencePolicy: options.convergencePolicy,
+      ingestionPool: options.ingestionPool,
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,
       scheduler: options.scheduler,

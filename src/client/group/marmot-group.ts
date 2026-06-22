@@ -17,6 +17,7 @@ import { mayReleaseOutbound } from "../../core/convergence-status.js";
 import type { ConvergenceScheduler } from "../../engine/group-engine.js";
 import type { ConvergencePolicy } from "../../core/convergence.js";
 import type { GroupHistoryTree } from "../../engine/history-tree.js";
+import type { IngestionPoolOptions } from "../../engine/ingestion-pool.js";
 import type { RetainedHistoryStore } from "../../engine/retained-store.js";
 import { buildForkTreeView, type ForkTreeView } from "./fork-tree-view.js";
 import { logger } from "../../utils/debug.js";
@@ -146,6 +147,11 @@ export type MarmotGroupOptions<
    * re-convergence. Defaults to the profile-1 policy.
    */
   convergencePolicy?: ConvergencePolicy;
+  /**
+   * Tuning for the persistent ingestion pool (size + epoch-age bounds on
+   * undecryptable events held for retry). Defaults bound it.
+   */
+  ingestionPool?: IngestionPoolOptions;
   /** The storage interface for the groups application message history (optional) */
   history?: THistory | GroupHistoryFactory<THistory>;
   /**
@@ -386,6 +392,7 @@ export class MarmotGroup<
       retained: options.retained,
       historyTree: options.historyTree,
       convergencePolicy: options.convergencePolicy,
+      ingestionPool: options.ingestionPool,
       history: this.history,
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,

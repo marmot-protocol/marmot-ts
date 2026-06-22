@@ -98,11 +98,15 @@ async function main(): Promise<void> {
     root.unmount();
     renderer.destroy();
     // stop() disposes the EventStore (and its loader) and closes the relay pool,
-    // so applesauce leaves no background timers holding the loop open — the
-    // process drains and exits on its own without a forced process.exit().
+    // so applesauce leaves no JS timers holding the loop open. But opentui's
+    // native (Zig) renderer keeps a handle alive that renderer.destroy() does
+    // not fully release under Bun — with the full UI mounted it pins the process
+    // for ~15-18s after teardown even though no JS timer or libuv handle remains.
+    // All our own teardown above is synchronous and complete here, so exit
+    // explicitly rather than waiting on a loop that won't drain on its own.
     live.stop();
     logFile?.close();
-    process.exitCode = 0;
+    process.exit(0);
   };
   process.on("exit", () => {
     if (!stopped) {

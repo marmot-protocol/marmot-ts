@@ -30,6 +30,7 @@ export default defineConfig({
           { text: "Groups", link: "/client/marmot-group" },
           { text: "Proposals", link: "/client/proposals" },
           { text: "History", link: "/client/history" },
+          { text: "Fork History", link: "/client/fork-history" },
           { text: "Network", link: "/client/network" },
           { text: "Storage", link: "/client/storage" },
           { text: "UI Frameworks", link: "/client/ui-frameworks" },

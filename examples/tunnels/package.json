@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@internet-privacy/marmot-ts": "workspace:*",
+    "@libs/qrcode": "npm:@jsr/libs__qrcode@^3.0.1",
     "applesauce-accounts": "0.0.0-next-20260620175751",
     "applesauce-common": "0.0.0-next-20260620175751",
     "applesauce-core": "0.0.0-next-20260620175751",

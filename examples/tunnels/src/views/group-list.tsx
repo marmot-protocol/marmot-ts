@@ -4,6 +4,7 @@ import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
 
 import { groupName } from "../marmot/server.js";
 import { Layout } from "./layout.js";
+import { QrCode } from "./qr.js";
 
 export interface GroupSummary {
   group: MarmotGroup;
@@ -76,6 +77,17 @@ export const GroupList: FC<{
           </a>
         ))
       )}
+    </section>
+
+    <section class="panel invite">
+      <h2>Invite this observer</h2>
+      <div class="invite-row">
+        <QrCode value={npub} />
+        <div>
+          <p>Scan to invite, or add this npub to a Marmot group:</p>
+          <code class="npub">{npub}</code>
+        </div>
+      </div>
     </section>
   </Layout>
 );

@@ -79,6 +79,10 @@ const STYLES = `
   table.heads th { color: var(--muted); font-weight: 500; font-size: 11px;
     text-transform: uppercase; letter-spacing: .05em; }
   table.heads .mono { font-size: 12px; }
+  .invite .invite-row { display: flex; gap: 18px; align-items: center; }
+  .invite svg { border-radius: 6px; display: block; }
+  .invite p { margin: 0 0 8px; color: var(--muted); }
+  .invite .npub { font-size: 12px; word-break: break-all; color: var(--fg); }
 `;
 
 /** The shared HTML shell: dark theme, top bar with the server identity. */

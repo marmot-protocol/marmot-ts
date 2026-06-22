@@ -61,9 +61,9 @@
       "default": "./dist/index.js"
     },
     "./mls": {
-      "types": "./src/mls.d.ts",
-      "import": "./src/mls.js",
-      "default": "./src/mls.js"
+      "types": "./dist/mls.d.ts",
+      "import": "./dist/mls.js",
+      "default": "./dist/mls.js"
     },
     "./client": {
       "types": "./dist/client/index.d.ts",

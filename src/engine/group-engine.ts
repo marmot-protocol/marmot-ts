@@ -41,6 +41,7 @@ import { logger } from "../utils/debug.js";
 import { createAdminCommitPolicyCallback } from "./admin-policy.js";
 import { DeliveredPayloadLedger } from "./delivered-payloads.js";
 import { ForkRecovery } from "./fork-recovery.js";
+import { GroupHistoryTree } from "./history-tree.js";
 import {
   type AppliedForkResolution,
   type IngestContext,
@@ -89,6 +90,12 @@ export type MarmotGroupEngineOptions<TEnvelope> = {
    */
   retained?: RetainedHistoryStore;
   /**
+   * A pre-populated full-fork history tree, rehydrated from persistence. When
+   * omitted the tree is seeded with the current tip as its root and grows as
+   * commits arrive.
+   */
+  historyTree?: GroupHistoryTree;
+  /**
    * Injectable wall-clock (ms) for the convergence-status quiescence window
    * (B5). Defaults to `Date.now`; tests pass a fake clock for determinism.
    */
@@ -130,6 +137,8 @@ export class MarmotGroupEngine<TEnvelope> {
 
   /** Retained canonical states + applied commits for fork recovery. */
   readonly #retained: RetainedHistoryStore;
+  /** Full-fork history tree: every observed state (canonical + every fork). */
+  readonly #tree: GroupHistoryTree;
   /** Convergence candidate-branch construction and selection. */
   readonly #forkRecovery: ForkRecovery<TEnvelope>;
   /** App payloads delivered eagerly, retracted as `invalidated` on rewind (M7). */
@@ -169,7 +178,42 @@ export class MarmotGroupEngine<TEnvelope> {
 
     this.#retained =
       options.retained ?? new RetainedHistoryStore(options.state);
+    this.#tree = options.historyTree ?? new GroupHistoryTree(options.state);
     this.#forkRecovery = new ForkRecovery(options.ciphersuite, options.peeler);
+  }
+
+  /**
+   * The full-fork history tree: every group state observed — the canonical
+   * branch and every fork — keyed by MLS confirmation tag. Read-only structural
+   * access; the engine grows it as commits and proposals arrive.
+   */
+  get history(): GroupHistoryTree {
+    return this.#tree;
+  }
+
+  /** Serializes the full-fork history tree for persistence. */
+  serializeHistory(): Uint8Array {
+    return this.#tree.serialize();
+  }
+
+  /**
+   * Records an applied commit into both retained history and the history tree.
+   * The freshly-produced `newState` is captured pristine; a tree hiccup (e.g. a
+   * parent not yet present) is logged and never breaks protocol processing.
+   */
+  #recordCommitNode(
+    parentState: ClientState,
+    message: Parameters<RetainedHistoryStore["record"]>[1],
+    newState: ClientState,
+  ): void {
+    this.#retained.record(parentState, message, newState);
+    try {
+      const parentTag = bytesToHex(parentState.confirmationTag);
+      if (!this.#tree.hasNode(parentTag)) this.#tree.setRoot(parentState);
+      this.#tree.recordCommit(parentTag, message, newState);
+    } catch (error) {
+      this.#log()("history tree recordCommit failed: %o", error);
+    }
   }
 
   get state(): ClientState {
@@ -408,7 +452,7 @@ export class MarmotGroupEngine<TEnvelope> {
         groupLifecycleStates.merging,
       );
       this.#setState(pending.newState);
-      this.#retained.record(
+      this.#recordCommitNode(
         pending.parentState,
         pending.commitMessage,
         pending.newState,
@@ -665,6 +709,16 @@ export class MarmotGroupEngine<TEnvelope> {
       log: this.#log(),
       getState: () => this.#state,
       setState: (state) => this.#setState(state),
+      recordCommit: (parentState, message, newState) =>
+        this.#recordCommitNode(parentState, message, newState),
+      recordProposalStaged: (state) => {
+        try {
+          const tag = bytesToHex(state.confirmationTag);
+          if (this.#tree.hasNode(tag)) this.#tree.updateSnapshot(tag, state);
+        } catch (error) {
+          this.#log()("history tree recordProposalStaged failed: %o", error);
+        }
+      },
       createAdminCallback: () => this.#createAdminVerificationCallback(),
       resolveFork: (forkEpoch, pool, encrypted, witnessEnvelopes) =>
         this.#resolveFork(forkEpoch, pool, encrypted, witnessEnvelopes),
@@ -722,6 +776,17 @@ export class MarmotGroupEngine<TEnvelope> {
       retained: this.#retained,
       adminCallback: this.#createAdminVerificationCallback(),
     });
+
+    // Retain every branch built while resolving — the winner and every loser —
+    // so the full fork tree survives even when we do not change branches. Edges
+    // are in DFS order (parents first); a dangling edge is skipped, not fatal.
+    if (resolution.outcome !== "skip") {
+      try {
+        for (const edge of resolution.edges) this.#tree.recordEdge(edge);
+      } catch (error) {
+        this.#log()("history tree recordEdge failed: %o", error);
+      }
+    }
 
     if (resolution.outcome !== "recovered") {
       return { outcome: resolution.outcome };

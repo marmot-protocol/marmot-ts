@@ -68,6 +68,22 @@ export interface IngestContext<TEnvelope> {
   log: Debugger;
   getState(): ClientState;
   setState(state: ClientState): void;
+  /**
+   * Records an applied commit on the canonical branch: updates retained history
+   * and the full-fork history tree. Replaces a direct `retained.record` so both
+   * stay in lockstep, with the freshly-produced child captured pristine.
+   */
+  recordCommit(
+    parentState: ClientState,
+    message: MlsMessage,
+    newState: ClientState,
+  ): void;
+  /**
+   * Records that a proposal was staged onto the current state (its epoch and
+   * confirmation tag are unchanged), so the history tree's node snapshot picks
+   * up the new `unappliedProposals`.
+   */
+  recordProposalStaged(state: ClientState): void;
   /** Builds the admin-verification callback against the current state. */
   createAdminCallback(): IncomingMessageCallback;
   /** Resolves a fork and applies the rewind (state + lifecycle) on success. */
@@ -379,6 +395,7 @@ export async function* ingestEnvelopes<TEnvelope>(
           ctx.getState().groupContext.epoch,
         );
         ctx.setState(result.newState);
+        ctx.recordProposalStaged(result.newState);
         yield { kind: "processed", result, envelope, message };
       } else if (result.kind === "applicationMessage") {
         // The MLS layer has authenticated the sender; advance our ratchet to
@@ -534,7 +551,7 @@ export async function* ingestEnvelopes<TEnvelope>(
           return;
         }
 
-        ctx.retained.record(parentState, message, result.newState);
+        ctx.recordCommit(parentState, message, result.newState);
         log(
           "commit envelope:%s applied – new epoch:%d",
           envelopeLabel(envelope),

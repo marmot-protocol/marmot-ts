@@ -25,6 +25,8 @@ import {
   selectCanonicalBranch,
 } from "../core/convergence.js";
 import { getCredentialPubkey } from "../core/credential.js";
+import { serializeClientState } from "../core/client-state.js";
+import type { EdgeSnapshot } from "./history-tree.js";
 import type { GroupPeeler } from "./types.js";
 import { framedEpoch } from "./wire-format.js";
 
@@ -40,6 +42,12 @@ interface BuiltBranches {
   branches: BranchCandidate[];
   tips: Map<BranchCandidate, ClientState>;
   chains: Map<BranchCandidate, ChainLink[]>;
+  /**
+   * Every edge explored, in DFS creation order (parents before children), each
+   * carrying a snapshot captured before the child's secrets could be zeroed.
+   * Feeds the full-fork history tree so abandoned branches are retained.
+   */
+  edges: EdgeSnapshot[];
 }
 
 /** The outcome of resolving a fork; the caller applies state/lifecycle changes. */
@@ -49,8 +57,11 @@ export type ForkResolution =
       winnerTip: ClientState;
       winnerChain: ChainLink[];
       result: ProcessMessageResult;
+      /** Every branch edge built while resolving (for history retention). */
+      edges: EdgeSnapshot[];
     }
-  | { outcome: "superseded" | "skip" };
+  | { outcome: "superseded"; edges: EdgeSnapshot[] }
+  | { outcome: "skip" };
 
 /** Inputs needed to access retained history during fork resolution. */
 export interface RetainedView {
@@ -104,6 +115,7 @@ export class ForkRecovery<TEnvelope> {
     const branches: BranchCandidate[] = [];
     const tips = new Map<BranchCandidate, ClientState>();
     const chains = new Map<BranchCandidate, ChainLink[]>();
+    const edges: EdgeSnapshot[] = [];
     let counter = 0;
 
     const witnessesAt = async (state: ClientState): Promise<AppWitness[]> => {
@@ -211,6 +223,18 @@ export class ForkRecovery<TEnvelope> {
         const tag = bytesToHex(next.newState.confirmationTag);
         if (seen.has(tag)) continue;
         extended = true;
+        // Snapshot the child now, before recursing — exploring its children
+        // would zero this state's consumed secrets in place (ts-mls), corrupting
+        // a snapshot taken afterward.
+        const commitBytes = encode(mlsMessageEncoder, message);
+        edges.push({
+          parentTag: bytesToHex(state.confirmationTag),
+          childTag: tag,
+          childEpoch: Number(next.newState.groupContext.epoch),
+          commitBytes,
+          commitDigest: commitDigest(commitBytes),
+          childSnapshot: serializeClientState(next.newState),
+        });
         await explore(
           next.newState,
           message,
@@ -246,7 +270,7 @@ export class ForkRecovery<TEnvelope> {
       [],
       [],
     );
-    return { branches, tips, chains };
+    return { branches, tips, chains, edges };
   }
 
   /**
@@ -281,7 +305,7 @@ export class ForkRecovery<TEnvelope> {
     const ours = retained.appliedCommitsBetween(forkEpoch, currentTipEpoch);
     if (ours.length === 0) return { outcome: "skip" };
 
-    const { branches, tips, chains } = await this.#buildBranches(
+    const { branches, tips, chains, edges } = await this.#buildBranches(
       root,
       [...ours, ...pool],
       encrypted,
@@ -296,18 +320,19 @@ export class ForkRecovery<TEnvelope> {
       this.#policy,
     );
     const winnerTip = winner ? tips.get(winner) : undefined;
-    if (!winner || !winnerTip) return { outcome: "superseded" };
+    if (!winner || !winnerTip) return { outcome: "superseded", edges };
 
     if (
       bytesToHex(winnerTip.confirmationTag) ===
       bytesToHex(currentState.confirmationTag)
     )
-      return { outcome: "superseded" };
+      return { outcome: "superseded", edges };
 
     return {
       outcome: "recovered",
       winnerTip,
       winnerChain: chains.get(winner) ?? [],
+      edges,
       result: {
         kind: "newState",
         newState: winnerTip,

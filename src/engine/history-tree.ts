@@ -33,6 +33,28 @@ export interface HistoryEdge {
 }
 
 /**
+ * An edge plus its child's pre-serialized snapshot, captured at the moment the
+ * child state is produced (see {@link GroupHistoryTree.recordEdge}). Fork
+ * recovery emits these so loser branches are retained with pristine snapshots.
+ */
+export interface EdgeSnapshot {
+  /** Parent node tag (must already be in the tree). */
+  parentTag: string;
+  /** Child node tag (hex of the child state's confirmation tag). */
+  childTag: string;
+  /** The child state's MLS epoch. */
+  childEpoch: number;
+  /** Serialized commit `MlsMessage` that produced the child. */
+  commitBytes: Uint8Array;
+  /** SHA-256 of `commitBytes`. */
+  commitDigest: Uint8Array;
+  /** Serialized child `ClientState`, captured before any secret zeroing. */
+  childSnapshot: Uint8Array;
+  /** The committer's MLS leaf index, when known. */
+  senderLeafIndex?: number;
+}
+
+/**
  * A node in the group history tree: one MLS group state. The node id is the hex
  * of the state's MLS `confirmationTag`, which is unique per state (it is a MAC
  * over the confirmed transcript hash, so two same-epoch forks have distinct
@@ -293,6 +315,36 @@ export class GroupHistoryTree {
     }
     if (!parent.childTags.includes(childTag)) parent.childTags.push(childTag);
     return childTag;
+  }
+
+  /**
+   * Records an edge from a snapshot captured at branch-build time. Unlike
+   * {@link recordCommit}, the child snapshot is supplied pre-serialized — fork
+   * recovery serializes each branch state the instant it is produced, before
+   * ts-mls can zero that state's secrets when exploring its children. Idempotent
+   * on the child tag. Returns `false` (without recording) when the parent is not
+   * yet in the tree, so a batch can skip a dangling edge instead of throwing.
+   */
+  recordEdge(edge: EdgeSnapshot): boolean {
+    const parent = this.#nodes.get(edge.parentTag);
+    if (!parent) return false;
+    if (!this.#nodes.has(edge.childTag)) {
+      this.#nodes.set(edge.childTag, {
+        tag: edge.childTag,
+        epoch: edge.childEpoch,
+        parentTag: edge.parentTag,
+        childTags: [],
+        edge: {
+          commitDigest: edge.commitDigest,
+          senderLeafIndex: edge.senderLeafIndex,
+        },
+      });
+      this.#snapshots.set(edge.childTag, edge.childSnapshot);
+      this.#commitBytes.set(edge.childTag, edge.commitBytes);
+    }
+    if (!parent.childTags.includes(edge.childTag))
+      parent.childTags.push(edge.childTag);
+    return true;
   }
 
   /**

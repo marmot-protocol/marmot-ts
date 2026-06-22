@@ -98,11 +98,12 @@ export type MarmotClientOptions<
   /** The backend to store and load the groups from */
   groupStateStore: GenericKeyValueStore<SerializedClientState>;
   /**
-   * Dedicated backend for the per-group convergence rewind-history blob. When
-   * provided, the rewind window is persisted so fork recovery survives a
+   * Dedicated backend for the per-group full-fork history tree (the single
+   * persisted source for fork recovery and the {@link MarmotGroup.forkTree}
+   * API). When provided, the tree is persisted so fork recovery survives a
    * restart; back it with the same durable (ideally encrypted) backend as
-   * `groupStateStore`. Optional — when omitted, rewind history is in-memory
-   * only and is rebuilt from the current tip after each restart.
+   * `groupStateStore`. Optional — when omitted, history is in-memory only and is
+   * rebuilt from the current tip after each restart.
    */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
   /**

@@ -8,7 +8,10 @@ import {
   deserializeClientState,
   SerializedClientState,
 } from "../core/client-state.js";
-import type { ConvergencePolicy } from "../core/convergence.js";
+import {
+  type ConvergencePolicy,
+  DEFAULT_CONVERGENCE_POLICY,
+} from "../core/convergence.js";
 import { GroupHistoryTree } from "../engine/history-tree.js";
 import { RetainedHistoryStore } from "../engine/retained-store.js";
 import { logger } from "../utils/debug.js";
@@ -30,7 +33,7 @@ export type GroupRegistryOptions<
   TMedia extends BaseGroupMedia | undefined = undefined,
 > = {
   store: GenericKeyValueStore<SerializedClientState>;
-  /** Dedicated store for the per-group rewind-history blob (optional). */
+  /** Dedicated store for the per-group full-fork history tree (optional). */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
   signer: EventSigner;
   network: NostrNetworkInterface;
@@ -147,8 +150,12 @@ export class GroupRegistry<
     if (!stateBytes) throw new Error(`Group ${idHex} not found`);
 
     const state = deserializeClientState(stateBytes);
-    const retained = await this.#loadRetained(idHex, state);
     const historyTree = await this.#loadHistory(idHex, state);
+    // The bounded convergence window is derived from the tree (the single
+    // persisted source), never stored separately.
+    const retained = historyTree
+      ? await this.#retainedFromTree(historyTree, state)
+      : undefined;
 
     return this.build(state, retained, historyTree);
   }
@@ -179,38 +186,45 @@ export class GroupRegistry<
   }
 
   /**
-   * Rehydrates the rewind-history store for a group, or returns `undefined` to
-   * cold-start (tip-only seed). Guards against a torn/stale rewind blob: if its
-   * highest retained epoch does not match the loaded tip epoch, it is discarded
-   * rather than fed into convergence.
+   * Rebuilds the bounded convergence window from the tree's canonical path
+   * (root → the loaded tip), so fork recovery has the sync access it needs. Only
+   * the last `maxRewindCommits` epochs are materialized (the whole path when the
+   * horizon is infinite); `record` prunes anything older. Returns `undefined` if
+   * the path or any snapshot/commit is missing.
    */
-  async #loadRetained(
-    idHex: string,
+  async #retainedFromTree(
+    tree: GroupHistoryTree,
     state: ClientState,
   ): Promise<RetainedHistoryStore | undefined> {
-    if (!this.rewindStore) return undefined;
+    const tipTag = bytesToHex(state.confirmationTag);
+    const fullPath = tree.path(tipTag);
+    if (!fullPath || fullPath.length === 0) return undefined;
 
-    const rewindBytes = await this.rewindStore.getItem(idHex);
-    if (!rewindBytes) return undefined;
+    const horizon =
+      this.convergencePolicy?.maxRewindCommits ??
+      DEFAULT_CONVERGENCE_POLICY.maxRewindCommits;
+    const keep = Number.isFinite(horizon)
+      ? Math.max(1, horizon + 1)
+      : fullPath.length;
+    const path = fullPath.slice(-keep);
 
-    try {
-      const snapshot = RetainedHistoryStore.deserialize(rewindBytes);
-      const store = new RetainedHistoryStore(snapshot, this.convergencePolicy);
-      const tipEpoch = Number(state.groupContext.epoch);
-      if (store.tipEpoch() !== tipEpoch) {
-        log(
-          "discarding stale rewind history for %s (snapshot tip %s != state %s)",
-          idHex,
-          store.tipEpoch(),
-          tipEpoch,
-        );
-        return undefined;
-      }
-      return store;
-    } catch (error) {
-      log("failed to rehydrate rewind history for %s: %o", idHex, error);
-      return undefined;
+    const states: ClientState[] = [];
+    for (const tag of path) {
+      const s = await tree.stateAt(tag);
+      if (!s) return undefined;
+      states.push(s);
     }
+
+    const retained = new RetainedHistoryStore(
+      states[0],
+      this.convergencePolicy,
+    );
+    for (let i = 1; i < path.length; i++) {
+      const commit = await tree.commitMessageOf(path[i]);
+      if (!commit) return undefined;
+      retained.record(states[i - 1], commit, states[i]);
+    }
+    return retained;
   }
 
   /** Caches a group instance and subscribes to its destroy event. */

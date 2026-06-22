@@ -116,13 +116,17 @@ export type GroupSessionOptions<
   ciphersuite: CiphersuiteImpl;
   store: GenericKeyValueStore<SerializedClientState>;
   /**
-   * Dedicated store for the rewind-history blob (one entry per group, keyed by
-   * hex group id). When set, the retained rewind window is persisted on
-   * {@link GroupSession.save} and survives a restart. Optional — when omitted,
-   * rewind history is in-memory only (legacy behavior).
+   * Dedicated store for the full-fork history tree (per-node keys under a hex
+   * group-id prefix). When set, the tree is flushed on {@link GroupSession.save}
+   * and survives a restart. Optional — when omitted, history is in-memory only
+   * and rebuilt from the current tip after each restart.
    */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
-  /** A retained-history store rehydrated from {@link rewindStore} on load. */
+  /**
+   * The bounded convergence window, derived from the history tree on load (never
+   * persisted separately). Set by the loader ({@link GroupRegistry}); fresh
+   * groups seed it from the current tip.
+   */
   retained?: RetainedHistoryStore;
   /**
    * A full-fork history tree rehydrated from {@link rewindStore} on load. When
@@ -275,13 +279,10 @@ export class GroupSession<
     const idHex = bytesToHex(this.id);
     const stateBytes = serializeClientState(this.state);
     await this.store.setItem(idHex, stateBytes);
-    // Persist the rewind window so fork recovery survives a restart. Written
-    // after the tip; a torn write is tolerated by the load-time epoch guard.
-    if (this.rewindStore) {
-      await this.rewindStore.setItem(idHex, this.#engine.serializeRetained());
-      // Append-only flush of any new fork-tree nodes (O(new nodes)).
-      await this.#engine.history.flush();
-    }
+    // Persist the full-fork history tree — the single source for fork recovery
+    // across restarts. Append-only flush of any new nodes (O(new nodes)). The
+    // bounded convergence window is rebuilt from the tree on load.
+    if (this.rewindStore) await this.#engine.history.flush();
     this.#dirty = false;
     this.#onStateSaved?.();
   }

@@ -71,54 +71,35 @@ async function buildStoreWithHistory() {
   return { store, epoch0, epoch1, epoch2 };
 }
 
-describe("RetainedHistoryStore serialization", () => {
-  it("round-trips states and applied commits", async () => {
+describe("RetainedHistoryStore (in-memory convergence window)", () => {
+  it("records states + applied commits and exposes the branch range", async () => {
     const { store, epoch0, epoch1, epoch2 } = await buildStoreWithHistory();
 
-    const snapshot = RetainedHistoryStore.deserialize(store.serialize());
-    const restored = new RetainedHistoryStore(snapshot);
+    expect(store.anchorEpoch()).toBe(0);
+    expect(store.tipEpoch()).toBe(2);
+    expect(store.size).toBe(3);
 
-    // Anchor / tip preserved.
-    expect(restored.anchorEpoch()).toBe(0);
-    expect(restored.tipEpoch()).toBe(2);
-    expect(restored.size).toBe(3);
-
-    // Each retained state round-trips (compare by confirmation tag + epoch).
     for (const [epoch, original] of [
       [0, epoch0],
       [1, epoch1],
       [2, epoch2],
     ] as const) {
-      const state = restored.stateAt(epoch);
+      const state = store.stateAt(epoch);
       expect(state, `state at epoch ${epoch}`).toBeDefined();
       expect(Number(state!.groupContext.epoch)).toBe(epoch);
       expect(state!.confirmationTag).toEqual(original.confirmationTag);
     }
 
-    // Applied commits round-trip and reconstruct the branch range.
-    expect(restored.hasState(1)).toBe(true);
-    expect(restored.hasState(99)).toBe(false);
-    expect(restored.appliedCommitsBetween(0, 2)).toHaveLength(2);
+    expect(store.hasState(1)).toBe(true);
+    expect(store.hasState(99)).toBe(false);
+    expect(store.appliedCommitsBetween(0, 2)).toHaveLength(2);
   });
 
-  it("rejects an unknown snapshot version byte", async () => {
-    const { store } = await buildStoreWithHistory();
-    const bytes = store.serialize();
-    bytes[0] = 0xff; // corrupt the version byte
-    expect(() => RetainedHistoryStore.deserialize(bytes)).toThrow(
-      /unknown snapshot version/,
-    );
-  });
-
-  it("round-trips an empty-applied-commits store (tip only)", async () => {
+  it("seeds tip-only with no applied commits", async () => {
     const { epoch0 } = await buildStoreWithHistory();
-    const fresh = new RetainedHistoryStore(epoch0); // seeded with the tip only
-
-    const restored = new RetainedHistoryStore(
-      RetainedHistoryStore.deserialize(fresh.serialize()),
-    );
-    expect(restored.tipEpoch()).toBe(0);
-    expect(restored.size).toBe(1);
-    expect(restored.appliedCommitsBetween(0, 1)).toHaveLength(0);
+    const fresh = new RetainedHistoryStore(epoch0);
+    expect(fresh.tipEpoch()).toBe(0);
+    expect(fresh.size).toBe(1);
+    expect(fresh.appliedCommitsBetween(0, 1)).toHaveLength(0);
   });
 });

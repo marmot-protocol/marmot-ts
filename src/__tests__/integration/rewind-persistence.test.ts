@@ -162,8 +162,9 @@ describe("rewind history persistence across restart", () => {
     const store = new InMemoryKeyValueStore<SerializedClientState>();
     const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
 
-    // Session 1: follow the losing (higher) branch onto epoch 2, persisting both
-    // the tip state and the rewind window (which retains epoch 1 + its commit).
+    // Session 1: follow the losing (higher) branch onto epoch 2, persisting the
+    // tip state and the full-fork history tree (which retains epoch 1 + its
+    // commit — the bounded rewind window is rebuilt from the tree on load).
     const first = new MarmotGroup(memberEpoch1, {
       store,
       rewindStore,
@@ -177,8 +178,11 @@ describe("rewind history persistence across restart", () => {
     );
     first.dispose();
 
-    // Sanity: the rewind blob was actually written.
-    expect(await rewindStore.getItem(groupId)).not.toBeNull();
+    // Sanity: the history tree was actually persisted (per-node edge keys).
+    const persistedKeys = await rewindStore.keys();
+    expect(persistedKeys.some((k) => k.startsWith(`${groupId}/edge/`))).toBe(
+      true,
+    );
 
     // "Restart": rehydrate the group through the real load path.
     const registry = new GroupRegistry({

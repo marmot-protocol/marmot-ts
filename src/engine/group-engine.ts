@@ -88,9 +88,10 @@ export type MarmotGroupEngineOptions<TEnvelope> = {
   peeler: GroupPeeler<TEnvelope>;
   onStateChanged?: (state: ClientState) => void;
   /**
-   * A pre-populated retained-history store, rehydrated from persistence so the
-   * rewind window survives a restart. When omitted the store is seeded with only
-   * the current tip (no past-epoch rewind until new commits accrue).
+   * The bounded convergence window (canonical states + applied commits within
+   * the rollback horizon), derived from the history tree on load. When omitted
+   * it is seeded with only the current tip (no past-epoch rewind until new
+   * commits accrue). Never persisted separately — the tree is the source.
    */
   retained?: RetainedHistoryStore;
   /**
@@ -236,15 +237,6 @@ export class MarmotGroupEngine<TEnvelope> {
 
   set state(newState: ClientState) {
     this.#setState(newState);
-  }
-
-  /**
-   * Serializes the retained-history rewind window for persistence (states +
-   * applied commits, bounded to the rollback horizon). Pair with
-   * {@link MarmotGroupEngineOptions.retained} to restore it on reload.
-   */
-  serializeRetained(): Uint8Array {
-    return this.#retained.serialize();
   }
 
   /**

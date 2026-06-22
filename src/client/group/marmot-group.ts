@@ -170,8 +170,9 @@ export type MarmotGroupOptions<
    */
   scheduler?: ConvergenceScheduler;
   /**
-   * A retained-history store rehydrated from {@link rewindStore} on load. Set by
-   * the loader ({@link GroupRegistry}); not part of the public construction API.
+   * The bounded convergence window, derived from the history tree on load. Set
+   * by the loader ({@link GroupRegistry}); not part of the public construction
+   * API.
    */
   retained?: RetainedHistoryStore;
   /**

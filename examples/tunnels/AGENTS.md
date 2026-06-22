@@ -16,7 +16,7 @@ Standalone package inside the `marmot-ts` pnpm workspace.
 
 - `src/index.tsx` — entrypoint: reads env config, builds + starts the server, mounts the Hono routes (`/` group list, `/:groupId` timeline).
 - `src/marmot/setup.ts` — `configFromEnv` + `createServer`: wires SQLite stores, the applesauce relay pool + event loader, and a `MarmotClient` with **infinite retention** (`maxRewindCommits`/`appPayloadPastEpochLimit` = `Infinity`, ingestion-pool bounds = `Infinity`).
-- `src/marmot/server.ts` — `TunnelServer`: lifecycle (publish identity, create-or-rotate KeyPackage, restore + connect groups, auto-accept invites) and read accessors for the HTTP layer. It is a **passive observer** — never sends/commits/self-updates, so it doesn't disturb watched groups.
+- `src/marmot/server.ts` — `TunnelServer`: lifecycle (publish identity, create-or-rotate KeyPackage, follow + connect groups, auto-accept invites) and read accessors for the HTTP layer. It is a **passive observer** — never sends/commits/self-updates, so it doesn't disturb watched groups. It drives kind-445 ingest itself (instead of `connectAll`) so it can capture the epoch each application message decrypts at (`result.result.newState.groupContext.epoch`) — that epoch only lives on the ingest result, never on the stored rumor — and persists it in the `message_epochs` table keyed by `${groupId}:${rumorId}`.
 - `src/views/*.tsx` — Hono JSX: `layout` (shell + CSS), `group-list`, `group-timeline`, and `fork-graph` (the SVG branching-timeline renderer, laid out git-graph style from `group.forkTreeView()`).
 - `src/helpers/*` — `sqlite-store` (`node:sqlite` KV store), `relay-pool`, `discovery`, `prefixed-store`, `account-proof`, `format`.
 

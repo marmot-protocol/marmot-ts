@@ -17,6 +17,8 @@ export interface TimelineProps {
   group: MarmotGroup;
   view: ForkTreeView;
   messages: Rumor[];
+  /** Epoch each message was decrypted at, keyed by rumor id. */
+  epochs: Record<string, number>;
   nameFor: (pubkey: string) => string;
 }
 
@@ -32,6 +34,7 @@ export const GroupTimeline: FC<TimelineProps> = ({
   group,
   view,
   messages,
+  epochs,
   nameFor,
 }) => {
   const info = group.info;
@@ -124,6 +127,13 @@ export const GroupTimeline: FC<TimelineProps> = ({
                 <span class="pill kind">
                   {KIND_LABELS[rumor.kind] ?? `kind ${rumor.kind}`}
                 </span>
+                {epochs[rumor.id] !== undefined ? (
+                  <span class="pill canon">epoch {epochs[rumor.id]}</span>
+                ) : (
+                  <span class="pill" title="epoch not captured this run">
+                    epoch ?
+                  </span>
+                )}
               </div>
               <div class="body">
                 {rumor.content || <em>(no text content)</em>}

@@ -185,6 +185,11 @@ export async function createServer(
     pubkey,
     outboxRelays: config.outboxRelays,
     inboxRelays: config.inboxRelays,
+    // Sidecar index: the MLS epoch each application message was decrypted at,
+    // keyed by `${groupHex}:${rumorId}`. Captured during ingest (the epoch only
+    // lives on the ingest result, never on the stored rumor) so the UI can show
+    // which epoch a message was seen on.
+    epochStore: new SqliteKeyValueStore<number>(db, "message_epochs"),
     dispose: () => db.close(),
   });
 }

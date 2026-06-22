@@ -19,7 +19,8 @@ renders each group's full history as a branching timeline.
    ingestion-pool bounds set to `Infinity`).
 4. Serves a web UI: `/` lists the followed groups, `/<group-id>` renders that
    group's fork-history graph, current fork heads, and decrypted application
-   messages.
+   messages — each tagged with the MLS epoch it was decrypted at (captured
+   during ingest, since the stored rumor itself carries no epoch).
 
 ## Run
 
@@ -59,6 +60,7 @@ Marmot group from any Marmot client; the group appears at `/` within moments.
 
 All state lives in one SQLite database (`$TUNNELS_DATA/state.db`) via the
 built-in `node:sqlite` module, split into tables: `groups` (serialized MLS
-state), `rewind` (fork-history blobs), `keypackages`, `invites`, and `messages`
-(per-group rumor history, namespaced by group id). The identity is reused across
-restarts, so the server keeps its group memberships.
+state), `rewind` (fork-history blobs), `keypackages`, `invites`, `messages`
+(per-group rumor history, namespaced by group id), and `message_epochs` (the
+epoch each message was decrypted at, keyed by `${groupId}:${rumorId}`). The
+identity is reused across restarts, so the server keeps its group memberships.

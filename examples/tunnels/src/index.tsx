@@ -48,6 +48,10 @@ app.get("/:groupId", async (c) => {
   // MarmotGroup type erases it — narrow back to the concrete store.
   const history = group.history as unknown as GroupRumorHistory | undefined;
   const messages = history ? await history.queryRumors({}) : [];
+  const epochs = await server.epochsFor(
+    groupId,
+    messages.map((m) => m.id),
+  );
 
   return c.html(
     <GroupTimeline
@@ -55,6 +59,7 @@ app.get("/:groupId", async (c) => {
       group={group}
       view={group.forkTreeView()}
       messages={messages}
+      epochs={epochs}
       nameFor={(pubkey) => server.nameFor(pubkey)}
     />,
   );

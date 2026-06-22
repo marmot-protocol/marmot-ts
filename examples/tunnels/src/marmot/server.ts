@@ -10,7 +10,10 @@ import type {
 import {
   createInboxRelayListEvent,
   createNip65RelayListEvent,
+  deserializeApplicationData,
+  GROUP_EVENT_KIND,
 } from "@internet-privacy/marmot-ts";
+import type { GenericKeyValueStore } from "@internet-privacy/marmot-ts/utils";
 
 import createDebug from "debug";
 
@@ -39,6 +42,8 @@ export interface TunnelServerOptions {
   outboxRelays: string[];
   /** Welcome-inbox relays (kind 10050): where invites are watched + delivered. */
   inboxRelays: string[];
+  /** Sidecar index of the epoch each application message was decrypted at. */
+  epochStore: GenericKeyValueStore<number>;
   /** Teardown hook (closes the SQLite connection). */
   dispose?: () => void;
 }
@@ -64,16 +69,20 @@ export class TunnelServer {
   readonly #outboxRelays: string[];
   readonly #inboxRelays: string[];
   readonly #relays: string[];
+  readonly #epochStore: GenericKeyValueStore<number>;
   readonly #dispose?: () => void;
 
   readonly #groups = new Map<string, MarmotGroup>();
+  /** Live kind-445 subscriptions, one per followed group. */
+  readonly #connections = new Map<string, Unsubscribable>();
   /** Invite rumor ids we've already attempted, so we don't re-join on re-yield. */
   readonly #handledInvites = new Set<string>();
   /** Profile-name cache for member pubkeys (kind 0), populated lazily. */
   readonly #names = new Map<string, string>();
+  /** In-memory mirror of the epoch index, keyed `${groupHex}:${rumorId}`. */
+  readonly #epochCache = new Map<string, number>();
 
   #stopped = false;
-  #groupsConnection?: Unsubscribable;
   #inviteConnection?: Unsubscribable;
 
   constructor(options: TunnelServerOptions) {
@@ -88,6 +97,7 @@ export class TunnelServer {
     this.#relays = [
       ...new Set([...options.outboxRelays, ...options.inboxRelays]),
     ];
+    this.#epochStore = options.epochStore;
     this.#dispose = options.dispose;
   }
 
@@ -116,17 +126,11 @@ export class TunnelServer {
   async start(): Promise<void> {
     await this.#publishIdentity();
     await this.#refreshKeyPackage();
-    await this.#restoreGroups();
 
-    // The library owns inbound transport: connectAll subscribes every group
-    // (existing and future-joined) to its kind-445 events, draining ingest;
-    // invites.listen subscribes for gift-wraps on our inbox relays.
-    this.#client.groups.on("unreadable", () =>
-      log("dropped an unreadable group event"),
-    );
-    this.#groupsConnection = this.#client.groups.connectAll({
-      fallbackRelays: this.#relays,
-    });
+    // #trackGroups follows the library's loaded-group set and connects each
+    // group's kind-445 subscription (existing + future-joined), draining ingest
+    // ourselves so we can capture the epoch each application message decrypts
+    // at. invites.listen subscribes for gift-wraps on our inbox relays.
     this.#inviteConnection = await this.#client.invites.listen(
       this.#inboxRelays,
     );
@@ -141,7 +145,8 @@ export class TunnelServer {
     if (this.#stopped) return;
     this.#stopped = true;
     this.#inviteConnection?.unsubscribe();
-    this.#groupsConnection?.unsubscribe();
+    for (const sub of this.#connections.values()) sub.unsubscribe();
+    this.#connections.clear();
     this.#eventStore.dispose();
     this.#pool.close();
     this.#dispose?.();
@@ -254,17 +259,11 @@ export class TunnelServer {
     }
   }
 
-  /** Load and track every previously-joined group from the store. */
-  async #restoreGroups(): Promise<void> {
-    const groups = await this.#client.groups.loadAll();
-    for (const group of groups) this.#track(group);
-    if (groups.length) log("restored %d group(s)", groups.length);
-  }
-
   /**
-   * Keep {@link #groups} in lockstep with the library's loaded set. The relay
-   * subscriptions themselves are owned by `connectAll`; this only mirrors the
-   * set for the HTTP layer to read.
+   * Follow the library's loaded-group set (initial snapshot + every change) and
+   * keep our subscriptions in lockstep: connect freshly-loaded/joined groups,
+   * drop ones that left. This is the single source that connects both restored
+   * groups (the initial yield is `loadAll()`) and newly-joined ones.
    */
   async #trackGroups(): Promise<void> {
     try {
@@ -273,7 +272,7 @@ export class TunnelServer {
         const live = new Set(groups.map((g) => g.idStr));
         for (const group of groups) this.#track(group);
         for (const id of [...this.#groups.keys()]) {
-          if (!live.has(id)) this.#groups.delete(id);
+          if (!live.has(id)) this.#untrack(id);
         }
       }
     } catch (err) {
@@ -285,6 +284,111 @@ export class TunnelServer {
     if (this.#groups.has(group.idStr)) return;
     this.#groups.set(group.idStr, group);
     log("following group %s (%s)", group.idStr.slice(0, 8), groupName(group));
+    void this.#connect(group);
+  }
+
+  #untrack(idStr: string): void {
+    this.#groups.delete(idStr);
+    this.#connections.get(idStr)?.unsubscribe();
+    this.#connections.delete(idStr);
+  }
+
+  /**
+   * Subscribe a group to its kind-445 events (backfill, then live) and drain
+   * ingest ourselves. Every processed application message carries the epoch it
+   * decrypted at on its `newState`; we record that against the rumor id so the
+   * UI can show it (the stored rumor itself has no epoch). Mirrors the library's
+   * `connectAll` transport, but observes the per-message results it discards.
+   */
+  async #connect(group: MarmotGroup): Promise<void> {
+    if (this.#connections.has(group.idStr) || this.#stopped) return;
+    const groupIdHex = group.info.nostr.groupIdHex;
+    const relays = group.relays?.length ? group.relays : this.#relays;
+    if (!groupIdHex || !relays.length) {
+      log("connect: group %s has no routing/relays — skipping", group.idStr);
+      return;
+    }
+    const filter = { kinds: [GROUP_EVENT_KIND], "#h": [groupIdHex] };
+
+    const seen = new Set<string>();
+    const drain = async (events: NostrEvent[]): Promise<void> => {
+      const fresh = events.filter((event) => !seen.has(event.id));
+      for (const event of fresh) seen.add(event.id);
+      if (!fresh.length) return;
+      try {
+        for await (const result of group.ingest(fresh)) {
+          if (
+            result.kind === "processed" &&
+            result.result.kind === "applicationMessage"
+          ) {
+            this.#recordEpoch(
+              group.idStr,
+              result.result.message,
+              Number(result.result.newState.groupContext.epoch),
+            );
+          }
+        }
+      } catch (err) {
+        log("connect: ingest failed for %s: %O", group.idStr, err);
+      }
+    };
+
+    // Backfill as one batch (so out-of-order commits resolve together), then go
+    // live. Register the subscription before awaiting backfill so a concurrent
+    // stop() can tear it down.
+    const sub = this.#pool
+      .subscription(relays, filter)
+      .subscribe({ next: (event) => void drain([event]) });
+    this.#connections.set(group.idStr, sub);
+    if (this.#stopped) {
+      sub.unsubscribe();
+      this.#connections.delete(group.idStr);
+      return;
+    }
+    await drain(await this.#pool.request(relays, filter));
+  }
+
+  /**
+   * Persist the epoch an application message was decrypted at, keyed by its
+   * rumor id. The payload is the raw application data; deserializing it yields
+   * the same rumor id the history store keys by, so the UI can join them.
+   */
+  #recordEpoch(groupIdStr: string, payload: Uint8Array, epoch: number): void {
+    let rumorId: string;
+    try {
+      rumorId = deserializeApplicationData(payload).id;
+    } catch {
+      return; // not a rumor payload (e.g. a non-NIP-59 application message)
+    }
+    const key = `${groupIdStr}:${rumorId}`;
+    if (this.#epochCache.get(key) === epoch) return;
+    this.#epochCache.set(key, epoch);
+    void this.#epochStore.setItem(key, epoch).catch(() => {});
+  }
+
+  /**
+   * The epoch each of `rumorIds` was decrypted at, for one group. Reads the
+   * in-memory mirror first, falling back to the persisted index for messages
+   * captured in an earlier run.
+   */
+  async epochsFor(
+    groupIdStr: string,
+    rumorIds: string[],
+  ): Promise<Record<string, number>> {
+    const out: Record<string, number> = {};
+    await Promise.all(
+      rumorIds.map(async (id) => {
+        const key = `${groupIdStr}:${id}`;
+        const cached = this.#epochCache.get(key);
+        const epoch =
+          cached ?? (await this.#epochStore.getItem(key)) ?? undefined;
+        if (epoch !== undefined && epoch !== null) {
+          this.#epochCache.set(key, epoch);
+          out[id] = epoch;
+        }
+      }),
+    );
+    return out;
   }
 
   /**

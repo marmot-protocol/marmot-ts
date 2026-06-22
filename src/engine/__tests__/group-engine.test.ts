@@ -45,6 +45,9 @@ function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
     wrapGroupMessage(message, state) {
       return createGroupEvent({ message, state, ciphersuite });
     },
+    idOf(envelope) {
+      return envelope.id;
+    },
   };
 }
 
@@ -141,6 +144,7 @@ describe("MarmotGroupEngine ingest – permanent decrypt failures", () => {
       },
       wrapGroupMessage: (message, state) =>
         base.wrapGroupMessage(message, state),
+      idOf: (envelope) => base.idOf(envelope),
     };
 
     const engine = new MarmotGroupEngine({

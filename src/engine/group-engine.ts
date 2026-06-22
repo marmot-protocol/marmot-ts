@@ -46,6 +46,7 @@ import { createAdminCommitPolicyCallback } from "./admin-policy.js";
 import { DeliveredPayloadLedger } from "./delivered-payloads.js";
 import { ForkRecovery } from "./fork-recovery.js";
 import { GroupHistoryTree } from "./history-tree.js";
+import { IngestionPool, type IngestionPoolOptions } from "./ingestion-pool.js";
 import {
   type AppliedForkResolution,
   type IngestContext,
@@ -108,6 +109,12 @@ export type MarmotGroupEngineOptions<TEnvelope> = {
    */
   convergencePolicy?: ConvergencePolicy;
   /**
+   * Tuning for the persistent ingestion pool — undecryptable events held and
+   * retried as the history tree grows, instead of being dropped. Defaults to a
+   * size- and epoch-age-bounded pool.
+   */
+  ingestionPool?: IngestionPoolOptions;
+  /**
    * Injectable wall-clock (ms) for the convergence-status quiescence window
    * (B5). Defaults to `Date.now`; tests pass a fake clock for determinism.
    */
@@ -153,6 +160,8 @@ export class MarmotGroupEngine<TEnvelope> {
   readonly #tree: GroupHistoryTree;
   /** The active convergence policy (branch selection + rollback horizon). */
   readonly #policy: ConvergencePolicy;
+  /** Undecryptable events held for retry as the tree grows (cross-batch). */
+  readonly #pool: IngestionPool<TEnvelope>;
   /** Convergence candidate-branch construction and selection. */
   readonly #forkRecovery: ForkRecovery<TEnvelope>;
   /** App payloads delivered eagerly, retracted as `invalidated` on rewind (M7). */
@@ -200,6 +209,12 @@ export class MarmotGroupEngine<TEnvelope> {
       options.peeler,
       this.#policy,
     );
+    this.#pool = new IngestionPool<TEnvelope>(options.ingestionPool);
+  }
+
+  /** Number of undecryptable events currently held in the ingestion pool. */
+  get pendingCount(): number {
+    return this.#pool.size;
   }
 
   /**
@@ -501,11 +516,7 @@ export class MarmotGroupEngine<TEnvelope> {
     let unresolved = false;
     let blocked = false;
 
-    for await (const result of ingestEnvelopes(
-      this.#ingestContext(),
-      envelopes,
-      options,
-    )) {
+    for await (const result of this.#ingestWithPool(envelopes, options)) {
       if (this.#isConvergenceRelevant(result)) convergenceRelevant = true;
       if (result.kind === "deferred") unresolved = true;
       if (
@@ -538,6 +549,68 @@ export class MarmotGroupEngine<TEnvelope> {
     // the layer that owns the transport publishes it (publish-before-apply).
     const auto = await this.#maybeAutoCommitSelfRemoves();
     if (auto) yield { ...auto, disposition: ingestResultDisposition(auto) };
+  }
+
+  /**
+   * Runs the ingest pipeline, but instead of surfacing a decrypt failure as
+   * terminal `unreadable`, holds the event in the {@link IngestionPool} and
+   * retries the whole pool whenever the canonical tip advances (a new epoch may
+   * unlock a pooled event's key). This is what lets a newer-epoch message that
+   * streamed in before its commit be read once the commit arrives, across ingest
+   * batches. Entries the tip ages past the retention window are finally surfaced
+   * as terminal `unreadable`.
+   */
+  async *#ingestWithPool(
+    envelopes: TEnvelope[],
+    options?: { maxRetries?: number },
+  ): AsyncGenerator<IngestResult<TEnvelope>> {
+    const MAX_SWEEPS = 16;
+    let pass = envelopes;
+    let sweeps = 0;
+    while (pass.length > 0) {
+      const tipBefore = bytesToHex(this.#state.confirmationTag);
+      for await (const result of ingestEnvelopes(
+        this.#ingestContext(),
+        pass,
+        options,
+      )) {
+        if (result.kind === "unreadable" && result.decryptFailure) {
+          // Hold for retry rather than dropping; suppress the terminal yield.
+          this.#pool.add(
+            this.peeler.idOf(result.envelope),
+            result.envelope,
+            Number(this.#state.groupContext.epoch),
+          );
+          continue;
+        }
+        if (result.kind === "processed" || result.kind === "removed")
+          this.#pool.remove(this.peeler.idOf(result.envelope));
+        yield result;
+      }
+      const tipAfter = bytesToHex(this.#state.confirmationTag);
+      // Re-feed the pool only when the tip advanced — an unchanged tip would
+      // reproduce the same failures. Bounded by MAX_SWEEPS per ingest call.
+      pass =
+        tipAfter !== tipBefore && this.#pool.size > 0 && ++sweeps < MAX_SWEEPS
+          ? this.#pool.envelopes()
+          : [];
+    }
+
+    // Give up on entries aged past the retention window — surface them terminal.
+    const evicted = this.#pool.evictStale(
+      Number(this.#state.groupContext.epoch),
+    );
+    for (const entry of evicted) {
+      yield {
+        kind: "unreadable",
+        envelope: entry.envelope,
+        errors: [
+          new Error(
+            "ingestion pool gave up: undecryptable within the retention window",
+          ),
+        ],
+      };
+    }
   }
 
   /**

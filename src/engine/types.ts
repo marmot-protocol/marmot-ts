@@ -28,6 +28,9 @@ export interface GroupPeeler<TEnvelope> {
   }>;
 
   wrapGroupMessage(message: MlsMessage, state: ClientState): Promise<TEnvelope>;
+
+  /** A stable transport id for an envelope (used to key the ingestion pool). */
+  idOf(envelope: TEnvelope): string;
 }
 
 /** Staged state awaiting publish confirmation (publish-before-apply). */
@@ -113,6 +116,14 @@ export type UnreadableIngestResult<TEnvelope> = {
   kind: "unreadable";
   envelope: TEnvelope;
   errors: unknown[];
+  /**
+   * The envelope failed to *decrypt* (its kind-445 wrapper did not open against
+   * any tried state), as opposed to decoding/processing after decryption. Such
+   * failures are retryable: the unlocking epoch/fork state may arrive later, so
+   * the engine pools them rather than treating them as terminal. A permanent
+   * MLS forward-secrecy failure (`gen-in-past`) is NOT flagged.
+   */
+  decryptFailure?: boolean;
 };
 
 /**

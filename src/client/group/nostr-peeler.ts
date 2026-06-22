@@ -40,4 +40,8 @@ export class NostrGroupPeeler implements GroupPeeler<NostrEvent> {
       ciphersuite: this.ciphersuite,
     });
   }
+
+  idOf(envelope: NostrEvent): string {
+    return envelope.id;
+  }
 }

@@ -150,6 +150,7 @@ function terminalResult<TEnvelope>(
   envelope: TEnvelope,
   deferred: Map<TEnvelope, DeferredEntry>,
   errorList: Array<{ envelope: TEnvelope; error: unknown }>,
+  decryptFailed: ReadonlySet<TEnvelope>,
 ): IngestResult<TEnvelope> {
   const entry = deferred.get(envelope);
   if (entry)
@@ -165,6 +166,9 @@ function terminalResult<TEnvelope>(
     errors: errorList
       .filter((e) => e.envelope === envelope)
       .map((e) => e.error),
+    // A peel failure is retryable (the unlocking state may arrive later); the
+    // engine pools these rather than dropping them.
+    decryptFailure: decryptFailed.has(envelope) || undefined,
   };
 }
 
@@ -239,6 +243,7 @@ export async function* ingestEnvelopes<TEnvelope>(
     maxRetries?: number;
     _errors?: Array<{ envelope: TEnvelope; error: unknown }>;
     _deferred?: Map<TEnvelope, DeferredEntry>;
+    _decryptFailed?: Set<TEnvelope>;
   },
 ): AsyncGenerator<IngestResult<TEnvelope>> {
   const log = ctx.log.extend(`ingest:${Date.now().toString(36).slice(-5)}`);
@@ -252,6 +257,9 @@ export async function* ingestEnvelopes<TEnvelope>(
   // the gap fills, but at a terminal yield they surface as `deferred`, not stale.
   const deferred: Map<TEnvelope, DeferredEntry> =
     options?._deferred ?? new Map();
+  // Envelopes whose kind-445 wrapper never opened (peel failures) — retryable,
+  // so they surface as `unreadable` with `decryptFailure` set for the pool.
+  const decryptFailedAll: Set<TEnvelope> = options?._decryptFailed ?? new Set();
 
   if (retryCount === 0) {
     log("start – %d envelope(s), maxRetries=%d", envelopes.length, maxRetries);
@@ -270,7 +278,7 @@ export async function* ingestEnvelopes<TEnvelope>(
       envelopes.length,
     );
     for (const envelope of envelopes) {
-      yield terminalResult(envelope, deferred, errorList);
+      yield terminalResult(envelope, deferred, errorList, decryptFailedAll);
     }
     return;
   }
@@ -315,6 +323,7 @@ export async function* ingestEnvelopes<TEnvelope>(
 
   for (const envelope of decryptFailed) {
     log("decrypt failed envelope:%s", envelopeLabel(envelope));
+    decryptFailedAll.add(envelope);
     errorList.push({
       envelope,
       error: new Error("Failed to decrypt group message"),
@@ -333,6 +342,7 @@ export async function* ingestEnvelopes<TEnvelope>(
         errors: errorList
           .filter((e) => e.envelope === envelope)
           .map((e) => e.error),
+        decryptFailure: true,
       };
     }
     return;
@@ -711,7 +721,7 @@ export async function* ingestEnvelopes<TEnvelope>(
       unreadable.length,
     );
     for (const envelope of unreadable) {
-      yield terminalResult(envelope, deferred, errorList);
+      yield terminalResult(envelope, deferred, errorList, decryptFailedAll);
     }
     return;
   }
@@ -722,5 +732,6 @@ export async function* ingestEnvelopes<TEnvelope>(
     maxRetries,
     _errors: errorList,
     _deferred: deferred,
+    _decryptFailed: decryptFailedAll,
   });
 }

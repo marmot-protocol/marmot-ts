@@ -1,5 +1,4 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
-import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   type CiphersuiteImpl,
   createCommit,
@@ -12,13 +11,14 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { createCredential } from "../../core/credential.js";
-import { createSimpleGroup } from "../../core/group.js";
 import {
   createGroupEvent,
   decryptGroupMessages,
 } from "../../core/group-message.js";
+import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { MarmotGroupEngine } from "../group-engine.js";
+import { IngestionPool } from "../ingestion-pool.js";
 import type { GroupPeeler } from "../types.js";
 
 const ADMIN = "a".repeat(64);
@@ -46,12 +46,14 @@ function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
   };
 }
 
-async function drain(gen: AsyncIterable<unknown>): Promise<void> {
-  for await (const _ of gen) void _;
+async function drain<T>(gen: AsyncIterable<T>): Promise<T[]> {
+  const out: T[] = [];
+  for await (const r of gen) out.push(r);
+  return out;
 }
 
-describe("MarmotGroupEngine history tree (full-fork retention)", () => {
-  it("captures both branches of a fork as siblings of the shared parent", async () => {
+describe("MarmotGroupEngine ingestion pool", () => {
+  it("holds a future-epoch event delivered before its commit, then reads it once the epoch is reached", async () => {
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -69,7 +71,7 @@ describe("MarmotGroupEngine history tree (full-fork retention)", () => {
     const { clientState: created } = await createSimpleGroup(
       adminKp,
       impl,
-      "Fork Group",
+      "Pool Group",
       { adminPubkeys: [ADMIN], relays: ["wss://mock.test"] },
     );
     const memberKp = await generateKeyPackage({
@@ -96,25 +98,27 @@ describe("MarmotGroupEngine history tree (full-fork retention)", () => {
       ratchetTree: undefined,
     });
 
-    // Two competing commits from the same epoch-1 admin state → a fork.
-    const commitA = await createCommit({
+    // Admin builds two sequential commits: epoch 1→2 and 2→3. The epoch-2 commit
+    // is wrapped with the epoch-2 exporter key, so a member still at epoch 1
+    // cannot decrypt it until it advances.
+    const commit12 = await createCommit({
       context: ctx,
       state: adminE1,
       extraProposals: [],
     });
-    const commitB = await createCommit({
+    const commit23 = await createCommit({
       context: ctx,
-      state: adminE1,
+      state: commit12.newState,
       extraProposals: [],
     });
-    const eventA = await createGroupEvent({
-      message: commitA.commit,
+    const event12 = await createGroupEvent({
+      message: commit12.commit,
       state: adminE1,
       ciphersuite: impl,
     });
-    const eventB = await createGroupEvent({
-      message: commitB.commit,
-      state: adminE1,
+    const event23 = await createGroupEvent({
+      message: commit23.commit,
+      state: commit12.newState,
       ciphersuite: impl,
     });
 
@@ -124,28 +128,43 @@ describe("MarmotGroupEngine history tree (full-fork retention)", () => {
       peeler: testPeeler(impl),
     });
 
-    const rootTag = bytesToHex(memberE1.confirmationTag);
-    expect(engine.history.rootTag).toBe(rootTag);
-    expect(engine.history.size).toBe(1);
+    // Deliver the epoch-2 commit FIRST (out of order, as a relay would stream
+    // it). The member cannot decrypt it yet → it is pooled, not dropped, and no
+    // terminal result is surfaced.
+    const first = await drain(engine.ingest([event23]));
+    expect(first.some((r) => r.kind === "processed")).toBe(false);
+    expect(first.some((r) => r.kind === "unreadable")).toBe(false);
+    expect(engine.pendingCount).toBe(1);
+    expect(Number(engine.state.groupContext.epoch)).toBe(1);
 
-    // Follow branch A onto epoch 2, then receive the competing past-epoch
-    // commit B: fork recovery materializes both branches and the tree retains
-    // them, even though only one stays canonical.
-    await drain(engine.ingest([eventA]));
-    await drain(engine.ingest([eventB]));
+    // The unlocking commit arrives in a later batch → the member advances to
+    // epoch 2, the pool is swept, and the previously-undecryptable commit is now
+    // read and applied, reaching epoch 3.
+    const second = await drain(engine.ingest([event12]));
+    expect(second.filter((r) => r.kind === "processed")).toHaveLength(2);
+    expect(engine.pendingCount).toBe(0);
+    expect(Number(engine.state.groupContext.epoch)).toBe(3);
+  });
 
-    const children = engine.history.childrenOf(rootTag);
-    expect(children).toHaveLength(2);
-    expect(engine.history.size).toBe(3);
-    for (const child of children) expect(engine.history.epochOf(child)).toBe(2);
-    expect(new Set(engine.history.tips())).toEqual(new Set(children));
+  it("bounds the pool by size and epoch-age", () => {
+    const pool = new IngestionPool<{ id: string }>({
+      maxSize: 2,
+      maxEpochAge: 5,
+    });
 
-    // The current canonical tip is one of the two retained fork branches, and
-    // its state rehydrates from the tree.
-    const tipTag = bytesToHex(engine.state.confirmationTag);
-    expect(children).toContain(tipTag);
-    expect(
-      bytesToHex((await engine.history.stateAt(tipTag))!.confirmationTag),
-    ).toBe(tipTag);
+    pool.add("a", { id: "a" }, 0);
+    pool.add("b", { id: "b" }, 0);
+    pool.add("a", { id: "a" }, 9); // re-add keeps original arrival epoch
+    expect(pool.size).toBe(2);
+
+    // Overflow evicts the oldest entry.
+    pool.add("c", { id: "c" }, 1);
+    expect(pool.size).toBe(2);
+    expect(pool.has("a")).toBe(false);
+
+    // Entries whose arrival the tip has aged past `maxEpochAge` are dropped.
+    const evicted = pool.evictStale(10);
+    expect(evicted.map((e) => e.id).sort()).toEqual(["b", "c"]);
+    expect(pool.size).toBe(0);
   });
 });

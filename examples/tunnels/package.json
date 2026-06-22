@@ -10,15 +10,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hono/node-server": "^2.0.6",
     "@internet-privacy/marmot-ts": "workspace:*",
-    "@libs/qrcode": "npm:@jsr/libs__qrcode@^3.0.1",
+    "@libs/qrcode": "jsr:^3.0.1",
     "applesauce-accounts": "0.0.0-next-20260620175751",
     "applesauce-common": "0.0.0-next-20260620175751",
     "applesauce-core": "0.0.0-next-20260620175751",
-    "applesauce-relay": "0.0.0-next-20260620175751",
     "applesauce-loaders": "0.0.0-next-20260620175751",
+    "applesauce-relay": "0.0.0-next-20260620175751",
     "debug": "^4.4.3",
-    "@hono/node-server": "^2.0.6",
     "hono": "^4.12.26"
   },
   "devDependencies": {

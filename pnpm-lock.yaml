@@ -140,7 +140,7 @@ importers:
         specifier: workspace:*
         version: link:../..
       '@libs/qrcode':
-        specifier: npm:@jsr/libs__qrcode@^3.0.1
+        specifier: jsr:^3.0.1
         version: '@jsr/libs__qrcode@3.0.1'
       applesauce-accounts:
         specifier: 0.0.0-next-20260620175751

@@ -5,6 +5,7 @@ import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
 import type { Timeline, TimelineStop } from "../helpers/timeline.js";
 import { formatTime } from "../helpers/format.js";
 import { groupName } from "../marmot/server.js";
+import { Author } from "./author.js";
 import { Layout } from "./layout.js";
 
 const KIND_LABELS: Record<number, string> = {
@@ -151,7 +152,7 @@ const Stop: FC<{
           <span class="muted">root · from the Welcome</span>
         ) : committer ? (
           <span>
-            committed by <span class="who">{nameFor(committer)}</span>
+            committed by <Author pubkey={committer} nameFor={nameFor} />
           </span>
         ) : (
           <span class="muted">commit · committer unknown</span>
@@ -165,7 +166,7 @@ const Stop: FC<{
           {stop.messages.map((m) => (
             <div class="tl-msg">
               <div class="tl-msg-hdr">
-                <span class="who">{nameFor(m.pubkey)}</span>
+                <Author pubkey={m.pubkey} nameFor={nameFor} />
                 <span class="when">{formatTime(m.created_at)}</span>
                 <span class="pill kind">
                   {KIND_LABELS[m.kind] ?? `kind ${m.kind}`}

@@ -86,6 +86,10 @@ const STYLES = `
   .invite .npub { font-size: 12px; word-break: break-all; color: var(--fg); }
   .hint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
   .muted { color: var(--muted); }
+  /* user names carry a colored underline keyed to the first 6 hex of the
+     pubkey (set inline via text-decoration-color) — line style is shared here */
+  .who { font-weight: 600; text-decoration: underline;
+    text-decoration-thickness: 2px; text-underline-offset: 2px; }
   .node-link { cursor: pointer; }
   .node-link:hover circle { stroke: var(--fg); }
   .panel h2 .pill { margin-left: 10px; vertical-align: middle; }

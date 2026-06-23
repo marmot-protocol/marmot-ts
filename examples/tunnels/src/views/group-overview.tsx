@@ -7,6 +7,7 @@ import type {
 
 import type { ForkSummary } from "../helpers/fork-stats.js";
 import { groupName } from "../marmot/server.js";
+import { Author } from "./author.js";
 import { ForkGraph } from "./fork-graph.js";
 import { Layout } from "./layout.js";
 
@@ -122,7 +123,9 @@ export const GroupOverview: FC<GroupOverviewProps> = ({
                   <tbody>
                     {fork.participants.map((p) => (
                       <tr>
-                        <td>{nameFor(p.pubkey)}</td>
+                        <td>
+                          <Author pubkey={p.pubkey} nameFor={nameFor} />
+                        </td>
                         <td>
                           {p.lastEpoch}
                           {p.lastEpoch === fork.epoch ? (

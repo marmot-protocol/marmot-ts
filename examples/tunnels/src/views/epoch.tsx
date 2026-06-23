@@ -7,6 +7,7 @@ import type { MarmotGroup } from "@internet-privacy/marmot-ts/client";
 import type { EpochDetail } from "../marmot/server.js";
 import { formatTime } from "../helpers/format.js";
 import { groupName } from "../marmot/server.js";
+import { Author } from "./author.js";
 import { Layout } from "./layout.js";
 
 const KIND_LABELS: Record<number, string> = {
@@ -123,7 +124,10 @@ export const EpochPage: FC<EpochPageProps> = ({
                   <div>
                     <span class="k">committer</span>
                     {detail.committerPubkey ? (
-                      nameFor(detail.committerPubkey)
+                      <Author
+                        pubkey={detail.committerPubkey}
+                        nameFor={nameFor}
+                      />
                     ) : (
                       <span class="muted">unknown</span>
                     )}
@@ -159,7 +163,7 @@ export const EpochPage: FC<EpochPageProps> = ({
                       <li>
                         <span class="pill prop">{p.type}</span>
                         {p.pubkey && (
-                          <span class="who">{nameFor(p.pubkey)}</span>
+                          <Author pubkey={p.pubkey} nameFor={nameFor} />
                         )}
                         {p.detail && <span class="muted mono">{p.detail}</span>}
                       </li>
@@ -180,7 +184,7 @@ export const EpochPage: FC<EpochPageProps> = ({
               messages.map((rumor) => (
                 <div class="msg">
                   <div class="hdr">
-                    <span class="who">{nameFor(rumor.pubkey)}</span>
+                    <Author pubkey={rumor.pubkey} nameFor={nameFor} />
                     <span class="when">{formatTime(rumor.created_at)}</span>
                     <span class="pill kind">
                       {KIND_LABELS[rumor.kind] ?? `kind ${rumor.kind}`}

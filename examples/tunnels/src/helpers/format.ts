@@ -20,6 +20,14 @@ export function npubShort(pubkey: string): string {
   }
 }
 
+/**
+ * Derive a stable display color from a pubkey: `#` + its first 6 hex chars.
+ * Pubkeys are 64-char lowercase hex, so this is always a valid CSS hex color.
+ */
+export function colorForPubkey(pubkey: string): string {
+  return `#${pubkey.slice(0, 6)}`;
+}
+
 /** Format a unix-seconds timestamp as a local date-time string. */
 export function formatTime(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString();

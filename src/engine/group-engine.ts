@@ -757,9 +757,20 @@ export class MarmotGroupEngine<TEnvelope> {
         };
       // A read on the canonical path is delivered; one that only decrypts on a
       // losing fork is reported as invalidated (M7), never delivered as accepted.
+      // The losing read still carries its fork-node identity (the node `tag` it
+      // decrypted against and that node's epoch) so a full-history consumer can
+      // attribute it; an app message does not change the epoch/confirmation tag,
+      // so `tag` is the delivery branch.
       return onCanonical
         ? { kind: "processed", result, envelope, message }
-        : { kind: "invalidated", envelope, message };
+        : {
+            kind: "invalidated",
+            envelope,
+            message,
+            payload: result.message,
+            tag,
+            epoch: Number(state.groupContext.epoch),
+          };
     }
 
     return undefined;
@@ -954,8 +965,14 @@ export class MarmotGroupEngine<TEnvelope> {
       createAdminCallback: () => this.#createAdminVerificationCallback(),
       resolveFork: (forkEpoch, pool, encrypted, witnessEnvelopes) =>
         this.#resolveFork(forkEpoch, pool, encrypted, witnessEnvelopes),
-      recordDeliveredAppPayload: (epoch, stateTag, envelope, message) => {
-        this.#delivered.record({ epoch, stateTag, envelope, message });
+      recordDeliveredAppPayload: (
+        epoch,
+        stateTag,
+        envelope,
+        message,
+        payload,
+      ) => {
+        this.#delivered.record({ epoch, stateTag, envelope, message, payload });
         const anchor = this.#retained.anchorEpoch();
         if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
       },
@@ -1060,10 +1077,15 @@ export class MarmotGroupEngine<TEnvelope> {
     return {
       outcome: "recovered",
       result: resolution.result,
-      invalidated: invalidated.map(({ envelope, message }) => ({
-        envelope,
-        message,
-      })),
+      invalidated: invalidated.map(
+        ({ envelope, message, payload, stateTag, epoch }) => ({
+          envelope,
+          message,
+          payload,
+          tag: stateTag,
+          epoch,
+        }),
+      ),
     };
   }
 

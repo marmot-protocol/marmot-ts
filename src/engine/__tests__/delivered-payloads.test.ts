@@ -14,6 +14,7 @@ const entry = (id: string, epoch: number, stateTag: string) => ({
   stateTag,
   envelope: { id } as Env,
   message: msg,
+  payload: new Uint8Array(),
 });
 
 describe("DeliveredPayloadLedger", () => {

@@ -140,16 +140,35 @@ export type DeferredIngestResult<TEnvelope> = {
 };
 
 /**
- * An MLS application message that decrypted only on a branch a later
- * convergence rewind abandoned (`protocol-core/inbound-processing.md`,
- * `convergence.md`). The payload was tentatively delivered as `accepted`
- * (Marmot v2 delivers eagerly); this result retracts it. It is reported, never
- * delivered as accepted output.
+ * An MLS application message that decrypted only on a losing/abandoned branch
+ * (`protocol-core/inbound-processing.md`, `convergence.md`). Either it was
+ * tentatively delivered as `accepted` on a branch a later convergence rewind
+ * abandoned (Marmot v2 delivers eagerly), or it only ever decrypted on a
+ * non-canonical fork node during the tree sweep. The spec requires it be
+ * reported as `invalidated`, not delivered as accepted output — but the local
+ * API is free to expose where it decrypted so a consumer (e.g. a full-history
+ * debugger) can still attribute it to its fork.
+ *
+ * `message` is the MLS application message (the encrypted wrapper); `payload` is
+ * its decrypted Marmot app payload bytes, so a consumer can identify the rumor
+ * being retracted (e.g. to withdraw it from a UI, or to record it under its
+ * fork). `tag` and `epoch` identify the losing branch: `tag` is the hex MLS
+ * confirmation tag of the fork-tree node the payload decrypted against (an
+ * application message does not change the epoch or confirmation tag, so the node
+ * is the delivery branch), and `epoch` is that node's MLS epoch. All three are
+ * populated for invalidations the engine produces; they are optional only for
+ * backward compatibility with consumers that ignore them.
  */
 export type InvalidatedIngestResult<TEnvelope> = {
   kind: "invalidated";
   envelope: TEnvelope;
   message: MlsMessage;
+  /** The decrypted Marmot app payload bytes of the invalidated message. */
+  payload?: Uint8Array;
+  /** Hex confirmation tag of the losing fork-tree node it decrypted against. */
+  tag?: string;
+  /** MLS epoch of that fork node. */
+  epoch?: number;
 };
 
 /**

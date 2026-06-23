@@ -41,8 +41,18 @@ export type AppliedForkResolution<TEnvelope> =
   | {
       outcome: "recovered";
       result: ProcessMessageResult;
-      /** App payloads abandoned by the rewind, to report as `invalidated` (M7). */
-      invalidated: { envelope: TEnvelope; message: MlsMessage }[];
+      /**
+       * App payloads abandoned by the rewind, to report as `invalidated` (M7).
+       * Each carries the fork node (`tag`/`epoch`) it had decrypted against so
+       * the retraction names its losing branch.
+       */
+      invalidated: {
+        envelope: TEnvelope;
+        message: MlsMessage;
+        payload: Uint8Array;
+        tag: string;
+        epoch: number;
+      }[];
     }
   | { outcome: "superseded" | "skip" };
 
@@ -104,6 +114,7 @@ export interface IngestContext<TEnvelope> {
     stateTag: string,
     envelope: TEnvelope,
     message: MlsMessage,
+    payload: Uint8Array,
   ): void;
   /** Drives the group to the terminal `Unrecoverable` lifecycle state. */
   toUnrecoverable(): void;
@@ -439,6 +450,7 @@ export async function* ingestEnvelopes<TEnvelope>(
           bytesToHex(result.newState.confirmationTag),
           envelope,
           message,
+          result.message,
         );
         log("application message envelope:%s", envelopeLabel(envelope));
         yield { kind: "processed", result, envelope, message };
@@ -642,6 +654,9 @@ export async function* ingestEnvelopes<TEnvelope>(
             kind: "invalidated",
             envelope: inv.envelope,
             message: inv.message,
+            payload: inv.payload,
+            tag: inv.tag,
+            epoch: inv.epoch,
           };
         }
       } else {

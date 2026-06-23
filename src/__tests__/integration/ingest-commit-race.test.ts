@@ -523,10 +523,11 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       pubkey: adminPubkey,
     };
     rumor.id = getEventHash(rumor);
+    const losingPayload = new TextEncoder().encode(JSON.stringify(rumor));
     const losingAppMessage = await createApplicationMessage({
       context: ctx,
       state: higher.newState,
-      message: new TextEncoder().encode(JSON.stringify(rumor)),
+      message: losingPayload,
     });
     const losingAppEvent = await createGroupEvent({
       message: losingAppMessage.message,
@@ -573,6 +574,9 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     expect(group.state.groupContext.epoch).toBe(
       memberStateEpoch1.groupContext.epoch + 1n,
     );
+    // The fork node the app payload will decrypt against — its branch identity.
+    const losingTag = bytesToHex(group.state.confirmationTag);
+    const losingEpoch = Number(group.state.groupContext.epoch);
 
     // Deliver the app payload while on the losing branch — accepted (eager).
     let deliveredAccepted = false;
@@ -589,11 +593,21 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
 
     // The canonical (lower) commit arrives late → rewind to it AND retract the
     // app payload that decrypted only on the now-abandoned higher branch.
-    const invalidated: { id: string }[] = [];
+    const invalidated: {
+      id: string;
+      tag?: string;
+      epoch?: number;
+      payload?: Uint8Array;
+    }[] = [];
     for await (const res of group.ingest([lowerEvent])) {
       if (res.kind === "invalidated") {
         expect(res.disposition).toEqual({ kind: "invalidated" });
-        invalidated.push({ id: res.event.id });
+        invalidated.push({
+          id: res.event.id,
+          tag: res.tag,
+          epoch: res.epoch,
+          payload: res.payload,
+        });
       }
     }
 
@@ -601,8 +615,17 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     expect(group.state.confirmationTag).toEqual(
       expected.newState.confirmationTag,
     );
-    // Exactly the losing-branch app payload was reported invalidated.
-    expect(invalidated).toEqual([{ id: losingAppEvent.id }]);
+    // Exactly the losing-branch app payload was reported invalidated, attributed
+    // to the fork node (tag + epoch) it had decrypted against, and carrying the
+    // decrypted payload so a consumer can identify the retracted rumor.
+    expect(invalidated).toEqual([
+      {
+        id: losingAppEvent.id,
+        tag: losingTag,
+        epoch: losingEpoch,
+        payload: losingPayload,
+      },
+    ]);
   });
 
   it("converges onto a deeper competing branch whose child commit is encrypted under an unreached epoch", async () => {

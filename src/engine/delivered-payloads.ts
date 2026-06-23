@@ -13,7 +13,10 @@ export interface DeliveredAppPayload<TEnvelope> {
   /** Hex confirmation tag of that state — its branch+epoch identity. */
   stateTag: string;
   envelope: TEnvelope;
+  /** The MLS application message (encrypted wrapper). */
   message: MlsMessage;
+  /** The decrypted Marmot app payload bytes, so a retraction can name it. */
+  payload: Uint8Array;
 }
 
 /**

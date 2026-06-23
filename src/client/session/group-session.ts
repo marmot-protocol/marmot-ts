@@ -75,6 +75,12 @@ export type InvalidatedIngestResult = {
   kind: "invalidated";
   event: NostrEvent;
   message: import("ts-mls").MlsMessage;
+  /** The decrypted Marmot app payload bytes of the invalidated message. */
+  payload?: Uint8Array;
+  /** Hex confirmation tag of the losing fork-tree node it decrypted against. */
+  tag?: string;
+  /** MLS epoch of that fork node. */
+  epoch?: number;
 };
 
 export type AutoCommitIngestResult = {

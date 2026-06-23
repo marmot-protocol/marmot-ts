@@ -14,13 +14,16 @@ renders each group's full history as a branching timeline.
 2. Auto-accepts every joinable invite as a **passive observer** — it joins from
    the Welcome but never self-updates, commits, or sends, so it never disturbs
    the groups it watches.
-3. Ingests every kind-445 group event with the engine configured to retain and
-   process everything (`maxRewindCommits` / `appPayloadPastEpochLimit` and both
-   ingestion-pool bounds set to `Infinity`). Application messages on the selected
-   (canonical) branch arrive as `processed`; messages that decrypt **only on a
-   non-canonical branch** arrive as `invalidated` results carrying their decrypted
-   payload and the fork node (`tag` + `epoch`) they belong to. The server stores
-   both — so it captures every fork's messages, not just the canonical path.
+3. Archives every kind-445 group event to a durable `events` table and ingests
+   it with the engine configured to retain and process everything
+   (`maxRewindCommits` / `appPayloadPastEpochLimit` and both ingestion-pool bounds
+   set to `Infinity`). On startup it **replays the archive** before backfilling
+   from relays, so it never depends on relays still serving old events.
+   Application messages on the selected (canonical) branch arrive as `processed`;
+   messages that decrypt **only on a non-canonical branch** arrive as
+   `invalidated` results carrying their decrypted payload and the fork node
+   (`tag` + `epoch`) they belong to. The server stores both — so it captures
+   every fork's messages, not just the canonical path.
 4. Serves a web UI:
    - `/` lists the followed groups.
    - `/<group-id>` renders that group's **fork-history epoch tree** — each node
@@ -78,7 +81,14 @@ Marmot group from any Marmot client; the group appears at `/` within moments.
 All state lives in one SQLite database (`$TUNNELS_DATA/state.db`) via the
 built-in `node:sqlite` module, split into tables: `groups` (serialized MLS
 state), `rewind` (fork-history blobs), `keypackages`, `invites`, `messages`
-(per-group rumor history, namespaced by group id), and `message_epochs` (where
+(per-group rumor history, namespaced by group id), `message_epochs` (where
 each message decrypted — its MLS epoch _and_ fork-tree node tag — keyed by
-`${groupId}:${rumorId}`; legacy epoch-only rows are still read). The
-identity is reused across restarts, so the server keeps its group memberships.
+`${groupId}:${rumorId}`; legacy epoch-only rows are still read), and `events`
+(every raw kind-445 group event, keyed `${groupId}:${eventId}`). The identity is
+reused across restarts, so the server keeps its group memberships.
+
+The `events` archive makes the server **relay-independent**: on startup it
+replays every archived event into the engine before backfilling from relays, so
+the full fork history — including application messages, which act as convergence
+witnesses and reveal which branches each member is active on — is reconstructed
+from local state even after relays have pruned those events.

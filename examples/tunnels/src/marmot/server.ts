@@ -99,6 +99,8 @@ export interface TunnelServerOptions {
   inboxRelays: string[];
   /** Sidecar index of where (epoch + fork node) each app message decrypted. */
   metaStore: GenericKeyValueStore<MessageMeta>;
+  /** Durable archive of raw kind-445 events, keyed `${groupHex}:${eventId}`. */
+  eventArchive: GenericKeyValueStore<NostrEvent>;
   /** Teardown hook (closes the SQLite connection). */
   dispose?: () => void;
 }
@@ -125,6 +127,7 @@ export class TunnelServer {
   readonly #inboxRelays: string[];
   readonly #relays: string[];
   readonly #metaStore: GenericKeyValueStore<MessageMeta>;
+  readonly #eventArchive: GenericKeyValueStore<NostrEvent>;
   readonly #dispose?: () => void;
 
   readonly #groups = new Map<string, MarmotGroup>();
@@ -153,6 +156,7 @@ export class TunnelServer {
       ...new Set([...options.outboxRelays, ...options.inboxRelays]),
     ];
     this.#metaStore = options.metaStore;
+    this.#eventArchive = options.eventArchive;
     this.#dispose = options.dispose;
   }
 
@@ -376,6 +380,13 @@ export class TunnelServer {
       const fresh = events.filter((event) => !seen.has(event.id));
       for (const event of fresh) seen.add(event.id);
       if (!fresh.length) return;
+      // Archive every event before processing it, so the durable store is a
+      // superset of whatever relays still serve (idempotent upsert by id).
+      for (const event of fresh) {
+        void this.#eventArchive
+          .setItem(`${group.idStr}:${event.id}`, event)
+          .catch(() => {});
+      }
       try {
         for await (const result of group.ingest(fresh)) {
           if (
@@ -414,9 +425,10 @@ export class TunnelServer {
       }
     };
 
-    // Backfill as one batch (so out-of-order commits resolve together), then go
-    // live. Register the subscription before awaiting backfill so a concurrent
-    // stop() can tear it down.
+    // Register the live subscription first (so nothing is missed), then drain in
+    // two batches: our durable event archive — so the full history survives even
+    // if relays have pruned it — then a relay backfill for anything new since the
+    // last run. Both batches share `seen`, so an event in both is processed once.
     const sub = this.#pool
       .subscription(relays, filter)
       .subscribe({ next: (event) => void drain([event]) });
@@ -426,7 +438,26 @@ export class TunnelServer {
       this.#connections.delete(group.idStr);
       return;
     }
+    await drain(await this.#loadArchivedEvents(group.idStr));
     await drain(await this.#pool.request(relays, filter));
+  }
+
+  /**
+   * Every kind-445 event previously archived for a group, newest first (so a
+   * replay resolves the same way a fresh backfill would). Reads the durable
+   * `events` store, which is a superset of whatever relays still serve.
+   */
+  async #loadArchivedEvents(groupIdStr: string): Promise<NostrEvent[]> {
+    const prefix = `${groupIdStr}:`;
+    const keys = (await this.#eventArchive.keys()).filter((key) =>
+      key.startsWith(prefix),
+    );
+    const events = await Promise.all(
+      keys.map((key) => this.#eventArchive.getItem(key)),
+    );
+    return events
+      .filter((event): event is NostrEvent => event != null)
+      .sort((a, b) => b.created_at - a.created_at);
   }
 
   /**

@@ -10,6 +10,7 @@ import { createEventLoaderForStore } from "applesauce-loaders/loaders";
 import { RelayPool as AsRelayPool } from "applesauce-relay/pool";
 
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
+import type { NostrEvent } from "applesauce-core/helpers/event";
 
 import {
   DEFAULT_CONVERGENCE_POLICY,
@@ -192,6 +193,12 @@ export async function createServer(
     // each message to a specific fork, not just an epoch number. The table name
     // is unchanged so older epoch-only rows are read back via legacy coercion.
     metaStore: new SqliteKeyValueStore<MessageMeta>(db, "message_epochs"),
+    // Durable archive of every kind-445 group event we ever see, keyed
+    // `${groupHex}:${eventId}`. Replayed into the engine on startup so the full
+    // history — forks, app messages (convergence witnesses), branch activity —
+    // is reconstructed from our own store, independent of whether relays still
+    // serve those events.
+    eventArchive: new SqliteKeyValueStore<NostrEvent>(db, "events"),
     dispose: () => db.close(),
   });
 }

@@ -18,11 +18,10 @@ correctness/security · **MINOR** hardening/cleanup · **TRACK** large optional 
 The cross-impl handshake, inbound pipeline, convergence engine, and member
 lifecycle are spec-conformant and tested. Resolved since the original review:
 
-- **B1–B4** transport/validation blockers: `encoding` tag removed; NIP-65 (kind
-  10002) KeyPackage discovery + inbox (10050) welcomes; KeyPackage `mls_proposals`
+- **B1–B4** transport/validation blockers: `encoding` tag removed; NIP-65 (kind 10002) KeyPackage discovery + inbox (10050) welcomes; KeyPackage `mls_proposals`
   / `app_components` tags; mandatory account-identity-proof on invite/join/create.
 - **B5** convergence status / quiescence-settlement — `Syncing/Resolving/Settled/
-  Blocked` derived core, engine tracking, settle timer + outbound queue/gating.
+Blocked` derived core, engine tracking, settle timer + outbound queue/gating.
 - **B6** member departure via MLS `self_remove` (0x000a) + deterministic
   lowest-leaf auto-committer; involuntary-removal `removed` signal.
 - **B7** `deferred` disposition emitted for future-epoch / missing-parent commits.
@@ -40,8 +39,8 @@ lifecycle are spec-conformant and tested. Resolved since the original review:
 
 - **Spec:** `features/encrypted-media.md` — version/scheme label `encrypted-media-v1`
   (MUST-reject legacy); attachments use `locator <kind> <value>` + `ciphertext_sha256`
-  + `plaintext_sha256`; `default_blob_endpoints` fallback; source-epoch exporter-secret
-  selection.
+  - `plaintext_sha256`; `default_blob_endpoints` fallback; source-epoch exporter-secret
+    selection.
 - **DONE:** the message/imeta + crypto layer is migrated (`src/core/media/`):
   `encrypted-media-v1` scheme label and key derivation/AAD; `MediaAttachment` rebuilt
   around `locators` + `ciphertextSha256`/`plaintextSha256`/`nonce`/`mediaType`/`filename`
@@ -53,7 +52,7 @@ lifecycle are spec-conformant and tested. Resolved since the original review:
   (`src/core/media/locator.ts`). Client `GroupMediaService`/`GroupMediaStore` rewired,
   cache keyed by `ciphertextSha256`. The 0x8008 policy codec was already done.
 - **REMAINING:** source-epoch media-secret selection. `deriveMediaEncryptionKey` already
-  takes the source-epoch `ClientState`, but `GroupMediaService` passes the *live* state on
+  takes the source-epoch `ClientState`, but `GroupMediaService` passes the _live_ state on
   receive. True source-epoch selection needs retained per-epoch exporter secrets plumbed
   from the engine/retained-history into the media service (ties into m4). Until then,
   media from an older epoch than the local tip cannot be decrypted.
@@ -70,7 +69,7 @@ lifecycle are spec-conformant and tested. Resolved since the original review:
 - **m3 — blossom-image (0x8002) codec absent.** No `blossom-image.ts`; excluded from
   `SUPPORTED_APP_COMPONENT_IDS`. Spec (`app-components/group-blossom-image-v1.md`) defines
   its bytes, but Rust also omits the codec and points groups at `avatar-url` (0x8007,
-  done). A group that *requires* 0x8002 is unjoinable. Decide: implement, or formally
+  done). A group that _requires_ 0x8002 is unjoinable. Decide: implement, or formally
   document as unsupported.
 - **m4 — Retained-history pruning vs the pin rule.** `requiredRetainedEpochs` /
   `prunableRetainedEpochs` (`src/core/retained-history.ts`) encode the rule but the live

@@ -90,16 +90,18 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     expect(group.lifecycle).toBe("Stable");
     expect(group.info.mls.groupIdHex).toBe(bytesToHex(group.id));
     expect(group.info.mls.epoch).toBe(clientState.groupContext.epoch);
-    expect(group.info.mls.cipherSuite).toBe(clientState.groupContext.cipherSuite);
-    expect(group.info.app.view?.name).toBe("Test Group");
-    expect(group.info.app.components.map((component) => component.name)).toEqual(
-      [
-        "app_components",
-        "marmot.group.profile.v1",
-        "marmot.group.admin-policy.v1",
-        "marmot.transport.nostr.routing.v1",
-      ],
+    expect(group.info.mls.cipherSuite).toBe(
+      clientState.groupContext.cipherSuite,
     );
+    expect(group.info.app.view?.name).toBe("Test Group");
+    expect(
+      group.info.app.components.map((component) => component.name),
+    ).toEqual([
+      "app_components",
+      "marmot.group.profile.v1",
+      "marmot.group.admin-policy.v1",
+      "marmot.transport.nostr.routing.v1",
+    ]);
     expect(group.info.nostr.groupIdHex).toHaveLength(64);
     expect(group.info.nostr.relays).toEqual(["wss://relay.test"]);
     expect(group.info.members.pubkeys).toEqual([adminPubkey]);

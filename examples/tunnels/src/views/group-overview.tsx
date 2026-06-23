@@ -1,6 +1,9 @@
 import type { FC } from "hono/jsx";
 
-import type { MarmotGroup, ForkTreeView } from "@internet-privacy/marmot-ts/client";
+import type {
+  MarmotGroup,
+  ForkTreeView,
+} from "@internet-privacy/marmot-ts/client";
 
 import type { ForkSummary } from "../helpers/fork-stats.js";
 import { groupName } from "../marmot/server.js";

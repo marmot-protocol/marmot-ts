@@ -29,13 +29,16 @@ const ALL_NATIVE_PACKAGES = [
 function currentNativePackage(): string {
   const { platform, arch } = process;
   const musl = process.env.OPENTUI_LIBC === "musl";
-  if (platform === "darwin" && arch === "x64") return "@opentui/core-darwin-x64";
+  if (platform === "darwin" && arch === "x64")
+    return "@opentui/core-darwin-x64";
   if (platform === "darwin" && arch === "arm64")
     return "@opentui/core-darwin-arm64";
   if (platform === "linux" && arch === "x64")
     return musl ? "@opentui/core-linux-x64-musl" : "@opentui/core-linux-x64";
   if (platform === "linux" && arch === "arm64")
-    return musl ? "@opentui/core-linux-arm64-musl" : "@opentui/core-linux-arm64";
+    return musl
+      ? "@opentui/core-linux-arm64-musl"
+      : "@opentui/core-linux-arm64";
   if (platform === "win32" && arch === "x64") return "@opentui/core-win32-x64";
   if (platform === "win32" && arch === "arm64")
     return "@opentui/core-win32-arm64";
@@ -65,7 +68,9 @@ const args = [
 ];
 
 console.log(`Compiling for ${process.platform}-${process.arch} (${keep})…`);
-const proc = spawn(["bun", ...args], { stdio: ["inherit", "inherit", "inherit"] });
+const proc = spawn(["bun", ...args], {
+  stdio: ["inherit", "inherit", "inherit"],
+});
 const code = await proc.exited;
 if (code === 0) console.log(`\nBuilt ${outfile}`);
 process.exit(code);

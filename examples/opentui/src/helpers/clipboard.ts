@@ -15,7 +15,11 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       ? [["pbcopy"]]
       : process.platform === "win32"
         ? [["clip"]]
-        : [["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]];
+        : [
+            ["wl-copy"],
+            ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"],
+          ];
 
   for (const [cmd, ...args] of candidates) {
     if (await tryCopy(cmd, args, text)) return true;

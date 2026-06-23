@@ -64,7 +64,10 @@ describe("MarmotGroupEngine convergence status (B5)", () => {
     const peeler: GroupPeeler<Envelope> = {
       async peelGroupMessages(envelopes) {
         if (envelopes.includes(envelope))
-          return { read: [{ envelope, message: futureCommit! }], unreadable: [] };
+          return {
+            read: [{ envelope, message: futureCommit! }],
+            unreadable: [],
+          };
         return { read: [], unreadable: [...envelopes] };
       },
       wrapGroupMessage() {

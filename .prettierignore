@@ -10,3 +10,6 @@ darkmatter/
 
 # Auto-generated lockfile
 pnpm-lock.yaml
+
+.agents/
+.claude/

@@ -216,9 +216,10 @@ function decodeGroupComponent(
   }
 }
 
-function getGroupComponentInfos(
-  clientState: ClientState | GroupInfo,
-): { components: MarmotGroupComponentInfo[]; decodeError?: string } {
+function getGroupComponentInfos(clientState: ClientState | GroupInfo): {
+  components: MarmotGroupComponentInfo[];
+  decodeError?: string;
+} {
   let dictionary: ReturnType<typeof getAppDataDictionary>;
   try {
     dictionary = getAppDataDictionary(clientState.groupContext.extensions);

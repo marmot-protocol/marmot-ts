@@ -4,6 +4,7 @@ import type { EventStore } from "applesauce-core/event-store";
 
 import type {
   ForkTreeNodeView,
+  GroupRumorHistory,
   MarmotClient,
   MarmotGroup,
   Unsubscribable,
@@ -349,10 +350,15 @@ export class TunnelServer {
 
   /**
    * Subscribe a group to its kind-445 events (backfill, then live) and drain
-   * ingest ourselves. Every processed application message carries the epoch it
-   * decrypted at on its `newState`; we record that against the rumor id so the
-   * UI can show it (the stored rumor itself has no epoch). Mirrors the library's
-   * `connectAll` transport, but observes the per-message results it discards.
+   * ingest ourselves, recording where every application message decrypted so the
+   * UI can place it on its fork node (the stored rumor carries no epoch/tag).
+   *
+   * `processed` application messages are on the selected (canonical) branch — the
+   * library already persists their rumor, so we only record their meta. The
+   * engine also surfaces messages that decrypt **only on a losing/non-canonical
+   * branch** as `invalidated`, each now carrying the fork node (`tag`/`epoch`) it
+   * decrypted against; the library does *not* store those, so we persist the
+   * rumor ourselves and record its meta. Together they give the full fork view.
    */
   async #connect(group: MarmotGroup): Promise<void> {
     if (this.#connections.has(group.idStr) || this.#stopped) return;
@@ -365,6 +371,7 @@ export class TunnelServer {
     const filter = { kinds: [GROUP_EVENT_KIND], "#h": [groupIdHex] };
 
     const seen = new Set<string>();
+    const history = group.history as unknown as GroupRumorHistory | undefined;
     const drain = async (events: NostrEvent[]): Promise<void> => {
       const fresh = events.filter((event) => !seen.has(event.id));
       for (const event of fresh) seen.add(event.id);
@@ -382,6 +389,24 @@ export class TunnelServer {
               // confirmation tag is the fork-tree node it decrypted at.
               tag: Buffer.from(state.confirmationTag).toString("hex"),
             });
+          } else if (
+            result.kind === "invalidated" &&
+            result.payload !== undefined &&
+            result.tag !== undefined &&
+            result.epoch !== undefined
+          ) {
+            // Decrypted only on a losing branch — the library never stores it, so
+            // save the rumor ourselves and pin it to the fork node it belongs to.
+            try {
+              const rumor = deserializeApplicationData(result.payload);
+              await history?.saveRumor(rumor);
+              this.#recordMessageMeta(group.idStr, result.payload, {
+                epoch: result.epoch,
+                tag: result.tag,
+              });
+            } catch {
+              // not a NIP-59 rumor payload (or history unavailable) — skip
+            }
           }
         }
       } catch (err) {
@@ -591,7 +616,9 @@ function summarizeProposal(
     return {
       type: "remove",
       byReference: false,
-      pubkey: parentState ? leafPubkey(parentState, p.remove.removed) : undefined,
+      pubkey: parentState
+        ? leafPubkey(parentState, p.remove.removed)
+        : undefined,
       detail: `leaf ${p.remove.removed}`,
     };
   }

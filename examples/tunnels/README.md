@@ -16,7 +16,11 @@ renders each group's full history as a branching timeline.
    the groups it watches.
 3. Ingests every kind-445 group event with the engine configured to retain and
    process everything (`maxRewindCommits` / `appPayloadPastEpochLimit` and both
-   ingestion-pool bounds set to `Infinity`).
+   ingestion-pool bounds set to `Infinity`). Application messages on the selected
+   (canonical) branch arrive as `processed`; messages that decrypt **only on a
+   non-canonical branch** arrive as `invalidated` results carrying their decrypted
+   payload and the fork node (`tag` + `epoch`) they belong to. The server stores
+   both — so it captures every fork's messages, not just the canonical path.
 4. Serves a web UI:
    - `/` lists the followed groups.
    - `/<group-id>` renders that group's **fork-history epoch tree** — each node
@@ -30,7 +34,10 @@ renders each group's full history as a branching timeline.
 
    Each message is attributed to the exact fork node (and MLS epoch) it
    decrypted at — captured during ingest, since the stored rumor carries neither
-   the node tag nor the epoch.
+   the node tag nor the epoch. Because non-canonical messages arrive as
+   `invalidated` results (with payload + node tag) and are persisted too, messages
+   on losing/non-canonical forks appear on their own node, not just the ones the
+   canonical path retained.
 
 ## Run
 
@@ -72,6 +79,6 @@ All state lives in one SQLite database (`$TUNNELS_DATA/state.db`) via the
 built-in `node:sqlite` module, split into tables: `groups` (serialized MLS
 state), `rewind` (fork-history blobs), `keypackages`, `invites`, `messages`
 (per-group rumor history, namespaced by group id), and `message_epochs` (where
-each message decrypted — its MLS epoch *and* fork-tree node tag — keyed by
+each message decrypted — its MLS epoch _and_ fork-tree node tag — keyed by
 `${groupId}:${rumorId}`; legacy epoch-only rows are still read). The
 identity is reused across restarts, so the server keeps its group memberships.

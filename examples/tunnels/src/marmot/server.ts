@@ -556,6 +556,38 @@ export class TunnelServer {
   }
 
   /**
+   * Resolve the committer pubkey for each of `tags` (fork-tree nodes), keyed by
+   * tag. Each is read from the *parent* epoch's roster (the tree the commit was
+   * applied to) at the commit's sender leaf — the same resolution
+   * {@link epochDetail} does, but committer-only and batched, so the timeline can
+   * label every stop's commit without decoding proposals. Root nodes (no commit)
+   * and anything undecodable are simply omitted.
+   */
+  async committersByTag(
+    group: MarmotGroup,
+    tags: string[],
+  ): Promise<Record<string, string>> {
+    const nodes = group.forkTreeView().nodes;
+    const byTag = new Map(nodes.map((n) => [n.tag, n]));
+    const out: Record<string, string> = {};
+    await Promise.all(
+      [...new Set(tags)].map(async (tag) => {
+        const node = byTag.get(tag);
+        const leaf = node?.commit?.senderLeafIndex;
+        if (!node?.parentTag || leaf === undefined) return;
+        try {
+          const parentState = await group.forkTree.stateAt(node.parentTag);
+          const pubkey = parentState && leafPubkey(parentState, leaf);
+          if (pubkey) out[tag] = pubkey;
+        } catch {
+          // parent state unavailable or undecodable — omit this committer.
+        }
+      }),
+    );
+    return out;
+  }
+
+  /**
    * Auto-accept every joinable invite. The server is a passive observer, so it
    * joins from the Welcome but never performs the MIP-02 self-update — that
    * would push it onto its own fork and disturb the group it is here to watch.

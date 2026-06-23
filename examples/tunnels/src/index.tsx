@@ -4,11 +4,13 @@ import { Hono } from "hono";
 import type { GroupRumorHistory } from "@internet-privacy/marmot-ts/client";
 
 import { computeNodeStats, summarizeForks } from "./helpers/fork-stats.js";
+import { buildTimeline } from "./helpers/timeline.js";
 import { configFromEnv, createServer } from "./marmot/setup.js";
 import { EpochPage } from "./views/epoch.js";
 import { GroupList, summarize } from "./views/group-list.js";
 import { GroupOverview } from "./views/group-overview.js";
 import { Layout } from "./views/layout.js";
+import { TimelinePage } from "./views/timeline.js";
 
 const config = configFromEnv();
 const server = await createServer(config);
@@ -76,6 +78,32 @@ app.get("/:groupId", async (c) => {
       view={view}
       countByTag={stats.countByTag}
       forks={summarizeForks(view, stats)}
+      nameFor={(pubkey) => server.nameFor(pubkey)}
+    />,
+  );
+});
+
+app.get("/:groupId/timeline", async (c) => {
+  const groupId = c.req.param("groupId");
+  const group = server.group(groupId);
+  if (!group) {
+    c.status(404);
+    return c.html(groupNotFound(groupId));
+  }
+
+  const { messages, meta } = await loadMessages(groupId);
+  const view = group.forkTreeView();
+  const timeline = buildTimeline(view, messages, meta);
+  // Resolve every stop's committer once (deduped across the shared prefix).
+  const tags = timeline.forks.flatMap((f) => f.stops.map((s) => s.node.tag));
+  const committerByTag = await server.committersByTag(group, tags);
+
+  return c.html(
+    <TimelinePage
+      npub={server.npub}
+      group={group}
+      timeline={timeline}
+      committerByTag={committerByTag}
       nameFor={(pubkey) => server.nameFor(pubkey)}
     />,
   );

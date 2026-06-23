@@ -41,6 +41,8 @@ export const GroupOverview: FC<GroupOverviewProps> = ({
     <Layout title={`tunnels — ${groupName(group)}`} npub={npub}>
       <p>
         <a href="/">← all groups</a>
+        {" · "}
+        <a href={`/${group.idStr}/timeline`}>conversations timeline →</a>
       </p>
 
       <section class="panel">

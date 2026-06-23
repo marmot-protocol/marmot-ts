@@ -32,6 +32,12 @@ renders each group's full history as a branching timeline.
      members have sent messages on each branch and the furthest epoch each
      reached (so you can see where members sit across forks and how far down a
      branch they have progressed).
+   - `/<group-id>/timeline` is the **conversations timeline**: every fork
+     rendered as a vertical root→tip column, side by side, so you can read what
+     a member on each branch sees. Stops (epochs) are aligned by depth across
+     columns, so the shared prefix lines up and the row where a branch leaves the
+     canonical path — the divergence point — is highlighted. Each stop shows its
+     commit (and committer) and the messages decrypted at that exact state.
    - `/<group-id>/<node-tag>` is a single epoch's page: who created the commit,
      the proposals it carried, and every application message decrypted there.
 

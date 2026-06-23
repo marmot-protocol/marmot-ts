@@ -108,6 +108,54 @@ const STYLES = `
     border-bottom: 1px solid var(--border); }
   .proposals li:last-child { border-bottom: 0; }
   .proposals .who { font-weight: 600; }
+
+  /* conversations timeline */
+  .tl-legend { display: flex; gap: 20px; flex-wrap: wrap; color: var(--muted);
+    font-size: 12px; }
+  .tl-legend span::before { content: "●"; margin-right: 6px; }
+  .tl-legend .l-canon::before { color: var(--accent); }
+  .tl-legend .l-shared::before { color: var(--muted); }
+  .tl-legend .l-diverge::before { color: var(--fork); }
+  .timeline-wrap { overflow-x: auto; padding: 4px 2px 16px; }
+  .timeline-grid { display: grid; column-gap: 14px; align-items: stretch; }
+  .tl-head {
+    position: sticky; top: 0; z-index: 2; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    margin-bottom: 6px;
+  }
+  .tl-head.canon { border-color: var(--accent); }
+  .tl-head-top { display: flex; gap: 8px; align-items: center; }
+  .tl-head-sub { color: var(--muted); font-size: 12px; margin-top: 4px;
+    font-family: var(--mono); }
+  .tl-stop {
+    position: relative; margin-left: 7px; padding: 4px 4px 16px 20px;
+    border-left: 2px solid var(--border);
+  }
+  .tl-stop.canon { border-left-color: var(--accent-dim); }
+  .tl-stop.shared { opacity: .62; }
+  .tl-stop.diverge { border-left-color: var(--fork); }
+  .tl-dot {
+    position: absolute; left: -8px; top: 7px; width: 13px; height: 13px;
+    border-radius: 50%; background: var(--muted); border: 2px solid var(--bg);
+  }
+  .tl-stop.canon .tl-dot { background: var(--accent); }
+  .tl-stop.diverge .tl-dot { background: var(--fork); }
+  .tl-node { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .tl-epoch { font-weight: 600; font-size: 13px; }
+  .tl-tag { color: var(--muted); font-size: 11px; }
+  .tl-node .pill { font-size: 10px; padding: 1px 6px; }
+  .tl-commit { color: var(--muted); font-size: 12px; margin: 3px 0 6px; }
+  .tl-commit .who { color: var(--fg); font-weight: 600; }
+  .tl-nomsg { color: var(--muted); font-size: 11px; font-style: italic; }
+  .tl-msgs { display: flex; flex-direction: column; gap: 6px; }
+  .tl-msg { background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 9px; }
+  .tl-msg-hdr { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .tl-msg-hdr .who { font-weight: 600; font-size: 12px; }
+  .tl-msg-hdr .when { color: var(--muted); font-size: 11px; }
+  .tl-msg-hdr .kind { font-size: 10px; padding: 1px 6px; }
+  .tl-msg-body { white-space: pre-wrap; word-break: break-word; font-size: 13px;
+    margin-top: 3px; }
 `;
 
 /** The shared HTML shell: dark theme, top bar with the server identity. */

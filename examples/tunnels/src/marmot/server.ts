@@ -101,9 +101,17 @@ export interface TunnelServerOptions {
   metaStore: GenericKeyValueStore<MessageMeta>;
   /** Durable archive of raw kind-445 events, keyed `${groupHex}:${eventId}`. */
   eventArchive: GenericKeyValueStore<NostrEvent>;
+  /**
+   * Optional inactivity TTL in hours. When set (> 0), groups idle for at least
+   * this long are periodically purged from local storage. Unset = retain forever.
+   */
+  groupTtlHours?: number;
   /** Teardown hook (closes the SQLite connection). */
   dispose?: () => void;
 }
+
+/** How often the inactivity sweep runs (capped to the TTL for short TTLs). */
+const SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 
 /**
  * Headless driver for a passive, omniscient group observer. Unlike a chat
@@ -128,9 +136,12 @@ export class TunnelServer {
   readonly #relays: string[];
   readonly #metaStore: GenericKeyValueStore<MessageMeta>;
   readonly #eventArchive: GenericKeyValueStore<NostrEvent>;
+  readonly #groupTtlHours?: number;
   readonly #dispose?: () => void;
 
   readonly #groups = new Map<string, MarmotGroup>();
+  /** Newest kind-445 `created_at` (unix seconds) seen per group — its activity. */
+  readonly #lastActive = new Map<string, number>();
   /** Live kind-445 subscriptions, one per followed group. */
   readonly #connections = new Map<string, Unsubscribable>();
   /** Invite rumor ids we've already attempted, so we don't re-join on re-yield. */
@@ -142,6 +153,7 @@ export class TunnelServer {
 
   #stopped = false;
   #inviteConnection?: Unsubscribable;
+  #sweepTimer?: ReturnType<typeof setInterval>;
 
   constructor(options: TunnelServerOptions) {
     this.#client = options.client;
@@ -157,6 +169,7 @@ export class TunnelServer {
     ];
     this.#metaStore = options.metaStore;
     this.#eventArchive = options.eventArchive;
+    this.#groupTtlHours = options.groupTtlHours;
     this.#dispose = options.dispose;
   }
 
@@ -197,12 +210,24 @@ export class TunnelServer {
     void this.#trackGroups();
     void this.#autoAcceptInvites();
 
+    if (this.#groupTtlHours) {
+      log("inactivity TTL: purging groups idle for > %dh", this.#groupTtlHours);
+      // Sweep no less often than the TTL itself, so a short TTL still fires.
+      const every = Math.min(
+        SWEEP_INTERVAL_MS,
+        this.#groupTtlHours * 3_600_000,
+      );
+      this.#sweepTimer = setInterval(() => void this.#sweepExpired(), every);
+      this.#sweepTimer.unref?.();
+    }
+
     log("ready as %s on %o", this.npub, this.#relays);
   }
 
   stop(): void {
     if (this.#stopped) return;
     this.#stopped = true;
+    if (this.#sweepTimer) clearInterval(this.#sweepTimer);
     this.#inviteConnection?.unsubscribe();
     for (const sub of this.#connections.values()) sub.unsubscribe();
     this.#connections.clear();
@@ -221,6 +246,16 @@ export class TunnelServer {
   /** A single followed group by hex id, or undefined. */
   group(idStr: string): MarmotGroup | undefined {
     return this.#groups.get(idStr);
+  }
+
+  /**
+   * The newest kind-445 event `created_at` (unix seconds) seen for a group — its
+   * "last active" time across all activity (commits + messages + proposals), or
+   * `0` if nothing has been ingested for it yet. Used to order the group list
+   * (most-recently-active first) and to drive inactivity expiry.
+   */
+  lastActive(idStr: string): number {
+    return this.#lastActive.get(idStr) ?? 0;
   }
 
   /**
@@ -348,8 +383,63 @@ export class TunnelServer {
 
   #untrack(idStr: string): void {
     this.#groups.delete(idStr);
+    this.#lastActive.delete(idStr);
     this.#connections.get(idStr)?.unsubscribe();
     this.#connections.delete(idStr);
+  }
+
+  /**
+   * Purge groups with no kind-445 activity within the configured TTL. A group is
+   * only eligible once it has a recorded last-active time (> 0), so groups whose
+   * archive replay is still in flight on startup are never purged prematurely.
+   */
+  async #sweepExpired(): Promise<void> {
+    if (this.#stopped || !this.#groupTtlHours) return;
+    const cutoff = Math.floor(Date.now() / 1000) - this.#groupTtlHours * 3600;
+    const stale = [...this.#groups.keys()].filter((id) => {
+      const seen = this.#lastActive.get(id);
+      return seen !== undefined && seen < cutoff;
+    });
+    for (const id of stale) {
+      log(
+        "purging idle group %s (last active %s)",
+        id.slice(0, 8),
+        this.#lastActive.get(id),
+      );
+      await this.#purgeGroup(id);
+    }
+  }
+
+  /**
+   * Remove every trace of a group from local storage. `client.groups.destroy`
+   * purges the library-owned state (group state, rewind history, rumor history)
+   * *without publishing anything* — so the passive-observer contract holds — and
+   * its `destroyed` event drives `#untrack` via the watch loop. We then clear the
+   * tunnels-owned sidecars the library doesn't know about: the raw-event archive
+   * and the message-meta index, both keyed `${groupHex}:`.
+   */
+  async #purgeGroup(idStr: string): Promise<void> {
+    try {
+      await this.#client.groups.destroy(idStr);
+    } catch (err) {
+      log("purge: destroy failed for %s: %O", idStr, err);
+      return; // leave the sidecars intact so a retry can finish the job
+    }
+    this.#untrack(idStr);
+    await this.#clearPrefixed(this.#eventArchive, `${idStr}:`);
+    await this.#clearPrefixed(this.#metaStore, `${idStr}:`);
+    for (const key of [...this.#metaCache.keys()]) {
+      if (key.startsWith(`${idStr}:`)) this.#metaCache.delete(key);
+    }
+  }
+
+  /** Remove every row in a store whose key starts with `prefix`. */
+  async #clearPrefixed(
+    store: GenericKeyValueStore<unknown>,
+    prefix: string,
+  ): Promise<void> {
+    const keys = (await store.keys()).filter((key) => key.startsWith(prefix));
+    await Promise.all(keys.map((key) => store.removeItem(key).catch(() => {})));
   }
 
   /**
@@ -381,12 +471,16 @@ export class TunnelServer {
       for (const event of fresh) seen.add(event.id);
       if (!fresh.length) return;
       // Archive every event before processing it, so the durable store is a
-      // superset of whatever relays still serve (idempotent upsert by id).
+      // superset of whatever relays still serve (idempotent upsert by id), and
+      // advance the group's last-active time from the newest event seen.
+      let newest = this.#lastActive.get(group.idStr) ?? 0;
       for (const event of fresh) {
         void this.#eventArchive
           .setItem(`${group.idStr}:${event.id}`, event)
           .catch(() => {});
+        if (event.created_at > newest) newest = event.created_at;
       }
+      this.#lastActive.set(group.idStr, newest);
       try {
         for await (const result of group.ingest(fresh)) {
           if (

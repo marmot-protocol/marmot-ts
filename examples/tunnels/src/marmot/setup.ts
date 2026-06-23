@@ -51,6 +51,12 @@ export interface TunnelConfig {
   port: number;
   /** Optional hex secret override (else read/generated under `dataDir`). */
   secretOverride?: string;
+  /**
+   * Optional inactivity TTL in hours. When set (> 0), groups with no kind-445
+   * activity for at least this many hours are periodically purged from local
+   * storage. Unset/0 means retain every group forever (the default).
+   */
+  groupTtlHours?: number;
 }
 
 /**
@@ -67,7 +73,14 @@ export function configFromEnv(env = process.env): TunnelConfig {
     inboxRelays: parseRelays(env.TUNNELS_INBOX_RELAYS ?? shared),
     port: Number(env.PORT) || 3000,
     secretOverride: env.TUNNELS_SECRET?.trim() || undefined,
+    groupTtlHours: parseTtlHours(env.TUNNELS_GROUP_TTL_HOURS),
   };
+}
+
+/** Parse a positive number of hours, or `undefined` for retain-forever. */
+function parseTtlHours(value: string | undefined): number | undefined {
+  const hours = Number(value?.trim());
+  return Number.isFinite(hours) && hours > 0 ? hours : undefined;
 }
 
 /** The union of outbox + inbox relays (pool defaults, group ingest fallback). */
@@ -199,6 +212,7 @@ export async function createServer(
     // is reconstructed from our own store, independent of whether relays still
     // serve those events.
     eventArchive: new SqliteKeyValueStore<NostrEvent>(db, "events"),
+    groupTtlHours: config.groupTtlHours,
     dispose: () => db.close(),
   });
 }

@@ -67,14 +67,15 @@ on Node 24, where no flag is needed.
 
 ## Configuration (environment variables)
 
-| Variable                | Default                              | Purpose                                                                   |
-| ----------------------- | ------------------------------------ | ------------------------------------------------------------------------- |
-| `TUNNELS_SECRET`        | generated + saved to `identity.key`  | 32-byte hex Nostr secret. When set, it's authoritative (not stored).      |
-| `TUNNELS_OUTBOX_RELAYS` | `TUNNELS_RELAYS` → built-in defaults | NIP-65 (kind 10002) relays: profile, relay lists, KeyPackage.             |
-| `TUNNELS_INBOX_RELAYS`  | `TUNNELS_RELAYS` → built-in defaults | Welcome-inbox (kind 10050) relays: where invites are watched.             |
-| `TUNNELS_RELAYS`        | built-in defaults                    | Shared fallback for both inbox and outbox when the specific var is unset. |
-| `TUNNELS_DATA`          | `./data`                             | Directory for the SQLite database and the generated identity key.         |
-| `PORT`                  | `3000`                               | HTTP port for the web UI.                                                 |
+| Variable                  | Default                              | Purpose                                                                   |
+| ------------------------- | ------------------------------------ | ------------------------------------------------------------------------- |
+| `TUNNELS_SECRET`          | generated + saved to `identity.key`  | 32-byte hex Nostr secret. When set, it's authoritative (not stored).      |
+| `TUNNELS_OUTBOX_RELAYS`   | `TUNNELS_RELAYS` → built-in defaults | NIP-65 (kind 10002) relays: profile, relay lists, KeyPackage.             |
+| `TUNNELS_INBOX_RELAYS`    | `TUNNELS_RELAYS` → built-in defaults | Welcome-inbox (kind 10050) relays: where invites are watched.             |
+| `TUNNELS_RELAYS`          | built-in defaults                    | Shared fallback for both inbox and outbox when the specific var is unset. |
+| `TUNNELS_DATA`            | `./data`                             | Directory for the SQLite database and the generated identity key.         |
+| `TUNNELS_GROUP_TTL_HOURS` | unset (retain forever)               | When > 0, purge groups idle (no kind-445 activity) for this many hours.   |
+| `PORT`                    | `3000`                               | HTTP port for the web UI.                                                 |
 
 Relay lists are comma-separated, e.g.
 `TUNNELS_OUTBOX_RELAYS="wss://relay.damus.io,wss://nos.lol"`.

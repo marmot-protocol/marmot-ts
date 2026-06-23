@@ -19,7 +19,11 @@ await server.start();
 const app = new Hono();
 
 app.get("/", (c) => {
-  const groups = server.groups().map(summarize);
+  const groups = server
+    .groups()
+    .map((group) => summarize(group, server.lastActive(group.idStr)))
+    // Most recently active groups first; idle (no activity) sink to the bottom.
+    .sort((a, b) => b.lastActive - a.lastActive);
   return c.html(
     <GroupList
       npub={server.npub}

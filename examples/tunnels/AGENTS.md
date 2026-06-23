@@ -27,7 +27,14 @@ Standalone package inside the `marmot-ts` pnpm workspace.
 ## Config (env vars)
 
 `TUNNELS_SECRET`, `TUNNELS_OUTBOX_RELAYS`, `TUNNELS_INBOX_RELAYS`, `TUNNELS_RELAYS`
-(shared fallback), `TUNNELS_DATA`, `PORT`. See `README.md` for the full table.
+(shared fallback), `TUNNELS_DATA`, `TUNNELS_GROUP_TTL_HOURS` (optional inactivity
+TTL — purge groups idle this many hours; unset = retain forever), `PORT`. See
+`README.md` for the full table. Group "last active" = newest kind-445
+`created_at`, tracked in `TunnelServer.#lastActive` (updated in `#connect`'s
+`drain`), exposed via `lastActive(idStr)`; the `/` list sorts by it and a
+`setInterval` sweep (`#sweepExpired` → `#purgeGroup`) drops idle groups via
+`client.groups.destroy` (no publish — keeps the passive-observer contract) plus
+manual clearing of the tunnels-owned `events`/`message_epochs` sidecars.
 
 ## JSX
 

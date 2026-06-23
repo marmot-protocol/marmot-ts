@@ -38,7 +38,7 @@ export const GroupOverview: FC<GroupOverviewProps> = ({
   const info = group.info;
 
   return (
-    <Layout title={`tunnels — ${groupName(group)}`} npub={npub}>
+    <Layout title={`tunnels — ${groupName(group)}`} npub={npub} wide>
       <p>
         <a href="/">← all groups</a>
         {" · "}

@@ -43,7 +43,7 @@ export const TimelinePage: FC<TimelinePageProps> = ({
   const { forks } = timeline;
 
   return (
-    <Layout title={`tunnels — ${groupName(group)} timeline`} npub={npub}>
+    <Layout title={`tunnels — ${groupName(group)} timeline`} npub={npub} wide>
       <p>
         <a href="/">← all groups</a>
         {" · "}

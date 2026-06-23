@@ -140,7 +140,7 @@ export const ForkGraph: FC<{
   });
 
   return (
-    <div class="graph-wrap">
+    <div class="graph-wrap" id="fork-graph-wrap">
       <svg
         width={width}
         height={height}
@@ -229,6 +229,13 @@ export const ForkGraph: FC<{
         <span class="l-fork">fork point</span>
         <span class="l-node">node (epoch)</span>
       </div>
+      <script
+        dangerouslySetInnerHTML={{
+          __html:
+            "(function(){var el=document.getElementById('fork-graph-wrap');" +
+            "if(el)el.scrollLeft=el.scrollWidth;})();",
+        }}
+      />
     </div>
   );
 };

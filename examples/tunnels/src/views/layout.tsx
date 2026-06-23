@@ -33,6 +33,7 @@ const STYLES = `
   header.top h1 { font-size: 16px; margin: 0; }
   header.top .id { color: var(--muted); font-size: 12px; }
   main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  main.wide { max-width: none; }
   .panel {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 10px; padding: 18px; margin-bottom: 20px;
@@ -159,9 +160,9 @@ const STYLES = `
 `;
 
 /** The shared HTML shell: dark theme, top bar with the server identity. */
-export const Layout: FC<PropsWithChildren<{ title: string; npub: string }>> = (
-  props,
-) => (
+export const Layout: FC<
+  PropsWithChildren<{ title: string; npub: string; wide?: boolean }>
+> = (props) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
@@ -176,7 +177,7 @@ export const Layout: FC<PropsWithChildren<{ title: string; npub: string }>> = (
         </h1>
         <span class="id mono">{props.npub}</span>
       </header>
-      <main>{props.children}</main>
+      <main class={props.wide ? "wide" : undefined}>{props.children}</main>
     </body>
   </html>
 );

@@ -42,7 +42,7 @@ export const EpochPage: FC<EpochPageProps> = ({
   const node = detail.node;
 
   return (
-    <Layout title={`tunnels — epoch ${node?.epoch ?? "?"}`} npub={npub}>
+    <Layout title={`tunnels — epoch ${node?.epoch ?? "?"}`} npub={npub} wide>
       <p>
         <a href="/">← all groups</a>
         {" · "}

@@ -223,6 +223,17 @@ export class MarmotGroupEngine<TEnvelope> {
   }
 
   /**
+   * The undecryptable events currently held in the ingestion pool, oldest-first:
+   * received transport envelopes that have not yet decrypted/processed into the
+   * history tree (e.g. a newer-epoch message awaiting its commit, or a fork
+   * message awaiting its branch). They are retried as the tree grows; an entry
+   * that never clears is a received event the unlocking state never arrived for.
+   */
+  pendingEnvelopes(): TEnvelope[] {
+    return this.#pool.envelopes();
+  }
+
+  /**
    * The full-fork history tree: every group state observed — the canonical
    * branch and every fork — keyed by MLS confirmation tag. Read-only structural
    * access; the engine grows it as commits and proposals arrive.

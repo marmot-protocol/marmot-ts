@@ -93,6 +93,7 @@ export function parseArgs(argv: string[]): CliOptions {
  */
 const STATE_FILES = [
   "identity.key",
+  "device-id",
   "state.db",
   "state.db-wal",
   "state.db-shm",
@@ -124,7 +125,8 @@ function loadOrCreateSecret(keyPath: string, override: string): string {
   return hex;
 }
 
-function loadOrCreateAuditDeviceId(path: string): string {
+function loadOrCreateDeviceId(path: string, ephemeral: boolean): string {
+  if (ephemeral) return randomBytes(16).toString("hex");
   if (existsSync(path)) return readFileSync(path, "utf8").trim();
   const id = randomBytes(16).toString("hex");
   writeFileSync(path, id);
@@ -211,11 +213,21 @@ export async function createController(
   const bootstrapRelays = chosenRelays.length
     ? chosenRelays
     : relaySet(DEFAULT_RELAYS);
-  const clientId = `marmot-opentui-${opts.label}`;
 
   const dataDir = join(homedir(), ".marmot-opentui", opts.label);
   mkdirSync(dataDir, { recursive: true });
   if (fresh) resetAccountFiles(dataDir);
+
+  // A stable per-device identifier, persisted alongside the identity so the
+  // same machine reuses it across restarts. Used as the replaceable KeyPackage
+  // `d` tag (so two devices under the same account don't clobber each other on
+  // relays) and as the audit `engine_id` input. Ephemeral mode generates a
+  // fresh one each run since nothing is persisted.
+  const deviceId = loadOrCreateDeviceId(
+    join(dataDir, "device-id"),
+    opts.ephemeral,
+  );
+  const clientId = `marmot-opentui-${deviceId.slice(0, 8)}`;
 
   // One SQLite connection holds every key-value store for this account (groups,
   // KeyPackages, invites, messages) as separate tables. Null in ephemeral mode,
@@ -232,9 +244,6 @@ export async function createController(
   let auditContext: AuditContextOptions | undefined;
   let auditLogPath: string | undefined;
   if (opts.audit) {
-    const deviceId = loadOrCreateAuditDeviceId(
-      join(dataDir, "audit-device-id"),
-    );
     const engineId = deriveEngineId(pubkey, deviceId);
     auditLogPath = opts.auditPath || join(dataDir, `audit-${engineId}.jsonl`);
     audit = new NodeJsonlAuditRecorder(auditLogPath);

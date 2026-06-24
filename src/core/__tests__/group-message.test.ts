@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createApplicationMessage,
   defaultCryptoProvider,
@@ -12,7 +12,6 @@ import {
   createEncryptedGroupEventContent,
   decryptGroupMessageEvent,
 } from "../group-message.js";
-import { createLegacyEncryptedGroupEventContent } from "../group-message-legacy.js";
 import { createCredential } from "../credential.js";
 import { createSimpleGroup } from "../group.js";
 import { generateKeyPackage } from "../key-package.js";
@@ -80,46 +79,6 @@ describe("group message encryption (MIP-03)", () => {
     expect(encode(mlsMessageEncoder, decoded)).toEqual(
       encode(mlsMessageEncoder, message),
     );
-  });
-
-  it("decrypts legacy format via fallback and warns once", async () => {
-    const { clientState, ciphersuite } = await createTestState("2".repeat(64));
-
-    const { message } = await createApplicationMessage({
-      context: {
-        cipherSuite: ciphersuite,
-        authService: unsafeTestingAuthenticationService,
-      },
-      state: clientState,
-      message: new TextEncoder().encode("legacy"),
-    });
-
-    const serialized = encode(mlsMessageEncoder, message);
-    const legacyContent = await createLegacyEncryptedGroupEventContent({
-      state: clientState,
-      ciphersuite,
-      serializedMessage: serialized,
-    });
-
-    const event = {
-      id: "d".repeat(64),
-      kind: 445,
-      pubkey: "c".repeat(64),
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [["h", "11".repeat(32)]],
-      content: legacyContent,
-      sig: "2".repeat(128),
-    };
-
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    await decryptGroupMessageEvent(event, clientState, ciphersuite);
-    await decryptGroupMessageEvent(event, clientState, ciphersuite);
-
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0]?.[0]).toContain("legacy MIP-03 group message");
-
-    warnSpy.mockRestore();
   });
 
   it("rejects invalid base64 group-event content", async () => {

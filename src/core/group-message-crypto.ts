@@ -11,7 +11,6 @@ import {
   type MlsMessage,
 } from "ts-mls";
 import { decodeContent, encodeContent } from "../utils/encoding.js";
-import { decryptLegacyGroupMessageEventContent } from "./group-message-legacy.js";
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { concatBytes, randomBytes } from "@noble/ciphers/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -112,18 +111,8 @@ export async function decryptGroupMessageEvent(
       message.id,
     );
     return decoded;
-  } catch (primaryError) {
-    try {
-      return await decryptLegacyGroupMessageEventContent(
-        message.content,
-        clientState,
-        ciphersuite,
-      );
-    } catch (legacyError) {
-      throw new Error(
-        `Failed to decrypt group message (new format and legacy fallback failed): ${formatError(primaryError)}; legacy: ${formatError(legacyError)}`,
-      );
-    }
+  } catch (error) {
+    throw new Error(`Failed to decrypt group message: ${formatError(error)}`);
   }
 }
 

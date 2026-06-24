@@ -63,9 +63,12 @@ Blocked` derived core, engine tracking, settle timer + outbound queue/gating.
 
 ## MINOR — hardening / cleanup
 
-- **m1 — Retire legacy group-message fallback.** `src/core/group-message-crypto.ts`
-  still falls back to `src/core/group-message-legacy.ts` on decrypt failure. Receive-only
-  leniency, harmless for interop, but off-spec surface to remove for a clean v2 cut.
+- **m1 — Retire legacy group-message fallback. DONE.** The NIP-44 legacy decrypt
+  fallback and `src/core/group-message-legacy.ts` are removed; `decryptGroupMessageEvent`
+  now wraps only the primary `encrypted-media`/exporter failure (stable
+  `Failed to decrypt group message:` prefix preserved for callers and tests). The legacy
+  fallback test was dropped; the message error surface is unchanged for downstream
+  (`decryptGroupMessages` swallows the error, the engine synthesizes its own).
 - **m3 — blossom-image (0x8002) codec absent.** No `blossom-image.ts`; excluded from
   `SUPPORTED_APP_COMPONENT_IDS`. Spec (`app-components/group-blossom-image-v1.md`) defines
   its bytes, but Rust also omits the codec and points groups at `avatar-url` (0x8007,

@@ -80,10 +80,25 @@
       "import": "./dist/engine/index.js",
       "default": "./dist/engine/index.js"
     },
+    "./audit": {
+      "types": "./dist/audit/index.d.ts",
+      "import": "./dist/audit/index.js",
+      "default": "./dist/audit/index.js"
+    },
     "./extra": {
       "types": "./dist/extra/index.d.ts",
       "import": "./dist/extra/index.js",
       "default": "./dist/extra/index.js"
+    },
+    "./extra/audit/node": {
+      "types": "./dist/extra/audit/node.d.ts",
+      "import": "./dist/extra/audit/node.js",
+      "default": "./dist/extra/audit/node.js"
+    },
+    "./extra/audit/browser": {
+      "types": "./dist/extra/audit/browser.d.ts",
+      "import": "./dist/extra/audit/browser.js",
+      "default": "./dist/extra/audit/browser.js"
     },
     "./utils": {
       "types": "./dist/utils/index.d.ts",

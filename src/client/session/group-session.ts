@@ -11,6 +11,7 @@ import {
 } from "../../core/client-state.js";
 import type { ConvergencePolicy } from "../../core/convergence.js";
 import type { Disposition } from "../../core/inbound.js";
+import type { AuditContextOptions, AuditSink } from "../../audit/index.js";
 import type { IngestionPoolOptions } from "../../engine/ingestion-pool.js";
 import { MarmotGroupEngine } from "../../engine/group-engine.js";
 import { GroupHistoryTree } from "../../engine/history-tree.js";
@@ -167,6 +168,10 @@ export type GroupSessionOptions<
   scheduler?: import("../../engine/group-engine.js").ConvergenceScheduler;
   /** Fired when the quiescence window elapses, so the owner can drain queued outbound (B5). */
   onSettleCheck?: () => void | Promise<void>;
+  /** Optional forensic audit sink. Omitted by default; audit logging is app opt-in. */
+  audit?: AuditSink;
+  /** Required when `audit` is set; contains stable engine/account/session metadata. */
+  auditContext?: AuditContextOptions;
 };
 
 export function ingestResultDisposition(result: IngestResult): Disposition {
@@ -227,6 +232,8 @@ export class GroupSession<
       settlementQuiescenceMs: options.settlementQuiescenceMs,
       scheduler: options.scheduler,
       onSettleCheck: options.onSettleCheck,
+      audit: options.audit,
+      auditContext: options.auditContext,
       onStateChanged: (newState) => {
         this.#dirty = true;
         this.#groupData = null;

@@ -44,6 +44,18 @@ import {
   mayPrepareLocalCommit,
   transitionLifecycle,
 } from "../core/group-lifecycle.js";
+import {
+  auditEpochStateName,
+  createAuditEmitter,
+  digestString,
+  errorDetail,
+  messageArtifactKindFromNostrKind,
+  type AuditContextOptions,
+  type AuditEmitter,
+  type AuditEventKind,
+  type AuditSink,
+  type AuditTransportWireEnvelope,
+} from "../audit/index.js";
 import { framedContentType } from "./wire-format.js";
 import { logger } from "../utils/debug.js";
 import { createAdminCommitPolicyCallback } from "./admin-policy.js";
@@ -137,6 +149,10 @@ export type MarmotGroupEngineOptions<TEnvelope> = {
    * outbound work (B5). The engine itself holds no outbound queue.
    */
   onSettleCheck?: () => void | Promise<void>;
+  /** Optional forensic audit sink. Omitted by default; audit logging is app opt-in. */
+  audit?: AuditSink;
+  /** Required when `audit` is set; contains stable engine/account/session metadata. */
+  auditContext?: AuditContextOptions;
 };
 
 /**
@@ -200,6 +216,7 @@ export class MarmotGroupEngine<TEnvelope> {
   readonly #onSettleCheck?: () => void | Promise<void>;
   /** Handle of the pending settle-check timer, if any (cleared/reset per pass). */
   #settleTimer: TimerHandle | undefined;
+  readonly #audit?: AuditEmitter;
 
   constructor(options: MarmotGroupEngineOptions<TEnvelope>) {
     this.#state = options.state;
@@ -224,6 +241,13 @@ export class MarmotGroupEngine<TEnvelope> {
       this.#policy,
     );
     this.#pool = new IngestionPool<TEnvelope>(options.ingestionPool);
+    this.#audit = createAuditEmitter(
+      options.audit && options.auditContext
+        ? { ...options.auditContext, sink: options.audit }
+        : undefined,
+    );
+    this.#emitEngineContext();
+    this.#emitGroupContext("engine_started");
   }
 
   /** Number of undecryptable events currently held in the ingestion pool. */
@@ -310,6 +334,35 @@ export class MarmotGroupEngine<TEnvelope> {
 
   /** Executes a local send intent and returns the wrapped transport envelope. */
   async send(intent: SendIntent): Promise<SendResult<TEnvelope>> {
+    const intentKind = auditSendIntentKind(intent);
+    this.#emitAudit({ type: "send_entry", intent_kind: intentKind });
+    try {
+      const result = await this.#sendInner(intent);
+      this.#emitAudit({
+        type: "send_outcome",
+        intent_kind: intentKind,
+        result_kind: auditSendResultKind(result),
+        outbound_messages: [
+          {
+            msg_id: this.peeler.idOf(result.envelope),
+            artifact_kind: this.#artifactKind(result.envelope, result.kind),
+            transport: this.#transportEnvelope(result.envelope),
+          },
+        ],
+      });
+      return result;
+    } catch (error) {
+      this.#emitAudit({
+        type: "send_error",
+        intent_kind: intentKind,
+        error_kind: "engine_error",
+        detail: errorDetail(error),
+      });
+      throw error;
+    }
+  }
+
+  async #sendInner(intent: SendIntent): Promise<SendResult<TEnvelope>> {
     switch (intent.kind) {
       case "applicationMessage": {
         const { newState, message } = await createApplicationMessage({
@@ -442,9 +495,10 @@ export class MarmotGroupEngine<TEnvelope> {
           ...commitOptions,
         });
 
-        this.#lifecycle = transitionLifecycle(
-          this.#lifecycle,
+        this.#transitionLifecycle(
           groupLifecycleStates.pendingPublish,
+          "begin_pending",
+          "commit",
         );
         this.#stagedCommitParentEpoch = Number(parentState.groupContext.epoch);
 
@@ -496,9 +550,12 @@ export class MarmotGroupEngine<TEnvelope> {
         );
       }
 
-      this.#lifecycle = transitionLifecycle(
-        this.#lifecycle,
+      const fromEpoch = Number(pending.parentState.groupContext.epoch);
+      const toEpoch = Number(pending.newState.groupContext.epoch);
+      this.#transitionLifecycle(
         groupLifecycleStates.merging,
+        "publish_confirmed",
+        pending.kind,
       );
       this.#setState(pending.newState);
       this.#recordCommitNode(
@@ -506,9 +563,16 @@ export class MarmotGroupEngine<TEnvelope> {
         pending.commitMessage,
         pending.newState,
       );
-      this.#lifecycle = transitionLifecycle(
-        this.#lifecycle,
+      this.#emitAudit({
+        type: "epoch_confirmed",
+        from_epoch: fromEpoch,
+        to_epoch: toEpoch,
+        pending_kind: pending.kind,
+      });
+      this.#transitionLifecycle(
         groupLifecycleStates.stable,
+        "merge_complete",
+        pending.kind,
       );
       this.#stagedCommitParentEpoch = undefined;
       return;
@@ -521,9 +585,18 @@ export class MarmotGroupEngine<TEnvelope> {
   publishFailed(pending: PendingState): void {
     if (pending.kind !== "commit") return;
     if (this.#lifecycle !== groupLifecycleStates.pendingPublish) return;
-    this.#lifecycle = transitionLifecycle(
-      this.#lifecycle,
+    const pendingEpoch = Number(pending.newState.groupContext.epoch);
+    const restoredEpoch = Number(this.#state.groupContext.epoch);
+    this.#emitAudit({
+      type: "epoch_rolled_back",
+      pending_epoch: pendingEpoch,
+      restored_epoch: restoredEpoch,
+      pending_kind: pending.kind,
+    });
+    this.#transitionLifecycle(
       groupLifecycleStates.stable,
+      "publish_failed",
+      pending.kind,
     );
     this.#stagedCommitParentEpoch = undefined;
   }
@@ -545,6 +618,7 @@ export class MarmotGroupEngine<TEnvelope> {
     let convergenceRelevant = false;
     let unresolved = false;
     let blocked = false;
+    for (const envelope of envelopes) this.#emitIngestEntry(envelope);
 
     for await (const result of this.#ingestWithPool(envelopes, options)) {
       if (this.#isConvergenceRelevant(result)) convergenceRelevant = true;
@@ -555,10 +629,12 @@ export class MarmotGroupEngine<TEnvelope> {
       )
         blocked = true;
 
-      yield {
+      const dispositioned = {
         ...result,
         disposition: ingestResultDisposition(result),
       };
+      this.#emitIngestOutcome(dispositioned);
+      yield dispositioned;
     }
 
     // A convergence pass ran only if convergence-relevant input arrived; a batch
@@ -578,7 +654,14 @@ export class MarmotGroupEngine<TEnvelope> {
     // commit (B6, member-departure.md). It is surfaced as an `autoCommit` result;
     // the layer that owns the transport publishes it (publish-before-apply).
     const auto = await this.#maybeAutoCommitSelfRemoves();
-    if (auto) yield { ...auto, disposition: ingestResultDisposition(auto) };
+    if (auto) {
+      const dispositioned = {
+        ...auto,
+        disposition: ingestResultDisposition(auto),
+      };
+      this.#emitIngestOutcome(dispositioned);
+      yield dispositioned;
+    }
   }
 
   /**
@@ -962,6 +1045,140 @@ export class MarmotGroupEngine<TEnvelope> {
     this.#onStateChanged?.(newState);
   }
 
+  #emitAudit(kind: AuditEventKind): void {
+    this.#audit?.emit(kind, {
+      groupRef: bytesToHex(this.#state.groupContext.groupId),
+      context: {
+        group: this.#auditGroupContext(),
+      },
+    });
+  }
+
+  #emitEngineContext(): void {
+    this.#emitAudit({
+      type: "engine_context",
+      context: {
+        ciphersuite: Number(this.#state.groupContext.cipherSuite),
+        convergence_max_rewind_commits: finiteAuditNumber(
+          this.#policy.maxRewindCommits,
+        ),
+      },
+    });
+  }
+
+  #emitGroupContext(reason: string): void {
+    this.#emitAudit({
+      type: "group_context",
+      reason,
+      context: this.#auditGroupContext(),
+    });
+  }
+
+  #auditGroupContext() {
+    const groupData = getMarmotGroupView(this.#state);
+    return {
+      epoch: Number(this.#state.groupContext.epoch),
+      member_count: this.#occupiedLeafIndices().length,
+      admin_count: groupData?.adminPubkeys.length ?? 0,
+      convergence_max_rewind_commits: finiteAuditNumber(
+        this.#policy.maxRewindCommits,
+      ),
+    };
+  }
+
+  #transitionLifecycle(
+    next: GroupLifecycleState,
+    reason: string,
+    pendingKind?: string,
+  ): void {
+    const previous = this.#lifecycle;
+    this.#lifecycle = transitionLifecycle(this.#lifecycle, next);
+    this.#emitAudit({
+      type: "epoch_state_changed",
+      previous_state: auditEpochStateName(previous),
+      new_state: auditEpochStateName(this.#lifecycle),
+      epoch: Number(this.#state.groupContext.epoch),
+      reason,
+      pending_kind: pendingKind,
+    });
+  }
+
+  #emitIngestEntry(envelope: TEnvelope): void {
+    const raw = JSON.stringify(envelope);
+    this.#emitAudit({
+      type: "ingest_entry",
+      msg_id: this.peeler.idOf(envelope),
+      envelope_kind: this.#artifactKind(envelope),
+      transport_source: "nostr",
+      transport: this.#transportEnvelope(envelope),
+      payload_len: raw.length,
+      payload_digest: digestString(raw),
+    });
+  }
+
+  #emitIngestOutcome(result: DispositionedIngestResult<TEnvelope>): void {
+    const msgId = this.peeler.idOf(result.envelope);
+    const outcome = auditIngestOutcome(result);
+    if (outcome) {
+      this.#emitAudit({
+        type: "ingest_outcome",
+        msg_id: msgId,
+        outcome_kind: outcome.kind,
+        stale_reason: outcome.staleReason,
+        epoch: auditResultEpoch(result),
+      });
+    }
+    if (result.kind === "invalidated") {
+      this.#emitAudit({
+        type: "message_state_changed",
+        msg_id: msgId,
+        artifact_kind: this.#artifactKind(result.envelope),
+        new_state: "epoch_invalidated",
+        epoch: result.epoch,
+        reason: "convergence_rewind",
+      });
+    }
+    if (result.kind === "rejected") {
+      this.#emitAudit({
+        type: "rejection",
+        msg_id: msgId,
+        reason: "admin_policy",
+      });
+    }
+  }
+
+  #transportEnvelope(envelope: TEnvelope): AuditTransportWireEnvelope {
+    const candidate = envelope as {
+      id?: string;
+      kind?: number;
+      pubkey?: string;
+      tags?: string[][];
+    };
+    const groupTag = candidate.tags?.find((tag) => tag[0] === "h")?.[1];
+    return {
+      transport: "nostr",
+      wire_id: candidate.id,
+      wire_kind: candidate.kind?.toString(),
+      wire_pubkey_hex: candidate.pubkey,
+      transport_group_id: groupTag,
+      nostr_event_id: candidate.id,
+      nostr_kind: candidate.kind,
+      nostr_pubkey_hex: candidate.pubkey,
+    };
+  }
+
+  #artifactKind(
+    envelope: TEnvelope,
+    resultKind?: SendResult<TEnvelope>["kind"],
+  ) {
+    if (resultKind === "applicationMessage") return "application_message";
+    if (resultKind === "groupEvolution" || resultKind === "selfUpdate")
+      return "commit";
+    if (resultKind === "proposal") return "proposal";
+    const candidate = envelope as { kind?: number };
+    return messageArtifactKindFromNostrKind(candidate.kind);
+  }
+
   #log(): Debugger {
     const idStr = bytesToHex(this.#state.groupContext.groupId);
     return logger.extend(`group-engine:${idStr.slice(0, 8)}`);
@@ -1013,9 +1230,9 @@ export class MarmotGroupEngine<TEnvelope> {
   #toUnrecoverable(): void {
     if (this.#lifecycle === groupLifecycleStates.unrecoverable) return;
     if (this.#lifecycle === groupLifecycleStates.stable)
-      this.#lifecycle = transitionLifecycle(
-        this.#lifecycle,
+      this.#transitionLifecycle(
         groupLifecycleStates.recovering,
+        "missing_retained_anchor",
       );
     if (
       canTransitionLifecycle(
@@ -1023,9 +1240,9 @@ export class MarmotGroupEngine<TEnvelope> {
         groupLifecycleStates.unrecoverable,
       )
     )
-      this.#lifecycle = transitionLifecycle(
-        this.#lifecycle,
+      this.#transitionLifecycle(
         groupLifecycleStates.unrecoverable,
+        "missing_retained_anchor",
       );
   }
 
@@ -1063,6 +1280,14 @@ export class MarmotGroupEngine<TEnvelope> {
     }
 
     if (resolution.outcome !== "recovered") {
+      this.#emitAudit({
+        type: "convergence_decision",
+        current_tip_epoch: Number(this.state.groupContext.epoch),
+        max_rewind_commits: finiteAuditNumber(this.#policy.maxRewindCommits),
+        candidates: [],
+        error_kinds:
+          resolution.outcome === "skip" ? ["candidate_state_unavailable"] : [],
+      });
       return { outcome: resolution.outcome };
     }
 
@@ -1083,10 +1308,22 @@ export class MarmotGroupEngine<TEnvelope> {
       canonicalTags,
     );
 
-    this.#lifecycle = transitionLifecycle(
-      this.#lifecycle,
-      groupLifecycleStates.recovering,
-    );
+    this.#emitAudit({
+      type: "convergence_decision",
+      current_tip_epoch: Number(this.state.groupContext.epoch),
+      max_rewind_commits: finiteAuditNumber(this.#policy.maxRewindCommits),
+      candidates: [
+        {
+          branch_id: bytesToHex(resolution.winnerTip.confirmationTag),
+          fork_epoch: forkEpoch,
+          tip_epoch: Number(resolution.winnerTip.groupContext.epoch),
+        },
+      ],
+      selected_branch_id: bytesToHex(resolution.winnerTip.confirmationTag),
+      selected_fork_epoch: forkEpoch,
+      selected_tip_epoch: Number(resolution.winnerTip.groupContext.epoch),
+    });
+    this.#transitionLifecycle(groupLifecycleStates.recovering, "fork_detected");
     this.#setState(resolution.winnerTip);
     for (const link of resolution.winnerChain) {
       this.#retained.record(
@@ -1096,10 +1333,7 @@ export class MarmotGroupEngine<TEnvelope> {
         this.#pinnedEpochs(),
       );
     }
-    this.#lifecycle = transitionLifecycle(
-      this.#lifecycle,
-      groupLifecycleStates.stable,
-    );
+    this.#transitionLifecycle(groupLifecycleStates.stable, "branch_applied");
 
     const anchor = this.#retained.anchorEpoch();
     if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
@@ -1131,5 +1365,87 @@ export class MarmotGroupEngine<TEnvelope> {
       ciphersuiteId: this.ciphersuite.id,
       onUnverifiableCommit: "retry",
     });
+  }
+}
+
+function finiteAuditNumber(value: number): number {
+  return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+}
+
+function auditSendIntentKind(intent: SendIntent): string {
+  switch (intent.kind) {
+    case "applicationMessage":
+      return "app_message";
+    case "proposal":
+      return "proposal";
+    case "commit":
+      return "group_evolution";
+    case "selfUpdate":
+      return "self_update";
+  }
+}
+
+function auditSendResultKind<TEnvelope>(result: SendResult<TEnvelope>): string {
+  switch (result.kind) {
+    case "applicationMessage":
+      return "application_message";
+    case "proposal":
+      return "proposal";
+    case "groupEvolution":
+      return "group_evolution";
+    case "selfUpdate":
+      return "self_update";
+  }
+}
+
+function auditIngestOutcome<TEnvelope>(
+  result: DispositionedIngestResult<TEnvelope>,
+): { kind: string; staleReason?: string } | undefined {
+  switch (result.disposition.kind) {
+    case "accepted":
+      return { kind: "processed" };
+    case "deferred":
+      return { kind: "buffered" };
+    case "stale":
+      return { kind: "stale", staleReason: auditStaleReason(result) };
+    case "invalidated":
+      return undefined;
+  }
+}
+
+function auditStaleReason<TEnvelope>(
+  result: DispositionedIngestResult<TEnvelope>,
+): string | undefined {
+  switch (result.kind) {
+    case "skipped":
+      return result.reason;
+    case "unreadable":
+      return result.decryptFailure ? "decrypt_failed" : "unreadable";
+    case "rejected":
+      return "rejected";
+    case "removed":
+      return "removed";
+    case "processed":
+    case "deferred":
+    case "invalidated":
+    case "autoCommit":
+      return undefined;
+  }
+}
+
+function auditResultEpoch<TEnvelope>(
+  result: DispositionedIngestResult<TEnvelope>,
+): number | undefined {
+  switch (result.kind) {
+    case "invalidated":
+      return result.epoch;
+    case "deferred":
+    case "processed":
+    case "rejected":
+    case "skipped":
+    case "unreadable":
+    case "autoCommit":
+    case "removed":
+      return undefined;
   }
 }

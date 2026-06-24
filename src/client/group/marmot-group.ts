@@ -13,6 +13,7 @@ import {
 
 import type { ProposalAction, ProposalContext } from "../../engine/types.js";
 import type { MediaAttachment } from "../../core/media.js";
+import type { AuditContextOptions, AuditSink } from "../../audit/index.js";
 import { mayReleaseOutbound } from "../../core/convergence-status.js";
 import type { ConvergenceScheduler } from "../../engine/group-engine.js";
 import type { ConvergencePolicy } from "../../core/convergence.js";
@@ -141,6 +142,10 @@ export type MarmotGroupOptions<
   ciphersuite: CiphersuiteImpl;
   /** The nostr relay pool to use for the group. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
+  /** Optional forensic audit sink. Omitted by default; audit logging is app opt-in. */
+  audit?: AuditSink;
+  /** Required when `audit` is set; contains stable engine/account/session metadata. */
+  auditContext?: AuditContextOptions;
   /**
    * Convergence policy (branch selection + `maxRewindCommits` rollback horizon).
    * Set `maxRewindCommits: Infinity` to keep forks of any age eligible for
@@ -397,6 +402,8 @@ export class MarmotGroup<
       now: options.now,
       settlementQuiescenceMs: options.settlementQuiescenceMs,
       scheduler: options.scheduler,
+      audit: options.audit,
+      auditContext: options.auditContext,
       // When the quiescence window elapses, release any queued outbound (B5).
       onSettleCheck: () => this.#drainOutbound(),
       onStateChanged: (newState) => this.emit("stateChanged", newState),
@@ -425,11 +432,14 @@ export class MarmotGroup<
       }),
       getNetwork: () => this.network,
       getRelays: () => this.relays,
+      getGroupRef: () => this.idStr,
       getGroupData: () => this.groupData,
       confirmPublished: (pending) => this.session.confirmPublished(pending),
       publishFailed: (pending) => this.session.publishFailed(pending),
       save: () => this.save(),
       log: this.log,
+      audit: options.audit,
+      auditContext: options.auditContext,
     });
     this.mediaService = new GroupMediaService({
       media: this.media,

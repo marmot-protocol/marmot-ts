@@ -86,10 +86,18 @@ Blocked` derived core, engine tracking, settle timer + outbound queue/gating.
   by store- and engine-level tests. _Note: ingest still does not gate apply on
   `mayApplyRetainedInbound(PendingPublish)`; the pin makes pruning safe regardless, but the
   apply-gating gap is tracked separately._
-- **m5 — Eligibility predicate "older than retained anchor".** `isBranchEligible`
-  (`src/core/convergence.ts`) enforces only the rollback-horizon delta; the
-  "older than retained anchor" guard (`convergence.md`) is applied operationally in the
-  engine's `#resolveFork` but not in the reusable predicate.
+- **m5 — Eligibility predicate "older than retained anchor". VERIFIED — not a gap (no
+  change).** Cross-checked against the Rust reference (`cgka-engine/src/convergence.rs`,
+  `canonicalization.rs`): the reference keeps `is_branch_eligible` **horizon-only** on
+  purpose and applies the anchor guard separately (candidate admission +
+  per-message classifiers, anchor-checked-first). The TS port already mirrors this
+  two-layer split — `isBranchEligible` is horizon-only, and the anchor guard is
+  operational (`classifyLateCommit` → `beyond_anchor` in `ingest.ts`, anchor-first; and
+  `resolveFork` cannot build a branch whose `forkEpoch` state is no longer retained).
+  Folding the anchor into the predicate would have **introduced** drift, not removed it.
+  Documented the deliberate split on `isBranchEligible`. (Minor non-issue: TS derives the
+  anchor as the oldest physically-retained epoch while Rust uses `tip - maxRewindCommits`;
+  they coincide in steady state and the TS form is closer to the spec's conceptual anchor.)
 - **m6 — Content-derived cross-source dedup.** Self-echo dedup uses the Nostr event id and
   only covers own sends; there is no general content-keyed `seen_message_ids` gate
   (`inbound-processing.md`; Rust `seen_message_ids`). Duplicate commits from two relays are

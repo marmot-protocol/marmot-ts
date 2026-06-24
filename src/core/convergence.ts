@@ -235,7 +235,21 @@ export function compareBranchScores(a: BranchScore, b: BranchScore): number {
 
 /**
  * A branch is eligible only inside the rollback horizon:
- * `currentTipEpoch - forkEpoch <= maxRewindCommits`.
+ * `currentTipEpoch - forkEpoch <= maxRewindCommits` (`convergence.md`
+ * "Eligibility").
+ *
+ * This predicate is intentionally horizon-only and takes no retained anchor.
+ * `convergence.md` lists a second eligibility rule — "a branch that needs a
+ * retained state older than the retained anchor MUST NOT be selected" — but that
+ * guard is deliberately kept **separate** from this predicate, mirroring the
+ * reference engine's two-layer structure (`is_branch_eligible` is horizon-only;
+ * the anchor check lives in candidate admission + late-commit classification,
+ * always anchor-first). Keeping the anchor out of here lets the predicate be
+ * reused for horizon-only purposes (e.g. eligibility counts) and keeps it a pure
+ * function of policy + branch, with no dependency on retained-store state. The
+ * anchor guard is applied operationally: {@link classifyLateCommit} emits
+ * `beyond_anchor` for a sub-anchor commit (ingest), and fork recovery cannot
+ * build a branch whose `forkEpoch` state is no longer retained.
  */
 export function isBranchEligible(
   currentTipEpoch: number,

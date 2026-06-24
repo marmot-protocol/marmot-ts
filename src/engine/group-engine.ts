@@ -51,6 +51,7 @@ import { DeliveredPayloadLedger } from "./delivered-payloads.js";
 import { ForkRecovery } from "./fork-recovery.js";
 import { GroupHistoryTree } from "./history-tree.js";
 import { IngestionPool, type IngestionPoolOptions } from "./ingestion-pool.js";
+import { contentDedupId } from "./message-dedup.js";
 import {
   type AppliedForkResolution,
   type IngestContext,
@@ -180,6 +181,22 @@ export class MarmotGroupEngine<TEnvelope> {
   readonly #forkRecovery: ForkRecovery<TEnvelope>;
   /** App payloads delivered eagerly, retracted as `invalidated` on rewind (M7). */
   readonly #delivered = new DeliveredPayloadLedger<TEnvelope>();
+
+  /**
+   * Content ids of inbound messages already terminally processed — replay dedup
+   * (`inbound-processing.md`; reference `seen_message_ids`). Process-lifetime,
+   * in-memory; an already-applied commit also re-dedups via epoch/canonical
+   * state, so this primarily gives a clean `duplicate` disposition for re-wrapped
+   * replays and stops a duplicate application message from re-delivering.
+   */
+  readonly #seenContentIds = new Set<string>();
+  /**
+   * Content ids of our own sends, so an echo re-wrapped in a fresh transport
+   * envelope (new event id) is still recognized as our own (reference
+   * `sent_message_ids`). The session also strips own echoes by outer event id
+   * before ingest; this covers the re-wrapped case.
+   */
+  readonly #sentContentIds = new Set<string>();
 
   readonly #onStateChanged?: (state: ClientState) => void;
 
@@ -326,6 +343,7 @@ export class MarmotGroupEngine<TEnvelope> {
           message,
           this.state,
         );
+        this.#sentContentIds.add(contentDedupId(message));
         this.#setState(newState);
         return { kind: "applicationMessage", envelope, newState };
       }
@@ -347,6 +365,7 @@ export class MarmotGroupEngine<TEnvelope> {
           message,
           this.state,
         );
+        this.#sentContentIds.add(contentDedupId(message));
         return {
           kind: "proposal",
           envelope,
@@ -447,6 +466,7 @@ export class MarmotGroupEngine<TEnvelope> {
           groupLifecycleStates.pendingPublish,
         );
         this.#stagedCommitParentEpoch = Number(parentState.groupContext.epoch);
+        this.#sentContentIds.add(contentDedupId(commit));
 
         const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
 
@@ -476,6 +496,7 @@ export class MarmotGroupEngine<TEnvelope> {
           extraProposals: [],
         });
 
+        this.#sentContentIds.add(contentDedupId(commit));
         const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
 
         return {
@@ -1002,6 +1023,17 @@ export class MarmotGroupEngine<TEnvelope> {
         if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
       },
       toUnrecoverable: () => this.#toUnrecoverable(),
+      dedup: {
+        classify: (message) => {
+          const id = contentDedupId(message);
+          if (this.#sentContentIds.has(id)) return "own-echo";
+          if (this.#seenContentIds.has(id)) return "duplicate";
+          return undefined;
+        },
+        remember: (message) => {
+          this.#seenContentIds.add(contentDedupId(message));
+        },
+      },
     };
   }
 

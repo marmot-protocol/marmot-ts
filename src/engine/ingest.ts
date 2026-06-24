@@ -28,6 +28,7 @@ import {
 import { getCredentialPubkey } from "../core/credential.js";
 import { type DeferredReason, deferredReasons } from "../core/inbound.js";
 import { classifyLateCommit } from "../core/retained-history.js";
+import { contentDedupId } from "./message-dedup.js";
 import type { RetainedHistoryStore } from "./retained-store.js";
 import type { IngestResult, PeeledMessagePair } from "./types.js";
 import { framedContentType, framedEpoch } from "./wire-format.js";
@@ -118,6 +119,22 @@ export interface IngestContext<TEnvelope> {
   ): void;
   /** Drives the group to the terminal `Unrecoverable` lifecycle state. */
   toUnrecoverable(): void;
+  /**
+   * Content-derived inbound dedup (`inbound-processing.md`; reference
+   * `seen_message_ids` / `sent_message_ids`). Keyed on {@link contentDedupId} so
+   * the same MLS message re-wrapped in a fresh transport envelope is recognized
+   * across sources and restarts-within-process.
+   */
+  dedup: {
+    /**
+     * Classifies a peeled message against prior history: `duplicate` (this
+     * content was already terminally processed), `own-echo` (our own send
+     * replayed back), or `undefined` (fresh — process it).
+     */
+    classify(message: MlsMessage): "duplicate" | "own-echo" | undefined;
+    /** Records a content id as seen, once the message reaches a terminal apply. */
+    remember(message: MlsMessage): void;
+  };
 }
 
 /**
@@ -361,10 +378,48 @@ export async function* ingestEnvelopes<TEnvelope>(
 
   const unreadable: TEnvelope[] = [...decryptFailed];
 
+  // Content-derived dedup (`inbound-processing.md`): before any MLS processing or
+  // convergence classification, drop a message whose content we have already
+  // terminally processed (`duplicate`) or that is our own send replayed back in a
+  // fresh transport envelope (`own-echo` → reported as `self-echo`). Keyed on the
+  // peeled MLS bytes, so a re-wrap with a new Nostr event id is still caught.
+  // Intra-batch repeats collapse to the first occurrence as well.
+  const batchSeen = new Set<string>();
+  const fresh: PeeledMessagePair<TEnvelope>[] = [];
+  for (const pair of read) {
+    const id = contentDedupId(pair.message);
+    const cls = ctx.dedup.classify(pair.message);
+    if (cls === "own-echo") {
+      log(
+        "skip envelope:%s reason:self-echo (own send)",
+        envelopeLabel(pair.envelope),
+      );
+      yield {
+        kind: "skipped",
+        envelope: pair.envelope,
+        message: pair.message,
+        reason: "self-echo",
+      };
+      continue;
+    }
+    if (cls === "duplicate" || batchSeen.has(id)) {
+      log("skip envelope:%s reason:duplicate", envelopeLabel(pair.envelope));
+      yield {
+        kind: "skipped",
+        envelope: pair.envelope,
+        message: pair.message,
+        reason: "duplicate",
+      };
+      continue;
+    }
+    batchSeen.add(id);
+    fresh.push(pair);
+  }
+
   let commits: PeeledMessagePair<TEnvelope>[] = [];
   const nonCommits: PeeledMessagePair<TEnvelope>[] = [];
 
-  for (const pair of read) {
+  for (const pair of fresh) {
     // Commits are MLS PublicMessage under Marmot v2 (see wire-format.ts); other
     // framed content (application, proposals) goes through the non-commit path.
     if (framedContentType(pair.message) === contentTypes.commit) {
@@ -418,6 +473,7 @@ export async function* ingestEnvelopes<TEnvelope>(
         );
         ctx.setState(result.newState);
         ctx.recordProposalStaged(result.newState);
+        ctx.dedup.remember(message);
         yield { kind: "processed", result, envelope, message };
       } else if (result.kind === "applicationMessage") {
         // The MLS layer has authenticated the sender; advance our ratchet to
@@ -452,6 +508,7 @@ export async function* ingestEnvelopes<TEnvelope>(
           message,
           result.message,
         );
+        ctx.dedup.remember(message);
         log("application message envelope:%s", envelopeLabel(envelope));
         yield { kind: "processed", result, envelope, message };
       }
@@ -553,6 +610,7 @@ export async function* ingestEnvelopes<TEnvelope>(
             "commit envelope:%s rejected by admin policy",
             envelopeLabel(envelope),
           );
+          ctx.dedup.remember(message);
           yield { kind: "rejected", result, envelope, message };
           continue;
         }
@@ -570,11 +628,13 @@ export async function* ingestEnvelopes<TEnvelope>(
             "commit envelope:%s removed us from the group",
             envelopeLabel(envelope),
           );
+          ctx.dedup.remember(message);
           yield { kind: "removed", result, envelope, message };
           return;
         }
 
         ctx.recordCommit(parentState, message, result.newState);
+        ctx.dedup.remember(message);
         log(
           "commit envelope:%s applied – new epoch:%d",
           envelopeLabel(envelope),

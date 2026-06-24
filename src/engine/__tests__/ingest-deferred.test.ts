@@ -91,6 +91,10 @@ describe("ingestEnvelopes – deferred (future-epoch commit)", () => {
       toUnrecoverable: () => {
         throw new Error("toUnrecoverable must not be called");
       },
+      dedup: {
+        classify: () => undefined,
+        remember: () => {},
+      },
     };
 
     const results: IngestResult<Envelope>[] = [];

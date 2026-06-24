@@ -33,6 +33,8 @@ export function ingestResultDisposition<TEnvelope>(
           return disposition.stale(inputCategories.alreadyApplied);
         case "self-echo":
           return disposition.stale(inputCategories.ownEcho);
+        case "duplicate":
+          return disposition.stale(inputCategories.duplicate);
         case "wrong-wireformat":
         case "invalid-app-payload":
           return disposition.stale(inputCategories.invalidEncoding);

@@ -1,6 +1,7 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
   CiphersuiteImpl,
+  createApplicationMessage,
   createCommit,
   defaultCryptoProvider,
   defaultProposalTypes,
@@ -18,11 +19,13 @@ import {
   mlsSignatureScheme,
   signAccountIdentityProof,
 } from "../../core/account-identity-proof.js";
+import { createChatRumor } from "../../client/group/application-message.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import {
   createGroupEvent,
   decryptGroupMessages,
+  serializeApplicationRumor,
 } from "../../core/group-message.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { DEFAULT_CONVERGENCE_POLICY } from "../../core/convergence.js";
@@ -122,8 +125,8 @@ describe("MarmotGroupEngine lifecycle (group-state.md)", () => {
   });
 });
 
-describe("MarmotGroupEngine ingest – permanent decrypt failures", () => {
-  it("drops an own application message as unreadable on the first pass without retrying", async () => {
+describe("MarmotGroupEngine ingest – own-echo dedup", () => {
+  it("classifies an own application-message echo as self-echo via content dedup, without retrying", async () => {
     const adminPubkey = "a".repeat(64);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -155,10 +158,11 @@ describe("MarmotGroupEngine ingest – permanent decrypt failures", () => {
       peeler,
     });
 
-    // Sending advances our own sender ratchet; MLS forward secrecy means we can
-    // never decrypt this message again (relays replay it to us, e.g. on
-    // restart). ts-mls reports this as ValidationError "Desired gen in the
-    // past" — a permanent failure that retrying cannot recover.
+    // A relay replays our own send back to us (e.g. on restart). The outer
+    // kind-445 envelope still decrypts (the exporter key is per-epoch and a send
+    // does not advance the epoch), so the message peels — but its content id was
+    // recorded on send, so content dedup recognizes it as our own echo before any
+    // MLS processing and skips it as self-echo, never queuing it for retry.
     const sent = await engine.send({
       kind: "applicationMessage",
       payload: new TextEncoder().encode("hello"),
@@ -167,12 +171,13 @@ describe("MarmotGroupEngine ingest – permanent decrypt failures", () => {
       throw new Error("expected applicationMessage send result");
 
     peelCalls = 0; // count only the ingest pass below
-    const kinds: string[] = [];
-    for await (const r of engine.ingest([sent.envelope])) kinds.push(r.kind);
+    const results: { kind: string; reason?: string }[] = [];
+    for await (const r of engine.ingest([sent.envelope]))
+      results.push(r as { kind: string; reason?: string });
 
-    expect(kinds).toEqual(["unreadable"]);
-    // Permanent failure ⇒ classified on the first pass, not queued for retry.
-    // Previously this spun the whole batch maxRetries (5) extra times.
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ kind: "skipped", reason: "self-echo" });
+    // Recognized post-peel / pre-process ⇒ peeled once, never queued for retry.
     expect(peelCalls).toBe(1);
   });
 });
@@ -475,5 +480,126 @@ describe("MarmotGroupEngine retained-history pruning (retained-history.md)", () 
     await memberSelfUpdate();
     expect(Number(engine.state.groupContext.epoch)).toBe(4);
     expect(retained.hasState(1)).toBe(false);
+  });
+});
+
+describe("MarmotGroupEngine content-derived dedup (inbound-processing.md)", () => {
+  // Build a 2-member group: admin (the engine under test) at epoch 1 with a
+  // non-admin member whose state we drive directly to forge re-wrapped duplicates.
+  async function twoMemberGroup() {
+    const adminPubkey = "a".repeat(64);
+    const memberPubkey = "d".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const ctx = {
+      cipherSuite: impl,
+      authService: unsafeTestingAuthenticationService,
+    };
+    const adminKp = await generateKeyPackage({
+      credential: createCredential(adminPubkey),
+      ciphersuiteImpl: impl,
+    });
+    const { clientState: adminEpoch0 } = await createSimpleGroup(
+      adminKp,
+      impl,
+      "Test Group",
+      { adminPubkeys: [adminPubkey], relays: ["wss://relay.test"] },
+    );
+    const memberKp = await generateKeyPackage({
+      credential: createCredential(memberPubkey),
+      ciphersuiteImpl: impl,
+    });
+    const add = await createCommit({
+      context: ctx,
+      state: adminEpoch0,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: memberKp.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+    const memberState = await joinGroup({
+      context: ctx,
+      welcome: add.welcome!.welcome!,
+      keyPackage: memberKp.publicPackage,
+      privateKeys: memberKp.privatePackage,
+      ratchetTree: undefined,
+    });
+    const peeler = testPeeler(impl);
+    const engine = new MarmotGroupEngine({
+      state: add.newState,
+      ciphersuite: impl,
+      peeler,
+    });
+    return { impl, ctx, peeler, engine, memberState, memberPubkey };
+  }
+
+  const kinds = async (
+    engine: MarmotGroupEngine<NostrEvent>,
+    env: NostrEvent,
+  ) => {
+    const out: { kind: string; reason?: string }[] = [];
+    for await (const r of engine.ingest([env]))
+      out.push(r as { kind: string; reason?: string });
+    return out;
+  };
+
+  it("skips a commit re-wrapped in a fresh envelope as duplicate", async () => {
+    const { ctx, peeler, engine, memberState } = await twoMemberGroup();
+
+    // One member self-update commit, wrapped into two distinct transport
+    // envelopes (fresh nonce ⇒ different event ids, identical MLS bytes) — as if
+    // delivered by two relays.
+    const commit = await createCommit({
+      context: ctx,
+      state: memberState,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const env1 = await peeler.wrapGroupMessage(commit.commit, memberState);
+    const env2 = await peeler.wrapGroupMessage(commit.commit, memberState);
+    expect(env1.id).not.toBe(env2.id);
+
+    expect((await kinds(engine, env1)).map((r) => r.kind)).toEqual([
+      "processed",
+    ]);
+    expect(Number(engine.state.groupContext.epoch)).toBe(2);
+
+    const r2 = await kinds(engine, env2);
+    expect(r2).toHaveLength(1);
+    expect(r2[0]).toMatchObject({ kind: "skipped", reason: "duplicate" });
+  });
+
+  it("delivers a re-wrapped application message once, skipping the duplicate", async () => {
+    const { ctx, peeler, engine, memberState, memberPubkey } =
+      await twoMemberGroup();
+
+    // The same application message from two relays must be delivered once, not
+    // twice — the gap content dedup closes (event-id self-echo only covers own
+    // sends; epoch checks only dedup commits). The payload is a valid Marmot app
+    // rumor bound to the member's pubkey so it passes the M3 authorship check.
+    const rumor = createChatRumor({ pubkey: memberPubkey, content: "gm" });
+    const app = await createApplicationMessage({
+      context: ctx,
+      state: memberState,
+      message: serializeApplicationRumor(rumor),
+    });
+    const env1 = await peeler.wrapGroupMessage(app.message, memberState);
+    const env2 = await peeler.wrapGroupMessage(app.message, memberState);
+    expect(env1.id).not.toBe(env2.id);
+
+    expect((await kinds(engine, env1)).map((r) => r.kind)).toEqual([
+      "processed",
+    ]);
+
+    const r2 = await kinds(engine, env2);
+    expect(r2).toHaveLength(1);
+    expect(r2[0]).toMatchObject({ kind: "skipped", reason: "duplicate" });
   });
 });

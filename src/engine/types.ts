@@ -106,6 +106,7 @@ export type SkippedIngestResult<TEnvelope> = {
     | "past-epoch"
     | "wrong-wireformat"
     | "self-echo"
+    | "duplicate"
     | "beyond-anchor"
     | "missing-retained-anchor"
     | "invalid-app-payload";

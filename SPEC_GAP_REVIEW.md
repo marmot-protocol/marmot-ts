@@ -98,10 +98,22 @@ Blocked` derived core, engine tracking, settle timer + outbound queue/gating.
   Documented the deliberate split on `isBranchEligible`. (Minor non-issue: TS derives the
   anchor as the oldest physically-retained epoch while Rust uses `tip - maxRewindCommits`;
   they coincide in steady state and the TS form is closer to the spec's conceptual anchor.)
-- **m6 — Content-derived cross-source dedup.** Self-echo dedup uses the Nostr event id and
-  only covers own sends; there is no general content-keyed `seen_message_ids` gate
-  (`inbound-processing.md`; Rust `seen_message_ids`). Duplicate commits from two relays are
-  deduped only incidentally by epoch checks.
+- **m6 — Content-derived cross-source dedup. DONE (in-memory).** Added a content-keyed
+  inbound dedup gate matching the Rust reference: `contentDedupId`
+  (`src/engine/message-dedup.ts`) = lowercase-hex `SHA-256` of the peeled MLS wire bytes,
+  no prefix — stable across transport re-wraps. The engine holds `#seenContentIds`
+  (replays → `duplicate` disposition) and `#sentContentIds` (own sends, recorded on every
+  `send`, so an own echo re-wrapped in a fresh envelope is recognized as `self-echo` even
+  with a new event id). The gate runs in `ingestEnvelopes` **post-peel / pre-MLS-process /
+  pre-convergence-classification**, collapses intra-batch repeats, and records `seen` only
+  on terminal apply (not on deferred/fork-pool, so a future-epoch commit still retries).
+  Closes the headline gap: the same application message delivered by two relays is now
+  delivered **once** (previously double-delivered / surfaced as `unreadable`). `duplicate`
+  reuses the existing `inputCategories.duplicate`. _Scope: in-memory / process-lifetime
+  (Rust additionally has a durable storage-backed layer surviving restart; already-applied
+  commits re-dedup via canonical-epoch checks post-restart, so the durable layer is a
+  follow-up). Not yet extended to the tree-sweep / orphan-pool paths (MLS forward secrecy
+  already blocks those replays)._
 - **m7 — URL-normalization parity vectors.** avatar-url (0x8007) / encrypted-media (0x8008)
   codecs assume WHATWG-URL (TS) and the Rust `url` crate normalize identically. No defect
   found, but no conformance vectors cover exotic percent-encoding / IDNA. Add tricky-URL

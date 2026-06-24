@@ -334,6 +334,18 @@ export class MarmotGroup<
   }
 
   /**
+   * Group transport events received but not yet decrypted/processed into the
+   * fork-history tree — the engine's ingestion pool (oldest-first). Normally
+   * transient (a message awaiting its commit, a fork message awaiting its
+   * branch); they are retried as the tree grows. An entry that lingers is a
+   * received event the client could never read — a gap a full-history debugger
+   * surfaces, since the unlocking state never arrived.
+   */
+  pendingEvents(): NostrEvent[] {
+    return this.session.pendingEvents();
+  }
+
+  /**
    * Evaluates whether a candidate's KeyPackage event (kind 30443) can be added
    * to this group — cipher-suite match, `required_capabilities`,
    * agent-text-stream-QUIC `required_member_roles`, and already-a-member. Use

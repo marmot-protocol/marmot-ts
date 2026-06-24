@@ -277,6 +277,15 @@ export class GroupSession<
     return this.#engine.history;
   }
 
+  /**
+   * Transport events received but not yet decrypted/processed into the history
+   * tree — the engine's ingestion pool (undecryptable-so-far events held for
+   * retry as the tree grows).
+   */
+  pendingEvents(): NostrEvent[] {
+    return this.#engine.pendingEnvelopes();
+  }
+
   get unappliedProposals() {
     return this.state.unappliedProposals;
   }

@@ -15,6 +15,7 @@ import {
 } from "../core/client-state.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
 import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
+import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { defaultCapabilities } from "../core/default-capabilities.js";
 import {
   getWelcome,
@@ -130,6 +131,10 @@ export type MarmotClientOptions<
   cryptoProvider?: CryptoProvider;
   /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */
   network: NostrNetworkInterface;
+  /** Optional forensic audit sink inherited by groups. Omitted by default. */
+  audit?: AuditSink;
+  /** Required when `audit` is set; contains stable engine/account/session metadata. */
+  auditContext?: AuditContextOptions;
   /**
    * Default `d` tag value (slot identifier) for key package events.
    * Used by {@link KeyPackageManager.create} when no explicit `d` is passed.
@@ -198,6 +203,8 @@ export class MarmotClient<
       signer: this.signer,
       accountProofSigner: options.accountProofSigner,
       network: this.network,
+      audit: options.audit,
+      auditContext: options.auditContext,
       cryptoProvider: this.cryptoProvider,
       historyFactory,
       mediaFactory,

@@ -14,6 +14,7 @@ import {
 } from "../core/convergence.js";
 import { GroupHistoryTree } from "../engine/history-tree.js";
 import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
+import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { RetainedHistoryStore } from "../engine/retained-store.js";
 import { logger } from "../utils/debug.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
@@ -38,6 +39,10 @@ export type GroupRegistryOptions<
   rewindStore?: GenericKeyValueStore<Uint8Array>;
   signer: EventSigner;
   network: NostrNetworkInterface;
+  /** Optional forensic audit sink inherited by loaded groups. */
+  audit?: AuditSink;
+  /** Required when `audit` is set; contains stable engine/account/session metadata. */
+  auditContext?: AuditContextOptions;
   cryptoProvider?: CryptoProvider;
   historyFactory?: GroupHistoryFactory<THistory>;
   mediaFactory?: GroupMediaFactory<TMedia>;
@@ -75,6 +80,8 @@ export class GroupRegistry<
   readonly rewindStore?: GenericKeyValueStore<Uint8Array>;
   readonly signer: EventSigner;
   readonly network: NostrNetworkInterface;
+  readonly audit?: AuditSink;
+  readonly auditContext?: AuditContextOptions;
   readonly cryptoProvider: CryptoProvider;
   readonly historyFactory: GroupHistoryFactory<THistory>;
   readonly mediaFactory: GroupMediaFactory<TMedia>;
@@ -102,6 +109,8 @@ export class GroupRegistry<
     this.rewindStore = options.rewindStore;
     this.signer = options.signer;
     this.network = options.network;
+    this.audit = options.audit;
+    this.auditContext = options.auditContext;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.historyFactory =
       options.historyFactory as GroupHistoryFactory<THistory>;
@@ -139,6 +148,8 @@ export class GroupRegistry<
       signer: this.signer,
       cryptoProvider: this.cryptoProvider,
       network: this.network,
+      audit: this.audit,
+      auditContext: this.auditContext,
       history: this.historyFactory,
       media: this.mediaFactory,
     });

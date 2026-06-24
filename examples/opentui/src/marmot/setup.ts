@@ -6,6 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -20,9 +21,16 @@ import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 
 import { GroupRumorHistory, MarmotClient } from "@internet-privacy/marmot-ts";
 import {
+  AuditEmitter,
+  deriveAccountRef,
+  deriveEngineId,
+  type AuditContextOptions,
+} from "@internet-privacy/marmot-ts/audit";
+import {
   InMemoryKeyValueStore,
   KeyValueRumorHistoryBackend,
 } from "@internet-privacy/marmot-ts/extra";
+import { NodeJsonlAuditRecorder } from "@internet-privacy/marmot-ts/extra/audit/node";
 
 import { accountProofSignerFor } from "../helpers/account-proof.js";
 import { Directory, LOOKUP_RELAYS } from "../helpers/discovery.js";
@@ -38,7 +46,10 @@ export const HELP_TEXT = `Usage: marmot-opentui [options]
 Options:
   --name <label>   Profile name; data + identity live in ~/.marmot-opentui/<label>/ (default: default)
   --sec <hex>      Use a specific 32-byte hex Nostr secret key.
-  --ephemeral      Keep all state in memory.
+  --ephemeral      Keep app state in memory (audit can still write when enabled).
+  --audit          Enable forensic audit JSONL recording.
+  --audit-path <path>
+                   Write audit JSONL to this path (implies --audit).
   --debug          Include full stack traces and cause chains in status errors.
   --logs <path>    Enable debug logging and append status/debug lines to this file.
   --help, -h       Print this help and exit.
@@ -53,6 +64,8 @@ export interface CliOptions {
   ephemeral: boolean;
   debug: boolean;
   logsPath: string;
+  audit: boolean;
+  auditPath: string;
   secOverride: string;
 }
 
@@ -66,6 +79,8 @@ export function parseArgs(argv: string[]): CliOptions {
     label: option("--name", "default"),
     ephemeral: flag("--ephemeral"),
     logsPath: option("--logs", ""),
+    audit: flag("--audit") || Boolean(option("--audit-path", "")),
+    auditPath: option("--audit-path", ""),
     debug: flag("--debug") || Boolean(option("--logs", "")),
     secOverride: option("--sec", ""),
   };
@@ -107,6 +122,13 @@ function loadOrCreateSecret(keyPath: string, override: string): string {
   const hex = Buffer.from(account.signer.key).toString("hex");
   writeFileSync(keyPath, hex);
   return hex;
+}
+
+function loadOrCreateAuditDeviceId(path: string): string {
+  if (existsSync(path)) return readFileSync(path, "utf8").trim();
+  const id = randomBytes(16).toString("hex");
+  writeFileSync(path, id);
+  return id;
 }
 
 /**
@@ -206,6 +228,35 @@ export async function createController(
   const account = PrivateKeyAccount.fromKey(secretHex);
   const pubkey = await account.signer.getPublicKey();
 
+  let audit: NodeJsonlAuditRecorder | undefined;
+  let auditContext: AuditContextOptions | undefined;
+  let auditLogPath: string | undefined;
+  if (opts.audit) {
+    const deviceId = loadOrCreateAuditDeviceId(
+      join(dataDir, "audit-device-id"),
+    );
+    const engineId = deriveEngineId(pubkey, deviceId);
+    auditLogPath = opts.auditPath || join(dataDir, `audit-${engineId}.jsonl`);
+    audit = new NodeJsonlAuditRecorder(auditLogPath);
+    auditContext = {
+      engineId,
+      accountRef: deriveAccountRef(pubkey),
+      recorderSessionId: randomUUID(),
+      dataMode: "obfuscated_sensitive_data",
+      source: {
+        account_label: opts.label,
+        device_id: deviceId,
+        device_name: opts.label,
+        platform: process.platform,
+        app_version: "marmot-opentui/0.0.0",
+        upload_trigger: "opentui_cli",
+      },
+    };
+    const emitter = new AuditEmitter({ ...auditContext, sink: audit });
+    emitter.emit({ type: "recorder_started", recorder: "marmot-opentui" });
+    emitter.emit({ type: "source_context", source: auditContext.source! });
+  }
+
   // keepAlive: 0 so a relay's health-watcher pipeline tears down immediately
   // once nothing subscribes to it, instead of arming a 30s timer that would
   // hold the event loop open after we close the pool on quit. The app keeps
@@ -247,6 +298,8 @@ export async function createController(
     signer: account.signer,
     accountProofSigner: accountProofSignerFor(account),
     network: pool,
+    audit,
+    auditContext,
     groupStateStore: makeStore(db, "groups") as any,
     // Persist the convergence rewind window so fork recovery survives a restart
     // (otherwise a client on a minority branch at quit never rewinds on relaunch).
@@ -260,7 +313,10 @@ export async function createController(
   return new MarmotController({
     // Closing the SQLite connection on stop() releases the file before any reset
     // deletes it, and flushes the WAL for the next run.
-    dispose: () => db?.close(),
+    dispose: () => {
+      void audit?.close();
+      db?.close();
+    },
     client,
     pool,
     directory,
@@ -271,6 +327,7 @@ export async function createController(
     fresh,
     clientId,
     debug: opts.debug,
+    auditLogPath,
     statusLog: onStatus,
     // Only freshly-created accounts publish an initial profile on first start.
     initialProfileName: newAccount?.name?.trim() || undefined,

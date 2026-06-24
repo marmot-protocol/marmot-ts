@@ -24,6 +24,7 @@ import {
 import { marmotAuthService } from "../core/auth-service.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
 import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
+import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { logger } from "../utils/debug.js";
 import { hasAck } from "../utils/index.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
@@ -87,6 +88,10 @@ export type GroupsManagerOptions<
   accountProofSigner?: AccountIdentityProofSigner;
   /** The nostr relay pool to use for the client */
   network: NostrNetworkInterface;
+  /** Optional forensic audit sink inherited by groups. Omitted by default. */
+  audit?: AuditSink;
+  /** Required when `audit` is set; contains stable engine/account/session metadata. */
+  auditContext?: AuditContextOptions;
   /** The crypto provider to use for cryptographic operations */
   cryptoProvider?: CryptoProvider;
   /** Optional group history factory passed to each MarmotGroup instance */
@@ -186,6 +191,8 @@ export class GroupsManager<
       ingestionPool: options.ingestionPool,
       signer: options.signer,
       network: options.network,
+      audit: options.audit,
+      auditContext: options.auditContext,
       cryptoProvider: this.cryptoProvider,
       historyFactory: options.historyFactory,
       mediaFactory: options.mediaFactory,
@@ -198,6 +205,8 @@ export class GroupsManager<
       ingestionPool: options.ingestionPool,
       signer: options.signer,
       network: options.network,
+      audit: options.audit,
+      auditContext: options.auditContext,
       cryptoProvider: this.cryptoProvider,
       accountProofSigner: options.accountProofSigner,
       historyFactory: options.historyFactory,

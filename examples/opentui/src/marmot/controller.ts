@@ -175,6 +175,8 @@ export interface MarmotControllerOptions {
   clientId: string;
   /** When true, error logs include the full stack trace and cause chain. */
   debug: boolean;
+  /** Audit JSONL output path when forensic recording is enabled. */
+  auditLogPath?: string;
   /** Optional sink for status lines when the UI has no on-screen log panel. */
   statusLog?: (line: StatusLine) => void;
   /**
@@ -395,6 +397,7 @@ export class MarmotController {
   readonly #fresh: boolean;
   readonly #clientId: string;
   readonly #debug: boolean;
+  readonly #auditLogPath?: string;
   readonly #statusLog?: (line: StatusLine) => void;
   readonly #dispose?: () => void;
   readonly #initialProfileName?: string;
@@ -460,6 +463,7 @@ export class MarmotController {
     this.#fresh = options.fresh;
     this.#clientId = options.clientId;
     this.#debug = options.debug;
+    this.#auditLogPath = options.auditLogPath;
     this.#statusLog = options.statusLog;
     this.#dispose = options.dispose;
     this.#initialProfileName = options.initialProfileName;
@@ -514,6 +518,7 @@ export class MarmotController {
     void this.#watchGroups();
     this.log(`ready — you are ${npubEncode(this.#pubkey)}`);
     this.log(`bootstrap relays: ${this.#relays.join(", ")}`);
+    if (this.#auditLogPath) this.log(`audit log: ${this.#auditLogPath}`);
     // Returning accounts discover their advertised relays in the background so the
     // invite subscription and future publishes follow the user's own relays, never
     // the bootstrap defaults. (#ensureKeyPackage already awaited this above if it

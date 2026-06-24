@@ -5,6 +5,7 @@ import {
   type ConvergencePolicy,
   DEFAULT_CONVERGENCE_POLICY,
 } from "../core/convergence.js";
+import { prunableRetainedEpochs } from "../core/retained-history.js";
 
 /**
  * The bounded convergence window — the recent canonical states + applied commits
@@ -83,11 +84,18 @@ export class RetainedHistoryStore {
    * Records the retained parent state and the applied commit message after
    * advancing an epoch, then prunes retained material beyond the rollback
    * horizon (`retained-history.md`).
+   *
+   * `pinnedEpochs` are epochs the caller's active lifecycle still needs and that
+   * MUST NOT be pruned even when older than the horizon (`retained-history.md`
+   * "Pruning": state needed to resolve an active PendingPublish / Merging /
+   * Recovering / Unrecoverable). The engine supplies them; e.g. the source epoch
+   * of a staged local commit the canonical tip has since advanced past.
    */
   record(
     parentState: ClientState,
     appliedMessage: MlsMessage,
     newState: ClientState,
+    pinnedEpochs: Iterable<number> = [],
   ): void {
     const parentEpoch = Number(parentState.groupContext.epoch);
     const newEpoch = Number(newState.groupContext.epoch);
@@ -95,11 +103,22 @@ export class RetainedHistoryStore {
     this.#states.set(newEpoch, newState);
     this.#appliedCommits.set(parentEpoch, appliedMessage);
 
-    const floor = newEpoch - this.#policy.maxRewindCommits;
-    for (const epoch of this.#states.keys())
-      if (epoch < floor) this.#states.delete(epoch);
-    for (const epoch of this.#appliedCommits.keys())
-      if (epoch < floor) this.#appliedCommits.delete(epoch);
+    const max = this.#policy.maxRewindCommits;
+    const pins = new Set(pinnedEpochs);
+    for (const epoch of prunableRetainedEpochs(
+      this.#states.keys(),
+      newEpoch,
+      max,
+      pins,
+    ))
+      this.#states.delete(epoch);
+    for (const epoch of prunableRetainedEpochs(
+      this.#appliedCommits.keys(),
+      newEpoch,
+      max,
+      pins,
+    ))
+      this.#appliedCommits.delete(epoch);
   }
 
   /** The highest retained epoch (the canonical tip), or undefined if empty. */

@@ -25,8 +25,10 @@ import {
   decryptGroupMessages,
 } from "../../core/group-message.js";
 import { generateKeyPackage } from "../../core/key-package.js";
+import { DEFAULT_CONVERGENCE_POLICY } from "../../core/convergence.js";
 import { createAdminCommitPolicyCallback } from "../admin-policy.js";
 import { MarmotGroupEngine } from "../group-engine.js";
+import { RetainedHistoryStore } from "../retained-store.js";
 import type { GroupPeeler } from "../types.js";
 
 function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
@@ -364,5 +366,114 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
         ],
       } as never),
     ).toBe("reject");
+  });
+});
+
+describe("MarmotGroupEngine retained-history pruning (retained-history.md)", () => {
+  it("pins a staged commit's source epoch against horizon pruning, then prunes once published-failed", async () => {
+    const adminPubkey = "a".repeat(64);
+    const memberPubkey = "d".repeat(64);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const ctx = {
+      cipherSuite: impl,
+      authService: unsafeTestingAuthenticationService,
+    };
+
+    // 2-member group: admin (the engine) + a non-admin member. The engine lives
+    // at epoch 1 (member added); the member self-updates to drive inbound
+    // commits that advance the canonical tip.
+    const adminKp = await generateKeyPackage({
+      credential: createCredential(adminPubkey),
+      ciphersuiteImpl: impl,
+    });
+    const { clientState: adminEpoch0 } = await createSimpleGroup(
+      adminKp,
+      impl,
+      "Test Group",
+      { adminPubkeys: [adminPubkey], relays: ["wss://relay.test"] },
+    );
+
+    const memberKp = await generateKeyPackage({
+      credential: createCredential(memberPubkey),
+      ciphersuiteImpl: impl,
+    });
+    const add = await createCommit({
+      context: ctx,
+      state: adminEpoch0,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: memberKp.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+    const adminEpoch1 = add.newState;
+    let memberState = await joinGroup({
+      context: ctx,
+      welcome: add.welcome!.welcome!,
+      keyPackage: memberKp.publicPackage,
+      privateKeys: memberKp.privatePackage,
+      ratchetTree: undefined,
+    });
+
+    // Horizon of 1 + an injected retained store we can inspect.
+    const policy = { ...DEFAULT_CONVERGENCE_POLICY, maxRewindCommits: 1 };
+    const retained = new RetainedHistoryStore(adminEpoch1, policy);
+    const peeler = testPeeler(impl);
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler,
+      retained,
+      convergencePolicy: policy,
+    });
+
+    // Stage a local self-update commit: enters PendingPublish, pinning epoch 1.
+    const staged = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (staged.kind !== "groupEvolution")
+      throw new Error("expected a groupEvolution send result");
+    expect(engine.lifecycle).toBe("PendingPublish");
+
+    // Helper: the member emits a self-update commit (allowed for non-admins) and
+    // wraps it for ingest; the engine applies it, advancing the canonical tip.
+    const memberSelfUpdate = async () => {
+      const commit = await createCommit({
+        context: ctx,
+        state: memberState,
+        wireAsPublicMessage: true,
+        ratchetTreeExtension: true,
+        extraProposals: [],
+      });
+      const envelope = await peeler.wrapGroupMessage(
+        commit.commit,
+        memberState,
+      );
+      memberState = commit.newState;
+      for await (const _ of engine.ingest([envelope])) void _;
+    };
+
+    // Two inbound commits advance the tip 1 -> 2 -> 3. With horizon 1 the tip at
+    // epoch 3 would normally drop epoch 1, but the staged commit pins it.
+    await memberSelfUpdate();
+    await memberSelfUpdate();
+    expect(Number(engine.state.groupContext.epoch)).toBe(3);
+    expect(retained.hasState(1)).toBe(true);
+
+    // Abandon the staged commit: the pin is released. A further inbound commit
+    // advances the tip to 4 and epoch 1, now unpinned, is pruned past the horizon.
+    engine.publishFailed(staged.pending);
+    expect(engine.lifecycle).toBe("Stable");
+    await memberSelfUpdate();
+    expect(Number(engine.state.groupContext.epoch)).toBe(4);
+    expect(retained.hasState(1)).toBe(false);
   });
 });

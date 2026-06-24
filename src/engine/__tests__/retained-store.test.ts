@@ -7,10 +7,13 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_CONVERGENCE_POLICY } from "../../core/convergence.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { RetainedHistoryStore } from "../retained-store.js";
+
+const HORIZON_1 = { ...DEFAULT_CONVERGENCE_POLICY, maxRewindCommits: 1 };
 
 /**
  * Builds a 2-member group and advances the admin two epochs, recording each
@@ -68,7 +71,14 @@ async function buildStoreWithHistory() {
   store.record(epoch0, add.commit, epoch1);
   store.record(epoch1, update.commit, epoch2);
 
-  return { store, epoch0, epoch1, epoch2 };
+  return {
+    store,
+    epoch0,
+    epoch1,
+    epoch2,
+    addCommit: add.commit,
+    updateCommit: update.commit,
+  };
 }
 
 describe("RetainedHistoryStore (in-memory convergence window)", () => {
@@ -93,6 +103,35 @@ describe("RetainedHistoryStore (in-memory convergence window)", () => {
     expect(store.hasState(1)).toBe(true);
     expect(store.hasState(99)).toBe(false);
     expect(store.appliedCommitsBetween(0, 2)).toHaveLength(2);
+  });
+
+  it("prunes states older than the rollback horizon", async () => {
+    const { epoch0, epoch1, epoch2, addCommit, updateCommit } =
+      await buildStoreWithHistory();
+    const store = new RetainedHistoryStore(epoch0, HORIZON_1);
+
+    store.record(epoch0, addCommit, epoch1); // tip 1, floor 0: nothing pruned
+    expect(store.hasState(0)).toBe(true);
+
+    store.record(epoch1, updateCommit, epoch2); // tip 2, floor 1: epoch 0 pruned
+    expect(store.hasState(0)).toBe(false);
+    expect(store.anchorEpoch()).toBe(1);
+    expect(store.appliedCommitsBetween(0, 1)).toHaveLength(0);
+  });
+
+  it("honors pinned epochs against horizon pruning (retained-history.md Pruning)", async () => {
+    const { epoch0, epoch1, epoch2, addCommit, updateCommit } =
+      await buildStoreWithHistory();
+    const store = new RetainedHistoryStore(epoch0, HORIZON_1);
+
+    store.record(epoch0, addCommit, epoch1);
+    // Advancing the tip to 2 would normally drop epoch 0 (floor 1), but a pin on
+    // epoch 0 — e.g. a staged local commit forked from it — keeps it retained.
+    store.record(epoch1, updateCommit, epoch2, [0]);
+
+    expect(store.hasState(0)).toBe(true);
+    expect(store.anchorEpoch()).toBe(0);
+    expect(store.appliedCommitsBetween(0, 1)).toHaveLength(1);
   });
 
   it("seeds tip-only with no applied commits", async () => {

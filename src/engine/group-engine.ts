@@ -158,6 +158,15 @@ export class MarmotGroupEngine<TEnvelope> {
   #state: ClientState;
   /** Group lifecycle state (group-state.md); only `Stable` may prepare a commit. */
   #lifecycle: GroupLifecycleState = groupLifecycleStates.stable;
+  /**
+   * Source (parent) epoch of a staged local commit awaiting publish
+   * confirmation. Set on entering `PendingPublish`, cleared once the commit
+   * merges or its publish is abandoned. Pinned against retained-history pruning
+   * while set, so an unrelated inbound commit advancing the tip cannot drop the
+   * state needed to apply the staged commit on confirmation (`retained-history.md`
+   * "Pruning").
+   */
+  #stagedCommitParentEpoch: number | undefined;
 
   /** Retained canonical states + applied commits for fork recovery. */
   readonly #retained: RetainedHistoryStore;
@@ -241,7 +250,7 @@ export class MarmotGroupEngine<TEnvelope> {
     message: Parameters<RetainedHistoryStore["record"]>[1],
     newState: ClientState,
   ): void {
-    this.#retained.record(parentState, message, newState);
+    this.#retained.record(parentState, message, newState, this.#pinnedEpochs());
     try {
       const parentTag = bytesToHex(parentState.confirmationTag);
       if (!this.#tree.hasNode(parentTag)) this.#tree.setRoot(parentState);
@@ -249,6 +258,19 @@ export class MarmotGroupEngine<TEnvelope> {
     } catch (error) {
       this.#log()("history tree recordCommit failed: %o", error);
     }
+  }
+
+  /**
+   * Epochs the active lifecycle still needs and that retained-history pruning
+   * MUST NOT drop, even when older than the rollback horizon (`retained-history.md`
+   * "Pruning"). Currently a staged local commit awaiting publish confirmation
+   * pins its source epoch; `Recovering` and `Unrecoverable` replay/observe
+   * synchronously and need no separate prune-time pin.
+   */
+  #pinnedEpochs(): number[] {
+    return this.#stagedCommitParentEpoch === undefined
+      ? []
+      : [this.#stagedCommitParentEpoch];
   }
 
   get state(): ClientState {
@@ -424,6 +446,7 @@ export class MarmotGroupEngine<TEnvelope> {
           this.#lifecycle,
           groupLifecycleStates.pendingPublish,
         );
+        this.#stagedCommitParentEpoch = Number(parentState.groupContext.epoch);
 
         const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
 
@@ -487,6 +510,7 @@ export class MarmotGroupEngine<TEnvelope> {
         this.#lifecycle,
         groupLifecycleStates.stable,
       );
+      this.#stagedCommitParentEpoch = undefined;
       return;
     }
 
@@ -501,6 +525,7 @@ export class MarmotGroupEngine<TEnvelope> {
       this.#lifecycle,
       groupLifecycleStates.stable,
     );
+    this.#stagedCommitParentEpoch = undefined;
   }
 
   /**
@@ -1064,7 +1089,12 @@ export class MarmotGroupEngine<TEnvelope> {
     );
     this.#setState(resolution.winnerTip);
     for (const link of resolution.winnerChain) {
-      this.#retained.record(link.parent, link.message, link.child);
+      this.#retained.record(
+        link.parent,
+        link.message,
+        link.child,
+        this.#pinnedEpochs(),
+      );
     }
     this.#lifecycle = transitionLifecycle(
       this.#lifecycle,

@@ -71,11 +71,18 @@ Blocked` derived core, engine tracking, settle timer + outbound queue/gating.
   its bytes, but Rust also omits the codec and points groups at `avatar-url` (0x8007,
   done). A group that _requires_ 0x8002 is unjoinable. Decide: implement, or formally
   document as unsupported.
-- **m4 — Retained-history pruning vs the pin rule.** `requiredRetainedEpochs` /
-  `prunableRetainedEpochs` (`src/core/retained-history.ts`) encode the rule but the live
-  pruning path must honor "MUST NOT remove state needed by an active PendingPublish /
-  Merging / Recovering / Unrecoverable" (`retained-history.md`). Re-verify the current
-  prune site (moved into the engine during the B5 work) honors lifecycle pins.
+- **m4 — Retained-history pruning vs the pin rule. DONE.** The live prune in
+  `RetainedHistoryStore.record` (`src/engine/retained-store.ts`) now routes through the
+  tested `prunableRetainedEpochs` helper with a `pinnedEpochs` set; the engine
+  (`src/engine/group-engine.ts`) tracks a staged local commit's source epoch on entering
+  `PendingPublish` (cleared on `confirmPublished`/`publishFailed`) and supplies it as the
+  pin at both `record` sites, so an unrelated inbound commit advancing the tip can no
+  longer drop state a staged commit needs (`retained-history.md` "Pruning"). `Recovering`/
+  `Unrecoverable` replay/observe synchronously and need no separate prune-time pin; the
+  load-time reconstruction path (`group-registry.ts`) keeps the default empty pins. Covered
+  by store- and engine-level tests. _Note: ingest still does not gate apply on
+  `mayApplyRetainedInbound(PendingPublish)`; the pin makes pruning safe regardless, but the
+  apply-gating gap is tracked separately._
 - **m5 — Eligibility predicate "older than retained anchor".** `isBranchEligible`
   (`src/core/convergence.ts`) enforces only the rollback-horizon delta; the
   "older than retained anchor" guard (`convergence.md`) is applied operationally in the

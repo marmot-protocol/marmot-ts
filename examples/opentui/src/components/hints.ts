@@ -1,13 +1,22 @@
 import type { KeyHint } from "./KeybindingFooter.js";
 import type { Pane } from "./focus.js";
 
-/** Shortcuts available from every panel, shown in the footer and help overlay. */
-export const GLOBAL_HINTS: KeyHint[] = [
-  { key: "tab", label: "next panel" },
-  { key: "shift+tab", label: "prev panel" },
-  { key: "?", label: "help" },
-  { key: "q", label: "quit/back" },
-];
+/**
+ * Shortcuts available from every panel, shown in the footer and help overlay.
+ * The audit-upload hint only appears when an upload target is configured
+ * (`--audit-upload`), so the footer stays uncluttered for the common case.
+ */
+export function globalHints(opts: { canUploadAudit: boolean }): KeyHint[] {
+  return [
+    { key: "tab", label: "next panel" },
+    { key: "shift+tab", label: "prev panel" },
+    { key: "?", label: "help" },
+    ...(opts.canUploadAudit
+      ? [{ key: "U", label: "upload audit" } satisfies KeyHint]
+      : []),
+    { key: "q", label: "quit/back" },
+  ];
+}
 
 /**
  * The per-panel keybinding hints. A few entries are conditional on context

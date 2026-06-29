@@ -6,7 +6,7 @@
   "description": "OpenTUI + React terminal chat for marmot-ts. Same darkmatter Marmot v2 lifecycle as the tui-chat example, but rendered with the @opentui/react reconciler so it can exercise the library's React / async-generator integration (groups.watch, invites.watchUnread, group.ingest).",
   "scripts": {
     "start": "bun run src/index.tsx",
-    "dev": "bun --hot src/index.tsx --debug --logs debug.log",
+    "dev": "bun --hot src/index.tsx --debug --logs debug.log --audit --audit-upload",
     "compile": "bun run scripts/compile.ts",
     "typecheck": "tsc --noEmit"
   },

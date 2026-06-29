@@ -9,7 +9,7 @@ import { KeybindingFooter } from "./KeybindingFooter.js";
 import { ModalHost, type Modal } from "./ModalHost.js";
 import { ProfilePanel } from "./ProfilePanel.js";
 import { Sidebar } from "./Sidebar.js";
-import { GLOBAL_HINTS, panelHints } from "./hints.js";
+import { globalHints, panelHints } from "./hints.js";
 
 export function App(props: {
   onQuit: () => void;
@@ -65,7 +65,10 @@ function AppContent(props: {
 
       <KeybindingFooter
         title={nav.focus}
-        hints={[...hints[nav.focus], ...GLOBAL_HINTS]}
+        hints={[
+          ...hints[nav.focus],
+          ...globalHints({ canUploadAudit: controller.canUploadAudit }),
+        ]}
       />
 
       <ModalHost modal={modal} setModal={setModal} onLogout={props.onLogout} />

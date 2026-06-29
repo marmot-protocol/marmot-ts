@@ -122,6 +122,15 @@ export function useAppKeybindings(props: {
       return setModal({ kind: "help" });
     }
     if (matches(key, "q")) return onQuit();
+    if (matches(key, "U")) {
+      if (controller.canUploadAudit) void controller.uploadAuditLog();
+      else
+        controller.log(
+          "audit upload not configured — run with --audit-upload <url>",
+          "warn",
+        );
+      return;
+    }
     if (matches(key, "down") || matches(key, "j")) return nav.moveSelection(1);
     if (matches(key, "up") || matches(key, "k")) return nav.moveSelection(-1);
     if (matches(key, "h") || matches(key, "left")) return nav.focusPrev();

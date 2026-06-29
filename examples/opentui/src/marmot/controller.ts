@@ -32,6 +32,10 @@ import {
   getKeyPackageReference,
 } from "@internet-privacy/marmot-ts";
 import type { Proposal } from "@internet-privacy/marmot-ts/mls";
+import {
+  uploadAuditLogFile,
+  type AuditLogUploadResult,
+} from "@internet-privacy/marmot-ts/extra/audit/node";
 
 import createDebug from "debug";
 
@@ -155,6 +159,21 @@ function keyPackageDetails(pkg: ListedKeyPackage): KeyPackageDetails {
   };
 }
 
+/**
+ * Where (and how) to upload this device's audit JSONL. Set when the user passes
+ * `--audit-upload`; absent leaves {@link MarmotController.uploadAuditLog} a no-op.
+ * Account identity is NOT sent here — it lives in the JSONL rows; only the
+ * non-identifying client labels travel as `X-Goggles-*` headers.
+ */
+export interface AuditUploadConfig {
+  /** Goggles tracker endpoint (https, or loopback http for local testing). */
+  endpoint: string;
+  /** Bearer token; required for non-loopback endpoints. */
+  bearerToken?: string;
+  /** Non-identifying client labels sent as `X-Goggles-*` headers. */
+  source?: { deviceLabel?: string; platform?: string; appVersion?: string };
+}
+
 export interface MarmotControllerOptions {
   client: MarmotClient;
   pool: RelayPool;
@@ -183,6 +202,8 @@ export interface MarmotControllerOptions {
   debug: boolean;
   /** Audit JSONL output path when forensic recording is enabled. */
   auditLogPath?: string;
+  /** Goggles upload target for the audit JSONL; absent disables uploading. */
+  auditUpload?: AuditUploadConfig;
   /** Optional sink for status lines when the UI has no on-screen log panel. */
   statusLog?: (line: StatusLine) => void;
   /**
@@ -429,6 +450,7 @@ export class MarmotController {
   readonly #clientId: string;
   readonly #debug: boolean;
   readonly #auditLogPath?: string;
+  readonly #auditUpload?: AuditUploadConfig;
   readonly #statusLog?: (line: StatusLine) => void;
   readonly #dispose?: () => void;
   readonly #initialProfileName?: string;
@@ -499,6 +521,7 @@ export class MarmotController {
     this.#clientId = options.clientId;
     this.#debug = options.debug;
     this.#auditLogPath = options.auditLogPath;
+    this.#auditUpload = options.auditUpload;
     this.#statusLog = options.statusLog;
     this.#dispose = options.dispose;
     this.#initialProfileName = options.initialProfileName;
@@ -528,6 +551,41 @@ export class MarmotController {
   /** Shared reactive event cache, consumed by the React `useProfile` hook. */
   get eventStore(): EventStore {
     return this.#eventStore;
+  }
+
+  /** True when an audit log is being recorded *and* an upload target is set. */
+  get canUploadAudit(): boolean {
+    return Boolean(this.#auditLogPath && this.#auditUpload);
+  }
+
+  /**
+   * Upload this device's audit JSONL to the configured Goggles tracker. A no-op
+   * (returns null) when auditing or an upload endpoint isn't configured. The
+   * {@link NodeJsonlAuditRecorder} appends synchronously, so the on-disk file is
+   * always current — no flush/close is needed before reading it here, which is
+   * why this is safe to call repeatedly while the app runs and again on quit.
+   * Best-effort: any failure is logged and swallowed.
+   */
+  async uploadAuditLog(): Promise<AuditLogUploadResult | null> {
+    if (!this.#auditLogPath || !this.#auditUpload) return null;
+    try {
+      this.log(`uploading audit log to ${this.#auditUpload.endpoint}…`);
+      const result = await uploadAuditLogFile(
+        this.#auditLogPath,
+        this.#auditUpload.endpoint,
+        {
+          bearerToken: this.#auditUpload.bearerToken,
+          source: this.#auditUpload.source,
+        },
+      );
+      this.log(
+        `uploaded audit log — ${result.bytesSent} bytes, HTTP ${result.status}`,
+      );
+      return result;
+    } catch (err) {
+      this.logError(err);
+      return null;
+    }
   }
 
   // --- lifecycle -------------------------------------------------------------

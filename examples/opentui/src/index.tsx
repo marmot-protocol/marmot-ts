@@ -90,13 +90,19 @@ async function main(): Promise<void> {
   let live = initial;
 
   let stopped = false;
-  const quit = (): void => {
+  const quit = async (): Promise<void> => {
     if (stopped) return;
     stopped = true;
     process.off("SIGINT", quit);
     process.off("SIGTERM", quit);
     root.unmount();
     renderer.destroy();
+    // Ship the final audit log before tearing the controller down. A no-op
+    // unless --audit-upload is set; the recorder appends synchronously, so the
+    // file on disk is already complete here. Best-effort — failures are logged
+    // and swallowed inside uploadAuditLog(), so a dead tracker never blocks quit
+    // beyond the request timeout.
+    await live.uploadAuditLog();
     // stop() disposes the EventStore (and its loader) and closes the relay pool,
     // so applesauce leaves no JS timers holding the loop open. But opentui's
     // native (Zig) renderer keeps a handle alive that renderer.destroy() does

@@ -37,9 +37,23 @@ import { Directory, LOOKUP_RELAYS } from "../helpers/discovery.js";
 import { PrefixedKeyValueStore } from "../helpers/prefixed-store.js";
 import { SqliteKeyValueStore } from "../helpers/sqlite-store.js";
 import { RelayPool } from "../helpers/relay-pool.js";
-import { MarmotController, type StatusLine } from "./controller.js";
+import {
+  MarmotController,
+  type AuditUploadConfig,
+  type StatusLine,
+} from "./controller.js";
 
 const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
+
+/** Reported as the audit `app_version` and the `X-Goggles-App-Version` header. */
+const APP_VERSION = "marmot-opentui/0.0.0";
+
+/**
+ * The IPF/Marmot Goggles tracker. Used as the audit upload target when
+ * `--audit-upload` is given as a bare flag (no explicit URL) and no
+ * `$MARMOT_AUDIT_LOG_TRACKER_ENDPOINT` is set.
+ */
+const DEFAULT_GOGGLES_ENDPOINT = "https://goggles.ipf.dev/";
 
 export const HELP_TEXT = `Usage: marmot-opentui [options]
 
@@ -50,6 +64,14 @@ Options:
   --audit          Enable forensic audit JSONL recording.
   --audit-path <path>
                    Write audit JSONL to this path (implies --audit).
+  --audit-upload [url]
+                   Upload the audit JSONL to a Goggles tracker on quit and on
+                   demand (press U); implies --audit. A bare flag uses
+                   https://goggles.ipf.dev/; falls back to
+                   $MARMOT_AUDIT_LOG_TRACKER_ENDPOINT.
+  --audit-token <token>
+                   Bearer token for the tracker, required for non-loopback
+                   endpoints. Falls back to $MARMOT_AUDIT_LOG_TRACKER_TOKEN.
   --debug          Include full stack traces and cause chains in status errors.
   --logs <path>    Enable debug logging and append status/debug lines to this file.
   --help, -h       Print this help and exit.
@@ -66,6 +88,10 @@ export interface CliOptions {
   logsPath: string;
   audit: boolean;
   auditPath: string;
+  /** Goggles tracker endpoint for audit uploads; empty disables uploading. */
+  auditUploadEndpoint: string;
+  /** Bearer token for the tracker (required for non-loopback endpoints). */
+  auditUploadToken: string;
   secOverride: string;
 }
 
@@ -75,12 +101,33 @@ export function parseArgs(argv: string[]): CliOptions {
     const i = argv.indexOf(name);
     return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
   };
+  // `--audit-upload <url>` overrides; a bare `--audit-upload` falls back to the
+  // default Goggles endpoint; otherwise the env var (empty disables uploading).
+  // The leading-`--` guard keeps a bare flag from swallowing the next option as
+  // its URL (e.g. `--audit-upload --debug`).
+  const auditUploadArg = option("--audit-upload", "");
+  const auditUploadEndpoint =
+    auditUploadArg && !auditUploadArg.startsWith("--")
+      ? auditUploadArg
+      : flag("--audit-upload")
+        ? DEFAULT_GOGGLES_ENDPOINT
+        : (process.env["MARMOT_AUDIT_LOG_TRACKER_ENDPOINT"] ?? "");
   return {
     label: option("--name", "default"),
     ephemeral: flag("--ephemeral"),
     logsPath: option("--logs", ""),
-    audit: flag("--audit") || Boolean(option("--audit-path", "")),
+    // An upload target needs something to upload, so --audit-upload (like
+    // --audit-path) turns recording on.
+    audit:
+      flag("--audit") ||
+      Boolean(option("--audit-path", "")) ||
+      Boolean(auditUploadEndpoint),
     auditPath: option("--audit-path", ""),
+    auditUploadEndpoint,
+    auditUploadToken: option(
+      "--audit-token",
+      process.env["MARMOT_AUDIT_LOG_TRACKER_TOKEN"] ?? "",
+    ),
     debug: flag("--debug") || Boolean(option("--logs", "")),
     secOverride: option("--sec", ""),
   };
@@ -243,6 +290,7 @@ export async function createController(
   let audit: NodeJsonlAuditRecorder | undefined;
   let auditContext: AuditContextOptions | undefined;
   let auditLogPath: string | undefined;
+  let auditUpload: AuditUploadConfig | undefined;
   if (opts.audit) {
     const engineId = deriveEngineId(pubkey, deviceId);
     auditLogPath = opts.auditPath || join(dataDir, `audit-${engineId}.jsonl`);
@@ -257,13 +305,27 @@ export async function createController(
         device_id: deviceId,
         device_name: opts.label,
         platform: process.platform,
-        app_version: "marmot-opentui/0.0.0",
+        app_version: APP_VERSION,
         upload_trigger: "opentui_cli",
       },
     };
     const emitter = new AuditEmitter({ ...auditContext, sink: audit });
     emitter.emit({ type: "recorder_started", recorder: "marmot-opentui" });
     emitter.emit({ type: "source_context", source: auditContext.source! });
+
+    // Only the non-identifying client labels become upload headers; the account
+    // label stays in the JSONL rows (account_ref + the source_context row above).
+    if (opts.auditUploadEndpoint) {
+      auditUpload = {
+        endpoint: opts.auditUploadEndpoint,
+        bearerToken: opts.auditUploadToken || undefined,
+        source: {
+          deviceLabel: opts.label,
+          platform: process.platform,
+          appVersion: APP_VERSION,
+        },
+      };
+    }
   }
 
   // keepAlive: 0 so a relay's health-watcher pipeline tears down immediately
@@ -337,6 +399,7 @@ export async function createController(
     clientId,
     debug: opts.debug,
     auditLogPath,
+    auditUpload,
     statusLog: onStatus,
     // Only freshly-created accounts publish an initial profile on first start.
     initialProfileName: newAccount?.name?.trim() || undefined,

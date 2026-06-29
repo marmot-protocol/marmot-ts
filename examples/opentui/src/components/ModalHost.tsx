@@ -16,7 +16,7 @@ import { ProfileModal } from "./ProfileModal.js";
 import { QrModal } from "./QrModal.js";
 import { RelaysModal } from "./RelaysModal.js";
 import { TextPrompt } from "./TextPrompt.js";
-import { GLOBAL_HINTS, panelHints } from "./hints.js";
+import { globalHints, panelHints } from "./hints.js";
 
 /** Every modal/overlay the app can show, plus the data each one needs. */
 export type Modal =
@@ -73,7 +73,7 @@ export function ModalHost(props: {
       return (
         <HelpOverlay
           panel={nav.focus}
-          global={GLOBAL_HINTS}
+          global={globalHints({ canUploadAudit: controller.canUploadAudit })}
           panelHints={hints[nav.focus]}
           onClose={() => setModal(null)}
         />

@@ -80,16 +80,18 @@ into this directory and run `bun run src/index.tsx --name alice`.)
 
 ### Flags
 
-| Flag                  | Default     | Meaning                                                             |
-| --------------------- | ----------- | ------------------------------------------------------------------- |
-| `--name <label>`      | `default`   | Profile name; data + identity live in `~/.marmot-opentui/<label>/`. |
-| `--sec <hex>`         | (generated) | Use a specific 32-byte hex Nostr secret key.                        |
-| `--ephemeral`         | off         | Keep app state in memory; audit can still write when enabled.       |
-| `--audit`             | off         | Record Marmot forensic audit JSONL for this account/device.         |
-| `--audit-path <path>` | account dir | Write audit JSONL to a custom path; implies `--audit`.              |
-| `--debug`             | off         | Include full stack traces (and `cause` chains) in status errors.    |
-| `--logs <path>`       | off         | Enable `debug` logging and append status/debug lines to this file.  |
-| `--help`, `-h`        | off         | Print the options and exit without starting the OpenTUI UI.         |
+| Flag                   | Default     | Meaning                                                                                                                                                                                      |
+| ---------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--name <label>`       | `default`   | Profile name; data + identity live in `~/.marmot-opentui/<label>/`.                                                                                                                          |
+| `--sec <hex>`          | (generated) | Use a specific 32-byte hex Nostr secret key.                                                                                                                                                 |
+| `--ephemeral`          | off         | Keep app state in memory; audit can still write when enabled.                                                                                                                                |
+| `--audit`              | off         | Record Marmot forensic audit JSONL for this account/device.                                                                                                                                  |
+| `--audit-path <path>`  | account dir | Write audit JSONL to a custom path; implies `--audit`.                                                                                                                                       |
+| `--audit-upload [url]` | off         | Upload the audit JSONL to a Goggles tracker on quit and on demand (`U`); implies `--audit`. A bare flag uses `https://goggles.ipf.dev/`; falls back to `$MARMOT_AUDIT_LOG_TRACKER_ENDPOINT`. |
+| `--audit-token <tok>`  | (none)      | Bearer token for the tracker; required for non-loopback endpoints. Falls back to `$MARMOT_AUDIT_LOG_TRACKER_TOKEN`.                                                                          |
+| `--debug`              | off         | Include full stack traces (and `cause` chains) in status errors.                                                                                                                             |
+| `--logs <path>`        | off         | Enable `debug` logging and append status/debug lines to this file.                                                                                                                           |
+| `--help`, `-h`         | off         | Print the options and exit without starting the OpenTUI UI.                                                                                                                                  |
 
 Relays are no longer chosen with a flag. The app bootstraps discovery from a
 default set (`wss://relay.damus.io`, `wss://nos.lol`) and then operates on the
@@ -109,7 +111,17 @@ Local state (groups, KeyPackages, invites, and message history) lives in a singl
 With `--audit`, obfuscated-sensitive forensic rows are appended to
 `audit-<engine_id>.jsonl` in the same directory by default, with a stable
 `audit-device-id` file used to derive the audit engine id. Use `--audit-path` to
-write the JSONL somewhere else for upload into Goggles.
+write the JSONL somewhere else.
+
+To ship those logs to the IPF/Marmot [Goggles](https://goggles.ipf.dev/)
+tracker, add `--audit-upload` (a bare flag targets `https://goggles.ipf.dev/`;
+pass a URL to override) plus `--audit-token <token>` for any non-loopback
+endpoint. The app then uploads the JSONL on quit and on demand when you press
+**U** — a `POST` of the raw NDJSON body (`Content-Type: application/x-ndjson`)
+with the account identity carried in the rows, not the headers. Both flags also
+read `$MARMOT_AUDIT_LOG_TRACKER_ENDPOINT` / `$MARMOT_AUDIT_LOG_TRACKER_TOKEN`.
+For local testing point it at a loopback `http://127.0.0.1:<port>/…` endpoint,
+where the bearer token is optional.
 To switch identities without restarting, focus the **profile** panel and press
 **o**. A form asks for a display name (published as your kind 0 profile) and an
 optional relay list used for both your inbox and outbox — it defaults to
@@ -158,6 +170,8 @@ the footer shows the keys that apply right now.
 - **h/l** or **←/→** — move focus to the previous/next panel.
 - **j/k** or **↑/↓** — move the selection inside the focused list panel.
 - **?** or **:** — open keyboard help for the current panel.
+- **U** — upload the audit log to the configured Goggles tracker (only when
+  started with `--audit-upload`; otherwise a status line says it isn't set up).
 - **q** or **Ctrl+C** — quit.
 
 **Panel keys:**

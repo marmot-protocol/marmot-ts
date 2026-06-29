@@ -95,11 +95,7 @@ export interface MarmotGroupView {
 }
 
 export type MarmotGroupDecodedComponent =
-  | number[]
-  | string[]
-  | string
-  | bigint
-  | object;
+  number[] | string[] | string | bigint | object;
 
 /** Raw and decoded details for one app component in the MLS app_data_dictionary. */
 export interface MarmotGroupComponentInfo {

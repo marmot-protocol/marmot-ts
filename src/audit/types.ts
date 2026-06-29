@@ -5,11 +5,7 @@ export const MARMOT_AUDIT_SCHEMA_VERSION = "marmot-forensics-audit/v2";
 export type AuditDataMode = "obfuscated_sensitive_data" | "full_data";
 
 export type AuditEpochState =
-  | "stable"
-  | "pending_publish"
-  | "merging"
-  | "recovering"
-  | "unrecoverable";
+  "stable" | "pending_publish" | "merging" | "recovering" | "unrecoverable";
 
 export type AuditMessageArtifactKind =
   | "application_message"
@@ -278,11 +274,7 @@ export type AuditEventKind =
       type: "peeler_outcome";
       msg_id: string;
       outcome:
-        | "success"
-        | "decrypt_failed"
-        | "stale_epoch"
-        | "malformed"
-        | "other";
+        "success" | "decrypt_failed" | "stale_epoch" | "malformed" | "other";
       artifact_kind?: AuditMessageArtifactKind;
       fallback_snapshot_used: boolean;
       fallback_snapshot_name?: string;

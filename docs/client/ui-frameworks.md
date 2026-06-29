@@ -326,9 +326,7 @@ const groups = useWatchGroups(props.client);
 ### Direct Async Generator Usage
 
 ```typescript
-const client = new MarmotClient({
-  /* ... */
-});
+const client = new MarmotClient({/* ... */});
 const gen = client.groups.watch();
 let cancelled = false;
 

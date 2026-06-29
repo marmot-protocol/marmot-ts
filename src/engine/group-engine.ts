@@ -293,6 +293,20 @@ export class MarmotGroupEngine<TEnvelope> {
   }
 
   /**
+   * The retained canonical states within the rollback horizon, newest epoch
+   * first. Used for cross-epoch encrypted-media decryption: media is keyed by
+   * its source-epoch exporter secret, which is not carried on the wire, so a
+   * receiver tries each still-retained epoch's key. States older than
+   * `max_rewind_commits` are pruned (`retained-history.md`); media from a pruned
+   * epoch can no longer be decrypted.
+   */
+  retainedStates(): ClientState[] {
+    return [...this.#retained.states()].sort(
+      (a, b) => Number(b.groupContext.epoch) - Number(a.groupContext.epoch),
+    );
+  }
+
+  /**
    * Records an applied commit into both retained history and the history tree.
    * The freshly-produced `newState` is captured pristine; a tree hiccup (e.g. a
    * parent not yet present) is logged and never breaks protocol processing.

@@ -1,5 +1,7 @@
+import { randomBytes } from "@noble/hashes/utils.js";
 import {
   CiphersuiteImpl,
+  ClientState,
   defaultCryptoProvider,
   getCiphersuiteImpl,
 } from "ts-mls";
@@ -22,6 +24,24 @@ async function createState(impl: CiphersuiteImpl) {
     relays: [],
   });
   return clientState;
+}
+
+/**
+ * Simulates the canonical tip advancing one epoch: a fresh exporter secret (so
+ * the source-epoch media key no longer derives from it) and a bumped epoch.
+ */
+function advanceEpoch(state: ClientState): ClientState {
+  return {
+    ...state,
+    groupContext: {
+      ...state.groupContext,
+      epoch: state.groupContext.epoch + 1n,
+    },
+    keySchedule: {
+      ...state.keySchedule,
+      exporterSecret: randomBytes(32),
+    },
+  };
 }
 
 /** Minimal in-memory media cache (keyed by ciphertextSha256) that records calls. */
@@ -106,6 +126,69 @@ describe("GroupMediaService", () => {
     expect(a.data).toEqual(b.data);
     // Only one in-flight decryption should reach the cache write.
     expect(cache.addMedia).toHaveBeenCalledOnce();
+  });
+
+  it("decrypts media from an older epoch after the local tip advances", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const sourceState = await createState(impl);
+    const sender = new GroupMediaService({
+      media: undefined as unknown as BaseGroupMedia,
+      getState: () => sourceState,
+      getCiphersuite: () => impl,
+    });
+    const plaintext = new Uint8Array([1, 2, 3, 4, 5]);
+    const { encrypted, attachment } = await sender.encryptMedia(
+      new Blob([plaintext], { type: "application/octet-stream" }),
+      { filename: "old.bin" },
+    );
+
+    // The tip advanced to a new epoch with a fresh exporter secret; the source
+    // epoch's state is still within the retained window.
+    const tip = advanceEpoch(sourceState);
+    const receiver = new GroupMediaService({
+      media: undefined as unknown as BaseGroupMedia,
+      getState: () => tip,
+      getCiphersuite: () => impl,
+      getRetainedStates: () => [tip, sourceState],
+    });
+
+    const { data } = await receiver.decryptMedia(encrypted, attachment);
+    expect(data).toEqual(plaintext);
+  });
+
+  it("fails to decrypt older-epoch media once the source epoch is pruned", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const sourceState = await createState(impl);
+    const sender = new GroupMediaService({
+      media: undefined as unknown as BaseGroupMedia,
+      getState: () => sourceState,
+      getCiphersuite: () => impl,
+    });
+    const { encrypted, attachment } = await sender.encryptMedia(
+      new Blob([new Uint8Array([6, 7, 8])], {
+        type: "application/octet-stream",
+      }),
+      { filename: "gone.bin" },
+    );
+
+    // Only the advanced tip remains retained — the source epoch was pruned.
+    const tip = advanceEpoch(sourceState);
+    const receiver = new GroupMediaService({
+      media: undefined as unknown as BaseGroupMedia,
+      getState: () => tip,
+      getCiphersuite: () => impl,
+      getRetainedStates: () => [tip],
+    });
+
+    await expect(receiver.decryptMedia(encrypted, attachment)).rejects.toThrow(
+      /did not authenticate/,
+    );
   });
 
   it("throws when decrypting an attachment without a ciphertextSha256", async () => {

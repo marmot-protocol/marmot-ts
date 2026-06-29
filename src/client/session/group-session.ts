@@ -285,6 +285,15 @@ export class GroupSession<
   }
 
   /**
+   * The retained canonical states within the rollback horizon, newest epoch
+   * first — the candidate epochs for cross-epoch encrypted-media decryption
+   * (see {@link MarmotGroupEngine.retainedStates}).
+   */
+  retainedStates(): ClientState[] {
+    return this.#engine.retainedStates();
+  }
+
+  /**
    * Transport events received but not yet decrypted/processed into the history
    * tree — the engine's ingestion pool (undecryptable-so-far events held for
    * retry as the tree grows).

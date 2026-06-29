@@ -18,6 +18,7 @@ export {
   deriveMediaEncryptionKey,
   encryptMediaFile,
   decryptMediaFile,
+  decryptMediaFileWithKeys,
 } from "./media/crypto.js";
 
 // imeta tag (de)serialization and strict validation.

@@ -131,6 +131,7 @@ describe("exports", () => {
         "decryptGroupMessageEvent",
         "decryptGroupMessages",
         "decryptMediaFile",
+        "decryptMediaFileWithKeys",
         "defaultCapabilities",
         "defaultMarmotClientConfig",
         "deferredReasons",

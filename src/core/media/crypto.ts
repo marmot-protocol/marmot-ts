@@ -163,6 +163,79 @@ export function encryptMediaFile(
 }
 
 /**
+ * Validates the receive-side fields, decodes the nonce, and verifies the
+ * fetched bytes match `ciphertextSha256` — the key-independent checks shared by
+ * the single-key and multi-key decrypt paths.
+ *
+ * @internal
+ * @returns The decoded 12-byte nonce and the AEAD AAD
+ */
+function prepareMediaDecrypt(
+  encrypted: Uint8Array,
+  attachment: MediaAttachment,
+): { nonce: Uint8Array; aad: Uint8Array } {
+  if (!attachment.plaintextSha256)
+    throw new Error("attachment.plaintextSha256 is required");
+  if (!attachment.ciphertextSha256)
+    throw new Error("attachment.ciphertextSha256 is required");
+  if (!attachment.mediaType)
+    throw new Error("attachment.mediaType is required");
+  if (!attachment.nonce) throw new Error("attachment.nonce is required");
+
+  const nonce = hexToBytes(attachment.nonce);
+  if (nonce.length !== 12) {
+    throw new Error(
+      `attachment.nonce must be 24 hex characters (12 bytes), got ${attachment.nonce.length} characters`,
+    );
+  }
+
+  // Ciphertext integrity: fetched bytes MUST match ciphertext_sha256. This is
+  // key-independent, so it runs once even when multiple candidate keys follow.
+  if (!equalBytes(sha256(encrypted), hexToBytes(attachment.ciphertextSha256))) {
+    throw new Error(
+      "encrypted-media-v1 integrity check failed: ciphertext hash does not match ciphertext_sha256",
+    );
+  }
+
+  return { nonce, aad: buildAad(attachment) };
+}
+
+/**
+ * AEAD-opens a verified `encrypted-media-v1` blob with one candidate key and
+ * checks the plaintext hash. Returns the plaintext on success, or `undefined`
+ * when the key fails authentication (the caller may try another epoch's key).
+ * A successful AEAD open whose plaintext hash mismatches is a genuine integrity
+ * failure and throws.
+ *
+ * @internal
+ */
+function openMediaFile(
+  encrypted: Uint8Array,
+  fileKey: Uint8Array,
+  nonce: Uint8Array,
+  aad: Uint8Array,
+  plaintextSha256: string,
+): Uint8Array | undefined {
+  let decrypted: Uint8Array;
+  try {
+    decrypted = chacha20poly1305(fileKey, nonce, aad).decrypt(encrypted);
+  } catch {
+    // ChaCha20-Poly1305 authentication failed — wrong key for this ciphertext.
+    return undefined;
+  }
+
+  // The AEAD tag authenticated, so this is the right key; the plaintext hash
+  // MUST match. A mismatch here is corruption, not a wrong-key signal.
+  if (!equalBytes(sha256(decrypted), hexToBytes(plaintextSha256))) {
+    throw new Error(
+      "encrypted-media-v1 integrity check failed: plaintext hash does not match plaintext_sha256",
+    );
+  }
+
+  return decrypted;
+}
+
+/**
  * Decrypts a fetched `encrypted-media-v1` blob.
  *
  * Performs the receive-side integrity checks in order
@@ -183,38 +256,62 @@ export function decryptMediaFile(
   fileKey: Uint8Array,
   attachment: MediaAttachment,
 ): Uint8Array {
-  if (!attachment.plaintextSha256)
-    throw new Error("attachment.plaintextSha256 is required");
-  if (!attachment.ciphertextSha256)
-    throw new Error("attachment.ciphertextSha256 is required");
-  if (!attachment.mediaType)
-    throw new Error("attachment.mediaType is required");
-  if (!attachment.nonce) throw new Error("attachment.nonce is required");
-
-  const nonce = hexToBytes(attachment.nonce);
-  if (nonce.length !== 12) {
+  const { nonce, aad } = prepareMediaDecrypt(encrypted, attachment);
+  const decrypted = openMediaFile(
+    encrypted,
+    fileKey,
+    nonce,
+    aad,
+    attachment.plaintextSha256,
+  );
+  if (!decrypted) {
     throw new Error(
-      `attachment.nonce must be 24 hex characters (12 bytes), got ${attachment.nonce.length} characters`,
+      "encrypted-media-v1 decryption failed: ciphertext did not authenticate under the supplied key",
     );
   }
-
-  // 1. Ciphertext integrity: fetched bytes MUST match ciphertext_sha256.
-  if (!equalBytes(sha256(encrypted), hexToBytes(attachment.ciphertextSha256))) {
-    throw new Error(
-      "encrypted-media-v1 integrity check failed: ciphertext hash does not match ciphertext_sha256",
-    );
-  }
-
-  // 2. AEAD authentication (also binds scheme/plaintext-hash/type/filename).
-  const aad = buildAad(attachment);
-  const decrypted = chacha20poly1305(fileKey, nonce, aad).decrypt(encrypted);
-
-  // 3. Plaintext integrity: SHA256(plaintext) MUST match plaintext_sha256.
-  if (!equalBytes(sha256(decrypted), hexToBytes(attachment.plaintextSha256))) {
-    throw new Error(
-      "encrypted-media-v1 integrity check failed: plaintext hash does not match plaintext_sha256",
-    );
-  }
-
   return decrypted;
+}
+
+/**
+ * Decrypts a fetched `encrypted-media-v1` blob, trying each candidate key in
+ * order until one authenticates the ciphertext.
+ *
+ * The media file key is derived from the source-epoch media exporter secret
+ * (`features/encrypted-media.md` — Key Derivation), but the source epoch is not
+ * carried in the `imeta` tag. Rather than thread the source epoch through every
+ * caller, the receiver supplies one key per still-retained epoch (current epoch
+ * first) and relies on the AEAD tag to identify the right one. The ciphertext
+ * hash is verified once; only the cheap AEAD open is retried per key.
+ *
+ * @param encrypted - The encrypted blob downloaded from a blob store
+ * @param fileKeys - Candidate keys from {@link deriveMediaEncryptionKey}, one
+ *   per retained epoch; tried in order. MUST be non-empty.
+ * @param attachment - The parsed attachment from the message's `imeta` tag
+ * @returns The decrypted file bytes from the first key that authenticates
+ * @throws If no candidate key authenticates the ciphertext, or a check fails
+ */
+export function decryptMediaFileWithKeys(
+  encrypted: Uint8Array,
+  fileKeys: Uint8Array[],
+  attachment: MediaAttachment,
+): Uint8Array {
+  if (fileKeys.length === 0)
+    throw new Error("decryptMediaFileWithKeys: at least one key is required");
+
+  const { nonce, aad } = prepareMediaDecrypt(encrypted, attachment);
+
+  for (const fileKey of fileKeys) {
+    const decrypted = openMediaFile(
+      encrypted,
+      fileKey,
+      nonce,
+      aad,
+      attachment.plaintextSha256,
+    );
+    if (decrypted) return decrypted;
+  }
+
+  throw new Error(
+    "encrypted-media-v1 decryption failed: ciphertext did not authenticate under any retained epoch key",
+  );
 }

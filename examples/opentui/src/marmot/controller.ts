@@ -697,7 +697,8 @@ export class MarmotController {
     this.#auditUpdatedAt = Math.floor(Date.now() / 1000);
     this.#auditError = state === "failed" ? (extra.error ?? null) : null;
     if (extra.bytesSent !== undefined) this.#auditBytesSent = extra.bytesSent;
-    if (extra.httpStatus !== undefined) this.#auditHttpStatus = extra.httpStatus;
+    if (extra.httpStatus !== undefined)
+      this.#auditHttpStatus = extra.httpStatus;
     this.#publish();
   }
 
@@ -1902,10 +1903,10 @@ export class MarmotController {
    * the media index and re-projects so the row flips pending → fetching →
    * ready/error.
    *
-   * NOTE: decryption derives the key from the group's CURRENT epoch state, not
-   * the message's source epoch (marmot-ts gap M9). Media from an epoch older
-   * than the local tip can fail to decrypt until source-epoch secret retention
-   * lands; for a single live session this is rarely hit.
+   * NOTE: `decryptMedia` tries the current epoch's key plus every still-retained
+   * epoch's key, so media sent before the local tip advanced still decrypts.
+   * Media from an epoch already pruned past the engine's rollback horizon can no
+   * longer be decrypted.
    */
   async #fetchMedia(group: MarmotGroup, att: MediaAttachment): Promise<void> {
     const rec = this.#mediaIndex.get(group.idStr)?.get(att.ciphertextSha256);

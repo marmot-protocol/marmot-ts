@@ -5,7 +5,7 @@ import type { CiphersuiteImpl, ClientState } from "ts-mls";
 
 import {
   canonicalizeMimeType,
-  decryptMediaFile,
+  decryptMediaFileWithKeys,
   deriveMediaEncryptionKey,
   encryptMediaFile,
   type MediaAttachment,
@@ -28,16 +28,26 @@ export type GroupMediaServiceOptions<
   media: TMedia;
   getState: () => ClientState;
   getCiphersuite: () => CiphersuiteImpl;
+  /**
+   * The still-retained canonical states (newest epoch first), used to decrypt
+   * media from an epoch older than the current tip. Optional — when omitted,
+   * decryption uses only the current epoch's key. See
+   * {@link GroupMediaService.decryptMedia}.
+   */
+  getRetainedStates?: () => Iterable<ClientState>;
 };
 
 /**
  * Optional group-scoped encrypted-media helper and plaintext cache adapter.
  *
- * Note: key derivation here uses the group's CURRENT `ClientState`. On send
- * that is correct (the source epoch is the current epoch). On receive of media
- * from an older epoch, the caller must supply the source-epoch state instead;
- * source-epoch media-secret retention is tracked separately (see
- * `features/encrypted-media.md` — Key Derivation).
+ * On send, the media file key is derived from the group's CURRENT `ClientState`
+ * — the source epoch is the current epoch. On receive, the source epoch is the
+ * MLS epoch of the message that carried the attachment, which is not encoded in
+ * the `imeta` tag (`features/encrypted-media.md` — Key Derivation). Rather than
+ * thread that epoch through every caller, {@link decryptMedia} derives one
+ * candidate key per still-retained epoch and lets the AEAD tag pick the right
+ * one, so media sent before the local tip advanced still decrypts. Media from
+ * an epoch already pruned past the rollback horizon cannot be decrypted.
  */
 export class GroupMediaService<
   TMedia extends BaseGroupMedia | undefined = undefined,
@@ -46,12 +56,14 @@ export class GroupMediaService<
 
   readonly #getState: () => ClientState;
   readonly #getCiphersuite: () => CiphersuiteImpl;
+  readonly #getRetainedStates?: () => Iterable<ClientState>;
   readonly #decryptingMedia = new Map<string, Promise<StoredMedia>>();
 
   constructor(options: GroupMediaServiceOptions<TMedia>) {
     this.media = options.media;
     this.#getState = options.getState;
     this.#getCiphersuite = options.getCiphersuite;
+    this.#getRetainedStates = options.getRetainedStates;
   }
 
   /**
@@ -94,6 +106,13 @@ export class GroupMediaService<
   /**
    * Decrypts a fetched blob for a parsed attachment, verifying its ciphertext
    * and plaintext hashes, and caches the plaintext keyed by `ciphertextSha256`.
+   *
+   * The media file key is bound to the message's source-epoch media exporter
+   * secret, which is not carried in the `imeta` tag. This derives one candidate
+   * key per still-retained epoch (current epoch first) and lets the AEAD tag
+   * select the right one, so media sent before the local tip advanced still
+   * decrypts. Media from an epoch already pruned past the rollback horizon
+   * cannot be decrypted.
    */
   async decryptMedia(
     encrypted: Uint8Array,
@@ -111,12 +130,18 @@ export class GroupMediaService<
     if (inFlight) return inFlight;
 
     const decryptPromise = (async () => {
-      const fileKey = await deriveMediaEncryptionKey(
-        this.#getState(),
-        this.#getCiphersuite(),
+      const ciphersuite = this.#getCiphersuite();
+      const states = this.#candidateStates();
+      const fileKeys = await Promise.all(
+        states.map((state) =>
+          deriveMediaEncryptionKey(state, ciphersuite, attachment),
+        ),
+      );
+      const plaintext = decryptMediaFileWithKeys(
+        encrypted,
+        fileKeys,
         attachment,
       );
-      const plaintext = decryptMediaFile(encrypted, fileKey, attachment);
 
       await this.media?.addMedia(key, {
         data: plaintext,
@@ -133,5 +158,23 @@ export class GroupMediaService<
     } finally {
       this.#decryptingMedia.delete(key);
     }
+  }
+
+  /**
+   * The states whose media-exporter secrets to try, current epoch first, then
+   * the remaining retained epochs, deduplicated by epoch. The current state is
+   * always included even if retention is unavailable.
+   */
+  #candidateStates(): ClientState[] {
+    const current = this.#getState();
+    const states = [current];
+    const seen = new Set<number>([Number(current.groupContext.epoch)]);
+    for (const state of this.#getRetainedStates?.() ?? []) {
+      const epoch = Number(state.groupContext.epoch);
+      if (seen.has(epoch)) continue;
+      seen.add(epoch);
+      states.push(state);
+    }
+    return states;
   }
 }

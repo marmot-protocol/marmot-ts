@@ -457,6 +457,7 @@ export class MarmotGroup<
       media: this.media,
       getState: () => this.state,
       getCiphersuite: () => this.ciphersuite,
+      getRetainedStates: () => this.session.retainedStates(),
     });
   }
 

@@ -174,7 +174,15 @@ export class GroupRegistry<
       ? await this.#retainedFromTree(historyTree, state)
       : undefined;
 
-    return this.build(state, retained, historyTree);
+    const group = await this.build(state, retained, historyTree);
+
+    // Re-evaluate the persisted forks from disk: if this client last followed a
+    // losing branch, switch to the canonical one now — without waiting for the
+    // network to re-deliver the winner. Only worth a pass when a competing fork
+    // is actually retained (more than one tip).
+    if (historyTree && historyTree.tips().length > 1) await group.reconverge();
+
+    return group;
   }
 
   /**

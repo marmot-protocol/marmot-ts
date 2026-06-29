@@ -87,6 +87,16 @@ export class IngestionPool<TEnvelope> {
     this.#entries.delete(id);
   }
 
+  /**
+   * Clears every entry's tried-tag memo so the next tree sweep re-peels all
+   * pooled events against all node states. Called after a convergence branch
+   * switch: the canonical path changed, so a fork message previously held on a
+   * losing branch may now decrypt on the canonical one and be delivered.
+   */
+  resetTried(): void {
+    for (const entry of this.#entries.values()) entry.triedTags.clear();
+  }
+
   /** The pooled envelopes, oldest-first. */
   envelopes(): TEnvelope[] {
     return [...this.#entries.values()].map((e) => e.envelope);

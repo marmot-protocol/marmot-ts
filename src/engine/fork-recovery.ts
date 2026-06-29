@@ -118,48 +118,14 @@ export class ForkRecovery<TEnvelope> {
     const edges: EdgeSnapshot[] = [];
     let counter = 0;
 
-    const witnessesAt = async (state: ClientState): Promise<AppWitness[]> => {
-      const epoch = Number(state.groupContext.epoch);
-      const out: AppWitness[] = [];
-      for (const envelope of witnessEnvelopes) {
-        try {
-          const decrypted = await this.#peeler.peelGroupMessages(
-            [envelope],
-            state,
-          );
-          for (const pair of decrypted.read) {
-            if (pair.message.wireformat !== wireformats.mls_private_message)
-              continue;
-            const r = await processMessage({
-              context: {
-                cipherSuite: this.#ciphersuite,
-                authService: marmotAuthService,
-                externalPsks: {},
-              },
-              state,
-              message: pair.message,
-              callback,
-            });
-            if (
-              r.kind === "applicationMessage" &&
-              r.senderLeafIndex !== undefined
-            ) {
-              const credential = getCredentialFromLeafIndex(
-                state.ratchetTree,
-                r.senderLeafIndex as LeafIndex,
-              );
-              out.push({
-                epoch,
-                sender: hexToBytes(getCredentialPubkey(credential)),
-              });
-            }
-          }
-        } catch {
-          /* not a witness on this state */
-        }
-      }
-      return out;
-    };
+    const witnessesAt = (state: ClientState): Promise<AppWitness[]> =>
+      collectWitnessesAt({
+        peeler: this.#peeler,
+        ciphersuite: this.#ciphersuite,
+        state,
+        witnessEnvelopes,
+        callback,
+      });
 
     const candidatesAt = async (state: ClientState): Promise<MlsMessage[]> => {
       const epoch = Number(state.groupContext.epoch);
@@ -342,4 +308,59 @@ export class ForkRecovery<TEnvelope> {
       },
     };
   }
+}
+
+/**
+ * Collects the {@link AppWitness}es that decrypt against a single candidate
+ * `state` (`convergence.md` "App-payload witnesses"): each witness envelope is
+ * peeled and processed, and an authenticated application message contributes a
+ * witness at `state`'s epoch keyed by the sender's account pubkey. Used by both
+ * the pool-replay branch builder ({@link ForkRecovery}) and the tree-fed
+ * re-convergence pass, which gathers witnesses per retained fork-branch node.
+ */
+export async function collectWitnessesAt<TEnvelope>(params: {
+  peeler: GroupPeeler<TEnvelope>;
+  ciphersuite: CiphersuiteImpl;
+  state: ClientState;
+  witnessEnvelopes: TEnvelope[];
+  callback: IncomingMessageCallback;
+}): Promise<AppWitness[]> {
+  const { peeler, ciphersuite, state, witnessEnvelopes, callback } = params;
+  const epoch = Number(state.groupContext.epoch);
+  const out: AppWitness[] = [];
+  for (const envelope of witnessEnvelopes) {
+    try {
+      const decrypted = await peeler.peelGroupMessages([envelope], state);
+      for (const pair of decrypted.read) {
+        if (pair.message.wireformat !== wireformats.mls_private_message)
+          continue;
+        const r = await processMessage({
+          context: {
+            cipherSuite: ciphersuite,
+            authService: marmotAuthService,
+            externalPsks: {},
+          },
+          state,
+          message: pair.message,
+          callback,
+        });
+        if (
+          r.kind === "applicationMessage" &&
+          r.senderLeafIndex !== undefined
+        ) {
+          const credential = getCredentialFromLeafIndex(
+            state.ratchetTree,
+            r.senderLeafIndex as LeafIndex,
+          );
+          out.push({
+            epoch,
+            sender: hexToBytes(getCredentialPubkey(credential)),
+          });
+        }
+      }
+    } catch {
+      /* not a witness on this state */
+    }
+  }
+  return out;
 }

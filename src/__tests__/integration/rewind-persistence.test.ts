@@ -2,6 +2,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventSigner } from "applesauce-core";
 import {
   CiphersuiteImpl,
+  createApplicationMessage,
   createCommit,
   defaultCryptoProvider,
   defaultProposalTypes,
@@ -21,7 +22,13 @@ import {
   deserializeClientState,
   SerializedClientState,
 } from "../../core/client-state.js";
-import { commitDigest } from "../../core/convergence.js";
+import {
+  commitDigest,
+  DEFAULT_CONVERGENCE_POLICY,
+  selectCanonicalBranch,
+} from "../../core/convergence.js";
+import { GroupHistoryTree } from "../../engine/history-tree.js";
+import { buildTreeBranchSet } from "../../engine/tree-convergence.js";
 import { createCredential } from "../../core/credential.js";
 import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
@@ -140,6 +147,10 @@ async function buildForkScenario(impl: CiphersuiteImpl) {
     memberEpoch1,
     lowerEvent,
     higherEvent,
+    lowerCommit: lower.commit,
+    higherCommit: higher.commit,
+    canonicalState: canonical.newState,
+    losingState: losing.newState,
     canonicalTag: canonical.newState.confirmationTag,
     losingTag: losing.newState.confirmationTag,
   };
@@ -205,6 +216,62 @@ describe("rewind history persistence across restart", () => {
     expect(reloaded.state.confirmationTag).toEqual(canonicalTag);
   });
 
+  it("switches to the canonical branch on restart when both forks are persisted and no new event arrives", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const {
+      memberEpoch1,
+      lowerCommit,
+      canonicalState,
+      higherEvent,
+      canonicalTag,
+      losingTag,
+    } = await buildForkScenario(impl);
+    const groupId = bytesToHex(memberEpoch1.groupContext.groupId);
+
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
+    const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
+
+    // Session 1: follow the losing (higher) branch onto epoch 2, then record the
+    // competing canonical (lower) branch into the persisted fork tree WITHOUT
+    // converging onto it — simulating a client that captured the rival fork but
+    // stopped before the convergence pass (tree flushed, tip still the loser).
+    const first = new MarmotGroup(memberEpoch1, {
+      store,
+      rewindStore,
+      signer: SIGNER,
+      ciphersuite: impl,
+      network: NETWORK,
+    });
+    await drain(first.ingest([higherEvent]));
+    expect(first.state.confirmationTag).toEqual(losingTag);
+    first.forkTree.recordCommit(
+      bytesToHex(memberEpoch1.confirmationTag),
+      lowerCommit,
+      canonicalState,
+    );
+    expect(first.forkTree.tips()).toHaveLength(2);
+    await first.save(true);
+    first.dispose();
+
+    // "Restart" through the real load path — and ingest NOTHING afterwards.
+    const registry = new GroupRegistry({
+      store,
+      rewindStore,
+      signer: SIGNER,
+      network: NETWORK,
+    });
+    const reloaded = await registry.load(groupId);
+
+    // Load-time re-convergence re-scored the persisted forks straight from disk
+    // and switched to the canonical (lower-digest) branch — no network redelivery.
+    expect(reloaded.state.confirmationTag).toEqual(canonicalTag);
+    expect(reloaded.state.confirmationTag).not.toEqual(losingTag);
+    expect(reloaded.lifecycle).toBe("Stable");
+  });
+
   it("cannot rewind after a restart without a persisted rewind store (the gap this fixes)", async () => {
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -238,5 +305,158 @@ describe("rewind history persistence across restart", () => {
     // the losing branch and never converges (documents the pre-fix behavior).
     expect(reloaded.state.confirmationTag).toEqual(losingTag);
     expect(reloaded.state.confirmationTag).not.toEqual(canonicalTag);
+  });
+
+  it("holds a competing-branch app message silently, then reveals it on switch", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const {
+      memberEpoch1,
+      lowerEvent,
+      higherEvent,
+      canonicalState,
+      canonicalTag,
+      losingTag,
+    } = await buildForkScenario(impl);
+
+    // An application message published on the canonical (lower) branch — it
+    // decrypts only against that branch's epoch-2 secret.
+    const appMessage = await createApplicationMessage({
+      context: {
+        cipherSuite: impl,
+        authService: unsafeTestingAuthenticationService,
+      },
+      state: canonicalState,
+      message: new TextEncoder().encode("on-the-canonical-branch"),
+    });
+    const appEvent = await createGroupEvent({
+      message: appMessage.message,
+      state: canonicalState,
+      ciphersuite: impl,
+    });
+
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
+    const group = new MarmotGroup(memberEpoch1, {
+      store,
+      signer: SIGNER,
+      ciphersuite: impl,
+      network: NETWORK,
+    });
+
+    // Follow the losing (higher) branch first.
+    await drain(group.ingest([higherEvent]));
+    expect(group.state.confirmationTag).toEqual(losingTag);
+
+    // The canonical-branch app message arrives BEFORE its branch is known. It
+    // cannot decrypt on our losing tip, so it is held silently in the pool —
+    // never surfaced as `invalidated`, never delivered — instead of being
+    // retracted.
+    const held: string[] = [];
+    for await (const res of group.ingest([appEvent])) held.push(res.kind);
+    expect(held).not.toContain("invalidated");
+    expect(group.state.confirmationTag).toEqual(losingTag); // unchanged
+    expect(group.pendingEvents().length).toBe(1); // retained silently
+
+    // When the canonical commit arrives we converge onto it and act on the held
+    // message against the now-canonical branch — releasing it from the pool,
+    // still never retracting it as `invalidated`.
+    const after: string[] = [];
+    for await (const res of group.ingest([lowerEvent])) after.push(res.kind);
+    expect(group.state.confirmationTag).toEqual(canonicalTag); // switched
+    expect(after).not.toContain("invalidated");
+    expect(group.pendingEvents().length).toBe(0); // released on switch
+  });
+});
+
+describe("buildTreeBranchSet", () => {
+  it("returns undefined for a single-branch tree (no competing tip)", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { memberEpoch1 } = await buildForkScenario(impl);
+    const tree = new GroupHistoryTree(memberEpoch1);
+    const rootTag = bytesToHex(memberEpoch1.confirmationTag);
+
+    expect(
+      buildTreeBranchSet(tree, rootTag, DEFAULT_CONVERGENCE_POLICY),
+    ).toBeUndefined();
+  });
+
+  it("enumerates both fork tips from the shared root and selects the lower-digest winner", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const {
+      memberEpoch1,
+      lowerCommit,
+      higherCommit,
+      canonicalState,
+      losingState,
+    } = await buildForkScenario(impl);
+
+    const tree = new GroupHistoryTree(memberEpoch1);
+    const rootTag = bytesToHex(memberEpoch1.confirmationTag);
+    tree.recordCommit(rootTag, lowerCommit, canonicalState);
+    tree.recordCommit(rootTag, higherCommit, losingState);
+
+    const canonicalTagHex = bytesToHex(canonicalState.confirmationTag);
+    const losingTagHex = bytesToHex(losingState.confirmationTag);
+
+    // Re-converge from the perspective of a client sitting on the losing tip.
+    const set = buildTreeBranchSet(
+      tree,
+      losingTagHex,
+      DEFAULT_CONVERGENCE_POLICY,
+    );
+    expect(set).toBeDefined();
+    expect(set!.rootTag).toBe(rootTag);
+    // Both fork tips are candidates, the current (losing) tip included.
+    expect(new Set(set!.candidates.map((c) => c.id))).toEqual(
+      new Set([canonicalTagHex, losingTagHex]),
+    );
+    expect(set!.candidates.every((c) => c.forkEpoch === 1)).toBe(true);
+
+    // The lower-digest branch wins the same-depth tie.
+    const winner = selectCanonicalBranch(
+      Number(losingState.groupContext.epoch),
+      set!.candidates,
+      DEFAULT_CONVERGENCE_POLICY,
+    );
+    expect(winner?.id).toBe(canonicalTagHex);
+  });
+
+  it("excludes a fork beyond the rollback horizon", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const {
+      memberEpoch1,
+      lowerCommit,
+      higherCommit,
+      canonicalState,
+      losingState,
+    } = await buildForkScenario(impl);
+
+    const tree = new GroupHistoryTree(memberEpoch1);
+    const rootTag = bytesToHex(memberEpoch1.confirmationTag);
+    tree.recordCommit(rootTag, lowerCommit, canonicalState);
+    tree.recordCommit(rootTag, higherCommit, losingState);
+
+    // A zero-commit horizon makes the epoch-1 fork (one commit back from the
+    // epoch-2 tip) ineligible — nothing to switch to.
+    const set = buildTreeBranchSet(
+      tree,
+      bytesToHex(losingState.confirmationTag),
+      {
+        ...DEFAULT_CONVERGENCE_POLICY,
+        maxRewindCommits: 0,
+      },
+    );
+    expect(set).toBeUndefined();
   });
 });

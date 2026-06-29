@@ -33,8 +33,12 @@ import {
   deriveConvergenceStatus,
 } from "../core/convergence-status.js";
 import {
+  type AppWitness,
+  type BranchCandidate,
   type ConvergencePolicy,
   DEFAULT_CONVERGENCE_POLICY,
+  isWitnessEligible,
+  selectCanonicalBranch,
   validateConvergencePolicy,
 } from "../core/convergence.js";
 import {
@@ -60,8 +64,14 @@ import { framedContentType } from "./wire-format.js";
 import { logger } from "../utils/debug.js";
 import { createAdminCommitPolicyCallback } from "./admin-policy.js";
 import { DeliveredPayloadLedger } from "./delivered-payloads.js";
-import { ForkRecovery } from "./fork-recovery.js";
+import {
+  type ChainLink,
+  collectWitnessesAt,
+  ForkRecovery,
+  type ForkResolution,
+} from "./fork-recovery.js";
 import { GroupHistoryTree } from "./history-tree.js";
+import { buildTreeBranchSet, type TreeBranchSet } from "./tree-convergence.js";
 import { IngestionPool, type IngestionPoolOptions } from "./ingestion-pool.js";
 import { contentDedupId } from "./message-dedup.js";
 import {
@@ -760,6 +770,20 @@ export class MarmotGroupEngine<TEnvelope> {
     // messages are read and all reachable forks are grown into the tree.
     if (this.#pool.size > 0) yield* this.#sweepTree();
 
+    // Re-score the persisted forks and switch branches if a competitor now wins
+    // — e.g. pooled/late fork material the sweep just grew into the tree, or a
+    // fork that only lived on disk. On a switch, re-sweep once so messages held
+    // on the now-canonical branch are delivered as `processed`. Witness envelopes
+    // are this batch plus the pool, so re-convergence sees at least the witnesses
+    // pool-replay recovery saw and never reverts a witness-boosted decision.
+    const tipBeforeReconverge = bytesToHex(this.#state.confirmationTag);
+    yield* this.#reconvergeFromTree([...envelopes, ...this.#pool.envelopes()]);
+    if (
+      bytesToHex(this.#state.confirmationTag) !== tipBeforeReconverge &&
+      this.#pool.size > 0
+    )
+      yield* this.#sweepTree();
+
     // Give up on entries aged past the retention window — surface them terminal.
     const evicted = this.#pool.evictStale(
       Number(this.#state.groupContext.epoch),
@@ -909,22 +933,16 @@ export class MarmotGroupEngine<TEnvelope> {
           message,
           reason: "invalid-app-payload",
         };
-      // A read on the canonical path is delivered; one that only decrypts on a
-      // losing fork is reported as invalidated (M7), never delivered as accepted.
-      // The losing read still carries its fork-node identity (the node `tag` it
-      // decrypted against and that node's epoch) so a full-history consumer can
-      // attribute it; an app message does not change the epoch/confirmation tag,
-      // so `tag` is the delivery branch.
+      // A read on the canonical path is delivered. One that only decrypts on a
+      // non-canonical fork is HELD silently — retained in the pool, not surfaced —
+      // until either we switch to that branch (a later sweep then delivers it as
+      // `processed`, after `#applyForkResolution` resets the tried-tag memo) or it
+      // ages out. Returning `undefined` keeps the entry pooled and moves on.
+      // `invalidated` is reserved for retracting a payload previously delivered as
+      // `accepted` when a rewind abandons its branch (`#applyForkResolution`).
       return onCanonical
         ? { kind: "processed", result, envelope, message }
-        : {
-            kind: "invalidated",
-            envelope,
-            message,
-            payload: result.message,
-            tag,
-            epoch: Number(state.groupContext.epoch),
-          };
+        : undefined;
     }
 
     return undefined;
@@ -1348,6 +1366,22 @@ export class MarmotGroupEngine<TEnvelope> {
       return { outcome: resolution.outcome };
     }
 
+    return this.#applyForkResolution(forkEpoch, resolution);
+  }
+
+  /**
+   * Adopts a recovered fork resolution — the shared rewind-apply path used by
+   * both pool-replay recovery ({@link #resolveFork}) and tree-fed re-convergence
+   * ({@link #reconvergeFromTree}). Computes the abandoned app payloads to retract
+   * (M7), transitions `Recovering → setState(winner) → Stable`, records the
+   * winner chain into retained history, prunes the ledger below the new anchor,
+   * and resets the pool's tried-tag memo so a fork message previously held on the
+   * losing branch can now be delivered on the canonical one.
+   */
+  #applyForkResolution(
+    forkEpoch: number,
+    resolution: Extract<ForkResolution, { outcome: "recovered" }>,
+  ): AppliedForkResolution<TEnvelope> {
     // The canonical branch's state identities (root + every applied child +
     // the tip). Any app payload delivered above the fork epoch whose delivery
     // state is not on this chain decrypted only on the abandoned branch, so it
@@ -1391,6 +1425,8 @@ export class MarmotGroupEngine<TEnvelope> {
       );
     }
     this.#transitionLifecycle(groupLifecycleStates.stable, "branch_applied");
+    // The canonical path moved; let held fork messages re-decrypt on it.
+    this.#pool.resetTried();
 
     const anchor = this.#retained.anchorEpoch();
     if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
@@ -1408,6 +1444,166 @@ export class MarmotGroupEngine<TEnvelope> {
         }),
       ),
     };
+  }
+
+  /**
+   * Re-scores the persisted fork history against the current tip and switches to
+   * the canonical branch when a competitor wins (`convergence.md`). Every
+   * candidate is sourced from the history tree, so a fork known only on disk is
+   * re-evaluated without the transport re-delivering it — the load-time and
+   * post-sweep path for dynamic fork switching. A switch reuses
+   * {@link #applyForkResolution}; only the resulting `invalidated` retractions are
+   * yielded (a tree-fed switch has no triggering envelope, so it is never a
+   * `processed` result — the now-canonical branch's app messages surface via a
+   * follow-up sweep). No-op unless `Stable` and the tree holds a competing tip.
+   */
+  async *#reconvergeFromTree(
+    witnessEnvelopes: TEnvelope[],
+  ): AsyncGenerator<IngestResult<TEnvelope>> {
+    if (this.#lifecycle !== groupLifecycleStates.stable) return;
+    if (this.#tree.tips().length <= 1) return;
+
+    const currentTipTag = bytesToHex(this.#state.confirmationTag);
+    const set = buildTreeBranchSet(this.#tree, currentTipTag, this.#policy);
+    if (!set) return;
+
+    // Witnesses are best-effort: layered on when envelopes are resident (live),
+    // absent on load where the structural keys (depth + lower tip digest) decide.
+    const witnessesByTip =
+      witnessEnvelopes.length > 0
+        ? await this.#gatherTreeWitnesses(set, witnessEnvelopes)
+        : undefined;
+    const candidates: BranchCandidate[] = witnessesByTip
+      ? set.candidates.map((c) => ({
+          ...c,
+          appWitnesses: witnessesByTip.get(c.id) ?? [],
+        }))
+      : set.candidates;
+
+    const winner = selectCanonicalBranch(
+      Number(this.#state.groupContext.epoch),
+      candidates,
+      this.#policy,
+    );
+    if (!winner || winner.id === currentTipTag) return;
+
+    const resolution = await this.#treeResolution(set.rootTag, winner.id);
+    if (!resolution) return;
+
+    const forkEpoch = this.#tree.epochOf(set.rootTag) ?? winner.forkEpoch;
+    const applied = this.#applyForkResolution(forkEpoch, resolution);
+    if (applied.outcome === "recovered")
+      for (const inv of applied.invalidated)
+        yield {
+          kind: "invalidated",
+          envelope: inv.envelope,
+          message: inv.message,
+          payload: inv.payload,
+          tag: inv.tag,
+          epoch: inv.epoch,
+        };
+  }
+
+  /**
+   * Drives one tree-fed re-convergence pass to completion, switching to the
+   * canonical branch if the persisted history now favors a competing fork. Public
+   * entry for the load path (after the engine hydrates from the tree) and any
+   * caller wanting an explicit re-evaluation. Witness-free — the structural keys
+   * decide; witnesses refine on the next live ingest/sweep.
+   */
+  async reconvergeFromHistory(): Promise<void> {
+    for await (const _ of this.#reconvergeFromTree([])) void _;
+  }
+
+  /**
+   * Assembles a recovered {@link ForkResolution} for a tree-fed switch directly
+   * from the persisted history tree — the path `rootTag → winnerTipTag`, with a
+   * fresh {@link ClientState} snapshot fetched per chain endpoint (so no two links
+   * alias an object) and the stored commit per edge. No `processMessage` replay:
+   * the tree already holds each branch state. Returns `undefined` if any snapshot
+   * or commit is missing.
+   */
+  async #treeResolution(
+    rootTag: string,
+    winnerTipTag: string,
+  ): Promise<Extract<ForkResolution, { outcome: "recovered" }> | undefined> {
+    const fullPath = this.#tree.path(winnerTipTag);
+    if (!fullPath) return undefined;
+    const rootIndex = fullPath.indexOf(rootTag);
+    if (rootIndex < 0) return undefined;
+    const segment = fullPath.slice(rootIndex);
+
+    const winnerChain: ChainLink[] = [];
+    for (let i = 1; i < segment.length; i++) {
+      const parent = await this.#tree.stateAt(segment[i - 1]);
+      const child = await this.#tree.stateAt(segment[i]);
+      const message = await this.#tree.commitMessageOf(segment[i]);
+      if (!parent || !child || !message) return undefined;
+      winnerChain.push({ parent, message, child });
+    }
+    const winnerTip = await this.#tree.stateAt(winnerTipTag);
+    if (!winnerTip) return undefined;
+
+    return {
+      outcome: "recovered",
+      winnerTip,
+      winnerChain,
+      edges: [],
+      result: {
+        kind: "newState",
+        newState: winnerTip,
+        actionTaken: "accept",
+        consumed: [],
+        aad: new Uint8Array(),
+      },
+    };
+  }
+
+  /**
+   * Gathers app-payload witnesses for each tree candidate branch by re-decrypting
+   * `witnessEnvelopes` against the states on the branch path above the shared fork
+   * root, filtered to the convergence-eligible window (`convergence.md`). Keyed by
+   * candidate tip tag.
+   */
+  async #gatherTreeWitnesses(
+    set: TreeBranchSet,
+    witnessEnvelopes: TEnvelope[],
+  ): Promise<Map<string, AppWitness[]>> {
+    const forkEpoch = this.#tree.epochOf(set.rootTag) ?? 0;
+    const callback = this.#createAdminVerificationCallback();
+    const byTip = new Map<string, AppWitness[]>();
+    for (const candidate of set.candidates) {
+      const path = this.#tree.path(candidate.id);
+      const rootIndex = path?.indexOf(set.rootTag) ?? -1;
+      if (!path || rootIndex < 0) {
+        byTip.set(candidate.id, []);
+        continue;
+      }
+      const witnesses: AppWitness[] = [];
+      // States strictly after the fork root — a witness must decrypt past it.
+      for (const tag of path.slice(rootIndex + 1)) {
+        const state = await this.#tree.stateAt(tag);
+        if (!state) continue;
+        for (const witness of await collectWitnessesAt({
+          peeler: this.peeler,
+          ciphersuite: this.ciphersuite,
+          state,
+          witnessEnvelopes,
+          callback,
+        }))
+          if (
+            isWitnessEligible(
+              witness,
+              forkEpoch,
+              candidate.tipEpoch,
+              this.#policy,
+            )
+          )
+            witnesses.push(witness);
+      }
+      byTip.set(candidate.id, witnesses);
+    }
+    return byTip;
   }
 
   #createAdminVerificationCallback(

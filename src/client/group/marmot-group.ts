@@ -492,6 +492,18 @@ export class MarmotGroup<
   }
 
   /**
+   * Re-scores the persisted fork history against the current tip and switches to
+   * the canonical branch if a competing fork now wins (`convergence.md`),
+   * persisting a resulting switch. Candidates come from the {@link forkTree}, so a
+   * client that diverged onto a losing fork converges from disk without waiting
+   * for the network to re-deliver the winning branch. Called automatically on
+   * load; safe to call explicitly to force a re-evaluation.
+   */
+  async reconverge(): Promise<void> {
+    await this.session.reconverge();
+  }
+
+  /**
    * Performs a self-update commit (no proposals) to rotate this member's leaf key material.
    *
    * This is required by MIP-02 for forward secrecy after joining from a Welcome.

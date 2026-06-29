@@ -328,6 +328,18 @@ export class GroupSession<
     this.#onStateSaved?.();
   }
 
+  /**
+   * Re-scores the persisted fork history against the current tip and switches to
+   * the canonical branch if a competing fork now wins (`convergence.md`), then
+   * persists a resulting switch. Sources candidates from the history tree, so a
+   * client that diverged onto a losing fork converges from disk without waiting
+   * for the network to re-deliver the winning branch. Called on load.
+   */
+  async reconverge(): Promise<void> {
+    await this.#engine.reconvergeFromHistory();
+    await this.save();
+  }
+
   async destroyLocalState(): Promise<void> {
     await this.history?.purgeMessages();
     const idHex = bytesToHex(this.id);

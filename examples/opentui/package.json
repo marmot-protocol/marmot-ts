@@ -13,22 +13,26 @@
   "dependencies": {
     "@internet-privacy/marmot-ts": "workspace:*",
     "@libs/qrcode": "npm:@jsr/libs__qrcode@^3.0.1",
-    "@opentui/core": "^0.4.1",
-    "@opentui/react": "^0.4.1",
-    "applesauce-accounts": "0.0.0-next-20260620175751",
-    "applesauce-common": "0.0.0-next-20260620175751",
-    "applesauce-core": "0.0.0-next-20260620175751",
-    "applesauce-react": "0.0.0-next-20260620175751",
-    "applesauce-relay": "0.0.0-next-20260620175751",
-    "applesauce-loaders": "0.0.0-next-20260620175751",
+    "@opentui/core": "^0.4.2",
+    "@opentui/react": "^0.4.2",
+    "applesauce-accounts": "^6.2.0",
+    "applesauce-common": "^6.2.0",
+    "applesauce-core": "^6.2.0",
+    "applesauce-loaders": "^6.2.0",
+    "applesauce-react": "^6.0.0",
+    "applesauce-relay": "^6.2.0",
+    "blossom-client-sdk": "^5.0.0",
     "debug": "^4.4.3",
-    "react": "^19.2.0"
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^7.0.0",
+    "react": "^19.2.7"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.0",
+    "@types/bun": "^1.3.14",
     "@types/debug": "^4.1.13",
-    "@types/node": "^24.12.4",
-    "@types/react": "^19.2.0",
+    "@types/node": "^24.13.2",
+    "@types/pngjs": "^6.0.5",
+    "@types/react": "^19.2.17",
     "typescript": "~6.0.3"
   }
 }

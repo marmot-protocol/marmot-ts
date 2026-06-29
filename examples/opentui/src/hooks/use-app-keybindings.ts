@@ -64,7 +64,8 @@ export function useAppKeybindings(props: {
       modal?.kind === "invite" ||
       modal?.kind === "groupinfo" ||
       modal?.kind === "profile" ||
-      modal?.kind === "relays";
+      modal?.kind === "relays" ||
+      modal?.kind === "attach";
 
     // Let Escape through even while a text input is focused, so it can exit
     // composing (and modals' own handlers can act on it).
@@ -112,6 +113,16 @@ export function useAppKeybindings(props: {
         );
         if (choice >= 0) nav.reactWith(REACTION_EMOJIS[choice]);
       }
+      return;
+    }
+
+    // Save-select mirrors reply-select: j/k move the timeline cursor, Enter
+    // writes the picked message's downloaded attachments to disk, Esc cancels.
+    if (nav.saveSelecting) {
+      if (matches(key, "esc")) nav.cancelSaveSelect();
+      else if (matches(key, "down") || matches(key, "j")) nav.moveSelection(1);
+      else if (matches(key, "up") || matches(key, "k")) nav.moveSelection(-1);
+      else if (matches(key, "enter")) nav.confirmSaveSelect();
       return;
     }
 
@@ -174,6 +185,12 @@ export function useAppKeybindings(props: {
       } else if (matches(key, "c")) {
         // Enter react-select mode to pick which message to react to.
         nav.startReactSelect();
+      } else if (matches(key, "a")) {
+        // Attach a file: prompt for a path, then send it as encrypted media.
+        setModal({ kind: "attach" });
+      } else if (matches(key, "s")) {
+        // Enter save-select mode to pick a message whose attachments to save.
+        nav.startSaveSelect();
       } else if (matches(key, "R")) setModal({ kind: "relays" });
       else if (matches(key, "p")) setModal({ kind: "profile" });
       else if (matches(key, "K")) setModal({ kind: "keypkg" });

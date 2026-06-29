@@ -113,8 +113,8 @@
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@scure/base": "^2.2.0",
-    "applesauce-common": "0.0.0-next-20260620175751",
-    "applesauce-core": "0.0.0-next-20260620175751",
+    "applesauce-common": "^6.2.0",
+    "applesauce-core": "^6.2.0",
     "debug": "^4.4.3",
     "eventemitter3": "^5.0.4",
     "ts-mls": "./ts-mls"
@@ -125,15 +125,15 @@
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
     "@types/debug": "^4.1.13",
-    "@types/node": "^24.12.4",
-    "applesauce-accounts": "0.0.0-next-20260620175751",
+    "@types/node": "^24.13.2",
+    "applesauce-accounts": "^6.2.0",
     "husky": "^9.1.7",
-    "lint-staged": "^17.0.5",
-    "prettier": "^3.8.3",
+    "lint-staged": "^17.0.8",
+    "prettier": "^3.9.3",
     "rimraf": "~6.0.1",
     "typedoc": "^0.28.19",
     "typescript": "~6.0.3",
     "vitepress": "2.0.0-alpha.17",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.6"
   }
 }

@@ -80,6 +80,20 @@ export type Navigation = {
   cancelReactSelect: () => void;
   /** React to the cursor's message with `emoji`, then leave react-select mode. */
   reactWith: (emoji: string) => void;
+
+  /**
+   * True while picking a message whose attachments to save to disk (entered
+   * with `s` in the chat panel). Shares the timeline cursor with the other
+   * picker modes; all three are mutually exclusive.
+   */
+  saveSelecting: boolean;
+  /** Enter save-select mode (no-op when there's nothing in the timeline). */
+  startSaveSelect: () => void;
+  /** Leave save-select mode without saving. */
+  cancelSaveSelect: () => void;
+  /** Save the cursor message's downloaded attachments, then leave the mode. */
+  confirmSaveSelect: () => void;
+
   /** The message a new send should reply to (NIP-C7 `q` tag), if any. */
   replyTarget?: ChatMessage;
   setReplyTarget: (message: ChatMessage | undefined) => void;
@@ -110,8 +124,11 @@ export function NavigationProvider(props: { children: ReactNode }) {
   // picker starts at the bottom (matching the sticky scroll) and j/k walk up.
   const [replySelecting, setReplySelecting] = useState(false);
   // React-select mode shares the timeline cursor with reply-select; only one is
-  // ever active at a time (each entry point clears the other).
+  // ever active at a time (each entry point clears the others).
   const [reactSelecting, setReactSelecting] = useState(false);
+  // Save-select mode: pick a message whose downloaded attachments to write to
+  // disk. Shares the timeline cursor with the other two picker modes.
+  const [saveSelecting, setSaveSelecting] = useState(false);
   const [messageCursor, setMessageCursor] = useState<number | null>(null);
   const [replyTarget, setReplyTarget] = useState<ChatMessage | undefined>(
     undefined,
@@ -147,12 +164,18 @@ export function NavigationProvider(props: { children: ReactNode }) {
         : Math.max(0, Math.min(messageCursor, activeMessages.length - 1));
   const selectedMessage = activeMessages[selectedMessageIndex];
 
-  const startReplySelect = () => {
-    if (!selectedMessage) return; // nothing in the timeline to reply to
-    setReactSelecting(false); // the two picker modes are mutually exclusive
-    setMessageCursor(null); // (re)start the picker at the newest message
-    setReplySelecting(true);
+  // The three timeline-picker modes are mutually exclusive; entering one clears
+  // the others and restarts the cursor at the newest message.
+  const enterPicker = (set: (on: boolean) => void) => {
+    if (!selectedMessage) return; // nothing in the timeline to pick
+    setReplySelecting(false);
+    setReactSelecting(false);
+    setSaveSelecting(false);
+    setMessageCursor(null);
+    set(true);
   };
+
+  const startReplySelect = () => enterPicker(setReplySelecting);
   const cancelReplySelect = () => {
     setReplySelecting(false);
     setMessageCursor(null);
@@ -166,12 +189,7 @@ export function NavigationProvider(props: { children: ReactNode }) {
     setMessageCursor(null);
   };
 
-  const startReactSelect = () => {
-    if (!selectedMessage) return; // nothing in the timeline to react to
-    setReplySelecting(false); // the two picker modes are mutually exclusive
-    setMessageCursor(null); // (re)start the picker at the newest message
-    setReactSelecting(true);
-  };
+  const startReactSelect = () => enterPicker(setReactSelecting);
   const cancelReactSelect = () => {
     setReactSelecting(false);
     setMessageCursor(null);
@@ -186,11 +204,27 @@ export function NavigationProvider(props: { children: ReactNode }) {
     setMessageCursor(null);
   };
 
+  const startSaveSelect = () => enterPicker(setSaveSelecting);
+  const cancelSaveSelect = () => {
+    setSaveSelecting(false);
+    setMessageCursor(null);
+  };
+  const confirmSaveSelect = () => {
+    if (selectedMessage) {
+      void controller
+        .saveMessageAttachments(selectedMessage)
+        .catch((err) => controller.logError(err));
+    }
+    setSaveSelecting(false);
+    setMessageCursor(null);
+  };
+
   // Switching groups exits reply-select, resets the cursor, and drops any
   // pending reply target (it belonged to the previous group's timeline).
   useEffect(() => {
     setReplySelecting(false);
     setReactSelecting(false);
+    setSaveSelecting(false);
     setMessageCursor(null);
     setReplyTarget(undefined);
   }, [activeGroupId]);
@@ -248,6 +282,10 @@ export function NavigationProvider(props: { children: ReactNode }) {
     startReactSelect,
     cancelReactSelect,
     reactWith,
+    saveSelecting,
+    startSaveSelect,
+    cancelSaveSelect,
+    confirmSaveSelect,
     replyTarget,
     setReplyTarget,
     composing,

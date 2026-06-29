@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 
-import type { ChatMessage } from "../marmot/controller.js";
+import type { ChatAttachment, ChatMessage } from "../marmot/controller.js";
+import { formatBytes } from "../marmot/controller.js";
 import {
   groupEpoch,
   groupMemberCount,
@@ -10,6 +11,7 @@ import {
 import { useChat } from "../hooks/use-marmot.js";
 import { useNavigation } from "../hooks/use-navigation.js";
 import { useDisplayName } from "../hooks/use-profile.js";
+import { ImagePreview } from "./ImagePreview.js";
 import { InputBar } from "./InputBar.js";
 import { REACTION_EMOJIS } from "./reactions.js";
 
@@ -33,9 +35,10 @@ export function ChatView() {
   const group = nav.activeGroup;
   const list = group ? (messages[group.idStr] ?? []) : [];
   const pager = group ? pagination[group.idStr] : undefined;
-  // The timeline cursor only appears while picking a reply target (press `r`) or
-  // a message to react to (press `c`), so it isn't noise during normal reading.
-  const cursorVisible = nav.replySelecting || nav.reactSelecting;
+  // The timeline cursor only appears while picking a message — to reply (`r`),
+  // react (`c`), or save attachments (`s`) — so it isn't noise during reading.
+  const cursorVisible =
+    nav.replySelecting || nav.reactSelecting || nav.saveSelecting;
   // Resolve reply quotes against messages currently in the timeline.
   const byId = useMemo(
     () => new Map(list.map((message) => [message.id, message])),
@@ -85,7 +88,21 @@ export function ChatView() {
         )}
       </scrollbox>
       {nav.reactSelecting && <ReactionPalette />}
+      {nav.saveSelecting && <SaveHint />}
       <InputBar focused={nav.composing} onFocus={focusInput} />
+    </box>
+  );
+}
+
+/** The hint shown above the composer while picking a message to save. */
+function SaveHint() {
+  return (
+    <box paddingX={1}>
+      <text fg="#888">
+        <span fg="#FFD700">save: </span>
+        <span fg="#888">enter saves this message's attachments to disk </span>
+        <span fg="#666">(j/k pick message · esc cancel)</span>
+      </text>
     </box>
   );
 }
@@ -142,9 +159,58 @@ function MessageRow(props: {
         <span fg="#555">: </span>
         {message.content}
       </text>
+      {message.attachments?.map((attachment) => (
+        <AttachmentRow key={attachment.id} attachment={attachment} />
+      ))}
       {message.reactions && message.reactions.length > 0 && (
         <ReactionRow reactions={message.reactions} />
       )}
+    </box>
+  );
+}
+
+/** Maps an attachment's fetch lifecycle to a glyph + colour. */
+function attachmentStatusBadge(attachment: ChatAttachment): {
+  icon: string;
+  note: string;
+  color: string;
+} {
+  switch (attachment.status) {
+    case "pending":
+    case "fetching":
+      return { icon: "⏳", note: "downloading…", color: "#888" };
+    case "error":
+      return {
+        icon: "⚠",
+        note: attachment.error ?? "failed",
+        color: "#FF6B6B",
+      };
+    case "ready":
+      return {
+        icon: attachment.mediaType.startsWith("image/") ? "🖼" : "📎",
+        note:
+          attachment.size !== undefined
+            ? formatBytes(attachment.size)
+            : "ready",
+        color: "#7CFC00",
+      };
+  }
+}
+
+/** A single attachment row: an icon, the filename, media type, and fetch state. */
+function AttachmentRow(props: { attachment: ChatAttachment }) {
+  const { attachment } = props;
+  const badge = attachmentStatusBadge(attachment);
+  return (
+    <box flexDirection="column">
+      <text>
+        <span>{"    "}</span>
+        <span fg={badge.color}>{`${badge.icon} `}</span>
+        <span fg="#CCC">{attachment.filename}</span>
+        <span fg="#555">{`  ${attachment.mediaType} · `}</span>
+        <span fg={badge.color}>{badge.note}</span>
+      </text>
+      <ImagePreview attachment={attachment} />
     </box>
   );
 }

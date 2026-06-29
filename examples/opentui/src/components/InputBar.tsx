@@ -16,6 +16,9 @@ import { useDisplayName } from "../hooks/use-profile.js";
  * When the navigation has a `replyTarget` set (the user pressed `r` on a
  * message), the send carries a NIP-C7 `q` tag and a banner shows the target;
  * the target is cleared after the message is sent.
+ *
+ * Files are sent from the keyboard (`a` to attach), not from this composer, so
+ * a plain submit is always a chat message.
  */
 export function InputBar(props: { focused: boolean; onFocus: () => void }) {
   const controller = useController();

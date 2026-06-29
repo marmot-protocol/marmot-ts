@@ -37,6 +37,7 @@ function AppContent(props: { onQuit: () => void }) {
     composing: nav.composing,
     replySelecting: nav.replySelecting,
     reactSelecting: nav.reactSelecting,
+    saveSelecting: nav.saveSelecting,
     showAllInvites: nav.showAllInvites,
     selectedGroupIsAdmin: nav.selectedGroupIsAdmin,
     activeGroupIsAdmin: nav.activeGroupIsAdmin,

@@ -27,6 +27,7 @@ export function panelHints(opts: {
   composing: boolean;
   replySelecting: boolean;
   reactSelecting: boolean;
+  saveSelecting: boolean;
   showAllInvites: boolean;
   selectedGroupIsAdmin: boolean;
   activeGroupIsAdmin: boolean;
@@ -65,21 +66,29 @@ export function panelHints(opts: {
               { key: "1-6", label: "react emoji" },
               { key: "esc", label: "cancel" },
             ]
-          : [
-              { key: "r", label: "reply" },
-              { key: "c", label: "react" },
-              { key: "n", label: "compose" },
-              { key: "u", label: "load older" },
-              { key: "i", label: "invite" },
-              { key: "m", label: "members" },
-              { key: "g", label: "group info" },
-              ...(opts.activeGroupIsAdmin
-                ? [{ key: "e", label: "edit info" }]
-                : []),
-              { key: "R", label: "relays" },
-              { key: "p", label: "profile" },
-              { key: "K", label: "key package" },
-            ],
+          : opts.saveSelecting
+            ? [
+                { key: "j/k", label: "select message" },
+                { key: "enter", label: "save attachments" },
+                { key: "esc", label: "cancel" },
+              ]
+            : [
+                { key: "r", label: "reply" },
+                { key: "c", label: "react" },
+                { key: "a", label: "attach file" },
+                { key: "s", label: "save attachment" },
+                { key: "n", label: "compose" },
+                { key: "u", label: "load older" },
+                { key: "i", label: "invite" },
+                { key: "m", label: "members" },
+                { key: "g", label: "group info" },
+                ...(opts.activeGroupIsAdmin
+                  ? [{ key: "e", label: "edit info" }]
+                  : []),
+                { key: "R", label: "relays" },
+                { key: "p", label: "profile" },
+                { key: "K", label: "key package" },
+              ],
     profile: [
       { key: "i", label: "invite QR" },
       { key: "p", label: "edit profile" },

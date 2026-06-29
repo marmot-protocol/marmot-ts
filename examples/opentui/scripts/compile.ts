@@ -57,6 +57,15 @@ const externals = ALL_NATIVE_PACKAGES.filter((pkg) => pkg !== keep).flatMap(
   (pkg) => ["--external", pkg],
 );
 
+// blossom-client-sdk lazily `import()`s the optional Cashu payment SDK only when
+// a blob server demands payment — a path the encrypted-media flow never takes
+// with free Blossom servers. It isn't installed, so keep it external rather than
+// pulling the whole Cashu stack into the standalone binary.
+const optionalExternals = ["@cashu/cashu-ts"].flatMap((pkg) => [
+  "--external",
+  pkg,
+]);
+
 const args = [
   "build",
   "--compile",
@@ -65,6 +74,7 @@ const args = [
   "--outfile",
   outfile,
   ...externals,
+  ...optionalExternals,
 ];
 
 console.log(`Compiling for ${process.platform}-${process.arch} (${keep})…`);

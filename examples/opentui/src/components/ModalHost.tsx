@@ -31,6 +31,7 @@ export type Modal =
   | { kind: "members"; groupId: string }
   | { kind: "profile" }
   | { kind: "relays" }
+  | { kind: "attach" }
   | { kind: "myqr" }
   | { kind: "help" }
   | null;
@@ -62,6 +63,7 @@ export function ModalHost(props: {
         composing: nav.composing,
         replySelecting: nav.replySelecting,
         reactSelecting: nav.reactSelecting,
+        saveSelecting: nav.saveSelecting,
         showAllInvites: nav.showAllInvites,
         selectedGroupIsAdmin: nav.selectedGroupIsAdmin,
         activeGroupIsAdmin: nav.activeGroupIsAdmin,
@@ -185,6 +187,7 @@ export function ModalHost(props: {
             void controller.updateGroupInfo(groupId, {
               name: fields.name.trim(),
               description: fields.description.trim(),
+              blossomServers: fields.blossomServers,
             });
           }}
           onCancel={() => setModal(null)}
@@ -255,5 +258,27 @@ export function ModalHost(props: {
           onCancel={() => setModal(null)}
         />
       );
+    case "attach":
+      return (
+        <TextPrompt
+          title="attach a file"
+          placeholder="/path/to/file (or ~/file)"
+          onSubmit={(value) => {
+            setModal(null);
+            const path = expandHome(value.trim());
+            if (path) void controller.sendFile(path, nav.replyTarget);
+            nav.setReplyTarget(undefined);
+          }}
+          onCancel={() => setModal(null)}
+        />
+      );
   }
+}
+
+/** Expands a leading `~` to the user's home directory. */
+function expandHome(path: string): string {
+  if (path.startsWith("~/") && process.env.HOME) {
+    return `${process.env.HOME}${path.slice(1)}`;
+  }
+  return path;
 }

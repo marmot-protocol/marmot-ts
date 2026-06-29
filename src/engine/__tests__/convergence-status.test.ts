@@ -73,6 +73,9 @@ describe("MarmotGroupEngine convergence status (B5)", () => {
       wrapGroupMessage() {
         throw new Error("not used");
       },
+      idOf(envelope) {
+        return envelope.id;
+      },
     };
 
     let t = 100_000;

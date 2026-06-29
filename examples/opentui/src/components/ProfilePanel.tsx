@@ -1,3 +1,4 @@
+import type { AuditStatus } from "../marmot/controller.js";
 import { useChat } from "../hooks/use-marmot.js";
 import { useNavigation } from "../hooks/use-navigation.js";
 import { useProfile } from "../hooks/use-profile.js";
@@ -17,6 +18,38 @@ function ageLabel(timestamp: number | null): string {
   return "just now";
 }
 
+/** Map the audit-upload status into a colored label + one-line detail. */
+function auditView(audit: AuditStatus): {
+  label: string;
+  color: string;
+  detail: string | null;
+} {
+  if (!audit.enabled)
+    return {
+      label: "disabled",
+      color: "#666",
+      detail: "run with --audit-upload <url>",
+    };
+  switch (audit.state) {
+    case "uploading":
+      return { label: "uploading…", color: "#FFD700", detail: null };
+    case "success":
+      return {
+        label: "uploaded",
+        color: "#7fe08a",
+        detail: `${audit.bytesSent ?? 0}B · HTTP ${audit.httpStatus ?? "?"} · ${ageLabel(audit.updatedAt)}`,
+      };
+    case "failed":
+      return {
+        label: "failed",
+        color: "#ff6b6b",
+        detail: audit.error ?? "unknown error",
+      };
+    default:
+      return { label: "idle", color: "#9aa9b8", detail: "press U to upload" };
+  }
+}
+
 export function ProfilePanel() {
   const {
     me,
@@ -26,8 +59,10 @@ export function ProfilePanel() {
     inboxRelays,
     keyPackages,
     clientId,
+    audit,
   } = useChat();
   const nav = useNavigation();
+  const auditStatus = auditView(audit);
   const profile = useProfile(me.pubkey);
   const displayName = profile?.displayName || profile?.name || "not set";
   const about = profile?.about ?? "";
@@ -74,6 +109,16 @@ export function ProfilePanel() {
       <Row label="published" value={ageLabel(keyPackages.newestPublishedAt)} />
       {keyPackages.newestPublishedId ? (
         <Row label="latest id" value={short(keyPackages.newestPublishedId)} />
+      ) : null}
+
+      <box height={1} />
+      <text fg="#888">audit log</text>
+      <text>
+        <span fg="#666">status: </span>
+        <span fg={auditStatus.color}>{auditStatus.label}</span>
+      </text>
+      {auditStatus.detail ? (
+        <text fg="#9aa9b8">{auditStatus.detail}</text>
       ) : null}
 
       <box height={1} />

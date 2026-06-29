@@ -466,6 +466,27 @@ export interface InvitePreview {
  * generators. This snapshot carries only what those generators cannot express —
  * the decrypted message timeline, status log, active selection, and busy flag.
  */
+/** Lifecycle state of the most recent audit-log upload attempt. */
+export type AuditUploadState = "uploading" | "success" | "failed";
+
+/** Audit-log upload status surfaced to the UI (see {@link MarmotController}). */
+export interface AuditStatus {
+  /** True when forensic recording *and* an upload endpoint are configured. */
+  enabled: boolean;
+  /** Upload endpoint, or null when uploading isn't configured. */
+  endpoint: string | null;
+  /** State of the latest attempt; null when none has run yet. */
+  state: AuditUploadState | null;
+  /** Unix seconds of the last state transition; null when none yet. */
+  updatedAt: number | null;
+  /** Bytes sent by the last successful upload. */
+  bytesSent: number | null;
+  /** HTTP status of the last successful upload. */
+  httpStatus: number | null;
+  /** Error message from the last failed upload. */
+  error: string | null;
+}
+
 export interface ChatSnapshot {
   me: { pubkey: string; npub: string };
   relays: string[];
@@ -484,6 +505,8 @@ export interface ChatSnapshot {
   status: StatusLine[];
   /** True while a long-running action (invite/join/create) is in flight. */
   busy: boolean;
+  /** Audit-log upload status (enabled flag + latest attempt). */
+  audit: AuditStatus;
 }
 
 type Listener = () => void;
@@ -512,6 +535,12 @@ export class MarmotController {
   readonly #debug: boolean;
   readonly #auditLogPath?: string;
   readonly #auditUpload?: AuditUploadConfig;
+  /** Latest audit-upload attempt; mirrored into the snapshot. */
+  #auditState: AuditUploadState | null = null;
+  #auditUpdatedAt: number | null = null;
+  #auditBytesSent: number | null = null;
+  #auditHttpStatus: number | null = null;
+  #auditError: string | null = null;
   readonly #statusLog?: (line: StatusLine) => void;
   readonly #dispose?: () => void;
 
@@ -631,6 +660,7 @@ export class MarmotController {
    */
   async uploadAuditLog(): Promise<AuditLogUploadResult | null> {
     if (!this.#auditLogPath || !this.#auditUpload) return null;
+    this.#setAuditState("uploading");
     try {
       this.log(`uploading audit log to ${this.#auditUpload.endpoint}…`);
       const result = await uploadAuditLogFile(
@@ -644,11 +674,31 @@ export class MarmotController {
       this.log(
         `uploaded audit log — ${result.bytesSent} bytes, HTTP ${result.status}`,
       );
+      this.#setAuditState("success", {
+        bytesSent: result.bytesSent,
+        httpStatus: result.status,
+      });
       return result;
     } catch (err) {
       this.logError(err);
+      this.#setAuditState("failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
       return null;
     }
+  }
+
+  /** Record an audit-upload transition and re-publish the snapshot. */
+  #setAuditState(
+    state: AuditUploadState,
+    extra: { bytesSent?: number; httpStatus?: number; error?: string } = {},
+  ): void {
+    this.#auditState = state;
+    this.#auditUpdatedAt = Math.floor(Date.now() / 1000);
+    this.#auditError = state === "failed" ? (extra.error ?? null) : null;
+    if (extra.bytesSent !== undefined) this.#auditBytesSent = extra.bytesSent;
+    if (extra.httpStatus !== undefined) this.#auditHttpStatus = extra.httpStatus;
+    this.#publish();
   }
 
   // --- lifecycle -------------------------------------------------------------
@@ -1941,6 +1991,15 @@ export class MarmotController {
       pagination,
       status: this.#status,
       busy: this.#busy,
+      audit: {
+        enabled: this.canUploadAudit,
+        endpoint: this.#auditUpload?.endpoint ?? null,
+        state: this.#auditState,
+        updatedAt: this.#auditUpdatedAt,
+        bytesSent: this.#auditBytesSent,
+        httpStatus: this.#auditHttpStatus,
+        error: this.#auditError,
+      },
     };
   }
 }

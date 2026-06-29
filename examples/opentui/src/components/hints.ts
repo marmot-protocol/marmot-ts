@@ -85,7 +85,6 @@ export function panelHints(opts: {
       { key: "p", label: "edit profile" },
       { key: "r", label: "edit relays" },
       { key: "K", label: "key package" },
-      { key: "o", label: "new account" },
     ],
   };
 }

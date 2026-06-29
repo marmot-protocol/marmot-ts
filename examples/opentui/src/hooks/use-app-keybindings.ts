@@ -64,8 +64,7 @@ export function useAppKeybindings(props: {
       modal?.kind === "invite" ||
       modal?.kind === "groupinfo" ||
       modal?.kind === "profile" ||
-      modal?.kind === "relays" ||
-      modal?.kind === "newaccount";
+      modal?.kind === "relays";
 
     // Let Escape through even while a text input is focused, so it can exit
     // composing (and modals' own handlers can act on it).
@@ -183,7 +182,6 @@ export function useAppKeybindings(props: {
       else if (matches(key, "p")) setModal({ kind: "profile" });
       else if (matches(key, "r")) setModal({ kind: "relays" });
       else if (matches(key, "K")) setModal({ kind: "keypkg" });
-      else if (matches(key, "o")) setModal({ kind: "newaccount-confirm" });
     }
   });
 }

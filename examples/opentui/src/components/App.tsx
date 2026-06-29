@@ -11,21 +11,15 @@ import { ProfilePanel } from "./ProfilePanel.js";
 import { Sidebar } from "./Sidebar.js";
 import { globalHints, panelHints } from "./hints.js";
 
-export function App(props: {
-  onQuit: () => void;
-  onLogout: (params: { name: string; relays: string[] }) => void;
-}) {
+export function App(props: { onQuit: () => void }) {
   return (
     <NavigationProvider>
-      <AppContent onQuit={props.onQuit} onLogout={props.onLogout} />
+      <AppContent onQuit={props.onQuit} />
     </NavigationProvider>
   );
 }
 
-function AppContent(props: {
-  onQuit: () => void;
-  onLogout: (params: { name: string; relays: string[] }) => void;
-}) {
+function AppContent(props: { onQuit: () => void }) {
   const controller = useController();
   const nav = useNavigation();
   const started = useRef(false);
@@ -71,7 +65,7 @@ function AppContent(props: {
         ]}
       />
 
-      <ModalHost modal={modal} setModal={setModal} onLogout={props.onLogout} />
+      <ModalHost modal={modal} setModal={setModal} />
     </box>
   );
 }

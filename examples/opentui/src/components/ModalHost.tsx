@@ -11,7 +11,6 @@ import { InviteDetailsModal } from "./InviteDetailsModal.js";
 import { InviteModal } from "./InviteModal.js";
 import { KeyPackageModal } from "./KeyPackageModal.js";
 import { MembersModal } from "./MembersModal.js";
-import { NewAccountModal } from "./NewAccountModal.js";
 import { ProfileModal } from "./ProfileModal.js";
 import { QrModal } from "./QrModal.js";
 import { RelaysModal } from "./RelaysModal.js";
@@ -33,8 +32,6 @@ export type Modal =
   | { kind: "profile" }
   | { kind: "relays" }
   | { kind: "myqr" }
-  | { kind: "newaccount-confirm" }
-  | { kind: "newaccount" }
   | { kind: "help" }
   | null;
 
@@ -47,7 +44,6 @@ export type Modal =
 export function ModalHost(props: {
   modal: Modal;
   setModal: (modal: Modal) => void;
-  onLogout: (params: { name: string; relays: string[] }) => void;
 }) {
   const { modal, setModal } = props;
   const controller = useController();
@@ -247,38 +243,6 @@ export function ModalHost(props: {
       );
     case "myqr":
       return <QrModal npub={me.npub} onClose={() => setModal(null)} />;
-    case "newaccount-confirm":
-      return (
-        <ChoicePrompt
-          title="reset identity & create new account?"
-          options={[
-            {
-              name: "Cancel",
-              description: "keep my current account and nsec",
-            },
-            {
-              name: "Yes, create a new account",
-              description:
-                "logs out and PERMANENTLY discards the current nsec — back it up first",
-            },
-          ]}
-          onSelect={(index) => {
-            if (index === 1) setModal({ kind: "newaccount" });
-            else setModal(null);
-          }}
-          onCancel={() => setModal(null)}
-        />
-      );
-    case "newaccount":
-      return (
-        <NewAccountModal
-          onSubmit={(params) => {
-            setModal(null);
-            props.onLogout(params);
-          }}
-          onCancel={() => setModal(null)}
-        />
-      );
     case "relays":
       return (
         <RelaysModal

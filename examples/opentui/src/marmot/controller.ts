@@ -183,19 +183,12 @@ export interface MarmotControllerOptions {
   signer: Signer;
   pubkey: string;
   /**
-   * Bootstrap/discovery relays — where a returning account reads its own
-   * advertised relay lists from on startup. Read-only: never a publish target.
-   * For a fresh account these are the relays the user chose, which also seed the
-   * operating ({@link MarmotController}'s outbox/inbox) lists.
+   * Bootstrap/discovery relays — where the account reads its own advertised
+   * relay lists from on startup. Read-only: never a publish target. The account
+   * starts with *unknown* operating relays and discovers them before publishing,
+   * so it never publishes to the bootstrap defaults.
    */
   relays: string[];
-  /**
-   * True for a freshly-created account. A fresh account already operates on the
-   * relays the user chose (so its outbox/inbox are seeded from {@link relays}); a
-   * returning account starts with *unknown* operating relays and discovers them
-   * before publishing, so it never publishes to the bootstrap defaults.
-   */
-  fresh: boolean;
   /** This device's key-package slot (`d` tag / clientId). */
   clientId: string;
   /** When true, error logs include the full stack trace and cause chain. */
@@ -208,15 +201,9 @@ export interface MarmotControllerOptions {
   statusLog?: (line: StatusLine) => void;
   /**
    * Optional teardown hook run on {@link MarmotController.stop}, e.g. to close
-   * the SQLite connection before a reset deletes the database file.
+   * the SQLite connection and flush its WAL.
    */
   dispose?: () => void;
-  /**
-   * Set only for a freshly-created account: the display name to publish as the
-   * kind 0 profile on first start. Its presence also triggers publishing the
-   * account's NIP-65 outbox + kind 10050 inbox relay lists so peers can find it.
-   */
-  initialProfileName?: string;
 }
 
 /** A single decrypted chat message rendered in the timeline. */
@@ -446,14 +433,12 @@ export class MarmotController {
   readonly #signer: Signer;
   readonly #pubkey: string;
   readonly #relays: string[];
-  readonly #fresh: boolean;
   readonly #clientId: string;
   readonly #debug: boolean;
   readonly #auditLogPath?: string;
   readonly #auditUpload?: AuditUploadConfig;
   readonly #statusLog?: (line: StatusLine) => void;
   readonly #dispose?: () => void;
-  readonly #initialProfileName?: string;
 
   readonly #groups = new Map<string, MarmotGroup>();
   readonly #bound = new Set<string>();
@@ -485,12 +470,11 @@ export class MarmotController {
   /**
    * Advertised NIP-65 outbox list (kind 10002) — the user's own write relays,
    * where their KeyPackages/profile/relay-lists are published and discovered.
-   * Seeded from the chosen relays for a fresh account; empty (unknown) for a
-   * returning account until {@link #loadRelayLists} resolves it.
+   * Empty (unknown) until {@link #loadRelayLists} resolves it.
    */
-  #outboxRelays: string[];
-  /** Advertised inbox list for welcomes (kind 10050); seeded like {@link #outboxRelays}. */
-  #inboxRelays: string[];
+  #outboxRelays: string[] = [];
+  /** Advertised inbox list for welcomes (kind 10050); resolved like {@link #outboxRelays}. */
+  #inboxRelays: string[] = [];
   #busy = false;
   #statusSeq = 0;
 
@@ -517,21 +501,16 @@ export class MarmotController {
     this.#signer = options.signer;
     this.#pubkey = options.pubkey;
     this.#relays = options.relays;
-    this.#fresh = options.fresh;
     this.#clientId = options.clientId;
     this.#debug = options.debug;
     this.#auditLogPath = options.auditLogPath;
     this.#auditUpload = options.auditUpload;
     this.#statusLog = options.statusLog;
     this.#dispose = options.dispose;
-    this.#initialProfileName = options.initialProfileName;
-    // A fresh account already operates on the relays the user chose, so seed its
-    // advertised lists with them. A returning account starts with *unknown*
-    // operating relays — NOT the bootstrap defaults — and adopts its published
-    // NIP-65 outbox + kind-10050 inbox once #loadRelayLists resolves them, so we
-    // never publish the user's events to a default relay they never configured.
-    this.#outboxRelays = this.#fresh ? this.#relays : [];
-    this.#inboxRelays = this.#fresh ? this.#relays : [];
+    // The account starts with *unknown* operating relays — NOT the bootstrap
+    // defaults — and adopts its published NIP-65 outbox + kind-10050 inbox once
+    // #loadRelayLists resolves them, so we never publish the user's events to a
+    // default relay they never configured.
     this.#snapshot = this.#buildSnapshot();
   }
 
@@ -593,8 +572,6 @@ export class MarmotController {
   async start(): Promise<void> {
     await this.#ensureKeyPackage();
     if (this.#watchAbort) return;
-    await this.#publishInitialIdentity();
-    if (this.#watchAbort) return;
     await this.#restoreGroups();
     if (this.#watchAbort) return;
     // The library owns inbound transport now: connectAll subscribes every group
@@ -612,27 +589,13 @@ export class MarmotController {
     this.log(`ready — you are ${npubEncode(this.#pubkey)}`);
     this.log(`bootstrap relays: ${this.#relays.join(", ")}`);
     if (this.#auditLogPath) this.log(`audit log: ${this.#auditLogPath}`);
-    // Returning accounts discover their advertised relays in the background so the
-    // invite subscription and future publishes follow the user's own relays, never
-    // the bootstrap defaults. (#ensureKeyPackage already awaited this above if it
+    // Discover the account's advertised relays in the background so the invite
+    // subscription and future publishes follow the user's own relays, never the
+    // bootstrap defaults. (#ensureKeyPackage already awaited this above if it
     // needed to publish a KeyPackage.)
     void this.#ensureRelayListsLoaded().catch((err) => {
       if (!this.#watchAbort) this.logError(err);
     });
-  }
-
-  /**
-   * For a freshly-created account only: publish the chosen display name (kind 0)
-   * and advertise the operating relays as the account's NIP-65 outbox + kind
-   * 10050 inbox lists, so peers can discover this new identity and its
-   * KeyPackage. A no-op for returning accounts (no `initialProfileName`).
-   */
-  async #publishInitialIdentity(): Promise<void> {
-    const name = this.#initialProfileName;
-    if (!name) return;
-    await this.saveProfile({ name });
-    if (this.#watchAbort) return;
-    await this.saveRelayLists(this.#outboxRelays, this.#inboxRelays);
   }
 
   stop(): void {
@@ -1191,14 +1154,13 @@ export class MarmotController {
   }
 
   /**
-   * Discover and adopt a returning account's advertised relay lists exactly
-   * once, memoising the in-flight pass so the background load and an on-demand
-   * publish (e.g. {@link #ensureKeyPackage}, {@link #requirePublishRelays}) share
-   * one discovery rather than racing two. A no-op for fresh accounts, which
-   * already operate on the relays the user chose.
+   * Discover and adopt the account's advertised relay lists exactly once,
+   * memoising the in-flight pass so the background load and an on-demand publish
+   * (e.g. {@link #ensureKeyPackage}, {@link #requirePublishRelays}) share one
+   * discovery rather than racing two.
    */
   async #ensureRelayListsLoaded(): Promise<void> {
-    if (this.#fresh || this.#relayListsLoaded) return;
+    if (this.#relayListsLoaded) return;
     if (!this.#relayListsPromise) {
       this.#relayListsPromise = this.#loadRelayLists().then(
         () => {

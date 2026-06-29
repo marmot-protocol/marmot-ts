@@ -16,9 +16,9 @@ export type FormField<K extends string> = {
  * submits, Esc cancels. Inputs are seeded once from `initialValues` and tracked
  * uncontrolled so the cursor stays stable while typing.
  *
- * Backs ProfileModal, RelaysModal, GroupInfoModal and NewAccountModal, which
- * differ only in their field set, labels, and the submit transform (trimming /
- * relay parsing) they apply in their own `onSubmit`.
+ * Backs ProfileModal, RelaysModal and GroupInfoModal, which differ only in their
+ * field set, labels, and the submit transform (trimming / relay parsing) they
+ * apply in their own `onSubmit`.
  */
 export function FormModal<K extends string>(props: {
   title: string;

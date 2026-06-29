@@ -1,6 +1,7 @@
 import { useKeyboard } from "@opentui/react";
 
 import { isTextEntryKey, matches, type Key } from "../components/keys.js";
+import { REACTION_EMOJIS } from "../components/reactions.js";
 import type { Modal } from "../components/ModalHost.js";
 import { useChat, useController } from "./use-marmot.js";
 import { useNavigation } from "./use-navigation.js";
@@ -100,6 +101,21 @@ export function useAppKeybindings(props: {
       return;
     }
 
+    // React-select mirrors reply-select: j/k move the timeline cursor, the
+    // number keys 1..N pick an emoji from the palette (and react), Esc cancels.
+    if (nav.reactSelecting) {
+      if (matches(key, "esc")) nav.cancelReactSelect();
+      else if (matches(key, "down") || matches(key, "j")) nav.moveSelection(1);
+      else if (matches(key, "up") || matches(key, "k")) nav.moveSelection(-1);
+      else {
+        const choice = REACTION_EMOJIS.findIndex((_, i) =>
+          matches(key, String(i + 1)),
+        );
+        if (choice >= 0) nav.reactWith(REACTION_EMOJIS[choice]);
+      }
+      return;
+    }
+
     if (matches(key, "tab")) return nav.focusNext();
     if (matches(key, "shift+tab")) return nav.focusPrev();
     if (matches(key, "?") || matches(key, ":")) {
@@ -147,6 +163,9 @@ export function useAppKeybindings(props: {
       } else if (matches(key, "r")) {
         // Enter reply-select mode to pick which message to reply to.
         nav.startReplySelect();
+      } else if (matches(key, "c")) {
+        // Enter react-select mode to pick which message to react to.
+        nav.startReactSelect();
       } else if (matches(key, "R")) setModal({ kind: "relays" });
       else if (matches(key, "p")) setModal({ kind: "profile" });
       else if (matches(key, "K")) setModal({ kind: "keypkg" });

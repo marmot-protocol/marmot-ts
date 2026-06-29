@@ -11,6 +11,7 @@ import { useChat } from "../hooks/use-marmot.js";
 import { useNavigation } from "../hooks/use-navigation.js";
 import { useDisplayName } from "../hooks/use-profile.js";
 import { InputBar } from "./InputBar.js";
+import { REACTION_EMOJIS } from "./reactions.js";
 
 /** Collapse a multi-line message to a single short preview line. */
 function previewText(text: string, max = 50): string {
@@ -32,9 +33,9 @@ export function ChatView() {
   const group = nav.activeGroup;
   const list = group ? (messages[group.idStr] ?? []) : [];
   const pager = group ? pagination[group.idStr] : undefined;
-  // The timeline cursor only appears while picking a reply target (press `r`),
-  // so it isn't noise during normal reading and composing.
-  const cursorVisible = nav.replySelecting;
+  // The timeline cursor only appears while picking a reply target (press `r`) or
+  // a message to react to (press `c`), so it isn't noise during normal reading.
+  const cursorVisible = nav.replySelecting || nav.reactSelecting;
   // Resolve reply quotes against messages currently in the timeline.
   const byId = useMemo(
     () => new Map(list.map((message) => [message.id, message])),
@@ -83,7 +84,26 @@ export function ChatView() {
           </>
         )}
       </scrollbox>
+      {nav.reactSelecting && <ReactionPalette />}
       <InputBar focused={nav.composing} onFocus={focusInput} />
+    </box>
+  );
+}
+
+/** The emoji palette shown above the composer while in react-select mode. */
+function ReactionPalette() {
+  return (
+    <box paddingX={1}>
+      <text fg="#888">
+        <span fg="#FFD700">react: </span>
+        {REACTION_EMOJIS.map((emoji, index) => (
+          <span key={emoji}>
+            <span fg="#666">{index + 1}</span>
+            <span fg="#888">{`:${emoji} `}</span>
+          </span>
+        ))}
+        <span fg="#666">(j/k pick message · esc cancel)</span>
+      </text>
     </box>
   );
 }
@@ -122,7 +142,26 @@ function MessageRow(props: {
         <span fg="#555">: </span>
         {message.content}
       </text>
+      {message.reactions && message.reactions.length > 0 && (
+        <ReactionRow reactions={message.reactions} />
+      )}
     </box>
+  );
+}
+
+/** The row of reaction chips rendered under a message that has reactions. */
+function ReactionRow(props: {
+  reactions: NonNullable<ChatMessage["reactions"]>;
+}) {
+  return (
+    <text>
+      <span>{"    "}</span>
+      {props.reactions.map((reaction) => (
+        <span key={reaction.emoji} fg={reaction.mine ? "#FFD700" : "#888"}>
+          {`${reaction.emoji} ${reaction.count}  `}
+        </span>
+      ))}
+    </text>
   );
 }
 

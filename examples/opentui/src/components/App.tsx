@@ -42,6 +42,7 @@ function AppContent(props: {
   const hints = panelHints({
     composing: nav.composing,
     replySelecting: nav.replySelecting,
+    reactSelecting: nav.reactSelecting,
     showAllInvites: nav.showAllInvites,
     selectedGroupIsAdmin: nav.selectedGroupIsAdmin,
     activeGroupIsAdmin: nav.activeGroupIsAdmin,

@@ -174,7 +174,12 @@ the footer shows the keys that apply right now.
   through the timeline (starting at the newest message), **Enter** picks the
   highlighted message and starts composing the reply, and **Esc** cancels. The
   reply carries a NIP-C7 `q` tag quoting the target and a banner names it while
-  you type. **i** invites to the active group, **m** opens the
+  you type. **c** enters react-select mode: **j/k** move the same timeline
+  cursor, and the number keys **1**–**6** react to the highlighted message with
+  an emoji from the palette shown above the composer (👍 ❤️ 😂 🎉 😮 😢), and
+  **Esc** cancels. Reactions are NIP-25 kind 7 application messages and appear as
+  aggregated `emoji count` chips under each message (your own reactions are
+  highlighted). **i** invites to the active group, **m** opens the
   members list, **g** opens the group debug view, **e** edits the active
   group's info when you are an admin, **R** opens relay settings, **p** opens
   profile settings, and **K** opens the KeyPackage publish/rotate chooser.

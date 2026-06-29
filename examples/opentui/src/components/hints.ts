@@ -17,6 +17,7 @@ export const GLOBAL_HINTS: KeyHint[] = [
 export function panelHints(opts: {
   composing: boolean;
   replySelecting: boolean;
+  reactSelecting: boolean;
   showAllInvites: boolean;
   selectedGroupIsAdmin: boolean;
   activeGroupIsAdmin: boolean;
@@ -49,20 +50,27 @@ export function panelHints(opts: {
             { key: "enter", label: "reply" },
             { key: "esc", label: "cancel" },
           ]
-        : [
-            { key: "r", label: "reply" },
-            { key: "n", label: "compose" },
-            { key: "u", label: "load older" },
-            { key: "i", label: "invite" },
-            { key: "m", label: "members" },
-            { key: "g", label: "group info" },
-            ...(opts.activeGroupIsAdmin
-              ? [{ key: "e", label: "edit info" }]
-              : []),
-            { key: "R", label: "relays" },
-            { key: "p", label: "profile" },
-            { key: "K", label: "key package" },
-          ],
+        : opts.reactSelecting
+          ? [
+              { key: "j/k", label: "select message" },
+              { key: "1-6", label: "react emoji" },
+              { key: "esc", label: "cancel" },
+            ]
+          : [
+              { key: "r", label: "reply" },
+              { key: "c", label: "react" },
+              { key: "n", label: "compose" },
+              { key: "u", label: "load older" },
+              { key: "i", label: "invite" },
+              { key: "m", label: "members" },
+              { key: "g", label: "group info" },
+              ...(opts.activeGroupIsAdmin
+                ? [{ key: "e", label: "edit info" }]
+                : []),
+              { key: "R", label: "relays" },
+              { key: "p", label: "profile" },
+              { key: "K", label: "key package" },
+            ],
     profile: [
       { key: "i", label: "invite QR" },
       { key: "p", label: "edit profile" },

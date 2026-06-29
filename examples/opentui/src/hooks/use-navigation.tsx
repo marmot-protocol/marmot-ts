@@ -67,6 +67,19 @@ export type Navigation = {
   cancelReplySelect: () => void;
   /** Confirm the cursor's message as the reply target and start composing. */
   confirmReplySelect: () => void;
+
+  /**
+   * True while picking a message to react to (entered with `c` in the chat
+   * panel). Shares the timeline cursor with reply-select; the two are mutually
+   * exclusive.
+   */
+  reactSelecting: boolean;
+  /** Enter react-select mode (no-op when there's nothing to react to). */
+  startReactSelect: () => void;
+  /** Leave react-select mode without reacting. */
+  cancelReactSelect: () => void;
+  /** React to the cursor's message with `emoji`, then leave react-select mode. */
+  reactWith: (emoji: string) => void;
   /** The message a new send should reply to (NIP-C7 `q` tag), if any. */
   replyTarget?: ChatMessage;
   setReplyTarget: (message: ChatMessage | undefined) => void;
@@ -96,6 +109,9 @@ export function NavigationProvider(props: { children: ReactNode }) {
   // active. `messageCursor === null` resolves to the newest message, so the
   // picker starts at the bottom (matching the sticky scroll) and j/k walk up.
   const [replySelecting, setReplySelecting] = useState(false);
+  // React-select mode shares the timeline cursor with reply-select; only one is
+  // ever active at a time (each entry point clears the other).
+  const [reactSelecting, setReactSelecting] = useState(false);
   const [messageCursor, setMessageCursor] = useState<number | null>(null);
   const [replyTarget, setReplyTarget] = useState<ChatMessage | undefined>(
     undefined,
@@ -133,6 +149,7 @@ export function NavigationProvider(props: { children: ReactNode }) {
 
   const startReplySelect = () => {
     if (!selectedMessage) return; // nothing in the timeline to reply to
+    setReactSelecting(false); // the two picker modes are mutually exclusive
     setMessageCursor(null); // (re)start the picker at the newest message
     setReplySelecting(true);
   };
@@ -149,10 +166,31 @@ export function NavigationProvider(props: { children: ReactNode }) {
     setMessageCursor(null);
   };
 
+  const startReactSelect = () => {
+    if (!selectedMessage) return; // nothing in the timeline to react to
+    setReplySelecting(false); // the two picker modes are mutually exclusive
+    setMessageCursor(null); // (re)start the picker at the newest message
+    setReactSelecting(true);
+  };
+  const cancelReactSelect = () => {
+    setReactSelecting(false);
+    setMessageCursor(null);
+  };
+  const reactWith = (emoji: string) => {
+    if (selectedMessage) {
+      void controller
+        .sendReaction(selectedMessage, emoji)
+        .catch((err) => controller.logError(err));
+    }
+    setReactSelecting(false);
+    setMessageCursor(null);
+  };
+
   // Switching groups exits reply-select, resets the cursor, and drops any
   // pending reply target (it belonged to the previous group's timeline).
   useEffect(() => {
     setReplySelecting(false);
+    setReactSelecting(false);
     setMessageCursor(null);
     setReplyTarget(undefined);
   }, [activeGroupId]);
@@ -206,6 +244,10 @@ export function NavigationProvider(props: { children: ReactNode }) {
     startReplySelect,
     cancelReplySelect,
     confirmReplySelect,
+    reactSelecting,
+    startReactSelect,
+    cancelReactSelect,
+    reactWith,
     replyTarget,
     setReplyTarget,
     composing,

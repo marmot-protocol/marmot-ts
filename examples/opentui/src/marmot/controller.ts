@@ -1,5 +1,5 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-import type { NostrEvent } from "applesauce-core/helpers/event";
+import { getEventHash, type NostrEvent } from "applesauce-core/helpers/event";
 import { normalizeRelayUrl } from "applesauce-core/helpers";
 import {
   normalizeToPubkey,
@@ -47,6 +47,12 @@ import {
 
 /** Kind of the chat rumors {@link createChatRumor} produces (Marmot chat message). */
 const CHAT_MESSAGE_KIND = 9;
+
+/** Kind of NIP-25 reaction rumors (an emoji reaction to a chat message). */
+const REACTION_KIND = 7;
+
+/** How many of the newest reaction rumors the live window holds per group. */
+const REACTION_WINDOW = 500;
 
 /** How many of the newest messages the live history window holds per group. */
 const HISTORY_WINDOW = 50;
@@ -175,6 +181,8 @@ export interface MarmotControllerOptions {
   clientId: string;
   /** When true, error logs include the full stack trace and cause chain. */
   debug: boolean;
+  /** Audit JSONL output path when forensic recording is enabled. */
+  auditLogPath?: string;
   /** Optional sink for status lines when the UI has no on-screen log panel. */
   statusLog?: (line: StatusLine) => void;
   /**
@@ -208,6 +216,31 @@ export interface ChatMessage {
   replyToId?: string;
   /** The pubkey of the replied-to author, from the `q` tag (index 3). */
   replyToPubkey?: string;
+  /**
+   * Emoji reactions to this message, aggregated per emoji (NIP-25 kind 7
+   * rumors). Empty/undefined when nobody has reacted.
+   */
+  reactions?: ReactionSummary[];
+}
+
+/** One emoji's worth of reactions on a message, aggregated across reactors. */
+export interface ReactionSummary {
+  /** The reaction emoji (the kind 7 rumor `content`). */
+  emoji: string;
+  /** Number of distinct members who reacted with this emoji. */
+  count: number;
+  /** True when this client is one of the reactors. */
+  mine: boolean;
+}
+
+/** A single decoded reaction rumor, indexed by its own rumor id. */
+interface ReactionRecord {
+  /** The id of the message this reaction targets (the `e` tag). */
+  targetId: string;
+  /** The reaction emoji (rumor `content`). */
+  emoji: string;
+  /** The reactor's pubkey. */
+  pubkey: string;
 }
 
 /** Per-group state for loading older (off-window) messages on demand. */
@@ -395,6 +428,7 @@ export class MarmotController {
   readonly #fresh: boolean;
   readonly #clientId: string;
   readonly #debug: boolean;
+  readonly #auditLogPath?: string;
   readonly #statusLog?: (line: StatusLine) => void;
   readonly #dispose?: () => void;
   readonly #initialProfileName?: string;
@@ -407,6 +441,10 @@ export class MarmotController {
   readonly #messages = new Map<string, ChatMessage[]>();
   /** Live `history.subscribe()` generators, one per attached group. */
   readonly #historySubs = new Map<string, AsyncGenerator<Rumor[]>>();
+  /** Per-group reaction union (reaction rumor id → record). */
+  readonly #reactionIndex = new Map<string, Map<string, ReactionRecord>>();
+  /** Live reaction `history.subscribe()` generators, one per attached group. */
+  readonly #reactionSubs = new Map<string, AsyncGenerator<Rumor[]>>();
   /** Older-message pagination state, one per group id. */
   readonly #pagination = new Map<string, PaginationState>();
 
@@ -460,6 +498,7 @@ export class MarmotController {
     this.#fresh = options.fresh;
     this.#clientId = options.clientId;
     this.#debug = options.debug;
+    this.#auditLogPath = options.auditLogPath;
     this.#statusLog = options.statusLog;
     this.#dispose = options.dispose;
     this.#initialProfileName = options.initialProfileName;
@@ -514,6 +553,7 @@ export class MarmotController {
     void this.#watchGroups();
     this.log(`ready — you are ${npubEncode(this.#pubkey)}`);
     this.log(`bootstrap relays: ${this.#relays.join(", ")}`);
+    if (this.#auditLogPath) this.log(`audit log: ${this.#auditLogPath}`);
     // Returning accounts discover their advertised relays in the background so the
     // invite subscription and future publishes follow the user's own relays, never
     // the bootstrap defaults. (#ensureKeyPackage already awaited this above if it
@@ -544,6 +584,8 @@ export class MarmotController {
     this.#groupsConnection?.unsubscribe();
     for (const gen of this.#historySubs.values()) void gen.return(undefined);
     this.#historySubs.clear();
+    for (const gen of this.#reactionSubs.values()) void gen.return(undefined);
+    this.#reactionSubs.clear();
     // Tear down the EventStore before the pool: dispose() drops the attached
     // event loader (its batching timers + in-flight warm relay requests) and
     // the model keep-warm timers, then pool.close() shuts the relay sockets and
@@ -878,6 +920,34 @@ export class MarmotController {
     // `send` saves the rumor to group.history, which the per-group
     // history.subscribe() loop projects into the timeline — including this
     // self-sent message — so no manual local echo is needed here.
+    await this.#client.groups.send(group.id, intent);
+  }
+
+  /**
+   * React to a chat message with an emoji. Sends a NIP-25 kind 7 rumor that
+   * targets the message with an `e` tag (`["e", <id>, "", <author>]`), names the
+   * author with a `p` tag, records the reacted-to kind with a `k` tag, and
+   * carries the emoji as its `content`. Like {@link sendText}, the rumor is saved
+   * to `group.history`, where the reaction subscription projects it back onto the
+   * message — so the reactor sees their own reaction with no manual echo.
+   */
+  async sendReaction(target: ChatMessage, emoji: string): Promise<void> {
+    const group = this.#requireActive();
+    const pubkey = await group.signer.getPublicKey();
+    const rumor: Rumor = {
+      id: "",
+      kind: REACTION_KIND,
+      pubkey,
+      created_at: Math.floor(Date.now() / 1000),
+      content: emoji,
+      tags: [
+        ["e", target.id, "", target.authorPubkey],
+        ["p", target.authorPubkey],
+        ["k", String(CHAT_MESSAGE_KIND)],
+      ],
+    };
+    rumor.id = getEventHash(rumor);
+    const intent = createApplicationMessageIntent(rumor);
     await this.#client.groups.send(group.id, intent);
   }
 
@@ -1286,6 +1356,12 @@ export class MarmotController {
       this.#historySubs.delete(id);
       void history.return(undefined);
     }
+    const reactions = this.#reactionSubs.get(id);
+    if (reactions) {
+      this.#reactionSubs.delete(id);
+      void reactions.return(undefined);
+    }
+    this.#reactionIndex.delete(id);
     this.#pagination.delete(id);
     this.#groups.delete(id);
     this.#publish();
@@ -1336,13 +1412,26 @@ export class MarmotController {
   #startHistory(group: MarmotGroup): void {
     const id = group.idStr;
     const history = group.history as unknown as GroupRumorHistory | undefined;
-    if (!history || this.#historySubs.has(id)) return;
-    const gen = history.subscribe({
-      kinds: [CHAT_MESSAGE_KIND],
-      limit: HISTORY_WINDOW,
-    });
-    this.#historySubs.set(id, gen);
-    void this.#consumeHistory(group, gen);
+    if (!history) return;
+    // Messages and reactions are projected from two independent subscriptions so
+    // the message window stays a clean count of chat messages — folding reactions
+    // into the same `limit` would let a burst of reactions push messages out.
+    if (!this.#historySubs.has(id)) {
+      const gen = history.subscribe({
+        kinds: [CHAT_MESSAGE_KIND],
+        limit: HISTORY_WINDOW,
+      });
+      this.#historySubs.set(id, gen);
+      void this.#consumeHistory(group, gen);
+    }
+    if (!this.#reactionSubs.has(id)) {
+      const gen = history.subscribe({
+        kinds: [REACTION_KIND],
+        limit: REACTION_WINDOW,
+      });
+      this.#reactionSubs.set(id, gen);
+      void this.#consumeReactions(group, gen);
+    }
   }
 
   async #consumeHistory(
@@ -1357,6 +1446,22 @@ export class MarmotController {
         if (this.#watchAbort || this.#historySubs.get(id) !== gen) break;
         // An empty yield means the history was purged; clear the union too.
         this.#upsertMessages(group, rumors, rumors.length === 0);
+      }
+    } catch (err) {
+      if (!this.#watchAbort) this.logError(err);
+    }
+  }
+
+  async #consumeReactions(
+    group: MarmotGroup,
+    gen: AsyncGenerator<Rumor[]>,
+  ): Promise<void> {
+    const id = group.idStr;
+    try {
+      for await (const rumors of gen) {
+        if (this.#watchAbort || this.#reactionSubs.get(id) !== gen) break;
+        // An empty yield means the history was purged; clear the union too.
+        this.#upsertReactions(group, rumors, rumors.length === 0);
       }
     } catch (err) {
       if (!this.#watchAbort) this.logError(err);
@@ -1379,11 +1484,81 @@ export class MarmotController {
     if (clear) index.clear();
     for (const rumor of rumors)
       index.set(rumor.id, this.#toChatMessage(group, rumor));
-    const sorted = [...index.values()].sort(
-      (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
-    );
+    this.#projectTimeline(group);
+  }
+
+  /**
+   * Merge reaction `rumors` into the group's reaction union and re-project the
+   * timeline so the new counts appear under their target messages. Keying by the
+   * reaction rumor id makes re-delivery idempotent, just like {@link #upsertMessages}.
+   */
+  #upsertReactions(group: MarmotGroup, rumors: Rumor[], clear = false): void {
+    const id = group.idStr;
+    let index = this.#reactionIndex.get(id);
+    if (!index) {
+      index = new Map<string, ReactionRecord>();
+      this.#reactionIndex.set(id, index);
+    }
+    if (clear) index.clear();
+    for (const rumor of rumors) {
+      const target = rumor.tags.find((tag) => tag[0] === "e" && tag[1])?.[1];
+      const emoji = rumor.content.trim();
+      if (!target || !emoji) continue;
+      index.set(rumor.id, { targetId: target, emoji, pubkey: rumor.pubkey });
+    }
+    this.#projectTimeline(group);
+  }
+
+  /**
+   * Re-project the rendered, oldest-first timeline for a group from its message
+   * and reaction unions, attaching each message's aggregated reactions. Called by
+   * both {@link #upsertMessages} and {@link #upsertReactions}.
+   */
+  #projectTimeline(group: MarmotGroup): void {
+    const id = group.idStr;
+    const messages = this.#messageIndex.get(id);
+    if (!messages) return;
+    const byTarget = this.#aggregateReactions(this.#reactionIndex.get(id));
+    const sorted = [...messages.values()]
+      .map((message) => ({
+        ...message,
+        reactions: byTarget.get(message.id),
+      }))
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
     this.#messages.set(id, sorted);
     this.#publish();
+  }
+
+  /**
+   * Aggregate a group's reaction records into per-message, per-emoji summaries.
+   * Reactors are de-duplicated per emoji (a member reacting twice with the same
+   * emoji counts once), and summaries are sorted by count then emoji.
+   */
+  #aggregateReactions(
+    index: Map<string, ReactionRecord> | undefined,
+  ): Map<string, ReactionSummary[]> {
+    const out = new Map<string, ReactionSummary[]>();
+    if (!index) return out;
+    // targetId → emoji → set of reactor pubkeys.
+    const byTarget = new Map<string, Map<string, Set<string>>>();
+    for (const { targetId, emoji, pubkey } of index.values()) {
+      let emojis = byTarget.get(targetId);
+      if (!emojis) byTarget.set(targetId, (emojis = new Map()));
+      let reactors = emojis.get(emoji);
+      if (!reactors) emojis.set(emoji, (reactors = new Set()));
+      reactors.add(pubkey);
+    }
+    for (const [targetId, emojis] of byTarget) {
+      const summaries = [...emojis.entries()]
+        .map(([emoji, reactors]) => ({
+          emoji,
+          count: reactors.size,
+          mine: reactors.has(this.#pubkey),
+        }))
+        .sort((a, b) => b.count - a.count || (a.emoji < b.emoji ? -1 : 1));
+      out.set(targetId, summaries);
+    }
+    return out;
   }
 
   #toChatMessage(group: MarmotGroup, rumor: Rumor): ChatMessage {

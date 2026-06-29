@@ -80,14 +80,16 @@ into this directory and run `bun run src/index.tsx --name alice`.)
 
 ### Flags
 
-| Flag             | Default     | Meaning                                                             |
-| ---------------- | ----------- | ------------------------------------------------------------------- |
-| `--name <label>` | `default`   | Profile name; data + identity live in `~/.marmot-opentui/<label>/`. |
-| `--sec <hex>`    | (generated) | Use a specific 32-byte hex Nostr secret key.                        |
-| `--ephemeral`    | off         | Keep all state in memory (nothing written to disk).                 |
-| `--debug`        | off         | Include full stack traces (and `cause` chains) in status errors.    |
-| `--logs <path>`  | off         | Enable `debug` logging and append status/debug lines to this file.  |
-| `--help`, `-h`   | off         | Print the options and exit without starting the OpenTUI UI.         |
+| Flag                  | Default     | Meaning                                                             |
+| --------------------- | ----------- | ------------------------------------------------------------------- |
+| `--name <label>`      | `default`   | Profile name; data + identity live in `~/.marmot-opentui/<label>/`. |
+| `--sec <hex>`         | (generated) | Use a specific 32-byte hex Nostr secret key.                        |
+| `--ephemeral`         | off         | Keep app state in memory; audit can still write when enabled.       |
+| `--audit`             | off         | Record Marmot forensic audit JSONL for this account/device.         |
+| `--audit-path <path>` | account dir | Write audit JSONL to a custom path; implies `--audit`.              |
+| `--debug`             | off         | Include full stack traces (and `cause` chains) in status errors.    |
+| `--logs <path>`       | off         | Enable `debug` logging and append status/debug lines to this file.  |
+| `--help`, `-h`        | off         | Print the options and exit without starting the OpenTUI UI.         |
 
 Relays are no longer chosen with a flag. The app bootstraps discovery from a
 default set (`wss://relay.damus.io`, `wss://nos.lol`) and then operates on the
@@ -103,7 +105,11 @@ welcome inbox (kind 10050). Set them when creating an account (profile panel →
 An account is generated on first run and persisted under the `--name` label.
 Local state (groups, KeyPackages, invites, and message history) lives in a single
 `state.db` SQLite database in that directory, alongside the raw `identity.key`;
-`--ephemeral` keeps everything in memory and writes nothing to disk.
+`--ephemeral` keeps the app's group/invite/message state in memory.
+With `--audit`, obfuscated-sensitive forensic rows are appended to
+`audit-<engine_id>.jsonl` in the same directory by default, with a stable
+`audit-device-id` file used to derive the audit engine id. Use `--audit-path` to
+write the JSONL somewhere else for upload into Goggles.
 To switch identities without restarting, focus the **profile** panel and press
 **o**. A form asks for a display name (published as your kind 0 profile) and an
 optional relay list used for both your inbox and outbox — it defaults to
@@ -168,7 +174,12 @@ the footer shows the keys that apply right now.
   through the timeline (starting at the newest message), **Enter** picks the
   highlighted message and starts composing the reply, and **Esc** cancels. The
   reply carries a NIP-C7 `q` tag quoting the target and a banner names it while
-  you type. **i** invites to the active group, **m** opens the
+  you type. **c** enters react-select mode: **j/k** move the same timeline
+  cursor, and the number keys **1**–**6** react to the highlighted message with
+  an emoji from the palette shown above the composer (👍 ❤️ 😂 🎉 😮 😢), and
+  **Esc** cancels. Reactions are NIP-25 kind 7 application messages and appear as
+  aggregated `emoji count` chips under each message (your own reactions are
+  highlighted). **i** invites to the active group, **m** opens the
   members list, **g** opens the group debug view, **e** edits the active
   group's info when you are an admin, **R** opens relay settings, **p** opens
   profile settings, and **K** opens the KeyPackage publish/rotate chooser.

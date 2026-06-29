@@ -59,6 +59,7 @@ function makeRuntime(overrides: Partial<GroupRuntimeOptions> = {}) {
     welcomeDelivery: { deliver } as unknown as NostrWelcomeDelivery,
     getNetwork: () => makeNetwork(async () => ackResponse()),
     getRelays: () => RELAYS,
+    getGroupRef: () => "group-ref",
     getGroupData: () => groupData,
     confirmPublished,
     publishFailed,

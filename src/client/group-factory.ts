@@ -9,6 +9,7 @@ import {
 import type { SerializedClientState } from "../core/client-state.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
 import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
+import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import { createCredential } from "../core/credential.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
@@ -33,6 +34,10 @@ export type GroupFactoryOptions<
   rewindStore?: GenericKeyValueStore<Uint8Array>;
   signer: EventSigner;
   network: NostrNetworkInterface;
+  /** Optional forensic audit sink inherited by new groups. */
+  audit?: AuditSink;
+  /** Required when `audit` is set; contains stable engine/account/session metadata. */
+  auditContext?: AuditContextOptions;
   cryptoProvider?: CryptoProvider;
   accountProofSigner?: AccountIdentityProofSigner;
   historyFactory?: GroupHistoryFactory<THistory>;
@@ -61,6 +66,8 @@ export class GroupFactory<
   readonly #rewindStore?: GenericKeyValueStore<Uint8Array>;
   readonly #signer: EventSigner;
   readonly #network: NostrNetworkInterface;
+  readonly #audit?: AuditSink;
+  readonly #auditContext?: AuditContextOptions;
   readonly #cryptoProvider: CryptoProvider;
   readonly #accountProofSigner?: AccountIdentityProofSigner;
   readonly #historyFactory: GroupHistoryFactory<THistory>;
@@ -75,6 +82,8 @@ export class GroupFactory<
     this.#ingestionPool = options.ingestionPool;
     this.#signer = options.signer;
     this.#network = options.network;
+    this.#audit = options.audit;
+    this.#auditContext = options.auditContext;
     this.#cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.#accountProofSigner = options.accountProofSigner;
     this.#historyFactory =
@@ -129,6 +138,8 @@ export class GroupFactory<
       ingestionPool: this.#ingestionPool,
       signer: this.#signer,
       network: this.#network,
+      audit: this.#audit,
+      auditContext: this.#auditContext,
       history: this.#historyFactory,
       media: this.#mediaFactory,
     });

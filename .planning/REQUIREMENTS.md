@@ -81,30 +81,30 @@ Which phases cover which requirements. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AUDIT-01 | — | Pending |
-| AUDIT-02 | — | Pending |
-| AUDIT-03 | — | Pending |
-| MEDIA-01 | — | Pending |
-| MEDIA-02 | — | Pending |
-| CONV-01 | — | Pending |
-| CONV-02 | — | Pending |
-| WIRE-01 | — | Pending |
-| WIRE-02 | — | Pending |
-| WIRE-03 | — | Pending |
-| WIRE-04 | — | Pending |
-| SEC-01 | — | Pending |
-| SEC-02 | — | Pending |
-| API-01 | — | Pending |
-| CONF-01 | — | Pending |
-| DOC-01 | — | Pending |
-| QA-01 | — | Pending |
-| QA-02 | — | Pending |
+| AUDIT-01 | Phase 1 | Pending |
+| AUDIT-02 | Phase 1 | Pending |
+| AUDIT-03 | Phase 1 | Pending |
+| MEDIA-01 | Phase 2 | Pending |
+| MEDIA-02 | Phase 2 | Pending |
+| CONV-01 | Phase 2 | Pending |
+| CONV-02 | Phase 2 | Pending |
+| SEC-01 | Phase 2 | Pending |
+| SEC-02 | Phase 2 | Pending |
+| API-01 | Phase 2 | Pending |
+| WIRE-01 | Phase 3 | Pending |
+| WIRE-02 | Phase 3 | Pending |
+| WIRE-03 | Phase 3 | Pending |
+| WIRE-04 | Phase 3 | Pending |
+| CONF-01 | Phase 3 | Pending |
+| DOC-01 | Phase 3 | Pending |
+| QA-01 | Phase 4 | Pending |
+| QA-02 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 18 total
-- Mapped to phases: 0 (roadmap pending)
-- Unmapped: 18 ⚠️
+- Mapped to phases: 18 (roadmap complete)
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-07-01*
-*Last updated: 2026-07-01 after initial definition*
+*Last updated: 2026-07-01 after roadmap creation*

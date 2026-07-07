@@ -82,3 +82,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 2. Blocker & Security Closure | 0/TBD | Not started | - |
 | 3. Wire / Conformance & Docs | 0/TBD | Not started | - |
 | 4. Quality Gate | 0/TBD | Not started | - |
+
+## Backlog
+
+### Phase 999.1: Group image support — check and add so downstream apps can show and update the group image (BACKLOG)
+
+**Goal:** [Captured for future planning] — verify group image (avatar) support end-to-end so downstream apps can read/display and update a group's image. Likely touches the group image/avatar-url (0x8007) extension and the group metadata surface.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)

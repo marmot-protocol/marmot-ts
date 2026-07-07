@@ -1,240 +1,179 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-07-01
+**Analysis Date:** 2026-07-07
 
 ## Directory Layout
 
 ```
 marmot-ts/
-├── src/                          # Library source (TypeScript ESM)
-│   ├── index.ts                  # Root barrel: re-exports client + core + utils + selected engine
-│   ├── mls.ts                    # ./mls subpath: re-exports all of ts-mls
-│   ├── core/                     # Protocol/crypto/state — no I/O
-│   │   ├── components/           # MLS extension components (group profile, capabilities, etc.)
-│   │   ├── media/                # Encrypted-media-v1 types and locator helpers
-│   │   └── __tests__/            # Core unit tests
-│   ├── engine/                   # Transport-agnostic MLS group state machine
-│   │   └── __tests__/            # Engine unit tests
-│   ├── client/                   # Nostr-flavored client layer
-│   │   ├── group/                # MarmotGroup facade + group-level helpers
-│   │   │   ├── proposals/        # Proposal builders (leave, etc.)
-│   │   │   └── __tests__/
-│   │   ├── session/              # GroupSession (engine wiring) + GroupEffects types
-│   │   │   └── __tests__/
-│   │   ├── runtime/              # GroupRuntime (Nostr publish effects)
-│   │   │   └── __tests__/
-│   │   ├── transport/
-│   │   │   └── nostr/            # NostrWelcomeDelivery (NIP-59 gift-wrap)
-│   │   └── __tests__/
-│   ├── audit/                    # Optional forensic audit log
-│   │   └── __tests__/
-│   ├── extra/                    # Optional store implementations + platform audit sinks
-│   │   ├── audit/                # browser.ts / node.ts audit sinks
-│   │   └── __tests__/
-│   ├── utils/                    # Cross-cutting utilities
-│   │   └── __tests__/
-│   └── __tests__/
-│       ├── helpers/              # Shared test doubles (mock network, account proof)
-│       └── integration/          # Integration tests (in-memory stores, mock Nostr)
-├── ts-mls/                       # Local workspace package: TypeScript MLS implementation
-├── darkmatter/                   # Rust reference implementation (separate workspace)
-│   └── crates/                   # Rust crates (cgka-engine, agent-connector, etc.)
-├── examples/
-│   ├── opentui/                  # Terminal UI example app (React + OpenTUI)
-│   └── forker/                   # Adversarial fork-injection example server
-├── docs/                         # VitePress documentation source
-│   └── .vitepress/               # VitePress config (srcDir: "docs")
-├── scripts/                      # Release scripts
-├── dist/                         # Build output (generated, not committed)
-├── .claude/                      # Claude project config
-├── .agents/
-│   └── skills/                   # Agent skills (applesauce, opentui)
-├── .changeset/                   # Changeset version bump entries
-├── .cursor/rules/                # Cursor IDE rules
-├── package.json                  # Package manifest, exports map, dependencies
-├── tsconfig.json                 # Root tsconfig (includes tests, noEmit)
-├── tsconfig.build.json           # Build tsconfig (excludes tests, emits to dist/)
-├── vitest.config.ts              # Vitest configuration
-├── typedoc.json                  # TypeDoc configuration
-└── pnpm-workspace.yaml           # pnpm workspace definition (includes ts-mls)
+├── src/                    # Library source (@internet-privacy/marmot-ts)
+│   ├── index.ts            # Root barrel (. subpath)
+│   ├── mls.ts              # Re-exports ts-mls (./mls subpath)
+│   ├── core/               # Protocol/crypto/state primitives, no I/O
+│   │   ├── components/     # App component descriptors (agent-text-stream, media, profile…)
+│   │   └── media/          # Encrypted-media wire format (imeta, locator, crypto)
+│   ├── engine/             # Transport-agnostic MLS state machine
+│   ├── client/             # Nostr-flavored wrappers, storage, lifecycle
+│   │   ├── group/          # MarmotGroup facade, peeler, media, proposals
+│   │   ├── session/        # GroupSession + effects
+│   │   ├── runtime/        # GroupRuntime (publish effects)
+│   │   └── transport/      # Nostr transport (welcome-delivery)
+│   ├── audit/              # Opt-in forensic audit log
+│   ├── extra/              # Opt-in store + platform audit-sink implementations
+│   ├── utils/              # Cross-cutting utilities (debug, encoding, kv, nip44)
+│   └── __tests__/          # Integration tests + shared helpers
+├── ts-mls/                 # Local MLS (RFC 9420) workspace package — build first
+├── darkmatter/             # Vendored Rust reference (git submodule) — wire truth
+├── docs/                   # VitePress docs source (srcDir: "docs")
+├── examples/               # Example apps: opentui, forker, tunnels
+├── scripts/                # Release scripts (publish-nostr.sh)
+├── dist/                   # Build output (generated, not committed)
+├── .planning/              # GSD planning artifacts + codebase docs
+├── package.json            # Manifest with exports map
+├── tsconfig.json           # Type-check config (noEmit, includes tests)
+├── tsconfig.build.json     # Library emit config
+├── vitest.config.ts        # Test runner config
+└── typedoc.json            # API reference generation
 ```
 
 ## Directory Purposes
 
 **`src/core/`:**
-- Purpose: Protocol and crypto primitives with zero I/O dependencies
-- Contains: MLS extensions (`components/`), group lifecycle FSM, convergence policy/selection, credential helpers, key-package encode/decode, group-message crypto, Nostr event builders, binary codec, protocol constants
-- Key files: `convergence.ts`, `group-lifecycle.ts`, `client-state.ts`, `group-message.ts`, `key-package-event.ts`, `protocol.ts`, `auth-service.ts`
+- Purpose: Pure protocol/crypto/state logic with zero I/O
+- Contains: MLS extensions, group lifecycle FSM, convergence, credential/key-package codecs, group-message crypto, binary codec, Nostr event builders
+- Key files: `protocol.ts`, `binary.ts`, `group-lifecycle.ts`, `convergence.ts`, `credential.ts`, `key-package.ts`, `group-message-crypto.ts`, `index.ts`
+
+**`src/core/components/`:**
+- Purpose: App component descriptors and capability markers
+- Contains: `agent-text-stream.ts`, `encrypted-media.ts`, `group-profile.ts`, `admin-policy.ts`, `nostr-routing.ts`, `message-retention.ts`
+- Key files: `index.ts`, `ids.ts`, `app-components-list.ts`
+
+**`src/core/media/`:**
+- Purpose: Encrypted-media wire format
+- Key files: `canonical.ts`, `crypto.ts`, `imeta.ts`, `locator.ts`, `types.ts`
 
 **`src/engine/`:**
 - Purpose: Transport-agnostic MLS group state machine
-- Contains: `MarmotGroupEngine` (coordinator), `GroupHistoryTree` (fork DAG), `RetainedHistoryStore`, `IngestionPool`, `ForkRecovery`, `ingestEnvelopes` pipeline, admin policy, dedup, wire-format helpers
-- Key files: `group-engine.ts`, `history-tree.ts`, `retained-store.ts`, `ingestion-pool.ts`, `fork-recovery.ts`, `ingest.ts`, `types.ts`
+- Contains: `MarmotGroupEngine`, history tree, retained store, ingestion pool, fork recovery, pure ingest pipeline
+- Key files: `group-engine.ts`, `ingest.ts`, `history-tree.ts`, `retained-store.ts`, `ingestion-pool.ts`, `fork-recovery.ts`, `types.ts`, `wire-format.ts`, `index.ts`
 
 **`src/client/`:**
-- Purpose: Nostr-specific wrappers, storage lifecycle, group/invite/key-package management
-- Contains: `MarmotGroup` (facade), `GroupSession`, `GroupRuntime`, `GroupsManager`, `MarmotClient`, `NostrGroupPeeler`, `NostrWelcomeDelivery`
-- Key files: `marmot-client.ts`, `groups-manager.ts`, `group/marmot-group.ts`, `session/group-session.ts`, `runtime/group-runtime.ts`, `group/nostr-peeler.ts`, `transport/nostr/welcome-delivery.ts`, `nostr-interface.ts`
+- Purpose: Nostr-flavored wrappers, storage lifecycle, group/invite/key-package management
+- Contains: top-level client, groups manager, invite/key-package managers, network interface
+- Key files: `marmot-client.ts`, `groups-manager.ts`, `invite-manager.ts`, `key-package-manager.ts`, `nostr-interface.ts`, `index.ts`
+
+**`src/client/group/`:**
+- Purpose: The `MarmotGroup` facade and Nostr peeling
+- Key files: `marmot-group.ts`, `nostr-peeler.ts`, `group-media-service.ts`, `group-rumor-history.ts`, `invite.ts`
+
+**`src/client/session/` / `src/client/runtime/` / `src/client/transport/`:**
+- Purpose: Session wiring (`group-session.ts`), publish-effect runtime (`group-runtime.ts`), Nostr transport (`transport/nostr/welcome-delivery.ts`)
 
 **`src/audit/`:**
-- Purpose: Optional forensic audit log — callers opt in via `audit?: AuditSink`
-- Contains: `AuditSink` interface, `AuditEmitter`, `AuditRecorder`, type definitions
-- Key files: `types.ts`, `sink.ts`, `emitter.ts`, `recorder.ts`
+- Purpose: Opt-in forensic audit log; no-op when absent
+- Key files: `sink.ts`, `emitter.ts`, `recorder.ts`, `types.ts`, `index.ts`
 
 **`src/extra/`:**
-- Purpose: Optional, swappable implementations not required by core protocol
-- Contains: `InMemoryKeyValueStore`, `EncryptedKeyValueStore`, `KeyValueRumorHistoryBackend`, platform audit sinks
-- Key files: `in-memory-key-value-store.ts`, `encrypted-key-value-store.ts`, `key-value-rumor-history-backend.ts`, `audit/browser.ts`, `audit/node.ts`
+- Purpose: Opt-in store implementations + platform audit sinks
+- Key files: `in-memory-key-value-store.ts`, `encrypted-key-value-store.ts`, `key-value-rumor-history-backend.ts`, `audit/node.ts`, `audit/browser.ts`
 
 **`src/utils/`:**
-- Purpose: Shared utility helpers used across all layers
-- Contains: `debug.ts` (root logger), `key-value.ts` (store interface), `encoding.ts`, `nostr.ts`, `nip44-binary.ts`, `timestamp.ts`, `relay-url.ts`
-- Key files: `key-value.ts` (defines `GenericKeyValueStore<V>`), `debug.ts`
-
-**`src/__tests__/`:**
-- Purpose: Integration tests and shared test helpers
-- `helpers/`: `mock-network.ts`, `account-proof.ts` — shared doubles for integration tests
-- `integration/`: full end-to-end scenarios using in-memory stores and mock Nostr relay
-
-**`ts-mls/`:**
-- Purpose: Local workspace dependency providing the TypeScript MLS implementation
-- Not part of the library source; referenced as `"ts-mls": "./ts-mls"` in `package.json`
-- Must be built with `pnpm --filter ts-mls build` before building the library
-
-**`darkmatter/`:**
-- Purpose: Rust reference implementation (separate Cargo workspace); not shipped with the npm package
-- Contains: `cgka-engine`, `agent-connector`, `agent-control`, `cgka-conformance-simulator` crates
-
-**`examples/`:**
-- Purpose: Standalone example applications (not part of published package)
-- `opentui/`: Terminal UI example using React + OpenTUI + applesauce
-- `forker/`: Adversarial server that joins groups and deliberately forks admin groups
+- Purpose: Cross-cutting utilities
+- Key files: `debug.ts`, `key-value.ts`, `encoding.ts`, `nostr.ts`, `nip44-binary.ts`, `timestamp.ts`, `relay-url.ts`
 
 ## Key File Locations
 
 **Entry Points:**
-- `src/index.ts`: Root barrel (`.` subpath export)
-- `src/mls.ts`: MLS re-export (`./mls` subpath)
-- `src/client/index.ts`: Client subpath barrel (`./client`)
-- `src/core/index.ts`: Core subpath barrel (`./core`)
-- `src/engine/index.ts`: Engine subpath barrel (`./engine`)
-- `src/audit/index.ts`: Audit subpath barrel (`./audit`)
-- `src/extra/index.ts`: Extra subpath barrel (`./extra`)
-- `src/utils/index.ts`: Utils subpath barrel (`./utils`)
+- `src/index.ts`: Root barrel (`.`) — client + core + utils + selected engine exports
+- `src/mls.ts`: `./mls` — re-exports `ts-mls`
+- `src/engine/index.ts`, `src/client/index.ts`, `src/core/index.ts`, `src/audit/index.ts`, `src/extra/index.ts`, `src/utils/index.ts`: per-subpath barrels
 
 **Configuration:**
-- `package.json`: Exports map, engines constraints, dependency list
-- `tsconfig.build.json`: Build config (NodeNext, strict, emits to `dist/`)
-- `tsconfig.json`: Root config (includes tests, `noEmit: true`)
-- `vitest.config.ts`: Test runner configuration
-- `typedoc.json`: TypeDoc entrypoint (`src/index.ts`)
-- `pnpm-workspace.yaml`: Workspace members
+- `package.json`: `exports` map defines all public subpaths
+- `tsconfig.build.json`: Library emit (excludes tests)
+- `tsconfig.json`: Type-check config (`noEmit`, includes tests + `vitest` types)
+- `vitest.config.ts`: Test runner (node env, matches `src/**/*.test.ts`)
+- `typedoc.json`: API reference from `src/index.ts`
+- `.prettierrc`: Formatting (`tabWidth: 2`)
 
 **Core Logic:**
-- `src/engine/group-engine.ts`: Central state machine — start here for protocol understanding
-- `src/engine/types.ts`: All engine-facing type definitions including `GroupPeeler<TEnvelope>`
-- `src/core/convergence.ts`: Branch selection algorithm (ported from Rust reference)
-- `src/core/group-lifecycle.ts`: Lifecycle FSM and legal transition table
-- `src/client/group/marmot-group.ts`: Top-level group API consumers interact with
+- `src/core/`: Protocol primitives
+- `src/engine/group-engine.ts`: State machine
+- `src/client/marmot-client.ts`: Top-level API
 
 **Testing:**
-- `src/__tests__/integration/`: Integration tests (end-to-end flows)
-- `src/__tests__/helpers/mock-network.ts`: Mock Nostr relay pool for tests
-- `src/__tests__/helpers/account-proof.ts`: Test account identity proof helper
-- Per-module `__tests__/` directories: unit tests colocated with source
+- `src/**/__tests__/`: Colocated unit tests
+- `src/__tests__/integration/`: Integration tests
+- `src/__tests__/helpers/`: Shared test doubles (mock network/client)
 
 ## Naming Conventions
 
 **Files:**
-- `kebab-case.ts` for all source files — no exceptions
-- Test files: `kebab-case.test.ts`, always inside a `__tests__/` subdirectory
-- Barrel files: always named `index.ts`
+- kebab-case: `group-engine.ts`, `key-package-event-decode.ts`, `in-memory-key-value-store.ts`
+- Tests: same name with `.test.ts`, under sibling `__tests__/`: `group-engine.test.ts`
 
 **Directories:**
-- `kebab-case` for all directories
-- `__tests__/` (double-underscore) for test subdirectories, colocated with the module they test
+- kebab-case; each layer has an `index.ts` barrel; `__tests__/` for colocated tests
 
-**Exports:**
-- Named exports only — no default exports anywhere in the library
-- Types are exported with `export type { ... }` where the value is not needed
-
-**Classes:**
-- `PascalCase` for classes and interfaces (`MarmotGroupEngine`, `GroupPeeler`, `NostrGroupPeeler`)
-
-**Functions and variables:**
-- `camelCase` for functions and variables
-
-**Constants:**
-- `SCREAMING_SNAKE_CASE` for module-level constants (`DEFAULT_CONVERGENCE_POLICY`, `GROUP_EVENT_KIND`)
+**Code identifiers:**
+- Functions: camelCase (`createGroup`, `ingestEnvelopes`)
+- Types/classes: PascalCase (`MarmotGroupEngine`, `SendResult`)
+- Protocol constants: SCREAMING_SNAKE_CASE (`ADDRESSABLE_KEY_PACKAGE_KIND`, `MAX_VARINT`)
+- Enum-like object namespaces: camelCase (`groupLifecycleStates`, `convergenceStatuses`)
+- Private fields: native `#` (`#state`, `#lifecycle`), not TypeScript `private`
 
 ## Where to Add New Code
 
-**New protocol primitive (no I/O):**
-- Implementation: `src/core/` — pick or create a file matching the concept
-- Export from: `src/core/index.ts`
+**New protocol/crypto/state primitive:**
+- Implementation: `src/core/` (add to relevant `index.ts` barrel)
 - Tests: `src/core/__tests__/`
 
-**New engine behavior (transport-agnostic):**
-- Implementation: `src/engine/` — new file or extend `group-engine.ts`
-- Expose types in: `src/engine/types.ts`
-- Export from: `src/engine/index.ts`
+**New engine state-machine logic:**
+- Implementation: `src/engine/`
 - Tests: `src/engine/__tests__/`
 
-**New Nostr client feature:**
-- Implementation: `src/client/` — place in the most specific subdirectory (`group/`, `session/`, `runtime/`, `transport/nostr/`)
-- Export from: `src/client/index.ts` (and `src/client/group/index.ts` if group-level)
-- Tests: colocated `__tests__/` or `src/__tests__/integration/` for end-to-end
+**New Nostr/client feature:**
+- Implementation: `src/client/` (or `group/`, `session/`, `runtime/`, `transport/`)
+- Tests: `src/client/**/__tests__/`
 
-**New MLS extension component:**
-- Implementation: `src/core/components/`
-- Export from: `src/core/components/index.ts`
+**New store or platform sink:**
+- Implementation: `src/extra/` (implement `GenericKeyValueStore` from `src/utils/key-value.ts`)
 
-**New optional store implementation:**
-- Implementation: `src/extra/`
-- Export from: `src/extra/index.ts`
-- Tests: `src/extra/__tests__/`
+**New app component / media type:**
+- Implementation: `src/core/components/` or `src/core/media/`
 
-**New utility helper:**
-- Implementation: `src/utils/`
-- Export from: `src/utils/index.ts`
-- Tests: `src/utils/__tests__/`
-
-**New proposal builder:**
-- Implementation: `src/client/group/proposals/`
-- Export from: `src/client/group/proposals/index.ts`
-
-**New integration test:**
-- Location: `src/__tests__/integration/`
-- Naming: `<scenario-name>.test.ts`
-- Use helpers from: `src/__tests__/helpers/`
+**Reminders:**
+- All relative imports need the emitted `.js` extension (NodeNext)
+- Named exports only; re-export via the directory `index.ts` barrel
+- Binary/protocol data is `Uint8Array`; hex via `@noble/hashes/utils.js` (no `Buffer`)
 
 ## Special Directories
 
 **`dist/`:**
-- Purpose: Compiled library output (`tsc -b tsconfig.build.json`)
-- Generated: Yes
-- Committed: No (gitignored)
-
-**`ts-mls/dist/`:**
-- Purpose: Compiled local MLS dependency
-- Generated: Yes (via `pnpm --filter ts-mls build` in `prepare` script)
+- Purpose: Compiled library output
+- Generated: Yes (`pnpm build`)
 - Committed: No
 
-**`darkmatter/`:**
-- Purpose: Rust reference implementation and conformance simulator
-- Generated: No (hand-authored)
-- Committed: Yes
-
-**`.changeset/`:**
-- Purpose: Changeset version bump entries for release management
-- Generated: Partially (entries created by `changeset add`)
-- Committed: Yes
-
-**`graphify-out/`:**
-- Purpose: Output from the `/graphify` knowledge-graph tool
+**`.vitepress/dist/`:**
+- Purpose: Built docs + TypeDoc reference
 - Generated: Yes
-- Committed: Yes (repo convention)
+- Committed: No
+
+**`ts-mls/`:**
+- Purpose: Local MLS RFC 9420 workspace package (dependency)
+- Generated: No — must be built before the library (`pnpm --filter ts-mls build`)
+- Committed: Yes (workspace source)
+
+**`darkmatter/`:**
+- Purpose: Vendored Rust reference implementation — source of truth for wire format
+- Generated: No
+- Committed: Yes (git submodule)
+
+**`graphify-out/`, `.planning/`:**
+- Purpose: Knowledge-graph output and GSD planning artifacts
+- Generated: Yes (tooling)
+- Committed: Varies (`.planning/` committed)
 
 ---
 
-*Structure analysis: 2026-07-01*
+*Structure analysis: 2026-07-07*

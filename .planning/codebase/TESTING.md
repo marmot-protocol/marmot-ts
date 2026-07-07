@@ -1,255 +1,166 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-07-01
+**Analysis Date:** 2026-07-07
 
 ## Test Framework
 
 **Runner:**
-- Vitest 3.x
-- Config: `vitest.config.ts` (root)
-- Environment: `node`
-- Includes: `src/**/*.test.ts` only
+- Vitest 3.2.6
+- Config: `vitest.config.ts` — `environment: "node"`, `include: ["src/**/*.test.ts"]`
 
 **Assertion Library:**
-- Vitest built-ins (`expect`, `it`, `describe`, `beforeEach`, `beforeAll`, `afterEach`, `vi`)
+- Vitest built-in `expect` (Chai-style); globals imported explicitly, not injected (though `vitest/globals` types are enabled in `tsconfig.json`)
 
 **Run Commands:**
 ```bash
-pnpm test                   # Watch mode (vitest)
-pnpm vitest run             # One-shot full suite
-pnpm vitest run src/path/to/file.test.ts  # Single file
+pnpm test                              # Vitest in watch mode
+pnpm vitest run                        # One-shot run of the full suite
+pnpm vitest run src/path/to/file.test.ts   # Run a single test file
 ```
 
-**CI Targets:**
-- Node.js 20, 22, 24
-- Deno 2: `deno run -A --node-modules-dir=auto npm:vitest run`
-- Bun latest and 1.1: `bun run vitest run`
+Cross-runtime CI additionally runs:
+```bash
+deno run -A --node-modules-dir=auto npm:vitest run   # Deno 2
+bun run vitest run                                    # Bun latest / 1.1
+```
+The suite must pass on Node 20/22/24, Deno 2, and Bun latest/1.1.
 
 ## Test File Organization
 
 **Location:**
-- Tests are colocated in `__tests__/` subdirectories alongside source:
-  - `src/core/__tests__/`
-  - `src/engine/__tests__/`
-  - `src/client/__tests__/`
-  - `src/extra/__tests__/` and `src/extra/audit/__tests__/`
-  - `src/client/group/__tests__/`
-  - `src/client/session/__tests__/`
-- Cross-module integration tests: `src/__tests__/integration/`
-- Shared test doubles: `src/__tests__/helpers/`
+- Co-located under a sibling `__tests__/` directory next to the code under test (e.g. `src/core/__tests__/binary.test.ts` tests `src/core/binary.ts`)
+- Cross-cutting integration tests live in `src/__tests__/integration/`
+- 65 test files total across `core`, `engine`, `client`, `extra`, and `utils`
 
 **Naming:**
-- `<module-name>.test.ts` matching the source file name
-- Integration tests named after the scenario: `end-to-end-invite-join-message.test.ts`, `ingest-commit-race.test.ts`
+- `<source-name>.test.ts` — mirrors the file under test
 
 **Structure:**
 ```
 src/
-├── __tests__/
-│   ├── helpers/
-│   │   ├── mock-network.ts         # MockNetwork class
-│   │   └── account-proof.ts        # accountProofSignerFor()
-│   └── integration/
-│       ├── end-to-end-invite-join-message.test.ts
-│       ├── group-connect.test.ts
-│       └── ...
-├── core/__tests__/
-│   ├── binary.test.ts
-│   ├── convergence.test.ts
-│   └── ...
-└── engine/__tests__/
-    ├── group-engine.test.ts
-    └── ...
+├── core/__tests__/            # protocol/crypto/state unit tests
+├── engine/__tests__/          # state-machine unit tests
+├── client/__tests__/          # client-layer unit tests
+├── client/**/__tests__/       # nested per-module tests (runtime, group, session)
+├── extra/__tests__/           # store implementation tests
+├── utils/__tests__/           # utility tests
+└── __tests__/
+    ├── helpers/               # shared test doubles (mock-network.ts, account-proof.ts)
+    └── integration/           # end-to-end multi-component flows
 ```
 
 ## Test Structure
 
 **Suite Organization:**
 ```typescript
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { MarmotGroupEngine } from "../group-engine.js";
 
-describe("ComponentName behavior (spec-doc.md)", () => {
-  let sharedState: SomeType;
-
-  beforeEach(async () => {
-    sharedState = await setupFn();
-  });
-
-  it("does the thing in the normal case", async () => {
-    // arrange + act + assert inline
-  });
-
-  it("rejects bad input", async () => {
-    await expect(fn()).rejects.toThrow("message");
+describe("MarmotGroupEngine lifecycle (group-state.md)", () => {
+  it("starts Stable, confirmPublished advances epoch, publishFailed resets to Stable", async () => {
+    const adminPubkey = "a".repeat(64);
+    // ... arrange, act, assert
   });
 });
 ```
 
-**Multiple `describe` blocks per file** are the norm for different behavioral groups. Each file may contain 2–5 `describe` blocks, each covering a distinct aspect: `src/engine/__tests__/group-engine.test.ts` has separate blocks for lifecycle, dedup, admin verification, retained-history pruning, and content dedup.
-
-**Naming convention for `it` strings:** Plain English, present tense: `"starts Stable, confirmPublished advances epoch"`, `"rejects commit send from non-admin members"`.
-
-**Reference to spec in `describe` name:** Many describe blocks include the spec document name in parentheses for traceability: `"MarmotGroupEngine lifecycle (group-state.md)"`, `"convergence policy"`.
-
 **Patterns:**
-- `beforeEach` for per-test isolation (most common)
-- `beforeAll` when setup is expensive and tests are read-only (e.g., `src/engine/__tests__/history-tree.test.ts`, `src/client/group/__tests__/invite.test.ts`)
-- `afterEach` for filesystem cleanup (only in `src/extra/audit/__tests__/upload.test.ts`)
-- No `afterAll` usage found
+- `describe` names often cite the spec doc they cover (e.g. `"MarmotGroupEngine lifecycle (group-state.md)"`)
+- `it` names are full behavioral sentences describing the observed outcome
+- Local `async function` builders inside the test file assemble fixtures (e.g. `createTestGroupState()`, `testPeeler()` in `src/engine/__tests__/group-engine.test.ts`)
+- Test pubkeys use repeated hex chars: `"a".repeat(64)`; valid x-only test pubkeys use hex chars `a/d/e/2/3/4`, invalid use `b/c/f/0/1`
+- Most tests are `async` because MLS/crypto operations are Promise-based
 
 ## Mocking
 
-**Framework:** `vi` from Vitest (no separate mock library)
+**Framework:** Vitest `vi` (`vi.fn`, `vi.spyOn`) — used sparingly
 
-**Patterns:**
+**Preferred approach:** Hand-written test doubles over `vi.mock`. No module-level `vi.mock()` is used anywhere; there is no auto-mocking.
+
+**Shared doubles (`src/__tests__/helpers/`):**
+- `MockNetwork` (`mock-network.ts`) — an in-memory `NostrNetworkInterface` implementation with a shared `events` array, filter matching, live subscription replay, and `clear()`. Prefer this over inline network mocks.
+- `accountProofSignerFor()` (`account-proof.ts`) — builds an `AccountIdentityProofSigner` from a test `PrivateKeyAccount`
+
+**Spot mocking with `vi`:**
 ```typescript
-// Inline function mock
+// Inject a fake fetch (src/extra/audit/__tests__/upload.test.ts)
 const fetch = vi.fn(async () => new Response(null, { status: 200 }));
 
-// Spy on a method
+// Spy on a real method (src/core/__tests__/media.test.ts)
 const addMediaSpy = vi.spyOn(group.media, "addMedia");
 
-// Inline object mock with vi.fn() for each method
-const historyBackend = {
-  saveMessage: vi.fn(async () => {}),
-  purgeMessages: vi.fn(async () => {}),
-};
-
-// Callback mock for event listener patterns
-const onApplicationMessage = vi.fn();
+// Assert event handlers fired (src/client/__tests__/leave-group.test.ts)
+const destroyedHandler = vi.fn();
 ```
 
-**What to Mock:**
-- External I/O: HTTP `fetch` (injected as a parameter), filesystem ops only when unavoidable
-- Nostr network layer: use `MockNetwork` class instead of mocking (`src/__tests__/helpers/mock-network.ts`)
-- Timers/clocks: inject `now` and `scheduler` options into `MarmotGroupEngine` (see `src/engine/group-engine.ts` `ConvergenceScheduler` interface)
+**What to mock:** Network/relay I/O (via `MockNetwork`), HTTP `fetch` for uploads, EventEmitter handlers to assert emission.
 
-**What NOT to Mock:**
-- Cryptographic operations (`ts-mls`, `@noble/curves`, `@noble/hashes`) — real crypto runs in all tests
-- Binary encoding/decoding — tested against real bytes
-- MLS state machine — integration tests use real `ts-mls` functions
+**What NOT to mock:** MLS/crypto (`ts-mls`, ciphersuite impls), binary codecs, convergence/lifecycle logic — these run for real so tests verify byte-for-byte wire behavior.
 
 ## Fixtures and Factories
 
-**Test Data — Pubkeys:**
-```typescript
-// Valid schnorr pubkeys used throughout tests
-const ADMIN = "a".repeat(64);    // 64-char hex — valid x-only pubkey
-const MEMBER = "d".repeat(64);   // another valid pubkey
-const nonAdminPubkey = "e".repeat(64);
-```
-
-**Test Data — Setup factory functions:**
-```typescript
-// Common pattern: async factory returning a shared multi-party setup
-async function twoMemberGroup() {
-  const impl = await getCiphersuiteImpl(...);
-  const adminKp = await generateKeyPackage(...);
-  const { clientState: adminEpoch0 } = await createSimpleGroup(...);
-  const memberKp = await generateKeyPackage(...);
-  const { newState: adminE1, welcome } = await createCommit(...);
-  const memberState = await joinGroup(...);
-  const peeler = testPeeler(impl);
-  const engine = new MarmotGroupEngine({ state: adminE1, ciphersuite: impl, peeler });
-  return { impl, ctx, peeler, engine, memberState, memberPubkey };
-}
-```
-
-**In-memory stores:**
-- `InMemoryKeyValueStore` from `src/extra/in-memory-key-value-store.ts` — used for `groupStateStore` and `keyPackageStore` in all integration/client tests
-
-**MockNetwork:**
-- `src/__tests__/helpers/mock-network.ts` implements `NostrNetworkInterface`
-- Shares a single `events: NostrEvent[]` array (simulates relay storage)
-- Supports live subscriptions: replays existing events, then delivers future publishes
-- `mockNetwork.clear()` resets state between test scenarios
-
-**Account helpers:**
-- `accountProofSignerFor(account)` from `src/__tests__/helpers/account-proof.ts` — builds an `AccountIdentityProofSigner` from a `PrivateKeyAccount`
+**Test data:**
+- `PrivateKeyAccount` from `applesauce-accounts/accounts` provides test identities (dev/test dependency, not a runtime dependency of the library)
+- Real ciphersuite implementations built in-test: `getCiphersuiteImpl("MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519", defaultCryptoProvider)`
+- `unsafeTestingAuthenticationService` from `ts-mls` for tests that need to bypass auth
+- Hex fixtures via `@noble/hashes/utils.js` `hexToBytes`/`bytesToHex`; a small local `hex = (s) => hexToBytes(s.replace(/\s+/g, ""))` helper is common in codec tests
 
 **Location:**
-- Shared doubles: `src/__tests__/helpers/`
-- Per-module helpers: inline factory functions within the test file
+- Reusable doubles in `src/__tests__/helpers/`
+- Per-file builder functions defined at the top of each test file
 
 ## Coverage
 
-**Requirements:** None enforced — no coverage threshold in `vitest.config.ts` or `package.json`
+**Requirements:** None enforced. No coverage provider is configured in `vitest.config.ts` and there is no coverage threshold.
 
 **View Coverage:**
 ```bash
-# No built-in coverage script — run manually:
-pnpm vitest run --coverage
+pnpm vitest run --coverage   # requires installing a coverage provider; not wired up by default
 ```
 
 ## Test Types
 
-**Unit Tests (majority):**
-- Scope: single function, class, or module in isolation
-- Location: `src/<module>/__tests__/<file>.test.ts`
-- Crypto is real; I/O is avoided or provided via simple in-memory fakes
-- Binary encoding tests (`src/core/__tests__/binary.test.ts`): verify spec byte sequences with hex literals
+**Unit Tests:**
+- Dominant style; located in per-module `__tests__/` dirs
+- Cover binary codecs, crypto/protocol helpers, the engine state machine, and client managers in isolation
 
 **Integration Tests:**
-- Location: `src/__tests__/integration/`
-- Scope: full `MarmotClient` → `GroupsManager` → `MarmotGroupEngine` flows with `MockNetwork` and `InMemoryKeyValueStore`
-- No external relays; no external crypto providers beyond the library's defaults
-- Cover invite→join→message, convergence, persistence/restart, race conditions
+- `src/__tests__/integration/` — full flows across engine + client + core using `MockNetwork` and in-memory stores
+- Examples: `end-to-end-invite-join-message.test.ts`, `send-chat-message.test.ts`, `rewind-persistence.test.ts`, `ingest-commit-race.test.ts`
+- Use in-memory stores and mock Nostr networking, never external relays or services
 
-**Engine Unit Tests:**
-- Located at `src/engine/__tests__/`
-- Use `testPeeler` helper (local to each test file) that wraps real `decryptGroupMessages`/`createGroupEvent`
-- Drive the `MarmotGroupEngine` directly with real MLS state (no mock ciphersuite)
+**Interop/Compatibility Tests:**
+- `src/core/__tests__/darkmatter-invite-compat.test.ts` and codec tests assert byte-for-byte wire format against the Rust `darkmatter` reference and spec worked examples
+
+**E2E Tests:**
+- No browser/CLI E2E harness; the integration suite is the top of the pyramid
 
 ## Common Patterns
 
 **Async Testing:**
 ```typescript
-it("does something async", async () => {
-  const result = await someAsyncFn();
+it("does the thing", async () => {
+  const result = await engine.someAsyncOp();
   expect(result.kind).toBe("processed");
 });
 ```
 
-**Async generator drain:**
-```typescript
-for await (const result of engine.ingest(events)) {
-  results.push(result as { kind: string });
-}
-// or drain without collecting:
-for await (const _ of group.ingest(groupEvents)) { /* drain */ }
-```
-
 **Error Testing:**
 ```typescript
-// Async rejection
-await expect(
-  engine.send({ kind: "commit", actorPubkey: nonAdminPubkey, extraProposals: [] }),
-).rejects.toThrow("Not a group admin");
-
-// Sync throw
-expect(() => encodeVarint(-1)).toThrow(RangeError);
-expect(() => decodeVarint(hex("4005"))).toThrow(BinaryDecodeError);
-
-// Regex match on message
-await expect(uploadAuditLogFile(...)).rejects.toThrow(/audit-\*\.jsonl/);
+await expect(decodeVarint(badBytes)).rejects.toThrow();
+// or for sync throws:
+expect(() => transitionLifecycle(state, illegal)).toThrow();
 ```
 
-**Discriminated union narrowing in tests:**
+**Round-trip / boundary testing (codecs):**
 ```typescript
-const result = await engine.send({ kind: "commit", ... });
-expect(result.kind).toBe("groupEvolution");
-if (result.kind !== "groupEvolution") throw new Error("expected groupEvolution");
-// Now TypeScript knows result is the groupEvolution branch
-engine.confirmPublished(result.pending);
+for (const v of [0n, 1n, 63n, 64n, 16383n, 16384n, ...]) {
+  expect(decodeVarint(encodeVarint(v))).toBe(v);
+}
 ```
 
-**Ciphersuite constant:**
-```typescript
-const CIPHERSUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
-const impl = await getCiphersuiteImpl(CIPHERSUITE, defaultCryptoProvider);
-```
-This is the only ciphersuite used across all tests.
+**Async generator draining:** Engine `ingest()` returns an `AsyncGenerator`; tests must iterate it fully (`for await (const r of engine.ingest(...))`) before asserting or issuing the next batch.
 
 ---
 
-*Testing analysis: 2026-07-01*
+*Testing analysis: 2026-07-07*

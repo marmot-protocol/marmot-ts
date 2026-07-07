@@ -1,135 +1,86 @@
 # External Integrations
 
-**Analysis Date:** 2026-07-01
+**Analysis Date:** 2026-07-07
 
-## Nostr Protocol Network
+## APIs & External Services
 
-**Role:** Core transport layer for all Marmot protocol messages.
+**Nostr relays (transport):**
+- The library is transport-agnostic and BYO-network. Downstream apps supply an implementation of `NostrNetworkInterface` (`src/client/nostr-interface.ts`), which merges `NostrPoolWrite` (`publish`) and `NostrPoolRead` (`request`, `subscription`) plus group-specific operations.
+- No relay URLs are hardcoded in the library; relay lists are passed in by callers and discovered from Nostr relay-list events.
+- SDK/Client: `applesauce-core` provides `NostrEvent` and `Filter` models. There is no bundled relay pool — callers wire their own (e.g. applesauce pools in examples/tests).
+- Auth: none at the transport layer; message authenticity is via MLS + Nostr event signatures.
 
-The library is BYO-network: it defines interfaces (`NostrPool`, `NostrNetworkInterface` in `src/client/nostr-interface.ts`) and the caller supplies the relay pool implementation. There are no hard-coded relay URLs in the library source.
+**MLS protocol engine:**
+- `ts-mls` `2.0.0-rc.14` (local workspace `./ts-mls`) - RFC 9420 MLS implementation. Re-exported to downstream via the `./mls` subpath.
 
-**Protocols implemented (NIP compliance):**
-- NIP-01 — base Nostr event format; `NostrEvent` type from `applesauce-core/helpers/event`
-- NIP-44 v2 — binary encryption for application content; custom implementation in `src/utils/nip44-binary.ts` using `@noble/ciphers/chacha`, `@noble/curves/secp256k1`, `@noble/hashes`
-- NIP-59 — gift-wrap for welcome message delivery; uses `applesauce-common/helpers/gift-wrap` and `applesauce-common/operations/gift-wrap`
-- NIP-65 — relay list discovery (kind 10002) for finding recipient inbox relays; constant `NIP65_RELAY_LIST_KIND = 10002` in `src/core/protocol.ts`
-
-**Nostr relay interface (library side):**
-```typescript
-// src/client/nostr-interface.ts
-interface NostrNetworkInterface {
-  publish(relays: string[], event: NostrEvent): Promise<Record<string, PublishResponse>>;
-  request(relays: string[], filters: Filter | Filter[]): Promise<NostrEvent[]>;
-  subscription(relays: string[], filters: Filter | Filter[]): Subscribable<NostrEvent>;
-  getUserInboxRelays(pubkey: string): Promise<string[]>;
-}
-```
-
-**Example app relay pool:**
-In `examples/opentui`, `applesauce-relay` ^6.2.0 provides `AsRelayPool` with WebSocket relay connections.
-
-**Release notifications:**
-On successful npm publish, `.github/workflows/release.yml` runs `scripts/publish-nostr.sh` using the `nak` CLI to post a Nostr event. Requires `NOSTR_KEY` secret (nsec or hex private key).
-- `nak` binary: downloaded from `https://github.com/fiatjaf/nak/releases/latest/download/nak-linux-amd64` during CI
-
-## Blossom (Distributed File Protocol)
-
-**Role:** Media storage and retrieval for group attachments.
-
-Blossom is a file-serving protocol where servers expose SHA-256-addressed blobs at `GET /<sha256>`. The library defines the `blossom-v1` locator type for media within MLS application messages.
-
-**Implementation:**
-- `src/core/media/locator.ts` — defines `blossom-v1` locator type; validates that locator URLs are `https`
-- `src/core/media/imeta.ts` — validates that `blossom-v1` locator URLs are HTTPS-only, non-loopback, routable hosts
-- `src/core/components/host-safety.ts` — shared host safety check (non-routable host rejection) used for blossom and avatar URLs
-
-**Example app integration:**
-`examples/opentui` depends on `blossom-client-sdk` ^5.0.0 for actual uploads. The library itself only contains the wire-format parsing and URL safety logic — it does not perform HTTP fetches.
-
-**Auth:** None in library (blossom auth is handled by client apps via blossom-client-sdk).
-
-## Goggles Audit Tracker
-
-**Role:** Optional HTTP endpoint for uploading audit JSONL log files.
-
-**Implementation:**
-- `src/extra/audit/node.ts` — `uploadAuditLogFile(path, endpoint, options)` function
-- Sends `POST` with `Content-Type: application/x-ndjson` body
-- Auth: Bearer token via `Authorization` header (required for non-loopback HTTPS endpoints)
-- Source identification: `X-Goggles-Device-Label`, `X-Goggles-Platform`, `X-Goggles-App-Version` headers
-- Max file size: 64 MiB; file name must match `audit-*.jsonl`
-- Endpoint must be `https:` (or loopback `http:` for local testing)
-- Uses global `fetch`; injectable for tests via `options.fetch`
-
-**Endpoint:** Caller-supplied HTTPS URL; no hardcoded endpoint in library.
+**Nostr event kinds used (`src/core/protocol.ts`):**
+- `10002` - Relay list (`RELAY_LIST_KIND`)
+- `10050` - Inbox/DM relay list (`INBOX_RELAY_LIST_KIND`)
+- `30443` - Addressable KeyPackage (`ADDRESSABLE_KEY_PACKAGE_KIND`); content is MLSMessage-framed (`mls_key_package`)
+- `445` - Group event / handshake + application messages (`GROUP_EVENT_KIND`)
+- `444` - Welcome event (`WELCOME_EVENT_KIND`)
 
 ## Data Storage
 
 **Databases:**
-- None in the library itself — storage is abstraction-based (BYO storage pattern)
-- `src/extra/in-memory-key-value-store.ts` — in-memory key-value store (default/test)
-- `src/extra/encrypted-key-value-store.ts` — encrypted wrapper over any key-value store backend
-- `src/extra/key-value-rumor-history-backend.ts` — rumor history storage using key-value store
+- None. The library defines a storage abstraction `GenericKeyValueStore` (`src/utils/key-value.ts`) that callers implement.
 
-**Browser Storage (audit logs):**
-- IndexedDB — `src/extra/audit/browser.ts` → `IndexedDbAuditWriter`; database name defaults to `"marmot-audit-logs"`, store name defaults to `"lines"`
-- OPFS (Origin Private File System) — `src/extra/audit/browser.ts` → `OpfsAuditWriter`; uses `navigator.storage.getDirectory()`
-- Auto-select: `AutoBrowserAuditWriter` picks OPFS if available, falls back to IndexedDB
+**File Storage:**
+- No direct filesystem access in library source. Optional store implementations live in `src/extra/`:
+  - `InMemoryKeyValueStore` (`src/extra/in-memory-key-value-store.ts`)
+  - `EncryptedKeyValueStore` (`src/extra/encrypted-key-value-store.ts`) - AES/ChaCha encryption via `@noble/ciphers`
+  - `KeyValueRumorHistoryBackend`
 
-**Node.js Storage (audit logs):**
-- Filesystem (JSONL) — `src/extra/audit/node.ts` → `NodeJsonlAuditWriter` (async) and `NodeJsonlAuditRecorder` (sync); writes append-only JSONL files
-
-**Connection:** No connection string or env var required; paths are caller-supplied.
+**Caching:**
+- None. Group state, fork-history tree, and rumor history are persisted through injected key-value stores; no external cache.
 
 ## Authentication & Identity
 
-**Auth Provider:** Custom / Nostr keypair identity.
+**Auth Provider:**
+- Nostr keys (secp256k1). Identity is a Nostr keypair; credentials are derived and bound into MLS via `src/core/` credential helpers.
+- Signing/ECDH via `@noble/curves` (secp256k1). Encryption for DMs/welcomes via NIP-44 binary (`src/utils/nip44-binary.ts`) and NIP-59 gift-wrap (`applesauce-common`).
+- No OAuth or third-party identity provider. Tests use `PrivateKeyAccount` from `applesauce-accounts`.
 
-- Nostr private keys (secp256k1) are the identity primitive; no external auth provider
-- `applesauce-accounts` package (dev dependency in library, runtime in examples) provides `PrivateKeyAccount` for signing events
-- MLS credentials carry the Nostr public key (`src/core/credential.ts`)
-- `src/core/auth-service.ts` handles account identity proof verification
+## Monitoring & Observability
 
-## NPM Registry
+**Error Tracking:**
+- None. No Sentry/telemetry integration.
 
-**Role:** Library distribution.
-
-- Registry: `registry.npmjs.org`
-- Package name: `@internet-privacy/marmot-ts`
-- Auth: `NPM_TOKEN` secret (set in `~/.npmrc` during CI release)
-- Published with npm provenance (`--provenance` flag via `changeset publish`)
-- Trigger: push to `master` branch via `changesets/action@v1` in `.github/workflows/release.yml`
+**Logs:**
+- `debug` `^4.4.3` scoped logger, namespace `marmot:*` (`src/utils/debug.ts`).
+- Optional forensic audit log (`src/audit/`): `AuditSink` interface, `AuditEmitter`, `AuditRecorder`. Opt-in via `audit?: AuditSink` on engine/client; no-op when absent. Platform sinks in `src/extra/audit/{node,browser}.ts`.
 
 ## CI/CD & Deployment
 
-**CI Platform:** GitHub Actions
+**Hosting:**
+- npm registry - Published as `@internet-privacy/marmot-ts` (public, with provenance)
+- GitHub Pages - Docs site (`.github/workflows/pages.yml`)
 
-**Workflows:**
-- `.github/workflows/tests.yml` — runs `pnpm vitest run` on Node 20/22/24, Deno v2, Bun latest/1.1 on every push/PR
-- `.github/workflows/build.yml` — runs `pnpm build` on every push/PR; uploads `dist/` as artifact
-- `.github/workflows/release.yml` — on push to `master`: creates changeset PR or publishes to npm; posts Nostr release notification
-- `.github/workflows/pages.yml` — on push to `master`: builds VitePress docs and deploys to GitHub Pages
-
-**Docs Hosting:** GitHub Pages at `https://<org>.github.io/marmot-ts/`
-
-## Webhooks & Callbacks
-
-**Incoming:** None — library has no HTTP server.
-
-**Outgoing:**
-- Nostr relay WebSocket connections (consumer responsibility, not library-managed)
-- Blossom server HTTPS requests (consumer responsibility via blossom-client-sdk)
-- Goggles tracker HTTPS POST (via `uploadAuditLogFile` in `src/extra/audit/node.ts`)
+**CI Pipeline (`.github/workflows/`):**
+- `tests.yml` - Vitest on Node 20/22/24, Deno 2, Bun latest/1.1
+- `build.yml` - `pnpm build`
+- `release.yml` - Changesets publish with npm provenance
+- `pages.yml` - VitePress docs deploy
 
 ## Environment Configuration
 
-**Required secrets (GitHub Actions only):**
-- `NPM_TOKEN` — npm publish authentication (release workflow)
-- `NOSTR_KEY` — Nostr private key for release notification (release workflow)
-- `GITHUB_TOKEN` — automatically provided by GitHub Actions
+**Required env vars (CI/release only):**
+- `NPM_TOKEN` - npm publish auth
+- `NOSTR_KEY` - release announcement signing (`scripts/publish-nostr.sh`)
+- `GITHUB_TOKEN` - GitHub Actions / release
 
-**No environment variables are required to develop, build, or test the library.** All network targets are injected by the consumer at runtime.
+**Secrets location:**
+- GitHub Actions repository/environment secrets. No `.env` files in the repo.
+
+## Webhooks & Callbacks
+
+**Incoming:**
+- None (library, not a server).
+
+**Outgoing:**
+- Nostr relay publishes driven by `GroupRuntime` (`src/client/runtime/group-runtime.ts`) through the injected `NostrNetworkInterface`.
+- Release announcement published to Nostr via `scripts/publish-nostr.sh`.
 
 ---
 
-*Integration audit: 2026-07-01*
+*Integration audit: 2026-07-07*

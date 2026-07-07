@@ -1,174 +1,119 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-07-01
+**Analysis Date:** 2026-07-07
 
 ## Naming Patterns
 
 **Files:**
-- kebab-case throughout: `group-engine.ts`, `key-package-event-decode.ts`, `in-memory-key-value-store.ts`
-- Test files: same name with `.test.ts` suffix, placed under `__tests__/` sibling directories
-- Helper/utility files: descriptive nouns or verb-noun pairs: `mock-network.ts`, `account-proof.ts`
+- kebab-case throughout: `group-engine.ts`, `key-package-event-decode.ts`, `in-memory-key-value-store.ts`, `nip44-binary.ts`
+- Helper/utility files use descriptive nouns or verb-noun pairs: `mock-network.ts`, `account-proof.ts`
+- Test files mirror the source name with `.test.ts` suffix, placed under a sibling `__tests__/` directory
 
 **Functions:**
-- camelCase for all functions: `createGroup`, `generateKeyPackage`, `encodeVarint`, `decodeContent`
-- Async generator functions (ingest pipelines): prefixed with action verb, e.g., `ingestEnvelopes` in `src/engine/ingest.ts`
+- camelCase for all functions: `createGroup`, `generateKeyPackage`, `encodeVarint`, `decodeContent`, `signAccountIdentityProof`
+- Async generator ingest pipelines are prefixed with an action verb: `ingestEnvelopes` (`src/engine/ingest.ts`)
 
-**Variables and Parameters:**
+**Variables:**
 - camelCase everywhere: `clientState`, `adminPubkey`, `ciphersuiteImpl`
-- Destructured option objects preserve camelCase from the type
+- Destructured option objects preserve camelCase from their type
+- Native `#` private fields (not the TypeScript `private` keyword): `#state`, `#lifecycle`, `#retained`, `#subscribers` (see `src/engine/group-engine.ts`, `src/__tests__/helpers/mock-network.ts`)
 
-**Types and Interfaces:**
-- PascalCase: `MarmotGroupEngine`, `CreateGroupParams`, `SendResult`, `IngestResult`
-- Discriminated union types use a `kind` string literal discriminant: `{ kind: "processed" | "skipped" | "rejected" | ... }`
+**Types:**
+- PascalCase: `MarmotGroupEngine`, `CreateGroupParams`, `SendResult`, `IngestResult`, `GroupPeeler`
 - Generic type parameters: single uppercase letter or short PascalCase: `TEnvelope`, `T`
+- Discriminated unions use a `kind` string-literal discriminant: `{ kind: "processed" | "skipped" | "rejected" | ... }`
 
 **Constants:**
-- Protocol-level named constants: SCREAMING_SNAKE_CASE: `ADDRESSABLE_KEY_PACKAGE_KIND`, `MAX_VARINT`, `AGENT_TEXT_STREAM_ROLE_RECEIVE` (see `src/core/protocol.ts`, `src/core/binary.ts`)
-- Exported enum-like object namespaces: camelCase: `groupLifecycleStates`, `convergenceStatuses`, `inputCategories` (see `src/core/group-lifecycle.ts`, `src/core/inbound.ts`)
+- Protocol-level constants: SCREAMING_SNAKE_CASE: `ADDRESSABLE_KEY_PACKAGE_KIND`, `MAX_VARINT`, `AGENT_TEXT_STREAM_ROLE_RECEIVE` (`src/core/protocol.ts`, `src/core/binary.ts`)
 - Private module-level constants: SCREAMING_SNAKE_CASE: `ROLE_MASK`, `COMPONENT_STATE_LEN`, `ALLOWED_RUMOR_KEYS`
+- Enum-like exported object namespaces: camelCase: `groupLifecycleStates`, `convergenceStatuses`, `inputCategories` (`src/core/group-lifecycle.ts`, `src/core/inbound.ts`)
 - Test-file top-level constants: SCREAMING_SNAKE_CASE: `ADMIN`, `MEMBER`, `CIPHERSUITE`, `RELAY`
-
-**Class Private Fields:**
-- Native `#` private fields (not TypeScript `private`): `#state`, `#lifecycle`, `#retained`, `#tree`
-- See `src/engine/group-engine.ts` for the canonical pattern
 
 ## Code Style
 
 **Formatting:**
-- Tool: Prettier
-- Config: `.prettierrc` — `tabWidth: 2`, `useTabs: false`
-- Pre-commit hook (Husky + lint-staged) formats staged files only
+- Tool: Prettier 3.9.3
+- Config: `.prettierrc` — `tabWidth: 2`, `useTabs: false` (all other options default)
+- `pnpm lint` is `prettier --check .`; `pnpm format` is `prettier --write .`
+- Pre-commit hook (Husky 9 + lint-staged 17) formats staged files only
 
 **Linting:**
-- No root ESLint config; `ts-mls` subpackage has its own `eslint.config.mjs`
-- TypeScript strict mode with `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns` (build fails on violations)
+- No root ESLint config — the library relies on Prettier plus the strict TypeScript compiler
+- The `ts-mls` subpackage has its own `eslint.config.mjs`
+- TypeScript strict mode enforces `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noFallthroughCasesInSwitch`, all `noImplicit*`; the build fails on any violation
 
 ## Import Organization
 
-**Order (conventional, not enforced by a sorter):**
-1. External packages: `@noble/hashes/utils.js`, `applesauce-*`, `ts-mls`, `debug`
-2. Sibling-layer internal imports with `.js` extension
-3. Deeper relative imports with `.js` extension
+**Order (observed, not enforced by a tool):**
+1. External type-only imports and third-party packages (`applesauce-core`, `ts-mls`, `@noble/*`)
+2. Local relative imports with the emitted `.js` extension
 
-**Critical rule:** All relative imports inside `src/` MUST use the emitted `.js` extension, even when importing `.ts` source files (NodeNext `moduleResolution`).
-
-```typescript
-// Correct
-import { createGroup } from "./group.js";
-import { logger } from "../utils/debug.js";
-
-// Wrong — omitting .js breaks NodeNext resolution
-import { createGroup } from "./group";
-```
-
-**`import type`:** Used for type-only imports throughout. Example from `src/engine/group-engine.ts`:
-```typescript
-import type {
-  AutoCommitIngestResult,
-  GroupPeeler,
-  SendIntent,
-} from "./types.js";
-```
-
-**Path Aliases:** None — only relative imports within `src/`.
+**Path conventions:**
+- All relative imports in `src/` MUST use the emitted `.js` extension even when importing a `.ts` file (NodeNext module resolution). Violating this breaks the build.
+- `import type { ... }` is used for type-only imports (e.g. `import type { NostrEvent } from "applesauce-core/helpers/event"`)
+- No path aliases; plain relative paths only
+- Hex encoding/decoding via `@noble/hashes/utils.js`: `bytesToHex`, `hexToBytes`
+- No `Buffer` usage anywhere (must stay runtime-agnostic for Deno and Bun)
 
 ## Error Handling
 
-**Patterns:**
 - Throw `new Error(message)` for domain/validation failures: wrong credential type, invalid binary encoding, missing required state
-- Custom error subclasses for codec failures: `BinaryDecodeError` in `src/core/binary.ts` — subclasses `Error`, sets `this.name`
-- Result types for expected multi-outcome flows (discriminated unions via `kind`) rather than try/catch at caller boundary
-- Async errors propagate as rejected Promises; callers use `await expect(...).rejects.toThrow(...)`
-
-**Error subclass pattern:**
-```typescript
-export class BinaryDecodeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "BinaryDecodeError";
-  }
-}
-```
+- Custom error subclasses for codec failures: `BinaryDecodeError` in `src/core/binary.ts` subclasses `Error` and sets `this.name`
+- Result types (discriminated unions via `kind`) for expected multi-outcome flows rather than try/catch at the caller boundary — e.g. `ingestEnvelopes()` emits `unreadable`/`rejected`/`skipped` rather than throwing
+- `transitionLifecycle()` (`src/core/group-lifecycle.ts`) throws on illegal FSM transitions
+- Tree/audit subsystems swallow their own errors so they never break protocol processing: `GroupHistoryTree.recordCommit()` logs rather than propagates; `AuditEmitter.emit()` catches and silences
+- Async errors propagate as rejected Promises; tests assert with `await expect(...).rejects.toThrow(...)`
 
 ## Logging
 
-**Framework:** `debug` package, exposed via `src/utils/debug.ts`
+**Framework:** `debug` ^4.4.3, wrapped in `src/utils/debug.ts`
 
-```typescript
-export const logger = createDebug("marmot-ts");
-```
-
-**Subsystem loggers:**
-```typescript
-// In each module that needs logging
-const log = logger.extend("client");
-const log = logger.extend("session");
-```
-
-**Enable at runtime:** `DEBUG=marmot-ts:*`
+**Patterns:**
+- Scoped namespaces under `marmot:*`
+- Module-level, read-only; no global mutable state
 
 ## Comments
 
-**File-level module doc:**
-```typescript
-/** @module @category Core - Group */
-```
-Used on almost every `src/core/` and `src/engine/` file.
+**When to comment:**
+- Doc comments on exported functions and non-obvious helpers explaining protocol intent (see `src/__tests__/helpers/account-proof.ts`)
+- Inline comments in tests cite spec worked examples (see `src/core/__tests__/binary.test.ts`)
 
-**JSDoc on public APIs:**
+**JSDoc/TSDoc tags in use:**
 - `@param name - description`
 - `@returns description`
 - `@throws description of what triggers it`
-- `@see cross-reference to spec doc`
-
-**Inline comments:** Used liberally for non-obvious protocol decisions, spec references, and constraint explanations. References to spec documents (e.g., `retained-history.md`, `convergence.md`) are common inside both source and tests.
-
-**Section separators in tests:** `// ====...====` banners for major sections inside long test files.
+- `@see cross-reference to a spec doc`
+- `{@link Symbol}` for cross-references
 
 ## Function Design
 
-**Size:** Large complex functions are broken into focused private class methods or standalone module functions. The engine (`src/engine/group-engine.ts`) delegates heavy logic to standalone functions in sibling modules (`ingest.ts`, `ingest-disposition.ts`, `history-tree.ts`).
-
-**Parameters:** Options-object pattern for anything with more than ~3 parameters:
-```typescript
-export async function createGroup(params: CreateGroupParams): Promise<CreateGroupResult>
-export function createAdminCommitPolicyCallback(opts: AdminCommitPolicyOptions): IncomingMessageCallback
-```
-
-**Return Values:**
 - `Promise<T>` for async operations
-- `AsyncGenerator<IngestResult<TEnvelope>>` for streaming ingest pipelines
-- Discriminated unions for multi-outcome results (never `null | result`)
+- `AsyncGenerator<IngestResult<TEnvelope>>` for streaming ingest pipelines; callers MUST fully drain the generator before the next batch
+- Discriminated unions for multi-outcome results — never `null | result`
+- Options passed as a single destructured object preserving camelCase field names
 
 ## Module Design
 
-**Exports:**
 - Named exports only — no default exports anywhere in `src/`
-- Re-export aggregators via `index.ts` barrel files per directory: `src/core/index.ts`, `src/client/index.ts`
-
-**Barrel Files:**
-- Each major directory has an `index.ts` that re-exports with `export * from "./module.js"`
-- `src/index.ts` aggregates only `client`, `core`, and `utils`; engine internals are accessed via the `./engine` subpath export
-
-**Binary Data:**
-- All binary protocol data is `Uint8Array`
-- Hex encoding/decoding via `@noble/hashes/utils.js`: `bytesToHex`, `hexToBytes`
-- No `Buffer` usage (must stay runtime-agnostic for Deno and Bun)
+- Each major directory has an `index.ts` barrel that re-exports with `export * from "./module.js"`: `src/core/index.ts`, `src/client/index.ts`, `src/engine/index.ts`
+- `src/index.ts` aggregates client, core, utils, and selected engine exports; deep engine internals are reached via the `./engine` subpath
+- `src/mls.ts` intentionally re-exports `ts-mls` for downstream apps via the `./mls` subpath
+- All binary/protocol data is `Uint8Array`
 
 ## Discriminated Union Pattern
 
-The dominant pattern for complex result types (used pervasively in the engine):
+Multi-outcome results are modeled as tagged unions keyed on a `kind` literal:
+
 ```typescript
-export type IngestResult<TEnvelope> =
-  | { kind: "processed"; result: ...; envelope: TEnvelope; message: MlsMessage }
-  | { kind: "skipped"; envelope: TEnvelope; reason: "past-epoch" | "self-echo" | "duplicate" }
-  | { kind: "unreadable"; envelope: TEnvelope; errors: unknown[] }
-  | { kind: "deferred"; ... }
-  | ...
+type IngestResult<T> =
+  | { kind: "processed"; ... }
+  | { kind: "skipped"; ... }
+  | { kind: "rejected"; ... }
+  | { kind: "unreadable"; ... };
 ```
 
-Narrow with `if (result.kind === "processed")` — never cast.
+Callers switch on `result.kind` rather than catching exceptions. This is the canonical pattern for the ingest pipeline, convergence status, and lifecycle results.
 
 ---
 
-*Convention analysis: 2026-07-01*
+*Convention analysis: 2026-07-07*

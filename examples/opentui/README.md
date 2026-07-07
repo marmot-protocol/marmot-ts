@@ -229,8 +229,8 @@ join.
 
 ## Known-divergent — avoid in interop tests
 
-These map to open items in the repo's `SPEC_GAP_REVIEW.md` and are inherited
-from the shared lifecycle (they do **not** break happy-path turn-taking chat):
+These are inherited from the shared lifecycle (they do **not** break happy-path
+turn-taking chat):
 
 - **Concurrent commits** (two members committing at once) — convergence /
   quiescence settlement is not implemented yet (gap **B5**).

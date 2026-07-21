@@ -19,14 +19,17 @@ correctly, across every supported runtime.
 
 ## Milestone
 
-**Finish the dark-matter migration to single-device wire-complete.**
+**v1.0 — catchup: resync marmot-ts to the post-split marmot spec + MDK Rust reference.**
 
-The library has been migrated to Marmot v2 (darkmatter). This milestone (1) runs a fresh,
-exhaustive audit of the TypeScript implementation against the *latest* darkmatter spec and
-Rust reference, replacing the stale `SPEC_GAP_REVIEW.md`, then (2) closes every confirmed
-single-device gap the audit surfaces, reaching full single-device wire interop with a green
-test suite. Multi-device (MIP-06) and push notifications (MIP-05) are audited and catalogued
-but deliberately deferred.
+The old "darkmatter" repo was split back into two upstream repos: **`marmot-protocol/marmot`**
+(the spec — vendored at `refs/marmot/`) and **`marmot-protocol/mdk`** (the "Marmot Development
+Kit" Rust reference — vendored at `refs/mdk/`, now at `marmotkit-v0.9.4`, well ahead of the
+`v0.2.0`-era baseline marmot-ts was last audited against). This milestone (1) **reviews what
+changed** in both repos since the split, then (2) **catches marmot-ts up** to feature parity
+and byte-for-byte interoperability with the MDK Rust code, closing interop-breaking gaps first.
+**Proof v2** (the account-identity-proof v1→v2 change) is the headline known breaker. Scope stays
+single-device: multi-device (MIP-06), push notifications (MIP-05), the QUIC data-plane/agent-stream
+runtime, and app/tooling crates are cataloged during the review but deliberately deferred.
 
 ## Requirements
 
@@ -48,16 +51,15 @@ but deliberately deferred.
 
 ### Active
 
-<!-- This milestone's scope. Hypotheses until shipped and validated. -->
+<!-- This milestone's (catchup) scope. Hypotheses until shipped and validated; the review step
+     (refs/marmot + refs/mdk) and REQUIREMENTS.md refine these into scoped REQ-IDs. -->
 
-- [ ] Exhaustive gap audit of TS impl vs latest darkmatter spec + Rust, producing a rewritten verified gap-analysis document (Phase 1 deliverable)
-- [ ] M9 — source-epoch media-secret retention: retained per-epoch exporter secrets plumbed to the media service so media from an older epoch than the local tip decrypts
-- [ ] m7 — URL-normalization parity conformance vectors (avatar-url 0x8007 / encrypted-media 0x8008) covering exotic percent-encoding / IDNA
-- [ ] m8 — explicit welcome recipient binding ("reject welcome not addressed to my account") in src/core/welcome.ts
-- [ ] m9 — kind-445 sig-before-decrypt: verify Nostr event id/signature before decrypting group messages (or confirm it is covered upstream in the inbound path)
-- [ ] m3 — formally document blossom-image (0x8002) as unsupported (Rust-parity: point groups at avatar-url 0x8007)
-- [ ] Any additional single-device wire/correctness gaps the Phase 1 audit confirms
-- [ ] Green test suite across all supported runtimes at milestone end
+- [ ] Review the post-split changes in `refs/marmot` (spec) + `refs/mdk` (Rust), classifying each as interop-breaking / additive / defer, producing the catch-up backlog
+- [ ] **Proof v2** — migrate account-identity-proof v1 → v2 to match MDK Rust (known interop-breaker)
+- [ ] Conform to post-split spec tightening: wire-boundary validation (#236), admin-policy / membership / role-change invariants (#171), adopted-spec framing (#170)
+- [ ] Reach feature parity + byte-for-byte interop with MDK library-scope crates (cgka-engine/session, marmot-account, transport-nostr-*, marmot-markdown)
+- [ ] Wire up MDK conformance vectors (`cgka-conformance-simulator`) as cross-impl tests where available
+- [ ] Green test suite across all supported runtimes (Node 20/22/24, Deno 2, Bun latest/1.1) at milestone end
 
 ### Out of Scope
 
@@ -69,14 +71,17 @@ but deliberately deferred.
 
 ## Context
 
-- The `darkmatter` submodule (spec + Rust reference) is checked out at `c9d63de`
-  (`marmotkit-v0.2.0-59-gc9d63de`), ahead of the superproject's recorded commit. Its recent
-  history postdates the June backlog (e.g. push-token gossip #725, chat-list left-vs-removed
-  #766, rename-events #726), so a fresh audit is warranted.
-- `ts-mls` is also a submodule (at `v2.0.0-rc.14-11-g2ca5c43`) and is the MLS engine the
-  library builds on.
-- Spec surface to audit: `darkmatter/spec/{foundation,protocol-core,app-components,transports,features}`
-  plus the Rust `crates/`.
+- The old `darkmatter` repo was split into two upstream repos, both vendored under `refs/`:
+  - **`refs/marmot/`** — the spec (`marmot-protocol/marmot`), at `archive/marmot-pre-darkmatter-spec-import-64-g7f2f5fa`.
+    Post-split spec work of note: #170 (adopted, drop draft/v2 framing), #171 (admin-policy/membership/role-change
+    invariants), #236 (wire-boundary validation tightening).
+  - **`refs/mdk/`** — the Rust reference ("Marmot Development Kit", `marmot-protocol/mdk`), at `marmotkit-v0.9.4-14-g3628ccc`,
+    ahead of the `v0.2.0`-era baseline marmot-ts was last audited against. 21 crates; library-scope ones are
+    `cgka-engine`, `cgka-session`, `marmot-account`, `traits`, `transport-nostr-adapter/-peeler`, `marmot-markdown`,
+    `storage-sqlite`, and `cgka-conformance-simulator` (test vectors).
+- `ts-mls` is a submodule (at `v2.0.0-rc.14-11-g2ca5c43`) and is the MLS engine the library builds on.
+- Spec surface to review: `refs/marmot/{foundation,protocol-core,app-components,transports,features}` plus the
+  Rust `refs/mdk/crates/`.
 - A codebase map already exists at `.planning/codebase/` (ARCHITECTURE, STACK, STRUCTURE,
   CONVENTIONS, CONCERNS, INTEGRATIONS, TESTING).
 - `SPEC_GAP_REVIEW.md` (repo root) is the prior backlog snapshot (2026-06-19); Phase 1's
@@ -98,19 +103,20 @@ but deliberately deferred.
 
 ## Key Decisions
 
-| Decision | Rationale | Outcome |
-|----------|-----------|---------|
-| Milestone = single-device wire-complete | Full single-device spec interop + green suite is a shippable, verifiable finish line; multi-device/push are large orthogonal tracks | — Pending |
-| Phase 1 is an exhaustive gap audit, all spec areas | The June backlog is stale and darkmatter moved ahead; a verified catalog must precede closure work | — Pending |
-| Audit breadth exhaustive, closure single-device only | Catalog everything for completeness, but only close single-device gaps this milestone | — Pending |
-| m3 blossom-image documented as unsupported, not implemented | Matches Rust reference which omits the codec and points groups at avatar-url 0x8007 | — Pending |
-| Multi-device (MIP-06) & push (MIP-05) deferred | Orthogonal to single-device wire interop; product does not need them yet | — Pending |
+| Decision                                                                            | Rationale                                                                                                                                                                                                                   | Outcome   |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| v1.0 repurposed as "catchup" (not shipped)                                          | The prior v1.0 (single-device wire-complete) never shipped; the darkmatter repo split into marmot + mdk and moved far ahead (v0.2→v0.9), so its phases were shelved to backlog (999.3–999.6) and v1.0 reused for the resync | — Pending |
+| Milestone = resync to post-split marmot spec + MDK Rust                             | Feature parity + byte-for-byte interop with the current Rust reference is the verifiable finish line; the refs moved enough that a fresh review is required                                                                 | — Pending |
+| Review refs first, then close interop-breakers first                                | Proof v2 and other breakers must be identified and closed before additive parity work; the review grounds the roadmap                                                                                                       | — Pending |
+| Proof v2 is the headline known breaker                                              | account-identity-proof v1→v2 changed the wire format; v1 peers cannot interop with current MDK                                                                                                                              | — Pending |
+| Multi-device (MIP-06), push (MIP-05), QUIC data-plane & app/tooling crates deferred | Orthogonal to single-device wire interop; cataloged during review but out of scope this milestone                                                                                                                           | — Pending |
 
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
 
 **After each phase transition** (via `/gsd-transition`):
+
 1. Requirements invalidated? → Move to Out of Scope with reason
 2. Requirements validated? → Move to Validated with phase reference
 3. New requirements emerged? → Add to Active
@@ -118,10 +124,12 @@ This document evolves at phase transitions and milestone boundaries.
 5. "What This Is" still accurate? → Update if drifted
 
 **After each milestone** (via `/gsd:complete-milestone`):
+
 1. Full review of all sections
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-01 after initialization*
+
+_Last updated: 2026-07-21 — milestone v1.0 repurposed as "catchup" (resync to marmot spec + MDK Rust reference)_

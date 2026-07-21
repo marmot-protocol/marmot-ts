@@ -6,34 +6,35 @@
 
 ## TS Layer ↔ Rust Crate Correspondence
 
-| TS Layer / File | Primary Rust Crate(s) | Role Match |
-|-----------------|----------------------|------------|
-| `ts-mls` (submodule) | `openMLS` (Rust lib, used by `cgka-engine`) | Both are the raw MLS engine — RFC 9420 state transitions |
-| `src/core/` (protocol/crypto primitives) | `cgka-traits` (`crates/traits/`) | Shared type vocabulary, app-component codecs, engine/peeler interfaces |
-| `src/core/components/` | `cgka-traits/src/app_components/` | App-component codecs (encrypted-media, avatar-url, admin-policy, routing) |
-| `src/engine/group-engine.ts` (`MarmotGroupEngine`) | `cgka-engine/src/engine.rs` (`Engine<S>`) | Transport-agnostic state machine; both implement the same CgkaEngine/engine contract |
-| `src/engine/epoch-manager` (implicit in engine) | `cgka-engine/src/epoch_manager.rs` (`EpochManager`) | Sole owner of lifecycle-state transitions (`Stable/PendingPublish/Merging/Recovering`) |
-| `src/engine/fork-recovery.ts` (`ForkRecovery`) | `cgka-engine/src/fork_recovery.rs` | Deterministic same-epoch commit ordering + rollback-to-winner |
-| `src/engine/retained-store.ts` (`RetainedHistoryStore`) | `cgka-engine` retained snapshots + `StorageProvider` | In-memory bounded window of `ClientState` per retained epoch |
-| `src/engine/history-tree.ts` (`GroupHistoryTree`) | `cgka-engine` stored-message store + `cgka-engine/src/openmls_projection.rs` | Full-fork DAG / commit persistence |
-| `src/engine/ingestion-pool.ts` (`IngestionPool`) | `cgka-engine/src/message_processor/store.rs` (retryable stored messages) | Holds undecryptable or deferred messages for retry |
-| `src/engine/ingest.ts` (`ingestEnvelopes`) | `cgka-engine/src/message_processor/ingest.rs` (`ingest_group_message`) | Inbound peel → classify → apply pipeline |
-| `src/engine/admin-policy.ts` | `cgka-engine/src/message_processor/send.rs` (MIP-03 guards) | Admin-commit authorization policy |
-| `src/engine/convergence.ts` (via `src/core/convergence.ts`) | `cgka-engine/src/convergence.rs` + `distributed_convergence.rs` | Candidate-branch scoring and selection |
-| `src/core/convergence.ts` | `cgka-engine/src/canonicalization.rs` | Branch-score algorithm (depth, witness quorum, tip priority/committer/digest) |
-| `src/core/group-lifecycle.ts` (`GroupLifecycleState`) | `cgka-traits/src/engine_state.rs` + `cgka-engine/src/epoch_manager.rs` | Lifecycle FSM and legal transition enforcement |
-| `src/core/group-message-crypto.ts` | `cgka-engine/src/group_context_view.rs` (`exporter_secret`) + `transport-nostr-peeler/src/peeler.rs` | Kind-445 ChaCha20-Poly1305 seal/unseal via MLS exporter |
-| `src/core/account-identity-proof.ts` | `cgka-engine/src/account_identity_proof.rs` | LeafNode extension binding account pubkey to MLS signing key |
-| `src/client/group/nostr-peeler.ts` (`NostrGroupPeeler`) | `transport-nostr-peeler/src/peeler.rs` | `TransportPeeler` / `GroupPeeler<NostrEvent>` impl; kind-445 wrap/peel |
-| `src/client/session/group-session.ts` (`GroupSession`) | `cgka-session` (wires engine into session lifecycle) | Wires engine + peeler; translates engine results to transport types |
-| `src/client/runtime/group-runtime.ts` (`GroupRuntime`) | `marmot-account/src/runtime.rs` (`AccountDeviceRuntime`) | Drives publish effects; confirm/rollback pending obligations |
-| `src/client/group/marmot-group.ts` (`MarmotGroup`) | `marmot-account` + `marmot-app` app facade | Top-level group API composing session + runtime |
-| `src/client/transport/nostr/welcome-delivery.ts` | `transport-nostr-adapter` (NIP-59 gift-wrap) + `marmot-account/src/key_package.rs` | NIP-59 welcome wrap/peel + inbox-relay delivery |
-| `src/core/welcome-join.ts` | `cgka-engine/src/group_lifecycle.rs` (`do_join_welcome`) | MLS Welcome processing → `ts-mls::joinGroup` / `OpenMLS::process_message` |
-| `src/extra/` (store impls) | `storage-sqlite` / `cgka-traits/src/storage.rs` | `StorageProvider` / `GenericKeyValueStore` implementations |
-| `src/audit/` (`AuditSink`) | `marmot-forensics` (JSONL audit schema) | Optional forensic audit log |
+| TS Layer / File                                             | Primary Rust Crate(s)                                                                                | Role Match                                                                             |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `ts-mls` (submodule)                                        | `openMLS` (Rust lib, used by `cgka-engine`)                                                          | Both are the raw MLS engine — RFC 9420 state transitions                               |
+| `src/core/` (protocol/crypto primitives)                    | `cgka-traits` (`crates/traits/`)                                                                     | Shared type vocabulary, app-component codecs, engine/peeler interfaces                 |
+| `src/core/components/`                                      | `cgka-traits/src/app_components/`                                                                    | App-component codecs (encrypted-media, avatar-url, admin-policy, routing)              |
+| `src/engine/group-engine.ts` (`MarmotGroupEngine`)          | `cgka-engine/src/engine.rs` (`Engine<S>`)                                                            | Transport-agnostic state machine; both implement the same CgkaEngine/engine contract   |
+| `src/engine/epoch-manager` (implicit in engine)             | `cgka-engine/src/epoch_manager.rs` (`EpochManager`)                                                  | Sole owner of lifecycle-state transitions (`Stable/PendingPublish/Merging/Recovering`) |
+| `src/engine/fork-recovery.ts` (`ForkRecovery`)              | `cgka-engine/src/fork_recovery.rs`                                                                   | Deterministic same-epoch commit ordering + rollback-to-winner                          |
+| `src/engine/retained-store.ts` (`RetainedHistoryStore`)     | `cgka-engine` retained snapshots + `StorageProvider`                                                 | In-memory bounded window of `ClientState` per retained epoch                           |
+| `src/engine/history-tree.ts` (`GroupHistoryTree`)           | `cgka-engine` stored-message store + `cgka-engine/src/openmls_projection.rs`                         | Full-fork DAG / commit persistence                                                     |
+| `src/engine/ingestion-pool.ts` (`IngestionPool`)            | `cgka-engine/src/message_processor/store.rs` (retryable stored messages)                             | Holds undecryptable or deferred messages for retry                                     |
+| `src/engine/ingest.ts` (`ingestEnvelopes`)                  | `cgka-engine/src/message_processor/ingest.rs` (`ingest_group_message`)                               | Inbound peel → classify → apply pipeline                                               |
+| `src/engine/admin-policy.ts`                                | `cgka-engine/src/message_processor/send.rs` (MIP-03 guards)                                          | Admin-commit authorization policy                                                      |
+| `src/engine/convergence.ts` (via `src/core/convergence.ts`) | `cgka-engine/src/convergence.rs` + `distributed_convergence.rs`                                      | Candidate-branch scoring and selection                                                 |
+| `src/core/convergence.ts`                                   | `cgka-engine/src/canonicalization.rs`                                                                | Branch-score algorithm (depth, witness quorum, tip priority/committer/digest)          |
+| `src/core/group-lifecycle.ts` (`GroupLifecycleState`)       | `cgka-traits/src/engine_state.rs` + `cgka-engine/src/epoch_manager.rs`                               | Lifecycle FSM and legal transition enforcement                                         |
+| `src/core/group-message-crypto.ts`                          | `cgka-engine/src/group_context_view.rs` (`exporter_secret`) + `transport-nostr-peeler/src/peeler.rs` | Kind-445 ChaCha20-Poly1305 seal/unseal via MLS exporter                                |
+| `src/core/account-identity-proof.ts`                        | `cgka-engine/src/account_identity_proof.rs`                                                          | LeafNode extension binding account pubkey to MLS signing key                           |
+| `src/client/group/nostr-peeler.ts` (`NostrGroupPeeler`)     | `transport-nostr-peeler/src/peeler.rs`                                                               | `TransportPeeler` / `GroupPeeler<NostrEvent>` impl; kind-445 wrap/peel                 |
+| `src/client/session/group-session.ts` (`GroupSession`)      | `cgka-session` (wires engine into session lifecycle)                                                 | Wires engine + peeler; translates engine results to transport types                    |
+| `src/client/runtime/group-runtime.ts` (`GroupRuntime`)      | `marmot-account/src/runtime.rs` (`AccountDeviceRuntime`)                                             | Drives publish effects; confirm/rollback pending obligations                           |
+| `src/client/group/marmot-group.ts` (`MarmotGroup`)          | `marmot-account` + `marmot-app` app facade                                                           | Top-level group API composing session + runtime                                        |
+| `src/client/transport/nostr/welcome-delivery.ts`            | `transport-nostr-adapter` (NIP-59 gift-wrap) + `marmot-account/src/key_package.rs`                   | NIP-59 welcome wrap/peel + inbox-relay delivery                                        |
+| `src/core/welcome-join.ts`                                  | `cgka-engine/src/group_lifecycle.rs` (`do_join_welcome`)                                             | MLS Welcome processing → `ts-mls::joinGroup` / `OpenMLS::process_message`              |
+| `src/extra/` (store impls)                                  | `storage-sqlite` / `cgka-traits/src/storage.rs`                                                      | `StorageProvider` / `GenericKeyValueStore` implementations                             |
+| `src/audit/` (`AuditSink`)                                  | `marmot-forensics` (JSONL audit schema)                                                              | Optional forensic audit log                                                            |
 
 **Structural note on layering:**
+
 - In the Rust stack, `cgka-traits` is the boundary crate (shared types) with zero MLS-engine dependency — analogous to `src/core` (no I/O) plus `src/engine/types.ts`.
 - `cgka-engine` is the full engine crate — analogous to `src/engine/` as a whole (including history tree and fork recovery which Rust keeps inside the engine crate).
 - `transport-nostr-peeler` is the single Nostr crypto-boundary crate — analogous to `src/client/group/nostr-peeler.ts` + `src/core/group-message-crypto.ts` combined.
@@ -104,6 +105,7 @@ ForkRecovery.resolveFork()               [src/engine/fork-recovery.ts]
 ```
 
 **Lifecycle FSM (`src/core/group-lifecycle.ts`):**
+
 ```
 Stable → PendingPublish → Merging → Stable
 Stable → Recovering → Stable | Unrecoverable
@@ -232,13 +234,13 @@ Local commit intent (e.g., invite, group-profile update):
 
 ## Component Boundaries
 
-| Boundary | TS Side | Rust Side | Protocol-defined seam |
-|----------|---------|-----------|----------------------|
-| Transport / Engine | `GroupPeeler<TEnvelope>` interface (`src/engine/types.ts`) | `TransportPeeler` trait (`cgka-traits/src/peeler.rs`) | spec: transport owns outer envelope; protocol-core owns when MLS bytes become canonical |
-| Engine / MLS | `ts-mls` `ClientState`, `processMessage` | OpenMLS `MlsGroup`, `process_message` | RFC 9420 MLS state transition |
-| Engine / Storage | `GenericKeyValueStore<V>` (`src/utils/key-value.ts`) | `StorageProvider` trait (`cgka-traits/src/storage.rs`) | Local contract; not wire-visible |
-| Core / Client | `src/core/` has zero I/O | `cgka-traits` + `cgka-engine` have no Nostr deps | No Nostr types in engine or core |
-| Publish obligation | `PendingState` (`src/engine/types.ts`) | `PendingStateRef` (`cgka-traits`) | spec: pending ref is local; not a wire type |
+| Boundary           | TS Side                                                    | Rust Side                                              | Protocol-defined seam                                                                   |
+| ------------------ | ---------------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| Transport / Engine | `GroupPeeler<TEnvelope>` interface (`src/engine/types.ts`) | `TransportPeeler` trait (`cgka-traits/src/peeler.rs`)  | spec: transport owns outer envelope; protocol-core owns when MLS bytes become canonical |
+| Engine / MLS       | `ts-mls` `ClientState`, `processMessage`                   | OpenMLS `MlsGroup`, `process_message`                  | RFC 9420 MLS state transition                                                           |
+| Engine / Storage   | `GenericKeyValueStore<V>` (`src/utils/key-value.ts`)       | `StorageProvider` trait (`cgka-traits/src/storage.rs`) | Local contract; not wire-visible                                                        |
+| Core / Client      | `src/core/` has zero I/O                                   | `cgka-traits` + `cgka-engine` have no Nostr deps       | No Nostr types in engine or core                                                        |
+| Publish obligation | `PendingState` (`src/engine/types.ts`)                     | `PendingStateRef` (`cgka-traits`)                      | spec: pending ref is local; not a wire type                                             |
 
 ---
 
@@ -249,6 +251,7 @@ Local commit intent (e.g., invite, group-profile update):
 **Where the gap lives:** `src/core/media/crypto.ts` (key derivation) called from the client media decrypt path. The retained secrets per epoch are available in `RetainedHistoryStore` (each entry is a full `ClientState` with `keySchedule.exporterSecret`), but the media decrypt caller does not iterate them.
 
 **Fix surface:**
+
 1. `src/core/media/crypto.ts` — extend the key-derivation API to accept an iterable of exporter secrets (or epoch → exporter secret map) rather than a single `ClientState`.
 2. Caller in `src/client/` — thread `retainedStore.states()` into the media decrypt call so cross-epoch media can try each retained epoch's secret in reverse order until one succeeds.
 3. Pruning pin — the spec requires not pruning states still needed to decrypt app payloads inside `app_payload_past_epoch_limit` (5 epochs). Confirm `RetainedHistoryStore.prune()` respects this window for media as well as commit replay.
@@ -272,6 +275,7 @@ Local commit intent (e.g., invite, group-profile update):
 ### m8 — Welcome recipient binding
 
 **Where the gap lives:** `src/core/welcome-join.ts`. The spec (`joining.md` steps 1–2, 6, 8) requires:
+
 - Step 1: Welcome addressed to this account identity.
 - Step 2: Referenced KeyPackage belongs to this account/device.
 - Step 6: Welcome author identified from MLS GroupInfo signer leaf + account identity validated.
@@ -302,6 +306,7 @@ The dependency direction in both TS and Rust is strict and should drive audit or
 ```
 
 **Recommended audit pass order:**
+
 1. **Transport wire format** — kind-445 framing, sig-before-decrypt (m9), MLSMessage wire format (PublicMessage). Rust ref: `transport-nostr-peeler`.
 2. **Welcome / join flow** — recipient binding (m8), admin check, KeyPackage rotation, ratchet_tree requirement. Rust ref: `cgka-engine/src/group_lifecycle.rs`.
 3. **Retained history + epoch secrets** — pruning pin rule, app-payload window, M9 media-secret retention. Rust ref: `cgka-engine/src/group_context_view.rs`.
@@ -350,5 +355,5 @@ A staged commit created before `selectCanonicalBranch` MUST NOT be reused after 
 
 ---
 
-*Architecture research for: Marmot (MLS over Nostr) TypeScript client — gap audit layer mapping*
-*Researched: 2026-07-01*
+_Architecture research for: Marmot (MLS over Nostr) TypeScript client — gap audit layer mapping_
+_Researched: 2026-07-01_

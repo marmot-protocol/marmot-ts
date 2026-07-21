@@ -1,6 +1,9 @@
-[submodule "darkmatter"]
-	path = darkmatter
-	url = https://github.com/marmot-protocol/darkmatter.git
 [submodule "ts-mls"]
 	path = ts-mls
 	url = https://github.com/hzrd149/ts-mls.git
+[submodule "marmot"]
+	path = refs/marmot
+	url = https://github.com/marmot-protocol/marmot
+[submodule "mdk"]
+	path = refs/mdk
+	url = https://github.com/marmot-protocol/mdk

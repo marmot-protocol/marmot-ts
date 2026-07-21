@@ -22,7 +22,7 @@ app/tooling crates are cataloged by the review but explicitly deferred.
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Proof v2** - Migrate account-identity-proof v1→v2 to close the headline interop-breaker
+- [x] **Phase 1: Proof v2** - Migrate account-identity-proof v1→v2 to close the headline interop-breaker (completed 2026-07-21)
 - [ ] **Phase 2: Inbound Trust & Wire Boundary** - Verify-before-trust, KeyPackage lifetime cap, required-tag cardinality
 - [ ] **Phase 3: Commit Integrity & Convergence Parity** - App-component integrity, admin/leaf coupling, SelfEvicted, notification withdrawal, own-commit protection
 - [ ] **Phase 4: Feature Parity & Conformance Vectors** - SafeAAD advertisement plus MDK's own test vectors wired up as cross-impl tests
@@ -44,7 +44,7 @@ in isolation before any other wire-boundary work begins.
 2. A v2 proof produced by marmot-ts is accepted by MDK-equivalent verification logic, proven via a Rust-signed → TS-verified round-trip fixture (no shared byte fixture exists yet, so this is generated fresh).
 3. Per-ciphersuite `signature_scheme` decimal tag values emitted by marmot-ts match the Rust `signature_algorithm() as u16` decimal for every supported ciphersuite.
 4. The unpublished kind-450 proof event carries its six tags (`d`, `extension`, `version`, `ciphersuite`, `signature_scheme`, `mls_signature_key`) in the exact Rust order/format and is never published/relayed.
-   **Plans**: 1/2 plans executed
+   **Plans**: 2/2 plans complete
 
 Plans:
 **Wave 1**
@@ -53,7 +53,7 @@ Plans:
 
 **Wave 2** _(blocked on Wave 1 completion)_
 
-- [ ] 01-02-PLAN.md — Thread widened signer contract through client, sweep proof-touching tests to v2, and pin a fresh Rust-signed → TS-verified round-trip fixture + never-published assertion
+- [x] 01-02-PLAN.md — Thread widened signer contract through client, sweep proof-touching tests to v2, and pin a fresh Rust-signed → TS-verified round-trip fixture + never-published assertion
 
 ### Phase 2: Inbound Trust & Wire Boundary
 
@@ -121,13 +121,13 @@ the milestone is shippable.
 **Execution Order:**
 Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
-| Phase                                    | Plans Complete | Status      | Completed |
-| ---------------------------------------- | -------------- | ----------- | --------- |
-| 1. Proof v2                              | 1/2            | In Progress |           |
-| 2. Inbound Trust & Wire Boundary         | 0/TBD          | Not started | -         |
-| 3. Commit Integrity & Convergence Parity | 0/TBD          | Not started | -         |
-| 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -         |
-| 5. Quality Gate                          | 0/TBD          | Not started | -         |
+| Phase                                    | Plans Complete | Status      | Completed  |
+| ---------------------------------------- | -------------- | ----------- | ---------- |
+| 1. Proof v2                              | 2/2            | Complete    | 2026-07-21 |
+| 2. Inbound Trust & Wire Boundary         | 0/TBD          | Not started | -          |
+| 3. Commit Integrity & Convergence Parity | 0/TBD          | Not started | -          |
+| 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -          |
+| 5. Quality Gate                          | 0/TBD          | Not started | -          |
 
 ## Backlog
 

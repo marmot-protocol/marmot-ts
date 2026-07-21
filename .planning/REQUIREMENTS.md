@@ -11,7 +11,7 @@ Requirements for catching marmot-ts up to feature parity + byte-for-byte interop
 
 ### Proof (account-identity-proof v2)
 
-- [ ] **PROOF-01**: account-identity-proof migrates v1→v2 — version byte `2`, and the 64-byte Schnorr signature signs the canonical Nostr **kind-450 event id** (not the old SHA-256 domain preimage); marmot-ts produces and verifies v2 byte-for-byte with MDK, and per-ciphersuite signature-scheme tag values match the Rust `signature_algorithm() as u16` decimals (interop-breaking; `src/core/account-identity-proof.ts`, mdk #755)
+- [x] **PROOF-01**: account-identity-proof migrates v1→v2 — version byte `2`, and the 64-byte Schnorr signature signs the canonical Nostr **kind-450 event id** (not the old SHA-256 domain preimage); marmot-ts produces and verifies v2 byte-for-byte with MDK, and per-ciphersuite signature-scheme tag values match the Rust `signature_algorithm() as u16` decimals (interop-breaking; `src/core/account-identity-proof.ts`, mdk #755)
 
 ### Security / inbound trust
 
@@ -68,21 +68,21 @@ Explicitly excluded. Documented to prevent scope creep.
 
 Which phases cover which requirements. Populated during roadmap creation.
 
-| Requirement | Phase                                           | Status  |
-| ----------- | ----------------------------------------------- | ------- |
-| PROOF-01    | Phase 1 — Proof v2                              | Pending |
-| SEC-01      | Phase 2 — Inbound Trust & Wire Boundary         | Pending |
-| WIRE-01     | Phase 2 — Inbound Trust & Wire Boundary         | Pending |
-| WIRE-02     | Phase 2 — Inbound Trust & Wire Boundary         | Pending |
-| WIRE-03     | Phase 3 — Commit Integrity & Convergence Parity | Pending |
-| CONV-01     | Phase 3 — Commit Integrity & Convergence Parity | Pending |
-| CONV-02     | Phase 3 — Commit Integrity & Convergence Parity | Pending |
-| CONV-03     | Phase 3 — Commit Integrity & Convergence Parity | Pending |
-| CONV-04     | Phase 3 — Commit Integrity & Convergence Parity | Pending |
-| WIRE-04     | Phase 4 — Feature Parity & Conformance Vectors  | Pending |
-| CONF-01     | Phase 4 — Feature Parity & Conformance Vectors  | Pending |
-| QA-01       | Phase 5 — Quality Gate                          | Pending |
-| QA-02       | Phase 5 — Quality Gate                          | Pending |
+| Requirement | Phase                                           | Status   |
+| ----------- | ----------------------------------------------- | -------- |
+| PROOF-01    | Phase 1 — Proof v2                              | Complete |
+| SEC-01      | Phase 2 — Inbound Trust & Wire Boundary         | Pending  |
+| WIRE-01     | Phase 2 — Inbound Trust & Wire Boundary         | Pending  |
+| WIRE-02     | Phase 2 — Inbound Trust & Wire Boundary         | Pending  |
+| WIRE-03     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
+| CONV-01     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
+| CONV-02     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
+| CONV-03     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
+| CONV-04     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
+| WIRE-04     | Phase 4 — Feature Parity & Conformance Vectors  | Pending  |
+| CONF-01     | Phase 4 — Feature Parity & Conformance Vectors  | Pending  |
+| QA-01       | Phase 5 — Quality Gate                          | Pending  |
+| QA-02       | Phase 5 — Quality Gate                          | Pending  |
 
 **Coverage:**
 

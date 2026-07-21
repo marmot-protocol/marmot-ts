@@ -13,6 +13,7 @@ the result against a green cross-runtime test suite (Phase 4). Multi-device (MIP
 ## Phases
 
 **Phase Numbering:**
+
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
@@ -26,62 +27,70 @@ Decimal phases appear between their surrounding integers in numeric order.
 ## Phase Details
 
 ### Phase 1: Exhaustive Gap Audit
+
 **Goal**: A rewritten, verified SPEC_GAP_REVIEW.md supersedes the stale June 2026 snapshot and becomes the authoritative closure backlog for Phase 2 and 3
 **Depends on**: Nothing (first phase)
 **Requirements**: AUDIT-01, AUDIT-02, AUDIT-03
 **Success Criteria** (what must be TRUE):
-  1. SPEC_GAP_REVIEW.md is rewritten with every confirmed gap pointing to source file:line and governing spec section (audit covers all seven spec areas in dependency order)
-  2. Every finding carries a confirmed present-or-absent verdict in code plus a classification: BLOCKER / MAJOR / MINOR / deferred
-  3. All seven candidate likely gaps (NIP-40 expiration, routing-rotation subscription, QUIC VarInt canonicality, convergence apply-gating, `isCommitMessage` wireformat, kind-30443 tag validation, kind-1210 attribution) are either confirmed with evidence or closed with code evidence
-  4. Multi-device (MIP-06), push (MIP-05), and QUIC data-plane surface is cataloged in the document with explicit deferred disposition and the reason
-**Plans**: TBD
+
+1. SPEC_GAP_REVIEW.md is rewritten with every confirmed gap pointing to source file:line and governing spec section (audit covers all seven spec areas in dependency order)
+2. Every finding carries a confirmed present-or-absent verdict in code plus a classification: BLOCKER / MAJOR / MINOR / deferred
+3. All seven candidate likely gaps (NIP-40 expiration, routing-rotation subscription, QUIC VarInt canonicality, convergence apply-gating, `isCommitMessage` wireformat, kind-30443 tag validation, kind-1210 attribution) are either confirmed with evidence or closed with code evidence
+4. Multi-device (MIP-06), push (MIP-05), and QUIC data-plane surface is cataloged in the document with explicit deferred disposition and the reason
+   **Plans**: TBD
 
 ### Phase 2: Blocker & Security Closure
+
 **Goal**: Every confirmed single-device blocker and security hardening gap is closed — media decrypts across epochs, convergence is correctly gated and arrival-order-free, messages are authenticated before decryption, and public API classifiers match the actual wire format
 **Depends on**: Phase 1
 **Requirements**: MEDIA-01, MEDIA-02, CONV-01, CONV-02, SEC-01, SEC-02, API-01
 **Success Criteria** (what must be TRUE):
-  1. Media sent at epoch N decrypts correctly after the group has advanced to epoch N+2 (a cross-epoch test sends media, advances state twice via commits, then decrypts and the plaintext matches)
-  2. An inbound commit that arrives during PendingPublish is returned as `deferred`, not applied; the canonical tip does not advance until the local commit is acknowledged
-  3. Two peers that receive the same competing commits in opposite relay-delivery order select the same canonical branch (dual-ordering test with two in-memory instances)
-  4. A kind-445 event with an invalid Nostr event signature is routed to `invalid_signature` disposition before any ChaCha20-Poly1305 decryption is attempted
-  5. A Welcome not addressed to the local account pubkey is rejected before `joinGroup()` is called; `isCommitMessage` and `isProposalMessage` return `true` for real PublicMessage engine output
-**Plans**: TBD
+
+1. Media sent at epoch N decrypts correctly after the group has advanced to epoch N+2 (a cross-epoch test sends media, advances state twice via commits, then decrypts and the plaintext matches)
+2. An inbound commit that arrives during PendingPublish is returned as `deferred`, not applied; the canonical tip does not advance until the local commit is acknowledged
+3. Two peers that receive the same competing commits in opposite relay-delivery order select the same canonical branch (dual-ordering test with two in-memory instances)
+4. A kind-445 event with an invalid Nostr event signature is routed to `invalid_signature` disposition before any ChaCha20-Poly1305 decryption is attempted
+5. A Welcome not addressed to the local account pubkey is rejected before `joinGroup()` is called; `isCommitMessage` and `isProposalMessage` return `true` for real PublicMessage engine output
+   **Plans**: TBD
 
 ### Phase 3: Wire / Conformance & Docs
+
 **Goal**: All remaining wire-format, codec-correctness, and API conformance gaps confirmed by Phase 1 are closed, and unsupported protocol features are formally documented
 **Depends on**: Phase 2
 **Requirements**: WIRE-01, WIRE-02, WIRE-03, WIRE-04, CONF-01, DOC-01
 **Success Criteria** (what must be TRUE):
-  1. A QUIC VarInt with a non-canonical (over-long) length prefix is rejected with an encoding error, not silently parsed (a test encodes an over-long VarInt and verifies the decoder throws)
-  2. A kind-30443 KeyPackage event with duplicate required tag names is rejected by the decoder (test: event with two `mls_extensions` tags yields rejection)
-  3. blossom-image (0x8002) is documented as unsupported in source and docs, with a comment pointing to avatar-url (0x8007) as the supported alternative
-  4. WIRE-03 (NIP-40 expiration) and WIRE-04 (routing-rotation subscription) are either closed with a test verifying correct behavior or explicitly recorded as not-applicable per Phase 1 findings
-  5. URL-normalization vectors for avatar-url (0x8007) and encrypted-media (0x8008) pass for exotic percent-encoding, IDNA/punycode round-trips, default-port elision, and trailing-slash serialization (CONF-01)
-**Plans**: TBD
+
+1. A QUIC VarInt with a non-canonical (over-long) length prefix is rejected with an encoding error, not silently parsed (a test encodes an over-long VarInt and verifies the decoder throws)
+2. A kind-30443 KeyPackage event with duplicate required tag names is rejected by the decoder (test: event with two `mls_extensions` tags yields rejection)
+3. blossom-image (0x8002) is documented as unsupported in source and docs, with a comment pointing to avatar-url (0x8007) as the supported alternative
+4. WIRE-03 (NIP-40 expiration) and WIRE-04 (routing-rotation subscription) are either closed with a test verifying correct behavior or explicitly recorded as not-applicable per Phase 1 findings
+5. URL-normalization vectors for avatar-url (0x8007) and encrypted-media (0x8008) pass for exotic percent-encoding, IDNA/punycode round-trips, default-port elision, and trailing-slash serialization (CONF-01)
+   **Plans**: TBD
 
 ### Phase 4: Quality Gate
+
 **Goal**: The full test suite passes on every supported runtime and every closure change with a byte-exact Rust reference vector is verified against it — the milestone is shippable
 **Depends on**: Phase 3
 **Requirements**: QA-01, QA-02
 **Success Criteria** (what must be TRUE):
-  1. `pnpm vitest run` exits 0 on Node 20, Node 22, and Node 24
-  2. `deno run -A --node-modules-dir=auto npm:vitest run` exits 0 on Deno 2
-  3. `bun run vitest run` exits 0 on Bun latest and Bun 1.1
-  4. Every closure change that has a byte-exact counterpart in `darkmatter/crates/` is cross-checked against the Rust reference output and the result documented in SPEC_GAP_REVIEW.md
-**Plans**: TBD
+
+1. `pnpm vitest run` exits 0 on Node 20, Node 22, and Node 24
+2. `deno run -A --node-modules-dir=auto npm:vitest run` exits 0 on Deno 2
+3. `bun run vitest run` exits 0 on Bun latest and Bun 1.1
+4. Every closure change that has a byte-exact counterpart in `darkmatter/crates/` is cross-checked against the Rust reference output and the result documented in SPEC_GAP_REVIEW.md
+   **Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
 Phases execute in numeric order: 1 → 2 → 3 → 4
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Exhaustive Gap Audit | 0/TBD | Not started | - |
-| 2. Blocker & Security Closure | 0/TBD | Not started | - |
-| 3. Wire / Conformance & Docs | 0/TBD | Not started | - |
-| 4. Quality Gate | 0/TBD | Not started | - |
+| Phase                         | Plans Complete | Status      | Completed |
+| ----------------------------- | -------------- | ----------- | --------- |
+| 1. Exhaustive Gap Audit       | 0/TBD          | Not started | -         |
+| 2. Blocker & Security Closure | 0/TBD          | Not started | -         |
+| 3. Wire / Conformance & Docs  | 0/TBD          | Not started | -         |
+| 4. Quality Gate               | 0/TBD          | Not started | -         |
 
 ## Backlog
 
@@ -92,6 +101,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 **Plans:** 0 plans
 
 Plans:
+
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
 ### Phase 999.2: Documentation review & update for current library state ahead of next release (BACKLOG)
@@ -101,4 +111,45 @@ Plans:
 **Plans:** 0 plans
 
 Plans:
+
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.3: Exhaustive Gap Audit (shelved from milestone v1.0 Phase 1) (BACKLOG)
+
+**Goal:** A rewritten, verified SPEC_GAP_REVIEW.md supersedes the stale June 2026 snapshot and becomes the authoritative closure backlog. Context gathered + discussion completed; no plans written. Depends on nothing; 999.4/999.5/999.6 depend on this. Full detail + prior work in `999.3-exhaustive-gap-audit/` (SHELVED.md, 01-CONTEXT.md, 01-DISCUSSION-LOG.md).
+**Requirements:** AUDIT-01, AUDIT-02, AUDIT-03
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.4: Blocker & Security Closure (shelved from milestone v1.0 Phase 2) (BACKLOG)
+
+**Goal:** Close every confirmed single-device blocker and security hardening gap — cross-epoch media decryption, convergence apply-gating, arrival-order-free branch selection, authenticate-before-decrypt, and public API classifiers matching the wire format. Depends on 999.3. Full detail in `999.4-blocker-and-security-closure/SHELVED.md`.
+**Requirements:** MEDIA-01, MEDIA-02, CONV-01, CONV-02, SEC-01, SEC-02, API-01
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.5: Wire / Conformance & Docs (shelved from milestone v1.0 Phase 3) (BACKLOG)
+
+**Goal:** Close remaining wire-format, codec, and API conformance gaps confirmed by the audit; document unsupported features (QUIC VarInt canonicality, duplicate-tag rejection, blossom-image 0x8002 unsupported, WIRE-03/04 disposition, URL-normalization vectors). Depends on 999.4. Full detail in `999.5-wire-conformance-and-docs/SHELVED.md`.
+**Requirements:** WIRE-01, WIRE-02, WIRE-03, WIRE-04, CONF-01, DOC-01
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.6: Quality Gate (shelved from milestone v1.0 Phase 4) (BACKLOG)
+
+**Goal:** Green Vitest suite on Node 20/22/24, Deno 2, Bun latest/1.1, plus byte-exact Rust reference verification for every closure change. Depends on 999.5. Full detail in `999.6-quality-gate/SHELVED.md`.
+**Requirements:** QA-01, QA-02
+**Plans:** 0 plans
+
+Plans:
+
 - [ ] TBD (promote with /gsd-review-backlog when ready)

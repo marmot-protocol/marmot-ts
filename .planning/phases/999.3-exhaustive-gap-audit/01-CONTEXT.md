@@ -7,7 +7,7 @@
 ## Phase Boundary
 
 Produce a **verified, classified single-device gap catalog** of the marmot-ts TypeScript
-implementation against the *latest* darkmatter spec + Rust reference (submodule at
+implementation against the _latest_ darkmatter spec + Rust reference (submodule at
 `c9d63de`, 59 commits ahead of the stale 2026-06-19 snapshot). Walk all seven spec areas
 in dependency order, confirm every finding present-or-absent in code with evidence, and
 drive that catalog into the **standard GSD planning artifacts** so Phases 2–3 are
@@ -22,6 +22,7 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
 ## Implementation Decisions
 
 ### Deliverable shape (reframed from the roadmap wording)
+
 - **D-01:** **Delete `SPEC_GAP_REVIEW.md`.** The bespoke repo-root backlog doc is retired,
   not rewritten. This supersedes the AUDIT-02 / Phase 1 Success-Criterion-#1 wording that
   says "rewrite SPEC_GAP_REVIEW.md" — the audit is authoritative and reshapes that item
@@ -35,6 +36,7 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
   a side document. Deferred items are recorded in `01-AUDIT.md`'s deferred catalog only.
 
 ### Verification rigor
+
 - **D-04:** **Read-only audit.** Each finding must cite **source `file:line` + governing
   spec section + Rust reference location**. Verdicts come from reading code/spec/Rust.
 - **D-05:** **Red-proof tests are deferred to the closure phases (2–3)**, not written in
@@ -43,6 +45,7 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
   in code plus classification.")
 
 ### Catalog structure (`01-AUDIT.md`)
+
 - **D-06:** **Organized by spec area in dependency order**: foundation → protocol-core →
   app-components → transports → features. This mirrors the audit walk and satisfies
   Success-Criterion coverage of "all seven spec areas in dependency order."
@@ -55,6 +58,7 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
   are not reopened.
 
 ### Audit execution strategy
+
 - **D-09:** **Parallel fan-out per spec area**, findings **adversarially cross-checked
   against the Rust reference** (`darkmatter/crates/`). Not a single sequential read.
 - **D-10:** **Triage the 59 post-June darkmatter commits.** Clearly single-device features
@@ -63,12 +67,14 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
   are multi-device, and QUIC data-plane → **deferred catalog with reason**.
 
 ### Reference fixup (part of the deliverable)
+
 - **D-11:** **Remove all `SPEC_GAP_REVIEW.md` references entirely** (do not repoint them).
   Known reference sites to clean: `examples/opentui/README.md`, `.planning/PROJECT.md`
   context note. Planning-doc references (`ROADMAP.md`, `REQUIREMENTS.md`, `research/*`,
   `codebase/CONCERNS.md`) are handled as part of the fold/reconcile, not left dangling.
 
 ### Requirement Deltas (audit output → GSD reconciliation)
+
 - **D-12:** The audit records a **Requirement Deltas** section (in `01-AUDIT.md`) covering:
   already-closed pre-flagged items, newly-discovered single-device gaps (new proposed IDs),
   and retirements (e.g. WIRE-03 NIP-40 expiration / WIRE-04 routing-rotation are
@@ -77,6 +83,7 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
   "rewritten SPEC_GAP_REVIEW.md" to "verified audit artifact + folded planning."
 
 ### Claude's Discretion
+
 - Exact severity-threshold boundaries between MAJOR and MINOR per finding.
 - Depth of the deferred catalog entries (name + reason minimum; add byte-level delta only
   where cheap and useful for the future milestone).
@@ -87,11 +94,13 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
 </decisions>
 
 <canonical_refs>
+
 ## Canonical References
 
 **Downstream agents MUST read these before planning or implementing.**
 
 ### Spec (source of truth for wire format)
+
 - `darkmatter/spec/foundation/` — foundational protocol definitions (audit area 1)
 - `darkmatter/spec/protocol-core/` — core Marmot/MLS-over-Nostr protocol (audit area 2)
 - `darkmatter/spec/app-components/` — app component codecs incl.
@@ -101,6 +110,7 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
   `retained-history.md` (audit area 5)
 
 ### Rust reference (byte-exact cross-check)
+
 - `darkmatter/crates/` — the Rust darkmatter reference implementation; the adversarial
   cross-check target for every confirmed finding (e.g. `cgka-engine/src/convergence.rs`,
   `canonicalization.rs` were used for the m5 verdict)
@@ -108,6 +118,7 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
   59 post-June commits (#725, #726, #766, …) for new single-device requirements
 
 ### Planning + existing catalog
+
 - `SPEC_GAP_REVIEW.md` (repo root) — the **stale 2026-06-19 snapshot being deleted**; read
   it once to carry forward the Completed-baseline record and the open items (M9, m3, m7, m8,
   m9), then remove it
@@ -117,6 +128,7 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
 - `.planning/PROJECT.md` — milestone scope, constraints, out-of-scope table
 
 ### Codebase maps (orient the read)
+
 - `.planning/codebase/ARCHITECTURE.md`, `STRUCTURE.md`, `STACK.md`, `CONVENTIONS.md`,
   `CONCERNS.md`, `INTEGRATIONS.md`, `TESTING.md` — layer map (utils ← core ← engine ←
   client), file layout, and known concerns
@@ -124,15 +136,18 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
 </canonical_refs>
 
 <code_context>
+
 ## Existing Code Insights
 
 ### Reusable Assets
+
 - Existing codebase maps under `.planning/codebase/` — use to select which `src/` modules
   map to each spec area rather than re-deriving the layout.
 - The Completed-baseline section of `SPEC_GAP_REVIEW.md` already records B1–B7, M1–M8,
   m1–m6 verdicts with evidence — carry these forward rather than re-auditing.
 
 ### Established Patterns
+
 - Layer boundary is strict: `utils ← core ← engine ← client`. Wire/codec gaps live in
   `src/core/`; convergence/retention gaps in `src/engine/`; validation-order gaps span
   `src/client/` ingest + `src/core/`.
@@ -140,6 +155,7 @@ changes.** Closing the gaps is Phases 2–3; new capabilities belong in their ow
   module-level stability (line numbers drift; the retired doc deliberately avoided line refs).
 
 ### Integration Points
+
 - Audit output integrates with GSD: `01-AUDIT.md` (evidence) → `REQUIREMENTS.md` +
   `ROADMAP.md` (folded confirmed gaps) → Phase 2/3 plans (closure).
 
@@ -179,5 +195,5 @@ None of these are new scope for this phase — all are catalog-and-defer.
 
 ---
 
-*Phase: 1-Exhaustive Gap Audit*
-*Context gathered: 2026-07-01*
+_Phase: 1-Exhaustive Gap Audit_
+_Context gathered: 2026-07-01_

@@ -1,10 +1,9 @@
 /**
  * Tests for the Marmot account identity proof LeafNode extension
- * (`marmot.account-identity-proof.v1`, 0xF2F1), byte-matched to the darkmatter
- * `account_identity_proof.rs` canonical message + wire layout.
+ * (`marmot.account-identity-proof.v2`, 0xF2F1), byte-matched to the darkmatter
+ * `account_identity_proof.rs` kind-450 event construction + wire layout.
  */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { sha256 } from "@noble/hashes/sha2.js";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { getEventHash } from "applesauce-core/helpers/event";
 import { describe, expect, it } from "vitest";
@@ -12,9 +11,13 @@ import { describe, expect, it } from "vitest";
 import type { LeafNode } from "ts-mls";
 import { createCredential } from "../credential.js";
 import {
+  ACCOUNT_IDENTITY_PROOF_EVENT_KIND,
   ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
   type AccountIdentityProofRequest,
+  accountIdentityProofEventId,
+  accountIdentityProofSignatureFromSignedEvent,
   accountIdentityProofSigningDigest,
+  buildAccountIdentityProofEvent,
   decodeAccountIdentityProof,
   encodeAccountIdentityProof,
   makeAccountIdentityProofExtension,
@@ -37,67 +40,56 @@ function request(): AccountIdentityProofRequest {
   };
 }
 
-describe("account identity proof — signing digest", () => {
-  it("uses Ed25519 (0x0807) for ciphersuite 1", () => {
+describe("account identity proof — v2 signing digest (kind-450 event id)", () => {
+  it("uses Ed25519 (0x0807 = 2055) for ciphersuite 1", () => {
     expect(mlsSignatureScheme(1)).toBe(0x0807);
+    expect(String(mlsSignatureScheme(1))).toBe("2055");
   });
 
-  it("matches the canonical message layout from the Rust reference", () => {
+  it("independently rebuilds the canonical kind-450 event id (six tags, exact order) and matches accountIdentityProofSigningDigest", () => {
     const req = request();
-    const domain = new TextEncoder().encode("marmot.account-identity-proof.v1");
-    // Reconstruct canonical_message() independently.
-    const parts: number[] = [];
-    parts.push(...domain, 0x00);
-    parts.push(0xf2, 0xf1); // ext type 0xF2F1 BE
-    parts.push(0x01); // version
-    parts.push(0x00, 0x01); // ciphersuite 1 BE
-    parts.push(0x08, 0x07); // signature scheme Ed25519 BE
-    parts.push(0x00, 0x20, ...accountIdentity); // u16 len + identity
-    parts.push(0x00, 0x20, ...mlsSignaturePublicKey); // u16 len + mls key
-    const expected = sha256(new Uint8Array(parts));
-    expect(bytesToHex(accountIdentityProofSigningDigest(req))).toBe(
-      bytesToHex(expected),
-    );
-  });
-});
-
-describe("account identity proof — published spec test vector", () => {
-  // Locks the cross-implementation conformance vector published in
-  // planning-artifacts/mls-account-identity-proof-signing.md so the code and
-  // the implementer guide cannot silently drift. Inputs: secret key 0x01…07,
-  // mls key 0xab×32, ciphersuite 1.
-  const PUBLISHED_ACCOUNT_IDENTITY =
-    "9d948d4dbd92fe2b7c3ace1cdf99f7f79cbb23f0ac10edf323b8bae36c58ea91";
-  const PUBLISHED_DIGEST =
-    "9035a57a3156c220cefc0318762cdbed8adbf155f54455151bc779d2a31c021e";
-  const PUBLISHED_SIGNATURE =
-    "3fd87ca37ddf056521dfcfe4749ef2169c5b423ac472a9af92abdc7aa532e94a01a1294d7bcc2abfba626efbfc0d08787893560b21b3ecd31b7d84e6d6c81496";
-
-  it("derives the published x-only account identity from the test secret key", () => {
-    expect(bytesToHex(accountIdentity)).toBe(PUBLISHED_ACCOUNT_IDENTITY);
+    // Reconstruct the canonical unsigned kind-450 event independently of
+    // buildAccountIdentityProofEvent, mirroring Rust proof_event()'s tag order.
+    const expectedEvent = {
+      pubkey: bytesToHex(accountIdentity),
+      created_at: 0,
+      kind: ACCOUNT_IDENTITY_PROOF_EVENT_KIND,
+      content: "",
+      tags: [
+        ["d", "marmot.account-identity-proof.v2"],
+        ["extension", "0xf2f1"],
+        ["version", "2"],
+        ["ciphersuite", "1"],
+        ["signature_scheme", "2055"],
+        ["mls_signature_key", bytesToHex(mlsSignaturePublicKey)],
+      ],
+    };
+    const expectedId = getEventHash(expectedEvent);
+    expect(accountIdentityProofEventId(req)).toBe(expectedId);
+    expect(bytesToHex(accountIdentityProofSigningDigest(req))).toBe(expectedId);
   });
 
-  it("produces the published signing digest", () => {
-    expect(bytesToHex(accountIdentityProofSigningDigest(request()))).toBe(
-      PUBLISHED_DIGEST,
-    );
-  });
-
-  it("verifies the published BIP-340 signature over the digest", () => {
-    // schnorr.sign uses aux randomness, so signatures are not byte-stable; the
-    // conformance check is that the published signature verifies (per the guide).
-    expect(
-      schnorr.verify(
-        hexToBytes(PUBLISHED_SIGNATURE),
-        accountIdentityProofSigningDigest(request()),
-        accountIdentity,
-      ),
-    ).toBe(true);
+  it("buildAccountIdentityProofEvent produces the same canonical event used by the digest", () => {
+    const req = request();
+    const event = buildAccountIdentityProofEvent(req);
+    expect(event.kind).toBe(450);
+    expect(event.created_at).toBe(0);
+    expect(event.content).toBe("");
+    expect(event.pubkey).toBe(bytesToHex(accountIdentity));
+    expect(event.tags).toEqual([
+      ["d", "marmot.account-identity-proof.v2"],
+      ["extension", "0xf2f1"],
+      ["version", "2"],
+      ["ciphersuite", "1"],
+      ["signature_scheme", "2055"],
+      ["mls_signature_key", bytesToHex(mlsSignaturePublicKey)],
+    ]);
+    expect(getEventHash(event)).toBe(accountIdentityProofEventId(req));
   });
 });
 
 describe("account identity proof — sign / verify", () => {
-  it("produces a BIP-340 signature that verifies over the digest", () => {
+  it("produces a BIP-340 signature that verifies over the kind-450 event id digest", () => {
     const req = request();
     const signature = signAccountIdentityProof(req, secretKey);
     expect(signature).toHaveLength(64);
@@ -122,12 +114,12 @@ describe("account identity proof — codec", () => {
     expect(bytesToHex(decoded.signature)).toBe(bytesToHex(signature));
   });
 
-  it("encodes to the fixed wire length (1+2+2+32+2+32+64)", () => {
+  it("encodes to the fixed wire length (1+2+2+32+2+32+64) with version byte 2", () => {
     const req = request();
     const signature = signAccountIdentityProof(req, secretKey);
-    expect(
-      encodeAccountIdentityProof({ request: req, signature }),
-    ).toHaveLength(135);
+    const encoded = encodeAccountIdentityProof({ request: req, signature });
+    expect(encoded).toHaveLength(135);
+    expect(encoded[0]).toBe(2);
   });
 
   it("rejects trailing bytes on decode", () => {
@@ -137,6 +129,17 @@ describe("account identity proof — codec", () => {
     const padded = new Uint8Array(encoded.length + 1);
     padded.set(encoded);
     expect(() => decodeAccountIdentityProof(padded)).toThrow();
+  });
+
+  it("rejects a version-byte-1 (v1) proof", () => {
+    const req = request();
+    const signature = signAccountIdentityProof(req, secretKey);
+    const encoded = encodeAccountIdentityProof({ request: req, signature });
+    const v1Encoded = new Uint8Array(encoded);
+    v1Encoded[0] = 1; // the old v1 version byte
+    expect(() => decodeAccountIdentityProof(v1Encoded)).toThrow(
+      /unsupported proof version/,
+    );
   });
 });
 
@@ -196,41 +199,68 @@ describe("account identity proof — leaf verification", () => {
   });
 });
 
-describe("account identity proof — v2 migration (RED, Task 1)", () => {
-  it("emits version byte 2 in the wire encoding and rejects a version-1 (v1) proof on decode", () => {
+describe("account identity proof — external-signer path (proof_event)", () => {
+  it("signs the canonical unsigned kind-450 event via a raw schnorr signer and extracts a verifying 64-byte signature", () => {
     const req = request();
-    const signature = signAccountIdentityProof(req, secretKey);
-    const encoded = encodeAccountIdentityProof({ request: req, signature });
-    expect(encoded[0]).toBe(2);
+    const unsignedEvent = buildAccountIdentityProofEvent(req);
+    const id = getEventHash(unsignedEvent);
 
-    // Flip the version byte to the old v1 value and confirm rejection.
-    const v1Encoded = new Uint8Array(encoded);
-    v1Encoded[0] = 1;
-    expect(() => decodeAccountIdentityProof(v1Encoded)).toThrow(/version/);
-  });
-
-  it("signs the canonical kind-450 event id (via getEventHash), not the old SHA-256 preimage", () => {
-    const req = request();
-    const expectedEvent = {
-      pubkey: bytesToHex(accountIdentity),
-      created_at: 0,
-      kind: 450,
-      content: "",
-      tags: [
-        ["d", "marmot.account-identity-proof.v2"],
-        ["extension", "0xf2f1"],
-        ["version", "2"],
-        ["ciphersuite", "1"],
-        ["signature_scheme", "2055"],
-        ["mls_signature_key", bytesToHex(mlsSignaturePublicKey)],
-      ],
+    // Simulate an external Nostr signer (NIP-07/NIP-46/hardware): it signs
+    // the event id with the account's key and returns the signed event.
+    const sig = bytesToHex(schnorr.sign(hexToBytes(id), secretKey));
+    const signedEvent = {
+      ...unsignedEvent,
+      id,
+      sig,
     };
-    const expectedId = getEventHash(expectedEvent);
-    expect(bytesToHex(accountIdentityProofSigningDigest(req))).toBe(expectedId);
+
+    const signature = accountIdentityProofSignatureFromSignedEvent(
+      req,
+      signedEvent,
+    );
+    expect(signature).toHaveLength(64);
+
+    const leaf = {
+      credential: createCredential(bytesToHex(accountIdentity)),
+      signaturePublicKey: mlsSignaturePublicKey,
+      extensions: [
+        makeAccountIdentityProofExtension({ request: req, signature }),
+      ],
+    } as unknown as LeafNode;
+    expect(() => verifyLeafAccountIdentityProof(leaf, 1)).not.toThrow();
   });
 
-  it("emits the ciphersuite-1 signature_scheme decimal tag as 2055", () => {
-    expect(mlsSignatureScheme(1)).toBe(0x0807);
-    expect(String(mlsSignatureScheme(1))).toBe("2055");
+  it("throws when the signed event pubkey does not match the request account identity", () => {
+    const req = request();
+    const unsignedEvent = buildAccountIdentityProofEvent(req);
+    const id = getEventHash(unsignedEvent);
+    const sig = bytesToHex(schnorr.sign(hexToBytes(id), secretKey));
+    const otherAccountIdentity = new Uint8Array(32).fill(0x11);
+    expect(() =>
+      accountIdentityProofSignatureFromSignedEvent(req, {
+        ...unsignedEvent,
+        pubkey: bytesToHex(otherAccountIdentity),
+        id,
+        sig,
+      }),
+    ).toThrow(/account identity/);
+  });
+
+  it("throws when the signed event id does not match the rebuilt proof-event id", () => {
+    const req = request();
+    const unsignedEvent = buildAccountIdentityProofEvent(req);
+    const otherRequest = {
+      ...req,
+      mlsSignaturePublicKey: new Uint8Array(32).fill(0xcd),
+    };
+    const otherId = getEventHash(buildAccountIdentityProofEvent(otherRequest));
+    const sig = bytesToHex(schnorr.sign(hexToBytes(otherId), secretKey));
+    expect(() =>
+      accountIdentityProofSignatureFromSignedEvent(req, {
+        ...unsignedEvent,
+        id: otherId,
+        sig,
+      }),
+    ).toThrow(/does not match proof request/);
   });
 });

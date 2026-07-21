@@ -5,6 +5,7 @@ describe("exports", () => {
   it("should export the expected members", () => {
     expect(Object.keys(exports).sort()).toMatchInlineSnapshot(`
       [
+        "ACCOUNT_IDENTITY_PROOF_EVENT_KIND",
         "ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE",
         "ADDRESSABLE_KEY_PACKAGE_KIND",
         "AGENT_TEXT_STREAM_QUIC_COMPONENT",
@@ -82,10 +83,14 @@ describe("exports", () => {
         "SUPPORTED_APP_COMPONENT_IDS",
         "SUPPORTED_LOCATOR_KINDS",
         "WELCOME_EVENT_KIND",
+        "accountIdentityProofEventId",
+        "accountIdentityProofEventJson",
+        "accountIdentityProofSignatureFromSignedEvent",
         "accountIdentityProofSigningDigest",
         "adminPolicyEntry",
         "agentTextStreamEntry",
         "appComponentsEntry",
+        "buildAccountIdentityProofEvent",
         "buildAccountIdentityProofExtension",
         "buildAppDataDictionary",
         "buildFallbackFetchUrls",

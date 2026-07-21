@@ -68,17 +68,29 @@ Explicitly excluded. Documented to prevent scope creep.
 
 Which phases cover which requirements. Populated during roadmap creation.
 
-| Requirement                  | Phase | Status |
-| ---------------------------- | ----- | ------ |
-| _to be filled by roadmapper_ |       |        |
+| Requirement | Phase                                           | Status  |
+| ----------- | ----------------------------------------------- | ------- |
+| PROOF-01    | Phase 1 — Proof v2                              | Pending |
+| SEC-01      | Phase 2 — Inbound Trust & Wire Boundary         | Pending |
+| WIRE-01     | Phase 2 — Inbound Trust & Wire Boundary         | Pending |
+| WIRE-02     | Phase 2 — Inbound Trust & Wire Boundary         | Pending |
+| WIRE-03     | Phase 3 — Commit Integrity & Convergence Parity | Pending |
+| CONV-01     | Phase 3 — Commit Integrity & Convergence Parity | Pending |
+| CONV-02     | Phase 3 — Commit Integrity & Convergence Parity | Pending |
+| CONV-03     | Phase 3 — Commit Integrity & Convergence Parity | Pending |
+| CONV-04     | Phase 3 — Commit Integrity & Convergence Parity | Pending |
+| WIRE-04     | Phase 4 — Feature Parity & Conformance Vectors  | Pending |
+| CONF-01     | Phase 4 — Feature Parity & Conformance Vectors  | Pending |
+| QA-01       | Phase 5 — Quality Gate                          | Pending |
+| QA-02       | Phase 5 — Quality Gate                          | Pending |
 
 **Coverage:**
 
-- v1 requirements: 12 total
-- Mapped to phases: TBD (roadmap)
-- Unmapped: TBD
+- v1 requirements: 13 total (PROOF-01, SEC-01, WIRE-01..04, CONV-01..04, CONF-01, QA-01, QA-02 — corrected from the earlier "12 total" placeholder, which undercounted by one)
+- Mapped to phases: 13/13
+- Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-07-21_
-_Last updated: 2026-07-21 after catchup review_
+_Last updated: 2026-07-21 after roadmap creation (traceability filled, coverage corrected to 13/13)_

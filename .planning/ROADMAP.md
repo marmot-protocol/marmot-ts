@@ -1,14 +1,17 @@
-# Roadmap: marmot-ts — dark-matter single-device wire-complete
+# Roadmap: marmot-ts — v1.0 catchup (resync to marmot spec + MDK Rust reference)
 
 ## Overview
 
-The library has completed its darkmatter migration baseline (B1–B7, M1–M8, encrypted-media wire
-format). The darkmatter spec submodule has since advanced 59 commits and the June 2026 gap-analysis
-document is stale. This milestone runs a fresh exhaustive audit of the TypeScript implementation
-against the latest spec and Rust reference (Phase 1), then closes every confirmed single-device gap
-in severity order — blockers and security first, wire-format conformance second — before verifying
-the result against a green cross-runtime test suite (Phase 4). Multi-device (MIP-06) and push
-(MIP-05) are cataloged during the audit and explicitly deferred.
+The darkmatter repo split into `refs/marmot` (spec) and `refs/mdk` (Rust reference, now at
+`marmotkit-v0.9.4`, far ahead of the `v0.2.0`-era baseline marmot-ts was last audited against).
+The catchup review (`.planning/research/SUMMARY.md` + PROOF-V2/SPEC-DELTAS/MDK-INTEROP) found
+5 interop-breaking gaps, 4 additive convergence/feature gaps, and 2 parity items needing a
+targeted verify. This milestone closes them in strict severity order: Proof v2 first (the
+headline known breaker, isolated because it touches identity/credential machinery), then the
+inbound-trust and wire-boundary tightening, then commit-integrity and convergence parity, then
+remaining feature parity plus wiring up MDK's own conformance vectors, and finally a green
+cross-runtime quality gate. Multi-device (MIP-06), push (MIP-05), the QUIC data-plane, and
+app/tooling crates are cataloged by the review but explicitly deferred.
 
 ## Phases
 
@@ -19,78 +22,103 @@ the result against a green cross-runtime test suite (Phase 4). Multi-device (MIP
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Exhaustive Gap Audit** - Rewrite SPEC_GAP_REVIEW.md as a verified, classified closure backlog
-- [ ] **Phase 2: Blocker & Security Closure** - Close every confirmed single-device blocker and security hardening gap
-- [ ] **Phase 3: Wire / Conformance & Docs** - Close remaining wire-format, codec, and API conformance gaps; document unsupported features
-- [ ] **Phase 4: Quality Gate** - Green suite on all runtimes; byte-exact Rust reference verification
+- [ ] **Phase 1: Proof v2** - Migrate account-identity-proof v1→v2 to close the headline interop-breaker
+- [ ] **Phase 2: Inbound Trust & Wire Boundary** - Verify-before-trust, KeyPackage lifetime cap, required-tag cardinality
+- [ ] **Phase 3: Commit Integrity & Convergence Parity** - App-component integrity, admin/leaf coupling, SelfEvicted, notification withdrawal, own-commit protection
+- [ ] **Phase 4: Feature Parity & Conformance Vectors** - SafeAAD advertisement plus MDK's own test vectors wired up as cross-impl tests
+- [ ] **Phase 5: Quality Gate** - Green suite on every supported runtime; byte-exact MDK cross-checks recorded
 
 ## Phase Details
 
-### Phase 1: Exhaustive Gap Audit
+### Phase 1: Proof v2
 
-**Goal**: A rewritten, verified SPEC_GAP_REVIEW.md supersedes the stale June 2026 snapshot and becomes the authoritative closure backlog for Phase 2 and 3
+**Goal**: marmot-ts implements account-identity-proof v2 (version byte `2`, signing the
+canonical Nostr kind-450 event id instead of the old SHA-256 domain preimage) so it
+interoperates byte-for-byte with the MDK Rust reference — the headline interop-breaker closed
+in isolation before any other wire-boundary work begins.
 **Depends on**: Nothing (first phase)
-**Requirements**: AUDIT-01, AUDIT-02, AUDIT-03
+**Requirements**: PROOF-01
 **Success Criteria** (what must be TRUE):
 
-1. SPEC_GAP_REVIEW.md is rewritten with every confirmed gap pointing to source file:line and governing spec section (audit covers all seven spec areas in dependency order)
-2. Every finding carries a confirmed present-or-absent verdict in code plus a classification: BLOCKER / MAJOR / MINOR / deferred
-3. All seven candidate likely gaps (NIP-40 expiration, routing-rotation subscription, QUIC VarInt canonicality, convergence apply-gating, `isCommitMessage` wireformat, kind-30443 tag validation, kind-1210 attribution) are either confirmed with evidence or closed with code evidence
-4. Multi-device (MIP-06), push (MIP-05), and QUIC data-plane surface is cataloged in the document with explicit deferred disposition and the reason
+1. marmot-ts emits and accepts only version byte `2` account-identity-proofs; a v1-only proof (version byte `1`) is now rejected.
+2. A v2 proof produced by marmot-ts is accepted by MDK-equivalent verification logic, proven via a Rust-signed → TS-verified round-trip fixture (no shared byte fixture exists yet, so this is generated fresh).
+3. Per-ciphersuite `signature_scheme` decimal tag values emitted by marmot-ts match the Rust `signature_algorithm() as u16` decimal for every supported ciphersuite.
+4. The unpublished kind-450 proof event carries its six tags (`d`, `extension`, `version`, `ciphersuite`, `signature_scheme`, `mls_signature_key`) in the exact Rust order/format and is never published/relayed.
    **Plans**: TBD
 
-### Phase 2: Blocker & Security Closure
+### Phase 2: Inbound Trust & Wire Boundary
 
-**Goal**: Every confirmed single-device blocker and security hardening gap is closed — media decrypts across epochs, convergence is correctly gated and arrival-order-free, messages are authenticated before decryption, and public API classifiers match the actual wire format
+**Goal**: The inbound Nostr path only trusts events after verifying their id and signature,
+and published/consumed KeyPackages plus required tags conform to the tightened #236 wire
+boundary — a conformant peer no longer silently accepts malformed input or forges trust in
+unverified fields.
 **Depends on**: Phase 1
-**Requirements**: MEDIA-01, MEDIA-02, CONV-01, CONV-02, SEC-01, SEC-02, API-01
+**Requirements**: SEC-01, WIRE-01, WIRE-02
 **Success Criteria** (what must be TRUE):
 
-1. Media sent at epoch N decrypts correctly after the group has advanced to epoch N+2 (a cross-epoch test sends media, advances state twice via commits, then decrypts and the plaintext matches)
-2. An inbound commit that arrives during PendingPublish is returned as `deferred`, not applied; the canonical tip does not advance until the local commit is acknowledged
-3. Two peers that receive the same competing commits in opposite relay-delivery order select the same canonical branch (dual-ordering test with two in-memory instances)
-4. A kind-445 event with an invalid Nostr event signature is routed to `invalid_signature` disposition before any ChaCha20-Poly1305 decryption is attempted
-5. A Welcome not addressed to the local account pubkey is rejected before `joinGroup()` is called; `isCommitMessage` and `isProposalMessage` return `true` for real PublicMessage engine output
+1. An inbound event with an invalid Nostr event id or Schnorr signature is rejected before any `h`/`p` routing tag is trusted or any decryption is attempted.
+2. Published KeyPackages cap their MLS Lifetime at ≤ 7,261,200 s (84 days); an inbound KeyPackage with an over-long or expired Lifetime is rejected rather than accepted for eligibility.
+3. An event with a repeated, empty, or duplicate required tag (445 `h`; 1059 `p`; 444 `e`/`relays`; 30443 `d`/`i`/`mls_protocol_version`) is rejected, not silently resolved by taking the first match.
    **Plans**: TBD
 
-### Phase 3: Wire / Conformance & Docs
+### Phase 3: Commit Integrity & Convergence Parity
 
-**Goal**: All remaining wire-format, codec-correctness, and API conformance gaps confirmed by Phase 1 are closed, and unsupported protocol features are formally documented
+**Goal**: Staged commits and membership/convergence handling match MDK's legality and rewind
+semantics so the two implementations never silently fork on a component-mutating or
+membership-changing commit.
 **Depends on**: Phase 2
-**Requirements**: WIRE-01, WIRE-02, WIRE-03, WIRE-04, CONF-01, DOC-01
+**Requirements**: WIRE-03, CONV-01, CONV-02, CONV-03, CONV-04
 **Success Criteria** (what must be TRUE):
 
-1. A QUIC VarInt with a non-canonical (over-long) length prefix is rejected with an encoding error, not silently parsed (a test encodes an over-long VarInt and verifies the decoder throws)
-2. A kind-30443 KeyPackage event with duplicate required tag names is rejected by the decoder (test: event with two `mls_extensions` tags yields rejection)
-3. blossom-image (0x8002) is documented as unsupported in source and docs, with a comment pointing to avatar-url (0x8007) as the supported alternative
-4. WIRE-03 (NIP-40 expiration) and WIRE-04 (routing-rotation subscription) are either closed with a test verifying correct behavior or explicitly recorded as not-applicable per Phase 1 findings
-5. URL-normalization vectors for avatar-url (0x8007) and encrypted-media (0x8008) pass for exotic percent-encoding, IDNA/punycode round-trips, default-port elision, and trailing-slash serialization (CONF-01)
+1. A staged commit that drops the `app_data_dictionary`, drops a required component, or rewrites a required component's bytes outside a validated `AppDataUpdate` is rejected pre-merge, identically on the send, inbound, and convergence/replay paths.
+2. Every membership-changing commit results in admin ⊆ member-leaves in the resulting epoch; a removal-without-policy-update commit that MDK deems illegal is rejected identically by marmot-ts.
+3. On being removed from a group, marmot-ts emits a self-removed notification, marks the group removed-inactive with no further outbound, and classifies subsequent input for that group as SelfEvicted/stale.
+4. Group-state-change notifications are attributed to their originating `commit_digest` and are withdrawn — including clearing removal markers — when that commit is superseded on rewind.
+5. Run against MDK's own-confirmed-commit scenario vectors (#706/#723/#702/#724): a device's own published+confirmed commit is never rolled back in favor of a same-epoch sibling; a clean pass requires no code change, and any divergence found is fixed before this phase closes (verify-first).
    **Plans**: TBD
 
-### Phase 4: Quality Gate
+### Phase 4: Feature Parity & Conformance Vectors
 
-**Goal**: The full test suite passes on every supported runtime and every closure change with a byte-exact Rust reference vector is verified against it — the milestone is shippable
+**Goal**: marmot-ts's LeafNode/KeyPackage bytes match the reference's SafeAAD advertisement,
+and MDK's own conformance-simulator test vectors run as automated cross-impl checks rather
+than manual spot-checks.
 **Depends on**: Phase 3
+**Requirements**: WIRE-04, CONF-01
+**Success Criteria** (what must be TRUE):
+
+1. Leaf/KeyPackage `app_components` advertise `0x0001` and an empty SafeAAD (`0x0002`) entry, matching MDK's leaf dictionary byte-for-byte; safe_aad is still rejected as group-component state.
+2. The `nostr-routing-v1-*` byte fixtures (`valid-state`, `valid-update`, `invalid-duplicate-relay`) pass as automated tests against `src/core/components/nostr-routing.ts` encode/decode, including the duplicate-relay reject case.
+3. The convergence/admin-policy/fork-recovery scenario vectors (`convergence-committer-selected`, `convergence-witness-selected`, `admin-policy-update`, `group-data-update`, `group-data-fork-recovery`, `concurrent-invite-fork-recovery`, and related manifest entries) run as an automated parity harness against `src/engine/fork-recovery.ts` and related convergence code.
+4. The Phase 1 proof-v2 Rust-signed → TS-verified round-trip is wired up as a permanent, repeatable automated test rather than a one-off manual check.
+   **Plans**: TBD
+
+### Phase 5: Quality Gate
+
+**Goal**: The full test suite is green on every supported runtime, and every catch-up change
+with a byte-exact MDK counterpart has been cross-checked against the Rust reference output —
+the milestone is shippable.
+**Depends on**: Phase 4
 **Requirements**: QA-01, QA-02
 **Success Criteria** (what must be TRUE):
 
-1. `pnpm vitest run` exits 0 on Node 20, Node 22, and Node 24
-2. `deno run -A --node-modules-dir=auto npm:vitest run` exits 0 on Deno 2
-3. `bun run vitest run` exits 0 on Bun latest and Bun 1.1
-4. Every closure change that has a byte-exact counterpart in `darkmatter/crates/` is cross-checked against the Rust reference output and the result documented in SPEC_GAP_REVIEW.md
+1. `pnpm vitest run` exits 0 on Node 20, Node 22, and Node 24.
+2. `deno run -A --node-modules-dir=auto npm:vitest run` exits 0 on Deno 2.
+3. `bun run vitest run` exits 0 on Bun latest and Bun 1.1.
+4. Every catch-up change with a byte-exact MDK counterpart (proof v2, KeyPackage lifetime, tag cardinality, SafeAAD dictionary bytes) has been cross-checked against the Rust reference output and the result recorded.
    **Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
-| Phase                         | Plans Complete | Status      | Completed |
-| ----------------------------- | -------------- | ----------- | --------- |
-| 1. Exhaustive Gap Audit       | 0/TBD          | Not started | -         |
-| 2. Blocker & Security Closure | 0/TBD          | Not started | -         |
-| 3. Wire / Conformance & Docs  | 0/TBD          | Not started | -         |
-| 4. Quality Gate               | 0/TBD          | Not started | -         |
+| Phase                                    | Plans Complete | Status      | Completed |
+| ---------------------------------------- | -------------- | ----------- | --------- |
+| 1. Proof v2                              | 0/TBD          | Not started | -         |
+| 2. Inbound Trust & Wire Boundary         | 0/TBD          | Not started | -         |
+| 3. Commit Integrity & Convergence Parity | 0/TBD          | Not started | -         |
+| 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -         |
+| 5. Quality Gate                          | 0/TBD          | Not started | -         |
 
 ## Backlog
 

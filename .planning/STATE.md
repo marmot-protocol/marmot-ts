@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: catchup
 status: planning
-last_updated: "2026-07-21T08:48:40.292Z"
+last_updated: "2026-07-21T09:00:00.000Z"
 last_activity: 2026-07-21
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,17 +17,19 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-01)
+See: .planning/PROJECT.md (updated 2026-07-21)
 
-**Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust darkmatter reference), across every supported runtime.
-**Current focus:** Phase 1 — Exhaustive Gap Audit
+**Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
+**Current focus:** Phase 1 — Proof v2
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-07-21 — Milestone v1.0 started
+Phase: 1 of 5 (Proof v2)
+Plan: — (not yet planned)
+Status: Roadmap created, ready to plan
+Last activity: 2026-07-21 — ROADMAP.md and REQUIREMENTS.md traceability written for the catchup milestone
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -57,10 +59,9 @@ _Updated after each plan completion_
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- Milestone = single-device wire-complete (multi-device/push explicitly deferred)
-- Phase 1 is an exhaustive gap audit; all closure phases depend on it
-- WIRE-03 and WIRE-04 are "pending audit confirmation" — Phase 1 may retire them
-- m3 (blossom-image 0x8002) documented as unsupported, not implemented
+- Prior v1.0 phases (Exhaustive Gap Audit → Blocker & Security Closure → Wire/Conformance & Docs → Quality Gate) were shelved to the backlog (999.3–999.6); v1.0 was repurposed as "catchup" and the phase sequence restarted at Phase 1
+- Catchup review is done (`.planning/research/SUMMARY.md` + PROOF-V2/SPEC-DELTAS/MDK-INTEROP); roadmap derived directly from its 13 v1 requirements — interop-breakers close first (Phase 1–2), then commit-integrity/convergence parity (Phase 3, CONV-04 verify-first), then feature parity + MDK vectors (Phase 4), then the quality gate (Phase 5)
+- REQUIREMENTS.md traceability footer corrected from "12 total" to "13 total" — the itemized requirement list (PROOF-01, SEC-01, WIRE-01..04, CONV-01..04, CONF-01, QA-01, QA-02) was always 13; the summary count was a stale undercount
 
 ### Pending Todos
 
@@ -68,19 +69,24 @@ None yet.
 
 ### Blockers/Concerns
 
-- darkmatter submodule is at c9d63de (59 commits ahead of v0.2.0 tag); audit must scan post-June commits (#725 push-token gossip, #766 chat-list semantics, #726 rename-events) for new single-device requirements
-- Whether `applesauce-core` verifies Nostr event id/sig upstream of the ingest path is unconfirmed; must be checked early in Phase 2 (SEC-01) to avoid a redundant check
+- Phase 1 (Proof v2) has no shared MDK byte fixture to check against — the round-trip test must be built fresh (Rust-signed → TS-verified), per PROOF-V2.md
+- Phase 3's CONV-04 is verify-first: run marmot-ts against MDK's own-confirmed-commit scenario vectors before writing any fix; only diverge-and-fix if the vectors actually fail
+- Open question carried from SUMMARY.md: confirm marmot-ts `mlsSignatureScheme()` decimal values match Rust `ciphersuite.signature_algorithm() as u16` for every supported ciphersuite (Phase 1)
+- Open question carried from SUMMARY.md: decide whether `AccountIdentityProofSigner` stays digest-only or is reshaped to "sign a Nostr event" for true external-signer parity (Phase 1, recommended but not required for minimal interop)
 
 ## Deferred Items
 
-| Category        | Item                                           | Status       | Deferred At     |
-| --------------- | ---------------------------------------------- | ------------ | --------------- |
-| Multi-device    | MIP-06 (ext 0xf2f0, External-Commit, join-PSK) | Catalog only | Milestone scope |
-| Push            | MIP-05 (push-token gossip, #725)               | Catalog only | Milestone scope |
-| QUIC data plane | Agent text-stream data plane                   | Not in scope | Milestone scope |
+| Category        | Item                                                                | Status       | Deferred At     |
+| --------------- | ------------------------------------------------------------------- | ------------ | --------------- |
+| Multi-device    | MIP-06 (ext 0xf2f0, External-Commit, join-PSK, pairing payload)     | Catalog only | Milestone scope |
+| Push            | MIP-05 (push-token gossip, #725)                                    | Catalog only | Milestone scope |
+| QUIC data plane | Agent text-stream data plane, transport-quic-*                      | Not in scope | Milestone scope |
+| App/tooling     | marmot-app, cli, uniffi, forensics, storage backends                | Not in scope | Milestone scope |
+| Media           | encrypted-media/Blossom changes (mdk #852)                          | Not in scope | Milestone scope |
+| Backlog (999.x) | Group image support, docs review, shelved v1.0 audit/closure phases | Backlog      | Prior milestone |
 
 ## Session Continuity
 
-Last session: 2026-07-01T16:32:00.711Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-exhaustive-gap-audit/01-CONTEXT.md
+Last session: 2026-07-21T09:00:00.000Z
+Stopped at: ROADMAP.md, STATE.md, and REQUIREMENTS.md traceability written for milestone v1.0 catchup; awaiting `/gsd-plan-phase 1`
+Resume file: None

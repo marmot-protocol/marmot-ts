@@ -44,12 +44,12 @@ in isolation before any other wire-boundary work begins.
 2. A v2 proof produced by marmot-ts is accepted by MDK-equivalent verification logic, proven via a Rust-signed → TS-verified round-trip fixture (no shared byte fixture exists yet, so this is generated fresh).
 3. Per-ciphersuite `signature_scheme` decimal tag values emitted by marmot-ts match the Rust `signature_algorithm() as u16` decimal for every supported ciphersuite.
 4. The unpublished kind-450 proof event carries its six tags (`d`, `extension`, `version`, `ciphersuite`, `signature_scheme`, `mls_signature_key`) in the exact Rust order/format and is never published/relayed.
-   **Plans**: 2 plans
+   **Plans**: 1/2 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 01-01-PLAN.md — Migrate core account-identity-proof v1→v2 (version byte 2, kind-450 event-id signing digest, external-signer parity builders, signature_scheme parity, colocated v2 tests)
+- [x] 01-01-PLAN.md — Migrate core account-identity-proof v1→v2 (version byte 2, kind-450 event-id signing digest, external-signer parity builders, signature_scheme parity, colocated v2 tests)
 
 **Wave 2** _(blocked on Wave 1 completion)_
 
@@ -123,7 +123,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase                                    | Plans Complete | Status      | Completed |
 | ---------------------------------------- | -------------- | ----------- | --------- |
-| 1. Proof v2                              | 0/2            | Not started | -         |
+| 1. Proof v2                              | 1/2            | In Progress |           |
 | 2. Inbound Trust & Wire Boundary         | 0/TBD          | Not started | -         |
 | 3. Commit Integrity & Convergence Parity | 0/TBD          | Not started | -         |
 | 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -         |

@@ -1,15 +1,19 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: catchup
-status: planning
-last_updated: "2026-07-21T09:00:00.000Z"
+milestone_name: Phase 1)
+current_phase: 01
+current_phase_name: proof-v2
+status: executing
+stopped_at: ROADMAP.md, STATE.md, and REQUIREMENTS.md traceability written for milestone v1.0 catchup; awaiting `/gsd-plan-phase 1`
+last_updated: "2026-07-21T14:15:59.509Z"
 last_activity: 2026-07-21
+last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 2
+  completed_plans: 1
   percent: 0
 ---
 
@@ -20,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-21)
 
 **Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
-**Current focus:** Phase 1 — Proof v2
+**Current focus:** Phase 01 — proof-v2
 
 ## Current Position
 
-Phase: 1 of 5 (Proof v2)
-Plan: — (not yet planned)
-Status: Roadmap created, ready to plan
-Last activity: 2026-07-21 — ROADMAP.md and REQUIREMENTS.md traceability written for the catchup milestone
+Phase: 01 (proof-v2) — EXECUTING
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-07-21 — Phase 01 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -51,6 +55,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: —
 
 _Updated after each plan completion_
+| Phase 01-proof-v2 P01 | 15min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -62,6 +67,8 @@ Recent decisions affecting current work:
 - Prior v1.0 phases (Exhaustive Gap Audit → Blocker & Security Closure → Wire/Conformance & Docs → Quality Gate) were shelved to the backlog (999.3–999.6); v1.0 was repurposed as "catchup" and the phase sequence restarted at Phase 1
 - Catchup review is done (`.planning/research/SUMMARY.md` + PROOF-V2/SPEC-DELTAS/MDK-INTEROP); roadmap derived directly from its 13 v1 requirements — interop-breakers close first (Phase 1–2), then commit-integrity/convergence parity (Phase 3, CONV-04 verify-first), then feature parity + MDK vectors (Phase 4), then the quality gate (Phase 5)
 - REQUIREMENTS.md traceability footer corrected from "12 total" to "13 total" — the itemized requirement list (PROOF-01, SEC-01, WIRE-01..04, CONV-01..04, CONF-01, QA-01, QA-02) was always 13; the summary count was a stale undercount
+- [Phase 01]: Widened AccountIdentityProofSigner to a union (plain digest function | { signEvent } object) to preserve raw-key compatibility while adding external-signer parity for account-identity-proof v2
+- [Phase 01]: mlsSignatureScheme() table already matched Rust ciphersuite.signature_algorithm() as u16 for all 7 ciphersuites; only decimal annotations added
 
 ### Pending Todos
 
@@ -87,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-21T09:00:00.000Z
+Last session: 2026-07-21T14:14:11.441Z
 Stopped at: ROADMAP.md, STATE.md, and REQUIREMENTS.md traceability written for milestone v1.0 catchup; awaiting `/gsd-plan-phase 1`
 Resume file: None

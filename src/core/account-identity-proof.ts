@@ -1,6 +1,10 @@
 /** @module @category Core - Account Identity Proof */
-import { sha256 } from "@noble/hashes/sha2.js";
 import { schnorr } from "@noble/curves/secp256k1.js";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import {
+  getEventHash,
+  type UnsignedEvent,
+} from "applesauce-core/helpers/event";
 import {
   type ClientState,
   type CustomExtension,
@@ -10,49 +14,73 @@ import {
   type LeafNode,
 } from "ts-mls";
 
-import { BinaryReader, BinaryWriter, encodeUtf8 } from "./binary.js";
+import { BinaryReader, BinaryWriter } from "./binary.js";
 import { getCredentialPubkey } from "./credential.js";
 
 /**
  * The Marmot account identity proof, carried as a custom MLS LeafNode extension
- * (`marmot.account-identity-proof.v1`).
+ * (`marmot.account-identity-proof.v2`).
  *
  * An MLS BasicCredential names a Marmot (Nostr) account, but the MLS signature
  * key is a separate per-leaf key. This extension binds the two by having the
- * Nostr account key sign — with BIP-340 Schnorr — a digest over the account
- * pubkey and the leaf signature key, so account-scoped policy (e.g. admin
- * authorization) can trust the credential identity.
+ * Nostr account key sign — with BIP-340 Schnorr — a canonical, unpublished
+ * Nostr kind-450 event whose tags carry the account/leaf binding, so
+ * account-scoped policy (e.g. admin authorization) can trust the credential
+ * identity. Signing a real (if unpublished) Nostr event, rather than a
+ * bespoke digest, lets external Nostr signers (NIP-07/NIP-46, hardware
+ * signers) produce the proof via a normal `signEvent` path — see
+ * {@link buildAccountIdentityProofEvent} and
+ * {@link accountIdentityProofSignatureFromSignedEvent}.
  *
- * Wire (`encode_proof`, fixed-width, big-endian):
- *   uint8  version;                       // 1
+ * The signed message is the NIP-01 event id of the canonical kind-450 event:
+ *   pubkey     = account identity (x-only Nostr pubkey, lowercase hex)
+ *   created_at = 0
+ *   kind       = 450
+ *   content    = ""
+ *   tags       = [
+ *     ["d", "marmot.account-identity-proof.v2"],
+ *     ["extension", "0xf2f1"],
+ *     ["version", "2"],
+ *     ["ciphersuite", "<decimal>"],
+ *     ["signature_scheme", "<decimal>"],
+ *     ["mls_signature_key", "<lowercase hex>"],
+ *   ]
+ *
+ * Wire (`encode_proof`, fixed-width, big-endian; unchanged from v1 except the
+ * version byte value and the meaning of the signature):
+ *   uint8  version;                       // 2
  *   uint16 ciphersuite;
  *   uint16 signature_scheme;
  *   opaque account_identity[32];          // x-only Nostr pubkey, no length prefix
  *   uint16 mls_signature_public_key_len;
  *   opaque mls_signature_public_key[len];
- *   opaque signature[64];                 // BIP-340 Schnorr
+ *   opaque signature[64];                 // BIP-340 Schnorr over the kind-450 event id
  *
  * @see darkmatter `crates/cgka-engine/src/account_identity_proof.rs`
  */
 export const ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE = 0xf2f1;
-const ACCOUNT_IDENTITY_PROOF_VERSION = 1;
-const ACCOUNT_IDENTITY_PROOF_DOMAIN = "marmot.account-identity-proof.v1";
+/** The (unpublished, local-only) Nostr event kind the proof signs. */
+export const ACCOUNT_IDENTITY_PROOF_EVENT_KIND = 450;
+const ACCOUNT_IDENTITY_PROOF_VERSION = 2;
+const ACCOUNT_IDENTITY_PROOF_DOMAIN = "marmot.account-identity-proof.v2";
 const ACCOUNT_IDENTITY_LEN = 32;
 const SCHNORR_SIGNATURE_LEN = 64;
 
 /**
  * MLS signature scheme code points (RFC 9420 / IANA TLS SignatureScheme),
  * keyed by MLS ciphersuite id. Used to record which scheme the leaf signature
- * key uses, matching OpenMLS `ciphersuite.signature_algorithm()`.
+ * key uses, matching OpenMLS `ciphersuite.signature_algorithm() as u16`
+ * (verified against `refs/mdk` — each row's decimal is the exact
+ * `signature_scheme` tag value emitted for that ciphersuite).
  */
 const MLS_SIGNATURE_SCHEME_BY_CIPHERSUITE: Record<number, number> = {
-  1: 0x0807, // Ed25519
-  2: 0x0403, // ecdsa_secp256r1_sha256
-  3: 0x0807, // Ed25519
-  4: 0x0808, // Ed448
-  5: 0x0603, // ecdsa_secp521r1_sha512
-  6: 0x0808, // Ed448
-  7: 0x0503, // ecdsa_secp384r1_sha384
+  1: 0x0807, // Ed25519 — 2055
+  2: 0x0403, // ecdsa_secp256r1_sha256 — 1027
+  3: 0x0807, // Ed25519 — 2055 (duplicates 1)
+  4: 0x0808, // Ed448 — 2056
+  5: 0x0603, // ecdsa_secp521r1_sha512 — 1539
+  6: 0x0808, // Ed448 — 2056 (duplicates 4)
+  7: 0x0503, // ecdsa_secp384r1_sha384 — 1283
 };
 
 /** Returns the MLS signature scheme code point for a ciphersuite id. */
@@ -84,31 +112,95 @@ export interface AccountIdentityProof {
   signature: Uint8Array;
 }
 
-/** A hook that signs the proof digest with the Nostr account key (BIP-340). */
-export type AccountIdentityProofSigner = (
-  request: AccountIdentityProofRequest,
-) => Uint8Array | Promise<Uint8Array>;
-
-function canonicalMessage(request: AccountIdentityProofRequest): Uint8Array {
-  return new BinaryWriter()
-    .bytes(encodeUtf8(ACCOUNT_IDENTITY_PROOF_DOMAIN))
-    .uint8(0)
-    .uint16(ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE)
-    .uint8(ACCOUNT_IDENTITY_PROOF_VERSION)
-    .uint16(request.ciphersuite)
-    .uint16(request.signatureScheme)
-    .uint16(request.accountIdentity.length)
-    .bytes(request.accountIdentity)
-    .uint16(request.mlsSignaturePublicKey.length)
-    .bytes(request.mlsSignaturePublicKey)
-    .build();
+/**
+ * A Nostr event, signed by an external signer (NIP-07/NIP-46, hardware, etc).
+ * Only the members needed to extract/verify the proof signature are required.
+ */
+export interface SignedAccountIdentityProofEvent {
+  id: string;
+  pubkey: string;
+  sig: string;
 }
 
-/** The 32-byte BIP-340 message digest the account key signs. */
+/**
+ * An external Nostr event signer (e.g. NIP-07 `window.nostr.signEvent`,
+ * NIP-46 remote signer, or a hardware signer) capable of signing the
+ * canonical unsigned kind-450 proof event and returning the signed event.
+ */
+export type AccountIdentityProofEventSigner = (
+  event: UnsignedEvent,
+) => SignedAccountIdentityProofEvent | Promise<SignedAccountIdentityProofEvent>;
+
+/**
+ * A hook that produces the 64-byte BIP-340 proof signature. Two shapes:
+ * - a plain function: the raw-secret-key digest path (see
+ *   {@link signAccountIdentityProof}) — signs the 32-byte kind-450 event id
+ *   directly.
+ * - `{ signEvent }`: the external-signer path — signs the canonical kind-450
+ *   {@link buildAccountIdentityProofEvent} via a normal Nostr `signEvent` API;
+ *   the 64-byte signature is extracted with
+ *   {@link accountIdentityProofSignatureFromSignedEvent}.
+ */
+export type AccountIdentityProofSigner =
+  | ((request: AccountIdentityProofRequest) => Uint8Array | Promise<Uint8Array>)
+  | { signEvent: AccountIdentityProofEventSigner };
+
+/**
+ * Builds the canonical, unsigned Nostr kind-450 proof event for a request.
+ * This event is a **local signing template only** — it is never published or
+ * relayed (`foundation/registries.md`: kind 450 is "Local signing template,
+ * not relayed"). Mirrors darkmatter `AccountIdentityProofRequest::proof_event`.
+ */
+export function buildAccountIdentityProofEvent(
+  request: AccountIdentityProofRequest,
+): UnsignedEvent {
+  return {
+    pubkey: bytesToHex(request.accountIdentity),
+    created_at: 0,
+    kind: ACCOUNT_IDENTITY_PROOF_EVENT_KIND,
+    content: "",
+    tags: [
+      ["d", ACCOUNT_IDENTITY_PROOF_DOMAIN],
+      [
+        "extension",
+        `0x${ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE.toString(16).padStart(4, "0")}`,
+      ],
+      ["version", String(ACCOUNT_IDENTITY_PROOF_VERSION)],
+      ["ciphersuite", String(request.ciphersuite)],
+      ["signature_scheme", String(request.signatureScheme)],
+      ["mls_signature_key", bytesToHex(request.mlsSignaturePublicKey)],
+    ],
+  };
+}
+
+/**
+ * Returns the canonical unsigned kind-450 proof event as a JSON string, for
+ * handing to an external signer that accepts a serialized event template.
+ * Mirrors darkmatter `AccountIdentityProofRequest::proof_event_json`.
+ */
+export function accountIdentityProofEventJson(
+  request: AccountIdentityProofRequest,
+): string {
+  return JSON.stringify(buildAccountIdentityProofEvent(request));
+}
+
+/**
+ * Returns the lowercase-hex NIP-01 event id of the canonical kind-450 proof
+ * event. Mirrors darkmatter `AccountIdentityProofRequest::proof_event_id`.
+ */
+export function accountIdentityProofEventId(
+  request: AccountIdentityProofRequest,
+): string {
+  return getEventHash(buildAccountIdentityProofEvent(request));
+}
+
+/** The 32-byte BIP-340 message digest the account key signs: the NIP-01 event
+ * id of the canonical, unpublished kind-450 proof event (see
+ * {@link buildAccountIdentityProofEvent}). */
 export function accountIdentityProofSigningDigest(
   request: AccountIdentityProofRequest,
 ): Uint8Array {
-  return sha256(canonicalMessage(request));
+  return hexToBytes(accountIdentityProofEventId(request));
 }
 
 /** Signs a proof request with a raw 32-byte Nostr secret key (BIP-340 Schnorr). */
@@ -117,6 +209,34 @@ export function signAccountIdentityProof(
   secretKey: Uint8Array,
 ): Uint8Array {
   return schnorr.sign(accountIdentityProofSigningDigest(request), secretKey);
+}
+
+/**
+ * Validates a signed kind-450 proof event against a request and extracts the
+ * 64-byte BIP-340 Schnorr signature. Throws if the signed event's pubkey
+ * differs from the request's account identity, if its id differs from the
+ * rebuilt canonical proof-event id, or if the signature does not verify.
+ * Mirrors darkmatter `AccountIdentityProofRequest::signature_from_signed_event`.
+ */
+export function accountIdentityProofSignatureFromSignedEvent(
+  request: AccountIdentityProofRequest,
+  event: SignedAccountIdentityProofEvent,
+): Uint8Array {
+  const accountIdentityHex = bytesToHex(request.accountIdentity);
+  if (event.pubkey.toLowerCase() !== accountIdentityHex)
+    throw new Error("proof event signer does not match account identity");
+
+  const expectedId = accountIdentityProofEventId(request);
+  if (event.id.toLowerCase() !== expectedId)
+    throw new Error("signed proof event does not match proof request");
+
+  const signature = hexToBytes(event.sig);
+  if (
+    !schnorr.verify(signature, hexToBytes(expectedId), request.accountIdentity)
+  )
+    throw new Error("invalid signed proof event: signature does not verify");
+
+  return signature;
 }
 
 /** Encodes an {@link AccountIdentityProof} to its LeafNode extension bytes. */
@@ -166,7 +286,7 @@ export function decodeAccountIdentityProof(
   };
 }
 
-/** Builds the `marmot.account-identity-proof.v1` LeafNode extension. */
+/** Builds the `marmot.account-identity-proof.v2` LeafNode extension. */
 export function makeAccountIdentityProofExtension(
   proof: AccountIdentityProof,
 ): CustomExtension {
@@ -180,6 +300,11 @@ export function makeAccountIdentityProofExtension(
  * Builds the account identity proof request for a leaf, signs it with the given
  * account signer, and returns the LeafNode extension. The MLS ciphersuite id and
  * leaf signature key are bound into the proof.
+ *
+ * `params.signer` may be either a raw-secret-key digest signer (a plain
+ * function; see {@link signAccountIdentityProof}) or an external Nostr event
+ * signer (`{ signEvent }`; see {@link AccountIdentityProofEventSigner}) —
+ * both produce the same 64-byte BIP-340 signature.
  */
 export async function buildAccountIdentityProofExtension(params: {
   accountIdentity: Uint8Array;
@@ -193,7 +318,15 @@ export async function buildAccountIdentityProofExtension(params: {
     ciphersuite: params.ciphersuite,
     signatureScheme: mlsSignatureScheme(params.ciphersuite),
   };
-  const signature = await params.signer(request);
+  const signature =
+    typeof params.signer === "function"
+      ? await params.signer(request)
+      : accountIdentityProofSignatureFromSignedEvent(
+          request,
+          await params.signer.signEvent(
+            buildAccountIdentityProofEvent(request),
+          ),
+        );
   return makeAccountIdentityProofExtension({ request, signature });
 }
 
@@ -218,7 +351,7 @@ export function verifyLeafAccountIdentityProof(
   );
   if (!extension)
     throw new Error(
-      "missing marmot.account-identity-proof.v1 LeafNode extension",
+      "missing marmot.account-identity-proof.v2 LeafNode extension",
     );
 
   const proof = decodeAccountIdentityProof(extension.extensionData);
@@ -245,7 +378,8 @@ export function verifyLeafAccountIdentityProof(
  * Verifies the Marmot account identity proof on every member leaf in the group.
  *
  * The spec requires a valid proof on every member leaf and KeyPackage — "there
- * is no legacy fallback" (foundation/account-identity-proof-v1.md §Validation).
+ * is no legacy fallback" (`foundation/account-identity-proof` spec §Validation;
+ * the spec doc is still filed under its pre-v2 name, see PROOF-V2.md).
  * Throws on the first leaf whose proof is missing or invalid, naming the member.
  */
 export function verifyAllLeafAccountIdentityProofs(

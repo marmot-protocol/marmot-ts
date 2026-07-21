@@ -47,8 +47,12 @@ in isolation before any other wire-boundary work begins.
    **Plans**: 2 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 01-01-PLAN.md — Migrate core account-identity-proof v1→v2 (version byte 2, kind-450 event-id signing digest, external-signer parity builders, signature_scheme parity, colocated v2 tests)
+
+**Wave 2** _(blocked on Wave 1 completion)_
+
 - [ ] 01-02-PLAN.md — Thread widened signer contract through client, sweep proof-touching tests to v2, and pin a fresh Rust-signed → TS-verified round-trip fixture + never-published assertion
 
 ### Phase 2: Inbound Trust & Wire Boundary

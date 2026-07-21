@@ -124,11 +124,12 @@ export type KeyPackageManagerOptions = {
   signer: EventSigner;
   /**
    * Optional Nostr-account proof signer. When provided, generated key packages
-   * carry a `marmot.account-identity-proof.v1` LeafNode extension binding the
+   * carry a `marmot.account-identity-proof.v2` LeafNode extension binding the
    * account to the leaf signature key (required for darkmatter wire interop).
-   * Supply this from a signer with raw BIP-340 access (e.g. a PrivateKeyAccount
-   * secret key via `signAccountIdentityProof`); the applesauce `EventSigner`
-   * alone cannot sign the proof digest.
+   * Accepts either a raw-secret-key digest signer (e.g. a PrivateKeyAccount
+   * secret key via `signAccountIdentityProof`) or an external Nostr event
+   * signer (`{ signEvent }`, e.g. NIP-07/NIP-46/hardware); the applesauce
+   * `EventSigner` alone cannot sign the proof.
    */
   accountProofSigner?: AccountIdentityProofSigner;
   /** The nostr relay pool to use for the client. Should implement GroupNostrInterface for group operations. */

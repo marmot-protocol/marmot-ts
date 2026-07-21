@@ -6,6 +6,7 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { schnorr } from "@noble/curves/secp256k1.js";
+import { getEventHash } from "applesauce-core/helpers/event";
 import { describe, expect, it } from "vitest";
 
 import type { LeafNode } from "ts-mls";
@@ -192,5 +193,44 @@ describe("account identity proof — leaf verification", () => {
 
   it("exposes the spec extension type", () => {
     expect(ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE).toBe(0xf2f1);
+  });
+});
+
+describe("account identity proof — v2 migration (RED, Task 1)", () => {
+  it("emits version byte 2 in the wire encoding and rejects a version-1 (v1) proof on decode", () => {
+    const req = request();
+    const signature = signAccountIdentityProof(req, secretKey);
+    const encoded = encodeAccountIdentityProof({ request: req, signature });
+    expect(encoded[0]).toBe(2);
+
+    // Flip the version byte to the old v1 value and confirm rejection.
+    const v1Encoded = new Uint8Array(encoded);
+    v1Encoded[0] = 1;
+    expect(() => decodeAccountIdentityProof(v1Encoded)).toThrow(/version/);
+  });
+
+  it("signs the canonical kind-450 event id (via getEventHash), not the old SHA-256 preimage", () => {
+    const req = request();
+    const expectedEvent = {
+      pubkey: bytesToHex(accountIdentity),
+      created_at: 0,
+      kind: 450,
+      content: "",
+      tags: [
+        ["d", "marmot.account-identity-proof.v2"],
+        ["extension", "0xf2f1"],
+        ["version", "2"],
+        ["ciphersuite", "1"],
+        ["signature_scheme", "2055"],
+        ["mls_signature_key", bytesToHex(mlsSignaturePublicKey)],
+      ],
+    };
+    const expectedId = getEventHash(expectedEvent);
+    expect(bytesToHex(accountIdentityProofSigningDigest(req))).toBe(expectedId);
+  });
+
+  it("emits the ciphersuite-1 signature_scheme decimal tag as 2055", () => {
+    expect(mlsSignatureScheme(1)).toBe(0x0807);
+    expect(String(mlsSignatureScheme(1))).toBe("2055");
   });
 });

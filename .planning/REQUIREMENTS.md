@@ -15,12 +15,12 @@ Requirements for catching marmot-ts up to feature parity + byte-for-byte interop
 
 ### Security / inbound trust
 
-- [ ] **SEC-01**: The inbound Nostr path verifies event id + Schnorr signature at the boundary BEFORE trusting `h`/`p` routing tags or attempting decryption; unverifiable events are rejected, not processed (interop-breaking/security; `groups-manager.ts` → `nostr-peeler.ts` → `group-message-crypto.ts`; `transports/nostr.md` #236, mdk #727)
+- [x] **SEC-01**: The inbound Nostr path verifies event id + Schnorr signature at the boundary BEFORE trusting `h`/`p` routing tags or attempting decryption; unverifiable events are rejected, not processed (interop-breaking/security; `groups-manager.ts` → `nostr-peeler.ts` → `group-message-crypto.ts`; `transports/nostr.md` #236, mdk #727)
 
 ### Wire / codec conformance
 
-- [ ] **WIRE-01**: Published KeyPackages cap the MLS Lifetime to the 84-day maximum (≤ 7,261,200 s), and inbound KeyPackages with an over-long or expired Lifetime are rejected (interop-breaking; `src/utils/timestamp.ts`, `key-package-event-decode.ts`, `key-package-eligibility.ts`; `foundation/key-packages.md` #236)
-- [ ] **WIRE-02**: Required-tag cardinality is enforced — events with repeated, empty, or duplicate required tags are rejected (445 `h`; 1059 `p`; 444 `e`/`relays`; 30443 `d`/`i`/`mls_protocol_version`) (interop-breaking; `src/utils/nostr.ts`, `key-package-event-decode.ts`, `welcome-event.ts`; `transports/nostr.md` #236)
+- [x] **WIRE-01**: Published KeyPackages cap the MLS Lifetime to the 84-day maximum (≤ 7,261,200 s), and inbound KeyPackages with an over-long or expired Lifetime are rejected (interop-breaking; `src/utils/timestamp.ts`, `key-package-event-decode.ts`, `key-package-eligibility.ts`; `foundation/key-packages.md` #236)
+- [x] **WIRE-02**: Required-tag cardinality is enforced — events with repeated, empty, or duplicate required tags are rejected (445 `h`; 1059 `p`; 444 `e`/`relays`; 30443 `d`/`i`/`mls_protocol_version`) (interop-breaking; `src/utils/nostr.ts`, `key-package-event-decode.ts`, `welcome-event.ts`; `transports/nostr.md` #236)
 - [ ] **WIRE-03**: App-component integrity is validated on staged commits — a commit that drops the `app_data_dictionary`, drops a required component, or rewrites a required component's bytes outside a validated `AppDataUpdate` is rejected pre-merge (interop-breaking; `src/engine/ingest.ts` + send + convergence; mdk cgka-engine #704)
 - [ ] **WIRE-04**: SafeAAD component (`0x0002`) is defined, `0x0001` is advertised in the leaf `app_components` list, and the empty safe_aad entry is emitted, so LeafNode/KeyPackage bytes match the reference (additive; `src/core/components/ids.ts`, `dictionary.ts`; mdk `b9ae3ce`)
 
@@ -71,9 +71,9 @@ Which phases cover which requirements. Populated during roadmap creation.
 | Requirement | Phase                                           | Status   |
 | ----------- | ----------------------------------------------- | -------- |
 | PROOF-01    | Phase 1 — Proof v2                              | Complete |
-| SEC-01      | Phase 2 — Inbound Trust & Wire Boundary         | Pending  |
-| WIRE-01     | Phase 2 — Inbound Trust & Wire Boundary         | Pending  |
-| WIRE-02     | Phase 2 — Inbound Trust & Wire Boundary         | Pending  |
+| SEC-01      | Phase 2 — Inbound Trust & Wire Boundary         | Complete |
+| WIRE-01     | Phase 2 — Inbound Trust & Wire Boundary         | Complete |
+| WIRE-02     | Phase 2 — Inbound Trust & Wire Boundary         | Complete |
 | WIRE-03     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
 | CONV-01     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
 | CONV-02     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |

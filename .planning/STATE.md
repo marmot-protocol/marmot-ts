@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: Phase 1)
 current_phase: 02
 current_phase_name: inbound-trust-wire-boundary
-status: executing
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-07-22T10:38:21.436Z"
+status: verifying
+stopped_at: Completed 02-03-PLAN.md
+last_updated: "2026-07-22T10:57:19.534Z"
 last_activity: 2026-07-22
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 5
-  completed_plans: 4
-  percent: 20
+  completed_plans: 5
+  percent: 40
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 
 Phase: 02 (inbound-trust-wire-boundary) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-22 — Phase 02 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -59,6 +59,7 @@ _Updated after each plan completion_
 | Phase 01 P02 | 20min | 3 tasks | 2 files |
 | Phase 02 P01 | 6min | 3 tasks | 8 files |
 | Phase 02 P02 | 10min | 3 tasks | 10 files |
+| Phase 02 P03 | 6min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 02]: Added safeVerifyEvent() to verify.ts after discovering applesauce's verifyEvent throws (rather than returning false) on a malformed event whose getEventHash/serializeEvent call is outside its own try/catch; wrapped at both the 445 drain and 1059 ingest gates
 - [Phase ?]: [Phase 02]: Relaxed getSingletonTagValue/getListTag from a NostrEvent-only signature to a generic <T extends { tags: string[][] }> bound (mirroring getTagValue) so the 444 welcome-rumor's unsigned Rumor callers compile
 - [Phase ?]: [Phase 02]: Deferred verifyEvent threading into GroupsManager/InviteManager constructor calls in marmot-client.ts from plan 02-02 Task 1 to Tasks 2/3 respectively, keeping each task's own pnpm compile green
+- [Phase ?]: Placed createInviteIntent trust-boundary tests in the existing invite.test.ts rather than key-package-manager.test.ts, matching this codebase's colocated-test convention
+- [Phase ?]: track()'s cardinality gate reuses the validated i tag value as the addPublished ref, replacing the prior getKeyPackageReference() read (a migration, not new wiring)
+- [Phase ?]: evaluateKeyPackageForGroup reuses the already-decoded keyPackage.leafNode.lifetime rather than re-calling getKeyPackageLifetime, avoiding a redundant decode
 
 ### Pending Todos
 
@@ -102,7 +106,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-22T10:38:21.431Z
-Stopped at: Completed 02-02-PLAN.md
+Last session: 2026-07-22T10:57:19.528Z
+Stopped at: Completed 02-03-PLAN.md
 Resume file:
 None

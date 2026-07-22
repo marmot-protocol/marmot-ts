@@ -23,7 +23,7 @@ app/tooling crates are cataloged by the review but explicitly deferred.
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Proof v2** - Migrate account-identity-proof v1→v2 to close the headline interop-breaker (completed 2026-07-21)
-- [ ] **Phase 2: Inbound Trust & Wire Boundary** - Verify-before-trust, KeyPackage lifetime cap, required-tag cardinality
+- [x] **Phase 2: Inbound Trust & Wire Boundary** - Verify-before-trust, KeyPackage lifetime cap, required-tag cardinality (completed 2026-07-22)
 - [ ] **Phase 3: Commit Integrity & Convergence Parity** - App-component integrity, admin/leaf coupling, SelfEvicted, notification withdrawal, own-commit protection
 - [ ] **Phase 4: Feature Parity & Conformance Vectors** - SafeAAD advertisement plus MDK's own test vectors wired up as cross-impl tests
 - [ ] **Phase 5: Quality Gate** - Green suite on every supported runtime; byte-exact MDK cross-checks recorded
@@ -68,7 +68,7 @@ unverified fields.
 1. An inbound event with an invalid Nostr event id or Schnorr signature is rejected before any `h`/`p` routing tag is trusted or any decryption is attempted.
 2. Published KeyPackages cap their MLS Lifetime at ≤ 7,261,200 s (84 days); an inbound KeyPackage with an over-long or expired Lifetime is rejected rather than accepted for eligibility.
 3. An event with a repeated, empty, or duplicate required tag (445 `h`; 1059 `p`; 444 `e`/`relays`; 30443 `d`/`i`/`mls_protocol_version`) is rejected, not silently resolved by taking the first match.
-   **Plans**: 2/3 plans executed
+   **Plans**: 3/3 plans complete
 
 Plans:
 **Wave 1**
@@ -81,7 +81,7 @@ Plans:
 
 **Wave 3** _(depends on Wave 2)_
 
-- [ ] 02-03-PLAN.md — Close the 30443 KeyPackage boundary on both consumption paths (track()/addPublished and createInviteIntent): outer-event verify, `d`/`i`/`mls_protocol_version` cardinality, and inbound Lifetime cap/current rejection, plus the eligibility Lifetime reason
+- [x] 02-03-PLAN.md — Close the 30443 KeyPackage boundary on both consumption paths (track()/addPublished and createInviteIntent): outer-event verify, `d`/`i`/`mls_protocol_version` cardinality, and inbound Lifetime cap/current rejection, plus the eligibility Lifetime reason
 
 ### Phase 3: Commit Integrity & Convergence Parity
 
@@ -137,7 +137,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase                                    | Plans Complete | Status      | Completed  |
 | ---------------------------------------- | -------------- | ----------- | ---------- |
 | 1. Proof v2                              | 2/2            | Complete    | 2026-07-21 |
-| 2. Inbound Trust & Wire Boundary         | 2/3            | In Progress |            |
+| 2. Inbound Trust & Wire Boundary         | 3/3            | Complete    | 2026-07-22 |
 | 3. Commit Integrity & Convergence Parity | 0/TBD          | Not started | -          |
 | 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -          |
 | 5. Quality Gate                          | 0/TBD          | Not started | -          |

@@ -269,6 +269,41 @@ describe("generateKeyPackage", () => {
     expect(keyPackage.publicPackage.leafNode.lifetime).toEqual(customLifetime);
   });
 
+  it("should reject an explicit lifetime override that exceeds the 84-day cap (D-08/D-09)", async () => {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const now = BigInt(unixNow());
+
+    await expect(
+      generateKeyPackage({
+        credential,
+        ciphersuiteImpl,
+        lifetime: { notBefore: now, notAfter: now + 7261201n },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("should accept an explicit at-cap lifetime override (7261200n)", async () => {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const now = BigInt(unixNow());
+    const lifetime = { notBefore: now, notAfter: now + 7261200n };
+
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+      lifetime,
+    });
+
+    expect(keyPackage.publicPackage.leafNode.lifetime).toEqual(lifetime);
+  });
+
   it("should throw error for non-basic credential", async () => {
     const invalidCredential = {
       credentialType: "x509" as any,

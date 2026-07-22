@@ -43,6 +43,7 @@ import type { StoredKeyPackage } from "./key-package-manager.js";
 import { KeyPackageManager } from "./key-package-manager.js";
 import type { NostrNetworkInterface } from "./nostr-interface.js";
 import { InMemoryKeyValueStore } from "../extra/in-memory-key-value-store.js";
+import { defaultVerifyEvent, type VerifyEventMethod } from "./verify.js";
 
 const log = logger.extend("client");
 
@@ -136,6 +137,17 @@ export type MarmotClientOptions<
   /** Required when `audit` is set; contains stable engine/account/session metadata. */
   auditContext?: AuditContextOptions;
   /**
+   * Injectable Nostr event verifier gating the inbound trust boundary (SEC-01)
+   * across all three entry points: the 445 group-message drain, the 1059
+   * gift-wrap ingest, and the 30443 KeyPackage publish/track path. Defaults to
+   * applesauce's `verifyEvent` (real BIP-340 Schnorr signature verification).
+   * Callers that trust their event source upstream (e.g. already verified by
+   * a relay pool) may inject `fakeVerifyEvent` instead, or supply a
+   * native/WASM verifier for performance — do not introduce a separate
+   * boolean skip-verification flag.
+   */
+  verifyEvent?: VerifyEventMethod;
+  /**
    * Default `d` tag value (slot identifier) for key package events.
    * Used by {@link KeyPackageManager.create} when no explicit `d` is passed.
    * Set this to a stable per-device string (e.g. `"my-app-desktop"`) so all
@@ -180,12 +192,14 @@ export class MarmotClient<
     this.capabilities = options.capabilities ?? defaultCapabilities();
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
+    const verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
     this.keyPackages = new KeyPackageManager({
       store: options.keyPackageStore,
       signer: options.signer,
       accountProofSigner: options.accountProofSigner,
       network: options.network,
       clientId: options.clientId,
+      verifyEvent,
     });
 
     const historyFactory = (

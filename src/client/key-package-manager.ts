@@ -33,6 +33,7 @@ import {
   WelcomeKeyPackageCandidate,
 } from "./key-package-store.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
+import { defaultVerifyEvent, type VerifyEventMethod } from "./verify.js";
 
 // Re-export the storage entry types and errors from their dedicated modules so
 // existing imports from this module keep working.
@@ -136,6 +137,12 @@ export type KeyPackageManagerOptions = {
   network: NostrNetworkInterface;
   /** The crypto provider to use for cryptographic operations */
   cryptoProvider?: CryptoProvider;
+  /**
+   * Injectable Nostr event verifier for the 30443 KeyPackage trust boundary
+   * (SEC-01). Defaults to applesauce's `verifyEvent`. Stored for the
+   * inbound-verify gate on `track()`/publish-record paths.
+   */
+  verifyEvent?: VerifyEventMethod;
 };
 
 /**
@@ -156,6 +163,12 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
 
   readonly #store: KeyPackageStore;
   readonly #publisher: KeyPackagePublisher;
+  /**
+   * The injectable event verifier for the 30443 trust boundary (SEC-01).
+   * Plumbing only here — the inbound-verify gate that consumes it is added
+   * in a follow-up plan.
+   */
+  readonly #verifyEvent: VerifyEventMethod;
   #log = logger.extend("KeyPackageManager");
 
   constructor(options: KeyPackageManagerOptions) {
@@ -168,6 +181,11 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       accountProofSigner: options.accountProofSigner,
       cryptoProvider: options.cryptoProvider,
     });
+    this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
+    this.#log(
+      "using %s event verifier",
+      this.#verifyEvent === defaultVerifyEvent ? "default" : "custom",
+    );
 
     // Re-emit storage lifecycle events so the manager's public event surface is
     // unchanged by the internal split.

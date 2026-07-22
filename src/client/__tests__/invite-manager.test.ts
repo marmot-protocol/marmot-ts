@@ -547,4 +547,128 @@ describe("InviteManager", () => {
       expect(await manager.getReceived()).toHaveLength(1);
     });
   });
+
+  describe("trust boundary (WIRE-02) — 1059 `p` tag cardinality", () => {
+    /** Genuinely signed kind-1059 gift wrap with an arbitrary tag set (only the `p` tag varies per test). */
+    function createSignedGiftWrapWithTags(
+      secretKey: Uint8Array,
+      tags: string[][],
+    ): NostrEvent {
+      return finalizeEvent(
+        {
+          kind: 1059,
+          created_at: Math.floor(Date.now() / 1000),
+          tags,
+          content: "encrypted-content",
+        },
+        secretKey,
+      );
+    }
+
+    function makeRealVerifierManager(): InviteManager {
+      return new InviteManager({
+        signer: PrivateKeyAccount.generateNew().signer,
+        store: new MemoryBackend<StoredInviteEntry>(),
+        network: new MockNetwork(),
+        // default (real) verifyEvent
+      });
+    }
+
+    it("rejects a 1059 gift wrap with two p tags with reason tag-cardinality", async () => {
+      const manager = makeRealVerifierManager();
+      const recipientPubkey =
+        await PrivateKeyAccount.generateNew().signer.getPublicKey();
+      const otherPubkey =
+        await PrivateKeyAccount.generateNew().signer.getPublicKey();
+      const event = createSignedGiftWrapWithTags(generateSecretKey(), [
+        ["p", recipientPubkey],
+        ["p", otherPubkey],
+      ]);
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const isNew = await manager.ingestEvent(event);
+
+      expect(isNew).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("tag-cardinality");
+      expect(await manager.getReceived()).toHaveLength(0);
+    });
+
+    it("rejects a 1059 gift wrap with an absent p tag with reason tag-cardinality", async () => {
+      const manager = makeRealVerifierManager();
+      const event = createSignedGiftWrapWithTags(generateSecretKey(), []);
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const isNew = await manager.ingestEvent(event);
+
+      expect(isNew).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("tag-cardinality");
+      expect(await manager.getReceived()).toHaveLength(0);
+    });
+
+    it("rejects a 1059 gift wrap with an empty-valued p tag with reason tag-cardinality", async () => {
+      const manager = makeRealVerifierManager();
+      const event = createSignedGiftWrapWithTags(generateSecretKey(), [
+        ["p", ""],
+      ]);
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const isNew = await manager.ingestEvent(event);
+
+      expect(isNew).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("tag-cardinality");
+      expect(await manager.getReceived()).toHaveLength(0);
+    });
+
+    it("still ingests a 1059 gift wrap with exactly one non-empty p tag", async () => {
+      const manager = makeRealVerifierManager();
+      const recipientPubkey =
+        await PrivateKeyAccount.generateNew().signer.getPublicKey();
+      const event = createSignedGiftWrapWithTags(generateSecretKey(), [
+        ["p", recipientPubkey],
+      ]);
+
+      const isNew = await manager.ingestEvent(event);
+
+      expect(isNew).toBe(true);
+      expect(await manager.getReceived()).toHaveLength(1);
+    });
+
+    it("rejects an invalid-signature 1059 event before the p-tag gate runs", async () => {
+      const manager = makeRealVerifierManager();
+      const recipientPubkey =
+        await PrivateKeyAccount.generateNew().signer.getPublicKey();
+      const real = createSignedGiftWrapWithTags(generateSecretKey(), [
+        ["p", recipientPubkey],
+      ]);
+      const corrupted: NostrEvent = { ...real, sig: "0".repeat(128) };
+      delete (corrupted as Record<PropertyKey, unknown>)[verifiedSymbol];
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const isNew = await manager.ingestEvent(corrupted);
+
+      expect(isNew).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("invalid-signature");
+      expect(await manager.getReceived()).toHaveLength(0);
+    });
+  });
 });

@@ -12,6 +12,7 @@ import { WELCOME_EVENT_KIND } from "../core/protocol.js";
 import { getWelcome } from "../core/welcome.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
 import { logger } from "../utils/debug.js";
+import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import type {
   NostrNetworkInterface,
   Unsubscribable,
@@ -70,7 +71,8 @@ export type InviteManagerEvents = {
   /**
    * Emitted when an inbound kind-1059 gift wrap is rejected at the trust
    * boundary — before it is stored or decrypted — for an invalid outer
-   * signature (SEC-01). Client/manager scope: no group context applies here.
+   * signature (SEC-01) or a repeated/absent/empty required `p` tag
+   * (WIRE-02). Client/manager scope: no group context applies here.
    */
   rejected: (event: NostrEvent, reason: RejectReason) => void;
 };
@@ -213,6 +215,14 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
     // outer event's own id/signature, so this gate closes that gap.
     if (!safeVerifyEvent(this.#verifyEvent, event)) {
       this.emit("rejected", event, "invalid-signature");
+      return false;
+    }
+
+    // Trust boundary (WIRE-02): the routing `p` tag must be a singleton
+    // (#236 required-tag cardinality) before it is trusted or the event is
+    // stored. Runs after the signature gate above (D-01 verify-before-trust).
+    if (getSingletonTagValue(event, "p") === undefined) {
+      this.emit("rejected", event, "tag-cardinality");
       return false;
     }
 

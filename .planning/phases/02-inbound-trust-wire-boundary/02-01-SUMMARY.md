@@ -165,6 +165,7 @@ None - no external service configuration required.
 - All three shared primitives (`RejectReason`/`defaultVerifyEvent`, `TAG_CARDINALITY`/strict getters, `createDefaultKeyPackageLifetime`/`isLifetimeWithinCap`/`isLifetimeCurrentWithGrace`) exist, are unit-tested, and are ready for Wave 2/3 plans (02-02, 02-03) to wire into the three inbound entry points (445 `#connectGroup` drain, 1059 `InviteManager.ingestEvent`, 30443 `KeyPackageStore.addPublished`/`createInviteIntent`).
 - WIRE-01 produce side is fully closed (default path capped; explicit-override path guarded). WIRE-01's inbound-reject side, SEC-01's boundary wiring, and WIRE-02's call-site migrations remain for 02-02/02-03.
 - Full test suite (611 tests, 68 files) and `pnpm compile` both pass clean; no regressions introduced.
+- **REQUIREMENTS.md traceability note:** SEC-01, WIRE-01, and WIRE-02 checkboxes in `.planning/REQUIREMENTS.md` are intentionally left `[ ]` (Pending) after this plan — 02-02 and 02-03 also declare these same requirement IDs in their frontmatter and complete the remaining wiring/migration work. This plan only built and unit-tested the shared primitives; running `requirements mark-complete` here would have prematurely flipped all three to Complete before the boundary wiring or call-site migrations exist. Mark them complete only once the phase's last contributing plan (02-03) lands.
 
 ---
 

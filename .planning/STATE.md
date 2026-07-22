@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 02
 current_phase_name: inbound-trust-wire-boundary
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-07-22T10:17:00.035Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-07-22T10:38:21.436Z"
 last_activity: 2026-07-22
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 5
   completed_phases: 1
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
   percent: 20
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 02 (inbound-trust-wire-boundary) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-07-22 — Phase 02 execution started
 
@@ -58,6 +58,7 @@ _Updated after each plan completion_
 | Phase 01-proof-v2 P01 | 15min | 3 tasks | 3 files |
 | Phase 01 P02 | 20min | 3 tasks | 2 files |
 | Phase 02 P01 | 6min | 3 tasks | 8 files |
+| Phase 02 P02 | 10min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Kept createThreeMonthLifetime as a deprecated alias re-export of createDefaultKeyPackageLifetime rather than a hard rename, per CONTEXT's Claude's Discretion
 - [Phase 02]: Cap enforcement lives entirely in marmot-ts (isLifetimeWithinCap + a throw guard in generateKeyPackage) rather than ts-mls's LifetimeConfig.maximumTotalLifetime, which is dead code in rc.14
 - [Phase 02]: getTagValue in src/utils/nostr.ts left byte-for-byte untouched; new strict getters live in a new sibling module src/utils/tag-cardinality.ts
+- [Phase ?]: [Phase 02]: Added safeVerifyEvent() to verify.ts after discovering applesauce's verifyEvent throws (rather than returning false) on a malformed event whose getEventHash/serializeEvent call is outside its own try/catch; wrapped at both the 445 drain and 1059 ingest gates
+- [Phase ?]: [Phase 02]: Relaxed getSingletonTagValue/getListTag from a NostrEvent-only signature to a generic <T extends { tags: string[][] }> bound (mirroring getTagValue) so the 444 welcome-rumor's unsigned Rumor callers compile
+- [Phase ?]: [Phase 02]: Deferred verifyEvent threading into GroupsManager/InviteManager constructor calls in marmot-client.ts from plan 02-02 Task 1 to Tasks 2/3 respectively, keeping each task's own pnpm compile green
 
 ### Pending Todos
 
@@ -98,7 +102,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-22T10:16:15.326Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-07-22T10:38:21.431Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file:
 None

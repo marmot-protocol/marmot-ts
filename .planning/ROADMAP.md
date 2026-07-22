@@ -68,7 +68,7 @@ unverified fields.
 1. An inbound event with an invalid Nostr event id or Schnorr signature is rejected before any `h`/`p` routing tag is trusted or any decryption is attempted.
 2. Published KeyPackages cap their MLS Lifetime at ≤ 7,261,200 s (84 days); an inbound KeyPackage with an over-long or expired Lifetime is rejected rather than accepted for eligibility.
 3. An event with a repeated, empty, or duplicate required tag (445 `h`; 1059 `p`; 444 `e`/`relays`; 30443 `d`/`i`/`mls_protocol_version`) is rejected, not silently resolved by taking the first match.
-   **Plans**: 1/3 plans executed
+   **Plans**: 2/3 plans executed
 
 Plans:
 **Wave 1**
@@ -77,7 +77,7 @@ Plans:
 
 **Wave 2** _(depends on Wave 1)_
 
-- [ ] 02-02-PLAN.md — Inject the pluggable VerifyEventMethod through MarmotClient; gate the 445 drain and 1059 ingest on verify-before-trust with typed `rejected` emits; migrate 444 `e`/`relays` reads to the strict getters
+- [x] 02-02-PLAN.md — Inject the pluggable VerifyEventMethod through MarmotClient; gate the 445 drain and 1059 ingest on verify-before-trust with typed `rejected` emits; migrate 444 `e`/`relays` reads to the strict getters
 
 **Wave 3** _(depends on Wave 2)_
 
@@ -137,7 +137,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase                                    | Plans Complete | Status      | Completed  |
 | ---------------------------------------- | -------------- | ----------- | ---------- |
 | 1. Proof v2                              | 2/2            | Complete    | 2026-07-21 |
-| 2. Inbound Trust & Wire Boundary         | 1/3            | In Progress |            |
+| 2. Inbound Trust & Wire Boundary         | 2/3            | In Progress |            |
 | 3. Commit Integrity & Convergence Parity | 0/TBD          | Not started | -          |
 | 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -          |
 | 5. Quality Gate                          | 0/TBD          | Not started | -          |

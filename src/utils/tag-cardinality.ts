@@ -1,5 +1,4 @@
 /** @module @category Utilities */
-import { NostrEvent } from "applesauce-core/helpers/event";
 
 /** The cardinality rule for a required tag: exactly one value, or a non-empty deduplicated list. */
 export type TagCardinality = "singleton" | "list";
@@ -45,12 +44,16 @@ export const TAG_CARDINALITY: Record<number, Record<string, TagCardinality>> = {
  *
  * Never throws — malformed input is a typed reject, not an exception.
  *
- * @param event - The Nostr event to read the tag from
+ * Generic over any tagged event shape (mirrors `getTagValue`'s constraint) so
+ * it works for both signed {@link NostrEvent}s (445, 1059) and unsigned
+ * rumors (444 welcome), which carry no `sig`/`id`.
+ *
+ * @param event - The Nostr event (or rumor) to read the tag from
  * @param name - The tag name to look up
  * @returns The tag's single value, or `undefined` if the cardinality rule is violated
  */
-export function getSingletonTagValue(
-  event: NostrEvent,
+export function getSingletonTagValue<T extends { tags: string[][] }>(
+  event: T,
   name: string,
 ): string | undefined {
   const matches = event.tags.filter((t) => t[0] === name);
@@ -71,12 +74,16 @@ export function getSingletonTagValue(
  *
  * Never throws — malformed input is a typed reject, not an exception.
  *
- * @param event - The Nostr event to read the tag from
+ * Generic over any tagged event shape (mirrors `getTagValue`'s constraint) so
+ * it works for both signed {@link NostrEvent}s (445, 1059) and unsigned
+ * rumors (444 welcome), which carry no `sig`/`id`.
+ *
+ * @param event - The Nostr event (or rumor) to read the tag from
  * @param name - The tag name to look up
  * @returns The tag's values, or `undefined` if the cardinality rule is violated
  */
-export function getListTag(
-  event: NostrEvent,
+export function getListTag<T extends { tags: string[][] }>(
+  event: T,
   name: string,
 ): string[] | undefined {
   const matches = event.tags.filter((t) => t[0] === name);

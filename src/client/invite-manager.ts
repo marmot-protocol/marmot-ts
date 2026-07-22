@@ -16,6 +16,12 @@ import type {
   NostrNetworkInterface,
   Unsubscribable,
 } from "./nostr-interface.js";
+import {
+  defaultVerifyEvent,
+  type RejectReason,
+  safeVerifyEvent,
+  type VerifyEventMethod,
+} from "./verify.js";
 
 /** A received gift wrap event (kind 1059) that hasn't been decrypted yet */
 export interface ReceivedGiftWrap extends KnownEvent<kinds.GiftWrap> {}
@@ -60,6 +66,13 @@ export type InviteManagerEvents = {
 
   /** Emitted when an event fails to decrypt or parse */
   error: (error: Error, eventId: string) => void;
+
+  /**
+   * Emitted when an inbound kind-1059 gift wrap is rejected at the trust
+   * boundary — before it is stored or decrypted — for an invalid outer
+   * signature (SEC-01). Client/manager scope: no group context applies here.
+   */
+  rejected: (event: NostrEvent, reason: RejectReason) => void;
 };
 
 export interface InviteManagerOptions {
@@ -71,6 +84,14 @@ export interface InviteManagerOptions {
 
   /** The nostr relay pool, used by {@link InviteManager.listen}. */
   network: NostrNetworkInterface;
+
+  /**
+   * Injectable Nostr event verifier gating the outer kind-1059 gift wrap
+   * before it is stored or decrypted (SEC-01). Defaults to applesauce's
+   * `verifyEvent`. `unlockGiftWrap` only verifies the inner seal — this gate
+   * closes that gap by verifying the outer event itself.
+   */
+  verifyEvent?: VerifyEventMethod;
 }
 
 /**
@@ -102,6 +123,8 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
   private store: GenericKeyValueStore<StoredInviteEntry>;
   private network: NostrNetworkInterface;
   private seenCache: Set<string> | null = null;
+  /** The injectable event verifier gating the 1059 outer event (SEC-01). */
+  readonly #verifyEvent: VerifyEventMethod;
 
   #log = logger.extend("InviteManager");
 
@@ -110,6 +133,7 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
     this.signer = options.signer;
     this.store = options.store;
     this.network = options.network;
+    this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
   }
 
   /**
@@ -181,6 +205,15 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
   async ingestEvent(event: NostrEvent): Promise<boolean> {
     if (!isGiftWrap(event)) {
       throw new Error(`Expected kind 1059 gift wrap, got kind ${event.kind}`);
+    }
+
+    // Trust boundary (SEC-01): verify the OUTER kind-1059 event before it is
+    // stored or decrypted. `unlockGiftWrap` (called later, in
+    // decryptGiftWrap) only verifies the inner seal — it never checks this
+    // outer event's own id/signature, so this gate closes that gap.
+    if (!safeVerifyEvent(this.#verifyEvent, event)) {
+      this.emit("rejected", event, "invalid-signature");
+      return false;
     }
 
     const seen = await this.getSeenSet();

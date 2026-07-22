@@ -102,6 +102,51 @@ describe("spec compliance (welcome delivery)", () => {
 
     expect(() => getWelcome(event)).not.toThrow(/encoding|e tag|relays/i);
   });
+
+  it("rejects a kind 444 rumor carrying two e tags (#236 singleton cardinality)", () => {
+    const event: NostrEvent = {
+      kind: WELCOME_EVENT_KIND,
+      pubkey: "0".repeat(64),
+      created_at: 1,
+      content: "AAAA",
+      tags: [validRelays, validE, ["e", "b".repeat(64)]],
+      id: "0".repeat(64),
+      sig: "0".repeat(128),
+    };
+
+    expect(() => getWelcome(event)).toThrow(/e tag/i);
+  });
+
+  it("rejects a kind 444 rumor whose relays tag is repeated (#236 list cardinality)", () => {
+    const event: NostrEvent = {
+      kind: WELCOME_EVENT_KIND,
+      pubkey: "0".repeat(64),
+      created_at: 1,
+      content: "AAAA",
+      tags: [validRelays, ["relays", "wss://other.example.com"], validE],
+      id: "0".repeat(64),
+      sig: "0".repeat(128),
+    };
+
+    expect(() => getWelcome(event)).toThrow(/relays/i);
+  });
+
+  it("rejects a kind 444 rumor whose relays tag carries duplicate URLs (#236 list cardinality)", () => {
+    const event: NostrEvent = {
+      kind: WELCOME_EVENT_KIND,
+      pubkey: "0".repeat(64),
+      created_at: 1,
+      content: "AAAA",
+      tags: [
+        ["relays", "wss://relay.example.com", "wss://relay.example.com"],
+        validE,
+      ],
+      id: "0".repeat(64),
+      sig: "0".repeat(128),
+    };
+
+    expect(() => getWelcome(event)).toThrow(/relays/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

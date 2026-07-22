@@ -1,5 +1,9 @@
 /** @module @category Client - Verify */
-import type { VerifiedEvent, VerifyEventMethod } from "applesauce-core/helpers";
+import type {
+  NostrEvent,
+  VerifiedEvent,
+  VerifyEventMethod,
+} from "applesauce-core/helpers";
 import { fakeVerifyEvent, verifyEvent } from "applesauce-core/helpers";
 
 export type { VerifiedEvent, VerifyEventMethod };
@@ -28,3 +32,24 @@ export type RejectReason =
  * not introduce a separate boolean skip-verification flag.
  */
 export const defaultVerifyEvent: VerifyEventMethod = verifyEvent;
+
+/**
+ * Runs an injected {@link VerifyEventMethod} defensively: a malformed event
+ * (e.g. a non-hex `pubkey`, a missing required field) can make the
+ * underlying verifier (applesauce/nostr-tools `verifyEvent`) throw rather
+ * than return `false` — it only wraps the Schnorr-verify step in a
+ * try/catch, not its own event-hash serialization step. Callers gating an
+ * inbound trust boundary must never let that propagate as an unhandled
+ * exception (availability/DoS-adjacent); treat any thrown error as a failed
+ * verification instead.
+ */
+export function safeVerifyEvent(
+  verify: VerifyEventMethod,
+  event: NostrEvent,
+): boolean {
+  try {
+    return verify(event);
+  } catch {
+    return false;
+  }
+}

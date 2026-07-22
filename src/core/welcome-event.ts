@@ -1,6 +1,6 @@
 /** @module @category Core - Welcome */
 import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
-import { getEventHash, getTagValue } from "applesauce-core/helpers/event";
+import { getEventHash } from "applesauce-core/helpers/event";
 import {
   decode,
   encode,
@@ -13,6 +13,7 @@ import {
 } from "ts-mls";
 import { decodeContent, encodeContent } from "../utils/encoding.js";
 import { unixNow } from "../utils/nostr.js";
+import { getListTag, getSingletonTagValue } from "../utils/tag-cardinality.js";
 import { WELCOME_EVENT_KIND } from "./protocol.js";
 
 /** True when `value` is a 32-byte (64-char) lowercase-or-uppercase hex string. */
@@ -84,18 +85,25 @@ export function createWelcomeRumor({
   };
 }
 
-/** Returns the key package event ID from a welcome rumor */
+/**
+ * Returns the key package event ID from a welcome rumor. Strict (#236): a
+ * repeated, missing, or empty-valued `e` tag yields `undefined` rather than
+ * silently resolving to the first match (WIRE-02).
+ */
 export function getWelcomeKeyPackageEventId(event: Rumor): string | undefined {
-  return getTagValue(event, "e");
+  return getSingletonTagValue(event, "e");
 }
 
-/** Returns the group relays from a welcome rumor */
+/**
+ * Returns the group relays from a welcome rumor. Strict (#236): a repeated
+ * `relays` tag, an empty/absent one, or one carrying duplicate URLs yields
+ * `[]` rather than silently resolving to the first match (WIRE-02).
+ *
+ * NOTE: The "relays" tag is a normal Nostr tag vector: ["relays", ...urls]
+ * (see transports/nostr.md "Welcome delivery" and createWelcomeRumor()).
+ */
 export function getWelcomeGroupRelays(event: Rumor): string[] {
-  // NOTE: The "relays" tag is a normal Nostr tag vector: ["relays", ...urls]
-  // (see transports/nostr.md "Welcome delivery" and createWelcomeRumor()).
-  const tag = event.tags.find((t) => t[0] === "relays");
-  if (!tag) return [];
-  return tag.slice(1);
+  return getListTag(event, "relays") ?? [];
 }
 
 /**
@@ -131,9 +139,11 @@ export function getWelcome(event: Rumor): Welcome {
     );
 
   // Validate the transport-level rumor shape the spec mandates before decoding
-  // (transports/nostr.md "Welcome delivery"): a 32-byte-hex `e` tag and a
-  // non-empty `relays` tag with no empty relay URLs.
-  const keyPackageEventId = getTagValue(event, "e");
+  // (transports/nostr.md "Welcome delivery"): a singleton 32-byte-hex `e` tag
+  // and a singleton non-empty, non-duplicate `relays` tag (#236 strict
+  // cardinality — WIRE-02). getSingletonTagValue/getListTag reject repeated,
+  // empty, or duplicate-valued tags instead of first-match-resolving them.
+  const keyPackageEventId = getSingletonTagValue(event, "e");
   if (!isEventId(keyPackageEventId))
     throw new Error(
       "Invalid welcome event: missing or malformed e tag (expected 32-byte hex KeyPackage event id)",

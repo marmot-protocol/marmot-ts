@@ -229,6 +229,7 @@ export class MarmotClient<
       signer: this.signer,
       store: options.inviteStore || new InMemoryKeyValueStore(),
       network: this.network,
+      verifyEvent,
     });
   }
 

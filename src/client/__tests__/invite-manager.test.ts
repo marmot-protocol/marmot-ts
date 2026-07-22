@@ -1,4 +1,9 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
+import {
+  finalizeEvent,
+  generateSecretKey,
+  verifiedSymbol,
+} from "applesauce-core/helpers";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +15,7 @@ import type {
 } from "../invite-manager.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { WELCOME_EVENT_KIND } from "../../core/protocol.js";
+import { fakeVerifyEvent } from "../verify.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 
 /**
@@ -94,10 +100,18 @@ describe("InviteManager", () => {
     store = new MemoryBackend<StoredInviteEntry>();
     account = PrivateKeyAccount.generateNew();
 
+    // This suite's mock gift wraps (`createMockGiftWrap`) carry a fake
+    // `sig: "signature"` literal, not a real BIP-340 signature — they predate
+    // the SEC-01 trust-boundary gate and exercise storage/seen-tracking/watch
+    // behavior unrelated to it. Inject fakeVerifyEvent (trust-upstream) so
+    // these pre-existing tests keep exercising that behavior unchanged; the
+    // dedicated "trust boundary (SEC-01)" describe block below uses the
+    // default (real) verifier against genuinely signed events.
     inviteManager = new InviteManager({
       signer: account.signer,
       store,
       network: new MockNetwork(),
+      verifyEvent: fakeVerifyEvent,
     });
   });
 
@@ -461,6 +475,76 @@ describe("InviteManager", () => {
 
       const seenAfter = await getSeenIds(store);
       expect(seenAfter).toHaveLength(0);
+    });
+  });
+
+  describe("trust boundary (SEC-01) — outer kind-1059 verify", () => {
+    /** Genuinely signed kind-1059 gift wrap (only the outer envelope; content is opaque). */
+    function createSignedGiftWrap(
+      secretKey: Uint8Array,
+      recipientPubkey: string,
+    ): NostrEvent {
+      return finalizeEvent(
+        {
+          kind: 1059,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [["p", recipientPubkey]],
+          content: "encrypted-content",
+        },
+        secretKey,
+      );
+    }
+
+    /** See `corruptSignature` in groups-manager.test.ts: strips the cached verifiedSymbol. */
+    function corruptSignature(event: NostrEvent): NostrEvent {
+      const corrupted: NostrEvent = { ...event, sig: "0".repeat(128) };
+      delete (corrupted as Record<PropertyKey, unknown>)[verifiedSymbol];
+      return corrupted;
+    }
+
+    it("rejects a 1059 gift wrap with an invalid outer signature before store/decrypt", async () => {
+      const localAccount = PrivateKeyAccount.generateNew();
+      const manager = new InviteManager({
+        signer: localAccount.signer,
+        store: new MemoryBackend<StoredInviteEntry>(),
+        network: new MockNetwork(),
+        // default (real) verifyEvent
+      });
+
+      const recipientPubkey = await localAccount.signer.getPublicKey();
+      const real = createSignedGiftWrap(generateSecretKey(), recipientPubkey);
+      const corrupted = corruptSignature(real);
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const isNew = await manager.ingestEvent(corrupted);
+
+      expect(isNew).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("invalid-signature");
+      expect(await manager.getReceived()).toHaveLength(0);
+    });
+
+    it("delegates verification to an injected fakeVerifyEvent (trust-upstream)", async () => {
+      const localAccount = PrivateKeyAccount.generateNew();
+      const manager = new InviteManager({
+        signer: localAccount.signer,
+        store: new MemoryBackend<StoredInviteEntry>(),
+        network: new MockNetwork(),
+        verifyEvent: fakeVerifyEvent,
+      });
+
+      const recipientPubkey = await localAccount.signer.getPublicKey();
+      const real = createSignedGiftWrap(generateSecretKey(), recipientPubkey);
+      const corrupted = corruptSignature(real);
+
+      const isNew = await manager.ingestEvent(corrupted);
+
+      expect(isNew).toBe(true);
+      expect(await manager.getReceived()).toHaveLength(1);
     });
   });
 });

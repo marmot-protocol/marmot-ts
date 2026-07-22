@@ -57,6 +57,7 @@ import type {
 import {
   defaultVerifyEvent,
   type RejectReason,
+  safeVerifyEvent,
   type VerifyEventMethod,
 } from "./verify.js";
 
@@ -485,7 +486,7 @@ export class GroupsManager<
       // is out of scope (RESEARCH Open Question 1).
       const trusted: NostrEvent[] = [];
       for (const event of fresh) {
-        if (!this.#verifyEvent(event)) {
+        if (!safeVerifyEvent(this.#verifyEvent, event)) {
           this.emit("rejected", group.id, event, "invalid-signature");
           continue;
         }

@@ -188,6 +188,7 @@ describe("exports", () => {
         "getKeyPackageClient",
         "getKeyPackageExtensions",
         "getKeyPackageIdentifier",
+        "getKeyPackageLifetime",
         "getKeyPackageMLSVersion",
         "getKeyPackageNostrPubkey",
         "getKeyPackageReference",

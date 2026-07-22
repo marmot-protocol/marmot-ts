@@ -14,6 +14,10 @@ import {
 } from "./components/agent-text-stream.js";
 import { AGENT_TEXT_STREAM_QUIC_COMPONENT_ID } from "./components/ids.js";
 import { getKeyPackage } from "./key-package-event.js";
+import {
+  isLifetimeCurrentWithGrace,
+  isLifetimeWithinCap,
+} from "../utils/timestamp.js";
 
 /**
  * MLS `required_capabilities` GroupContext extension type (code point `0x0003`).
@@ -145,6 +149,17 @@ export function evaluateKeyPackageForGroup(
           `missing ${role.name} role ${codePointHex(role.extension)}`,
         );
       }
+    }
+
+    // WIRE-01 (defense-in-depth): reject an over-long or expired Lifetime,
+    // mirroring the hard-reject boundary at KeyPackageManager.track()/
+    // createInviteIntent() so a caller invoking this evaluator directly
+    // cannot bypass the cap/current check (RESEARCH A2).
+    const lifetime = keyPackage.leafNode.lifetime;
+    if (!isLifetimeWithinCap(lifetime)) {
+      reasons.push("KeyPackage lifetime range exceeds the 7,261,200s cap");
+    } else if (!isLifetimeCurrentWithGrace(lifetime)) {
+      reasons.push("KeyPackage lifetime is not current (outside ~1h grace)");
     }
   } catch (err) {
     reasons.push(

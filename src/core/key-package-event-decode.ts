@@ -6,6 +6,7 @@ import {
   decode,
   defaultCredentialTypes,
   KeyPackage,
+  Lifetime,
   mlsMessageDecoder,
   wireformats,
 } from "ts-mls";
@@ -45,6 +46,21 @@ export function getKeyPackage(event: NostrEvent): KeyPackage {
     );
 
   return message.keyPackage;
+}
+
+/**
+ * Reads the inbound MLS `Lifetime` ({@link Lifetime}) from a kind 30443
+ * event's decoded KeyPackage leaf node (WIRE-01 inbound read). Returns
+ * `undefined` when the event cannot be decoded as a KeyPackage — never
+ * throws, matching the project's typed-reject convention for boundary
+ * readers (D-08).
+ */
+export function getKeyPackageLifetime(event: NostrEvent): Lifetime | undefined {
+  try {
+    return getKeyPackage(event).leafNode.lifetime;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Gets the MLS protocol version from a kind 30443 event */

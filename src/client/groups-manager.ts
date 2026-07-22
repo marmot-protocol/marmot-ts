@@ -482,26 +482,40 @@ export class GroupsManager<
     }
 
     const filter = { kinds: [GROUP_EVENT_KIND], "#h": [h] };
+    // Only ids of TRUSTED (verified + `h`-cardinal) events live here (SEC-01/
+    // WR-01): an unverified or malformed event's id must never occupy this
+    // dedup slot, or a corrupted same-id forgery could poison it and censor
+    // the genuine, validly-signed event arriving later.
     const seen = new Set<string>();
+    // Tracks event OBJECTS already rejected, so a relay/backfill+subscribe
+    // redelivery of the exact same malformed event (a legitimate resend, not
+    // a new forgery attempt) doesn't re-emit a duplicate `rejected` — while a
+    // genuinely different event object carrying the same id (the WR-01
+    // scenario) is still evaluated fresh.
+    const rejectedEvents = new Set<NostrEvent>();
     const drain = async (events: NostrEvent[]): Promise<void> => {
-      const fresh = events.filter((event) => !seen.has(event.id));
-      for (const event of fresh) seen.add(event.id);
+      const fresh = events.filter(
+        (event) => !seen.has(event.id) && !rejectedEvents.has(event),
+      );
       if (!fresh.length) return;
 
       // Trust boundary (SEC-01/WIRE-02): verify signature and `h` tag
-      // cardinality BEFORE any event reaches group.ingest(). Not a
-      // cross-check of the `h` value against the subscribed group id — that
-      // is out of scope (RESEARCH Open Question 1).
+      // cardinality BEFORE any event reaches group.ingest() or occupies the
+      // dedup `seen` slot. Not a cross-check of the `h` value against the
+      // subscribed group id — that is out of scope (RESEARCH Open Question 1).
       const trusted: NostrEvent[] = [];
       for (const event of fresh) {
         if (!safeVerifyEvent(this.#verifyEvent, event)) {
+          rejectedEvents.add(event);
           this.emit("rejected", group.id, event, "invalid-signature");
           continue;
         }
         if (getSingletonTagValue(event, "h") === undefined) {
+          rejectedEvents.add(event);
           this.emit("rejected", group.id, event, "tag-cardinality");
           continue;
         }
+        seen.add(event.id);
         trusted.push(event);
       }
       if (!trusted.length) return;

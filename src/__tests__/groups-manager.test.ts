@@ -266,4 +266,51 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
       rejections.some(([, , reason]) => reason === "invalid-signature"),
     ).toBe(false);
   });
+
+  it("does not let a corrupted same-id forgery censor the genuine event that arrives later (WR-01)", async () => {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const manager = makeManager(network);
+    const group = await manager.create("Test Group", {
+      relays: ["wss://relay.test"],
+    });
+
+    await manager.send(group.id, {
+      kind: "applicationMessage",
+      payload: new TextEncoder().encode("hello"),
+    });
+    const genuine = network.events[0];
+    // Same id (NIP-01 ids don't cover `sig`), corrupted signature.
+    const corrupted = corruptSignature(genuine);
+
+    // Only the corrupted forgery is present for backfill — the genuine event
+    // has not "arrived" yet.
+    network.clear();
+    network.events.push(corrupted);
+
+    const rejections: Array<[Uint8Array, NostrEvent, string]> = [];
+    manager.on("rejected", (groupId, event, reason) =>
+      rejections.push([groupId, event, reason]),
+    );
+    const ingestSpy = vi.spyOn(group, "ingest");
+
+    await manager.connect(group.id);
+
+    // The forgery is rejected and does not reach ingest.
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0][2]).toBe("invalid-signature");
+    expect(ingestSpy).not.toHaveBeenCalled();
+
+    // The genuine, validly-signed event (same id) now arrives via the live
+    // subscription. It must NOT be censored by the poisoned dedup slot.
+    await network.publish(["wss://relay.test"], genuine);
+
+    expect(ingestSpy).toHaveBeenCalledTimes(1);
+    expect(ingestSpy).toHaveBeenCalledWith([genuine]);
+
+    // A second delivery of the already-verified genuine event is still
+    // deduped and does not reach ingest again.
+    await network.publish(["wss://relay.test"], genuine);
+
+    expect(ingestSpy).toHaveBeenCalledTimes(1);
+  });
 });

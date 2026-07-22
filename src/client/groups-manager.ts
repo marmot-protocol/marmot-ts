@@ -301,13 +301,17 @@ export class GroupsManager<
    * Invites a user to a group from their KeyPackage event (kind 30443).
    *
    * Resolves the committing member from the manager's signer, builds an Add
-   * commit intent via {@link createInviteIntent}, and drives it through the
-   * group session/runtime. After the commit acks, the runtime delivers a
-   * Welcome to the invitee via NIP-59 gift wrap.
+   * commit intent via {@link createInviteIntent} (gated on the same injected
+   * verifier as the 445/1059/30443 inbound boundaries — SEC-01/WIRE-01/
+   * WIRE-02), and drives it through the group session/runtime. After the
+   * commit acks, the runtime delivers a Welcome to the invitee via NIP-59
+   * gift wrap.
    *
    * @returns Per-relay publish responses for the commit group event.
-   * @throws Error if the event is not a KeyPackage kind or the credential
-   *   identity does not match the event author.
+   * @throws Error if the event is not a KeyPackage kind, fails signature
+   *   verification, has invalid required-tag cardinality, has an over-long
+   *   or not-current Lifetime, or the credential identity does not match
+   *   the event author.
    */
   async invite(
     groupId: Uint8Array | string,
@@ -316,7 +320,11 @@ export class GroupsManager<
     const actorPubkey = await this.signer.getPublicKey();
     const [result] = await this.send(
       groupId,
-      createInviteIntent({ keyPackageEvent, actorPubkey }),
+      createInviteIntent({
+        keyPackageEvent,
+        actorPubkey,
+        verifyEvent: this.#verifyEvent,
+      }),
     );
     return result.response;
   }

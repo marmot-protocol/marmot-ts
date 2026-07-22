@@ -42,7 +42,12 @@ export function createWelcomeRumor({
    * (transports/nostr.md "Welcome delivery").
    */
   keyPackageEventId: string;
-  /** Array of relay URLs for the group (becomes the non-empty `relays` tag) */
+  /**
+   * Array of relay URLs for the group (becomes the `relays` tag). Must be
+   * non-empty and every URL must be distinct — matching the #236
+   * list-cardinality rule this rumor's own consumer (`getWelcome` /
+   * `getWelcomeGroupRelays`, via `getListTag`) enforces (WIRE-02).
+   */
   groupRelays: string[];
 }): Rumor {
   if (!isEventId(keyPackageEventId))
@@ -52,6 +57,10 @@ export function createWelcomeRumor({
   if (groupRelays.length === 0 || groupRelays.some((r) => r.length === 0))
     throw new Error(
       "Welcome rumor requires a non-empty relays tag with no empty relay URLs",
+    );
+  if (new Set(groupRelays).size !== groupRelays.length)
+    throw new Error(
+      "Welcome rumor requires distinct relay URLs — a duplicate relay tag value would be rejected by this library's own getWelcome consumer",
     );
   // Serialize the welcome message as a full MLSMessage (RFC 9420)
   const mlsMessage: MlsWelcomeMessage = {

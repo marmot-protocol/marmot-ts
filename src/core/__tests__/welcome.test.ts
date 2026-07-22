@@ -14,7 +14,10 @@ import {
   WELCOME_EVENT_KIND,
 } from "../protocol.js";
 import {
+  createWelcomeRumor,
   getWelcome,
+  getWelcomeGroupRelays,
+  getWelcomeKeyPackageEventId,
   readWelcomeGroupInfo,
   readWelcomeMarmotGroupView,
 } from "../welcome.js";
@@ -319,5 +322,50 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupView", () => {
         ciphersuiteImpl: ciphersuite,
       }),
     ).rejects.toThrow("Failed to decrypt group secrets");
+  });
+
+  describe("createWelcomeRumor", () => {
+    it("throws when groupRelays contains a duplicate relay URL", async () => {
+      const groupRelays = ["wss://mock-relay.test"];
+      const { welcomeRumor, adminPubkey } = await setupWelcomeRumor(
+        "Dup Relay Test",
+        groupRelays,
+      );
+      const welcome = getWelcome(welcomeRumor);
+      const keyPackageEventId = getWelcomeKeyPackageEventId(welcomeRumor)!;
+
+      expect(() =>
+        createWelcomeRumor({
+          welcome,
+          author: adminPubkey,
+          keyPackageEventId,
+          groupRelays: ["wss://relay.example.com", "wss://relay.example.com"],
+        }),
+      ).toThrow(/relay/i);
+    });
+
+    it("produces a rumor getWelcome round-trips with distinct relays (producer/consumer parity)", async () => {
+      const groupRelays = ["wss://mock-relay.test"];
+      const { welcomeRumor, adminPubkey } = await setupWelcomeRumor(
+        "Distinct Relay Test",
+        groupRelays,
+      );
+      const welcome = getWelcome(welcomeRumor);
+      const keyPackageEventId = getWelcomeKeyPackageEventId(welcomeRumor)!;
+      const distinctRelays = [
+        "wss://relay-a.example.com",
+        "wss://relay-b.example.com",
+      ];
+
+      const rumor = createWelcomeRumor({
+        welcome,
+        author: adminPubkey,
+        keyPackageEventId,
+        groupRelays: distinctRelays,
+      });
+
+      expect(() => getWelcome(rumor)).not.toThrow();
+      expect(getWelcomeGroupRelays(rumor)).toEqual(distinctRelays);
+    });
   });
 });

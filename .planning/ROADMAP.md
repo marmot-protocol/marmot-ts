@@ -68,7 +68,7 @@ unverified fields.
 1. An inbound event with an invalid Nostr event id or Schnorr signature is rejected before any `h`/`p` routing tag is trusted or any decryption is attempted.
 2. Published KeyPackages cap their MLS Lifetime at ≤ 7,261,200 s (84 days); an inbound KeyPackage with an over-long or expired Lifetime is rejected rather than accepted for eligibility.
 3. An event with a repeated, empty, or duplicate required tag (445 `h`; 1059 `p`; 444 `e`/`relays`; 30443 `d`/`i`/`mls_protocol_version`) is rejected, not silently resolved by taking the first match.
-   **Plans**: 3/3 plans complete
+   **Plans**: 4 plans (3 complete + 1 gap-closure)
 
 Plans:
 **Wave 1**
@@ -82,6 +82,10 @@ Plans:
 **Wave 3** _(depends on Wave 2)_
 
 - [x] 02-03-PLAN.md — Close the 30443 KeyPackage boundary on both consumption paths (track()/addPublished and createInviteIntent): outer-event verify, `d`/`i`/`mls_protocol_version` cardinality, and inbound Lifetime cap/current rejection, plus the eligibility Lifetime reason
+
+**Gap closure** _(from 02-VERIFICATION.md)_
+
+- [ ] 02-04-PLAN.md — Close the three verified defects: enforce 1059 `p`-tag cardinality in InviteManager.ingestEvent (GAP 1/WIRE-02), reorder the 445 #connectGroup drain so only verified events occupy the dedup slot — fixing the WR-01 same-id forgery censorship (GAP 2/SEC-01), and make createWelcomeRumor reject duplicate relay URLs to match its own strict consumer (GAP 3/WIRE-02)
 
 ### Phase 3: Commit Integrity & Convergence Parity
 

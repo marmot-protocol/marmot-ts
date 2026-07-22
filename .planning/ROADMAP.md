@@ -68,12 +68,12 @@ unverified fields.
 1. An inbound event with an invalid Nostr event id or Schnorr signature is rejected before any `h`/`p` routing tag is trusted or any decryption is attempted.
 2. Published KeyPackages cap their MLS Lifetime at ≤ 7,261,200 s (84 days); an inbound KeyPackage with an over-long or expired Lifetime is rejected rather than accepted for eligibility.
 3. An event with a repeated, empty, or duplicate required tag (445 `h`; 1059 `p`; 444 `e`/`relays`; 30443 `d`/`i`/`mls_protocol_version`) is rejected, not silently resolved by taking the first match.
-   **Plans**: 3 plans
+   **Plans**: 1/3 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 02-01-PLAN.md — Shared trust-boundary primitives: RejectReason taxonomy + injectable verifier defaults (verify.ts), table-driven #236 tag-cardinality validator + strict getters (tag-cardinality.ts), and produce-side KeyPackage lifetime cap/backdate/rename + cap/grace helpers (timestamp.ts)
+- [x] 02-01-PLAN.md — Shared trust-boundary primitives: RejectReason taxonomy + injectable verifier defaults (verify.ts), table-driven #236 tag-cardinality validator + strict getters (tag-cardinality.ts), and produce-side KeyPackage lifetime cap/backdate/rename + cap/grace helpers (timestamp.ts)
 
 **Wave 2** _(depends on Wave 1)_
 
@@ -137,7 +137,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase                                    | Plans Complete | Status      | Completed  |
 | ---------------------------------------- | -------------- | ----------- | ---------- |
 | 1. Proof v2                              | 2/2            | Complete    | 2026-07-21 |
-| 2. Inbound Trust & Wire Boundary         | 0/3            | Planned     | -          |
+| 2. Inbound Trust & Wire Boundary         | 1/3            | In Progress |            |
 | 3. Commit Integrity & Convergence Parity | 0/TBD          | Not started | -          |
 | 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -          |
 | 5. Quality Gate                          | 0/TBD          | Not started | -          |

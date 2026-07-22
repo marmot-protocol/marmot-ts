@@ -28,6 +28,7 @@ import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { logger } from "../utils/debug.js";
 import { hasAck } from "../utils/index.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
+import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import {
   BaseGroupHistory,
   BaseGroupMedia,
@@ -53,6 +54,11 @@ import type {
   PublishResponse,
   Unsubscribable,
 } from "./nostr-interface.js";
+import {
+  defaultVerifyEvent,
+  type RejectReason,
+  type VerifyEventMethod,
+} from "./verify.js";
 
 const log = logger.extend("GroupsManager");
 
@@ -110,6 +116,12 @@ export type GroupsManagerOptions<
    * that aims to retain and process everything.
    */
   ingestionPool?: IngestionPoolOptions;
+  /**
+   * Injectable Nostr event verifier gating the 445 `#connectGroup` drain
+   * (SEC-01): every inbound group-message event is verified before it
+   * reaches `group.ingest()`. Defaults to applesauce's `verifyEvent`.
+   */
+  verifyEvent?: VerifyEventMethod;
 };
 
 /** Events emitted by {@link GroupsManager} */
@@ -147,6 +159,17 @@ export type GroupsManagerEvents<
    * connection loop logging them.
    */
   unreadable: (groupId: Uint8Array, event: NostrEvent) => void;
+  /**
+   * Emitted by a {@link GroupsManager.connect} subscription when an inbound
+   * kind-445 event is rejected at the trust boundary — before it ever
+   * reaches `group.ingest()` — for an invalid signature or a malformed `h`
+   * tag (SEC-01/WIRE-02).
+   */
+  rejected: (
+    groupId: Uint8Array,
+    event: NostrEvent,
+    reason: RejectReason,
+  ) => void;
 };
 
 /**
@@ -175,6 +198,8 @@ export class GroupsManager<
   readonly #registry: GroupRegistry<THistory, TMedia>;
   /** Builds new groups (the accountProofSigner/ciphersuite consumer). */
   readonly #factory: GroupFactory<THistory, TMedia>;
+  /** The injectable event verifier gating the 445 drain (SEC-01). */
+  readonly #verifyEvent: VerifyEventMethod;
 
   constructor(options: GroupsManagerOptions<THistory, TMedia>) {
     super();
@@ -183,6 +208,7 @@ export class GroupsManager<
     this.accountProofSigner = options.accountProofSigner;
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
+    this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
 
     this.#registry = new GroupRegistry<THistory, TMedia>({
       store: options.store,
@@ -452,8 +478,27 @@ export class GroupsManager<
       const fresh = events.filter((event) => !seen.has(event.id));
       for (const event of fresh) seen.add(event.id);
       if (!fresh.length) return;
+
+      // Trust boundary (SEC-01/WIRE-02): verify signature and `h` tag
+      // cardinality BEFORE any event reaches group.ingest(). Not a
+      // cross-check of the `h` value against the subscribed group id — that
+      // is out of scope (RESEARCH Open Question 1).
+      const trusted: NostrEvent[] = [];
+      for (const event of fresh) {
+        if (!this.#verifyEvent(event)) {
+          this.emit("rejected", group.id, event, "invalid-signature");
+          continue;
+        }
+        if (getSingletonTagValue(event, "h") === undefined) {
+          this.emit("rejected", group.id, event, "tag-cardinality");
+          continue;
+        }
+        trusted.push(event);
+      }
+      if (!trusted.length) return;
+
       try {
-        for await (const result of group.ingest(fresh)) {
+        for await (const result of group.ingest(trusted)) {
           if (result.kind === "unreadable")
             this.emit("unreadable", group.id, result.event);
         }

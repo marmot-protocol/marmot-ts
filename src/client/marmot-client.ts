@@ -222,6 +222,7 @@ export class MarmotClient<
       cryptoProvider: this.cryptoProvider,
       historyFactory,
       mediaFactory,
+      verifyEvent,
     });
 
     this.invites = new InviteManager({

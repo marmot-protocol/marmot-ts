@@ -1,8 +1,15 @@
 import type { EventSigner } from "applesauce-core/factories";
-import { describe, expect, it } from "vitest";
+import {
+  finalizeEvent,
+  generateSecretKey,
+  verifiedSymbol,
+} from "applesauce-core/helpers";
+import type { NostrEvent } from "applesauce-core/helpers/event";
+import { describe, expect, it, vi } from "vitest";
 
 import { GroupsManager } from "../client/groups-manager.js";
 import type { NostrNetworkInterface } from "../client/nostr-interface.js";
+import { fakeVerifyEvent } from "../client/verify.js";
 import type { SerializedClientState } from "../core/client-state.js";
 import { InMemoryKeyValueStore } from "../extra/in-memory-key-value-store.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
@@ -132,5 +139,131 @@ describe("GroupsManager session/runtime helpers", () => {
     expect(results[0].kind).toBe("skipped");
     if (results[0].kind !== "skipped") throw new Error("expected skipped");
     expect(results[0].reason).toBe("self-echo");
+  });
+});
+
+describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)", () => {
+  /**
+   * `finalizeEvent` caches a `true` result under `verifiedSymbol` on the
+   * event it just signed; a plain object spread copies that own enumerable
+   * symbol property too, so a naive `{ ...real, sig: "bad" }` would silently
+   * short-circuit `defaultVerifyEvent` back to `true`. Strip the cache so the
+   * corrupted event is actually re-verified from scratch.
+   */
+  function corruptSignature(event: NostrEvent): NostrEvent {
+    const corrupted: NostrEvent = { ...event, sig: "0".repeat(128) };
+    delete (corrupted as Record<PropertyKey, unknown>)[verifiedSymbol];
+    return corrupted;
+  }
+
+  function makeManager(
+    network: NostrNetworkInterface,
+    verifyEvent?: (event: NostrEvent) => boolean,
+  ) {
+    const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+    return new GroupsManager({
+      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      signer,
+      network,
+      verifyEvent: verifyEvent as any,
+    });
+  }
+
+  it("rejects an inbound 445 event with an invalid signature before ingest", async () => {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const manager = makeManager(network);
+    const group = await manager.create("Test Group", {
+      relays: ["wss://relay.test"],
+    });
+
+    await manager.send(group.id, {
+      kind: "applicationMessage",
+      payload: new TextEncoder().encode("hello"),
+    });
+    const real = network.events[0];
+    const corrupted = corruptSignature(real);
+    network.clear();
+    network.events.push(corrupted);
+
+    const rejections: Array<[Uint8Array, NostrEvent, string]> = [];
+    manager.on("rejected", (groupId, event, reason) =>
+      rejections.push([groupId, event, reason]),
+    );
+    const ingestSpy = vi.spyOn(group, "ingest");
+
+    await manager.connect(group.id);
+
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0][2]).toBe("invalid-signature");
+    expect(ingestSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a properly-signed 445 event carrying a duplicate h tag before ingest", async () => {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const manager = makeManager(network);
+    const group = await manager.create("Test Group", {
+      relays: ["wss://relay.test"],
+    });
+
+    await manager.send(group.id, {
+      kind: "applicationMessage",
+      payload: new TextEncoder().encode("hello"),
+    });
+    const real = network.events[0];
+
+    // Re-sign a modified draft carrying a second `h` tag — a genuinely valid
+    // signature (matches how 445 events are actually signed, MIP-03 ephemeral
+    // keys), but the routing tag itself violates #236 singleton cardinality.
+    const draft = {
+      kind: real.kind,
+      created_at: real.created_at,
+      content: real.content,
+      tags: [...real.tags, ["h", "duplicate-h-value"]],
+    };
+    const badEvent = finalizeEvent(draft, generateSecretKey());
+    network.clear();
+    network.events.push(badEvent);
+
+    const rejections: Array<[Uint8Array, NostrEvent, string]> = [];
+    manager.on("rejected", (groupId, event, reason) =>
+      rejections.push([groupId, event, reason]),
+    );
+    const ingestSpy = vi.spyOn(group, "ingest");
+
+    await manager.connect(group.id);
+
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0][2]).toBe("tag-cardinality");
+    expect(ingestSpy).not.toHaveBeenCalled();
+  });
+
+  it("delegates verification to an injected fakeVerifyEvent (trust-upstream)", async () => {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const manager = makeManager(network, fakeVerifyEvent);
+    const group = await manager.create("Test Group", {
+      relays: ["wss://relay.test"],
+    });
+
+    await manager.send(group.id, {
+      kind: "applicationMessage",
+      payload: new TextEncoder().encode("hello"),
+    });
+    const real = network.events[0];
+    const corrupted = corruptSignature(real);
+    network.clear();
+    network.events.push(corrupted);
+
+    const rejections: Array<[Uint8Array, NostrEvent, string]> = [];
+    manager.on("rejected", (groupId, event, reason) =>
+      rejections.push([groupId, event, reason]),
+    );
+
+    await manager.connect(group.id);
+
+    // With signature verification delegated away (fakeVerifyEvent), the
+    // invalid-signature rejection must never fire for this event.
+    expect(
+      rejections.some(([, , reason]) => reason === "invalid-signature"),
+    ).toBe(false);
   });
 });

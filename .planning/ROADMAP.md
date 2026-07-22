@@ -68,7 +68,7 @@ unverified fields.
 1. An inbound event with an invalid Nostr event id or Schnorr signature is rejected before any `h`/`p` routing tag is trusted or any decryption is attempted.
 2. Published KeyPackages cap their MLS Lifetime at ≤ 7,261,200 s (84 days); an inbound KeyPackage with an over-long or expired Lifetime is rejected rather than accepted for eligibility.
 3. An event with a repeated, empty, or duplicate required tag (445 `h`; 1059 `p`; 444 `e`/`relays`; 30443 `d`/`i`/`mls_protocol_version`) is rejected, not silently resolved by taking the first match.
-   **Plans**: 4 plans (3 complete + 1 gap-closure)
+   **Plans**: 4/4 plans complete
 
 Plans:
 **Wave 1**
@@ -85,7 +85,7 @@ Plans:
 
 **Gap closure** _(from 02-VERIFICATION.md)_
 
-- [ ] 02-04-PLAN.md — Close the three verified defects: enforce 1059 `p`-tag cardinality in InviteManager.ingestEvent (GAP 1/WIRE-02), reorder the 445 #connectGroup drain so only verified events occupy the dedup slot — fixing the WR-01 same-id forgery censorship (GAP 2/SEC-01), and make createWelcomeRumor reject duplicate relay URLs to match its own strict consumer (GAP 3/WIRE-02)
+- [x] 02-04-PLAN.md — Close the three verified defects: enforce 1059 `p`-tag cardinality in InviteManager.ingestEvent (GAP 1/WIRE-02), reorder the 445 #connectGroup drain so only verified events occupy the dedup slot — fixing the WR-01 same-id forgery censorship (GAP 2/SEC-01), and make createWelcomeRumor reject duplicate relay URLs to match its own strict consumer (GAP 3/WIRE-02)
 
 ### Phase 3: Commit Integrity & Convergence Parity
 
@@ -141,7 +141,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase                                    | Plans Complete | Status      | Completed  |
 | ---------------------------------------- | -------------- | ----------- | ---------- |
 | 1. Proof v2                              | 2/2            | Complete    | 2026-07-21 |
-| 2. Inbound Trust & Wire Boundary         | 3/3            | Complete    | 2026-07-22 |
+| 2. Inbound Trust & Wire Boundary         | 4/4            | Complete    | 2026-07-22 |
 | 3. Commit Integrity & Convergence Parity | 0/TBD          | Not started | -          |
 | 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -          |
 | 5. Quality Gate                          | 0/TBD          | Not started | -          |

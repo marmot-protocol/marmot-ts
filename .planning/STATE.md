@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 02
 current_phase_name: inbound-trust-wire-boundary
 status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-07-22T11:21:02.678Z"
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-07-22T11:35:03.502Z"
 last_activity: 2026-07-22
-last_activity_desc: Phase 02 execution started
+last_activity_desc: Completed 02-04-PLAN.md — Phase 02 (inbound-trust-wire-boundary) complete
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 6
+  completed_plans: 6
   percent: 40
 ---
 
@@ -28,12 +28,12 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 
 ## Current Position
 
-Phase: 02 (inbound-trust-wire-boundary) — EXECUTING
-Plan: 3 of 3
-Status: Ready to execute
-Last activity: 2026-07-22 — Phase 02 execution started
+Phase: 02 (inbound-trust-wire-boundary) — COMPLETE
+Plan: 4 of 4
+Status: Phase 02 complete — ready for Phase 3
+Last activity: 2026-07-22 — Completed 02-04-PLAN.md (gap closure)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [████░░░░░░] 40%
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ _Updated after each plan completion_
 | Phase 02 P01 | 6min | 3 tasks | 8 files |
 | Phase 02 P02 | 10min | 3 tasks | 10 files |
 | Phase 02 P03 | 6min | 3 tasks | 9 files |
+| Phase 02 P04 | 12min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Placed createInviteIntent trust-boundary tests in the existing invite.test.ts rather than key-package-manager.test.ts, matching this codebase's colocated-test convention
 - [Phase ?]: track()'s cardinality gate reuses the validated i tag value as the addPublished ref, replacing the prior getKeyPackageReference() read (a migration, not new wiring)
 - [Phase ?]: evaluateKeyPackageForGroup reuses the already-decoded keyPackage.leafNode.lifetime rather than re-calling getKeyPackageLifetime, avoiding a redundant decode
+- [Phase ?]: [Phase 02]: Introduced an object-identity-keyed rejectedEvents Set alongside the trusted-only id-keyed seen Set in GroupsManager#connectGroup's drain, to close WR-01 (same-id forgery censorship) without regressing existing single-rejection tests under MockNetwork's backfill+subscribe replay of the same malformed event object
 
 ### Pending Todos
 
@@ -106,7 +108,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-22T10:57:19.528Z
-Stopped at: Completed 02-03-PLAN.md
+Last session: 2026-07-22T11:34:39.947Z
+Stopped at: Completed 02-04-PLAN.md
 Resume file:
 None

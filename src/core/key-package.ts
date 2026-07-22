@@ -17,7 +17,10 @@ import {
 } from "ts-mls";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
-import { createThreeMonthLifetime } from "../utils/timestamp.js";
+import {
+  createDefaultKeyPackageLifetime,
+  isLifetimeWithinCap,
+} from "../utils/timestamp.js";
 import {
   type AccountIdentityProofSigner,
   buildAccountIdentityProofExtension,
@@ -102,7 +105,14 @@ export async function generateKeyPackage({
   const resolvedCapabilities = capabilities
     ? ensureMarmotCapabilities(capabilities)
     : defaultCapabilities();
-  const resolvedLifetime = lifetime ?? createThreeMonthLifetime();
+  const resolvedLifetime = lifetime ?? createDefaultKeyPackageLifetime();
+  // WIRE-01 produce path: the cap must hold regardless of how lifetime is
+  // supplied. The default is always within cap, so this check only ever
+  // rejects an explicit caller-supplied `lifetime` override (D-09).
+  if (!isLifetimeWithinCap(resolvedLifetime))
+    throw new Error(
+      `generateKeyPackage: lifetime range ${resolvedLifetime.notAfter - resolvedLifetime.notBefore}s exceeds the 7,261,200s (84-day) cap`,
+    );
   // Marmot requires support for last_resort capability signaling (MIP-00),
   // but individual KeyPackages may be single-use or last-resort reusable.
   // `isLastResort` controls whether this KeyPackage is marked reusable.

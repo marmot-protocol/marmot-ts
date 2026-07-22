@@ -12,12 +12,20 @@ import {
 
 import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import {
-  getKeyPackageReference,
+  getKeyPackageLifetime,
   getKeyPackageRelays,
 } from "../core/key-package-event.js";
-import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../core/protocol.js";
+import {
+  ADDRESSABLE_KEY_PACKAGE_KIND,
+  KEY_PACKAGE_MLS_VERSION_TAG,
+} from "../core/protocol.js";
 import { logger } from "../utils/debug.js";
 import { GenericKeyValueStore } from "../utils/key-value.js";
+import { getSingletonTagValue } from "../utils/tag-cardinality.js";
+import {
+  isLifetimeCurrentWithGrace,
+  isLifetimeWithinCap,
+} from "../utils/timestamp.js";
 import {
   KeyPackageNotFoundError,
   KeyPackageRotatePreconditionError,
@@ -33,7 +41,12 @@ import {
   WelcomeKeyPackageCandidate,
 } from "./key-package-store.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
-import { defaultVerifyEvent, type VerifyEventMethod } from "./verify.js";
+import {
+  defaultVerifyEvent,
+  type RejectReason,
+  safeVerifyEvent,
+  type VerifyEventMethod,
+} from "./verify.js";
 
 // Re-export the storage entry types and errors from their dedicated modules so
 // existing imports from this module keep working.
@@ -113,6 +126,13 @@ export type KeyPackageManagerEvents = {
   updated: (keyPackage: StoredKeyPackage) => void;
   /** Emitted when a key package publish is recorded (own publish or observed relay event) */
   published: (refHex: string, eventId: string, relays: string[]) => void;
+  /**
+   * Emitted when an inbound kind-30443 KeyPackage event is rejected at the
+   * trust boundary in {@link KeyPackageManager.track} — invalid signature,
+   * required-tag cardinality violation, or Lifetime cap/current failure
+   * (SEC-01/WIRE-01/WIRE-02) — before it is ever persisted.
+   */
+  rejected: (event: NostrEvent, reason: RejectReason) => void;
 };
 
 /** Options for creating a new KeyPackageManager */
@@ -164,9 +184,8 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   readonly #store: KeyPackageStore;
   readonly #publisher: KeyPackagePublisher;
   /**
-   * The injectable event verifier for the 30443 trust boundary (SEC-01).
-   * Plumbing only here — the inbound-verify gate that consumes it is added
-   * in a follow-up plan.
+   * The injectable event verifier for the 30443 trust boundary (SEC-01),
+   * consumed by {@link track}'s inbound-verify gate.
    */
   readonly #verifyEvent: VerifyEventMethod;
   #log = logger.extend("KeyPackageManager");
@@ -423,10 +442,16 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   // ---------------------------------------------------------------------------
 
   /**
-   * Observes a Nostr event and, if it is a kind 30443 key package event whose
-   * `i` tag (MIP-00 KeyPackageRef) matches its decoded body, records it in the
-   * store. Events with no `i` tag, an undecodable body, or an `i` tag that does
-   * not match the recomputed ref are rejected.
+   * Observes a Nostr event and, if it is a kind 30443 key package event that
+   * passes the trust boundary (SEC-01/WIRE-01/WIRE-02), records it in the
+   * store. Non-key-package events are silently ignored. Events that fail the
+   * boundary — invalid signature, non-singleton/invalid `d`/`i`/
+   * `mls_protocol_version`, an over-long or not-current KeyPackage Lifetime,
+   * an undecodable body, or an `i` tag that does not match the recomputed
+   * ref — are rejected: a `rejected` event is emitted with a typed
+   * {@link RejectReason} (except for the last two, which the underlying
+   * {@link KeyPackageStore.addPublished} chokepoint throws on and this
+   * method converts to a `false` return without an emit).
    *
    * @param event - Any Nostr event; non-key-package events are silently ignored
    * @returns `true` if the event was recorded, `false` if ignored or rejected
@@ -436,13 +461,42 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       return false;
     }
 
-    const refHex = getKeyPackageReference(event);
-    if (!refHex) return false;
+    // Trust boundary (SEC-01/WIRE-01/WIRE-02): verify signature, required-tag
+    // cardinality, and KeyPackage Lifetime BEFORE the event is ever persisted.
+    if (!safeVerifyEvent(this.#verifyEvent, event)) {
+      this.emit("rejected", event, "invalid-signature");
+      return false;
+    }
+
+    if (getSingletonTagValue(event, "d") === undefined) {
+      this.emit("rejected", event, "tag-cardinality");
+      return false;
+    }
+    const refHex = getSingletonTagValue(event, "i");
+    if (refHex === undefined) {
+      this.emit("rejected", event, "tag-cardinality");
+      return false;
+    }
+    if (getSingletonTagValue(event, KEY_PACKAGE_MLS_VERSION_TAG) !== "1.0") {
+      this.emit("rejected", event, "tag-cardinality");
+      return false;
+    }
+
+    const lifetime = getKeyPackageLifetime(event);
+    if (
+      !lifetime ||
+      !isLifetimeWithinCap(lifetime) ||
+      !isLifetimeCurrentWithGrace(lifetime)
+    ) {
+      this.emit("rejected", event, "lifetime-cap");
+      return false;
+    }
 
     try {
       await this.#store.addPublished(refHex, event);
     } catch {
-      // Event body could not be decoded as a KeyPackage — treat as invalid
+      // Event body could not be decoded as a KeyPackage, or its `i` tag does
+      // not match the recomputed ref — treat as invalid.
       return false;
     }
 

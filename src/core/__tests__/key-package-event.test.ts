@@ -17,12 +17,14 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { createCredential } from "../credential.js";
+import { evaluateKeyPackageForGroup } from "../key-package-eligibility.js";
 import { generateKeyPackage } from "../key-package.js";
 import {
   createDeleteKeyPackageEvent,
   createKeyPackageEvent,
   getKeyPackage,
   getKeyPackageIdentifier,
+  getKeyPackageLifetime,
   getKeyPackageNostrPubkey,
 } from "../key-package-event.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../protocol.js";
@@ -674,5 +676,146 @@ describe("spec compliance (MIP-00)", () => {
     });
 
     expect(event.tags.some((t) => t[0] === "encoding")).toBe(false);
+  });
+});
+
+describe("getKeyPackageLifetime (WIRE-01 inbound read)", () => {
+  const validPubkey =
+    "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+  const testD =
+    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+  it("returns the KeyPackage's Lifetime for a well-formed 30443 event", async () => {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+    });
+
+    const event = await createKeyPackageEvent({
+      keyPackage: keyPackage.publicPackage,
+      identifier: testD,
+    });
+    const mockEvent: NostrEvent = {
+      ...event,
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      pubkey: validPubkey,
+      id: "lifetime-read-id",
+      sig: "lifetime-read-sig",
+    };
+
+    expect(getKeyPackageLifetime(mockEvent)).toEqual(
+      keyPackage.publicPackage.leafNode.lifetime,
+    );
+  });
+
+  it("returns undefined for an undecodable event (never throws)", () => {
+    const event: NostrEvent = {
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      pubkey: mockPubkey,
+      created_at: 0,
+      content: "not-a-key-package",
+      tags: [],
+      id: "bogus-lifetime-id",
+      sig: mockSig,
+    };
+
+    expect(() => getKeyPackageLifetime(event)).not.toThrow();
+    expect(getKeyPackageLifetime(event)).toBeUndefined();
+  });
+});
+
+describe("evaluateKeyPackageForGroup — Lifetime check (WIRE-01)", () => {
+  const validPubkey =
+    "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+
+  async function buildEvent(lifetime: { notBefore: bigint; notAfter: bigint }) {
+    const credential = createCredential(validPubkey);
+    const ciphersuiteImpl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const keyPackage = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl,
+    });
+    const tamperedPublicPackage = {
+      ...keyPackage.publicPackage,
+      leafNode: { ...keyPackage.publicPackage.leafNode, lifetime },
+    };
+    const framedBytes = encode(mlsMessageEncoder, {
+      version: tamperedPublicPackage.version,
+      wireformat: wireformats.mls_key_package,
+      keyPackage: tamperedPublicPackage,
+    });
+    const event: NostrEvent = {
+      kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+      pubkey: validPubkey,
+      created_at: unixNow(),
+      content: bytesToBase64(framedBytes),
+      tags: [],
+      id: "lifetime-eligibility-id",
+      sig: "lifetime-eligibility-sig",
+    };
+    const fakeState = {
+      groupContext: {
+        groupId: new Uint8Array(32),
+        epoch: 0n,
+        cipherSuite: tamperedPublicPackage.cipherSuite,
+        extensions: [],
+        treeHash: new Uint8Array(32),
+        confirmedTranscriptHash: new Uint8Array(32),
+      },
+    } as unknown as Parameters<typeof evaluateKeyPackageForGroup>[0];
+    return { event, fakeState };
+  }
+
+  it("rejects a KeyPackage whose Lifetime range exceeds the 7,261,200s cap", async () => {
+    const now = BigInt(unixNow());
+    const { event, fakeState } = await buildEvent({
+      notBefore: now,
+      notAfter: now + 7261201n,
+    });
+
+    const result = evaluateKeyPackageForGroup(fakeState, event);
+
+    expect(result.eligible).toBe(false);
+    expect(
+      result.reasons.some((r) => r.toLowerCase().includes("lifetime")),
+    ).toBe(true);
+  });
+
+  it("accepts a KeyPackage at exactly the 7,257,600s (84-day) default range", async () => {
+    const now = BigInt(unixNow());
+    const { event, fakeState } = await buildEvent({
+      notBefore: now,
+      notAfter: now + 7257600n,
+    });
+
+    const result = evaluateKeyPackageForGroup(fakeState, event);
+
+    expect(result.eligible).toBe(true);
+    expect(
+      result.reasons.some((r) => r.toLowerCase().includes("lifetime")),
+    ).toBe(false);
+  });
+
+  it("rejects a KeyPackage that is expired beyond the ~1h grace", async () => {
+    const now = BigInt(unixNow());
+    const { event, fakeState } = await buildEvent({
+      notBefore: now - 100_000n,
+      notAfter: now - 10_000n, // well beyond the 3600s grace
+    });
+
+    const result = evaluateKeyPackageForGroup(fakeState, event);
+
+    expect(result.eligible).toBe(false);
+    expect(
+      result.reasons.some((r) => r.toLowerCase().includes("lifetime")),
+    ).toBe(true);
   });
 });

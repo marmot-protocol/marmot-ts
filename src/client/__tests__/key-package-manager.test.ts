@@ -1,4 +1,10 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
+import {
+  finalizeEvent,
+  generateSecretKey,
+  verifiedSymbol,
+} from "applesauce-core/helpers";
+import type { NostrEvent } from "applesauce-core/helpers/event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -16,7 +22,14 @@ import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { createCredential } from "../../core/credential.js";
-import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
+import {
+  bytesToBase64,
+  defaultCryptoProvider,
+  encode,
+  getCiphersuiteImpl,
+  mlsMessageEncoder,
+  wireformats,
+} from "ts-mls";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -773,6 +786,275 @@ describe("KeyPackageManager", () => {
       await manager.track({ ...realEvent, id: "b".repeat(64) });
       await manager.track({ ...realEvent, id: "e".repeat(64) });
 
+      const events = await getPublished(manager, pkg.keyPackageRef);
+      expect(events).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // track() — trust boundary (SEC-01/WIRE-01/WIRE-02)
+  // -------------------------------------------------------------------------
+
+  describe("track() — trust boundary (SEC-01/WIRE-01/WIRE-02)", () => {
+    /** See `corruptSignature` in groups-manager.test.ts: strips the cached verifiedSymbol. */
+    function corruptSignature(event: NostrEvent): NostrEvent {
+      const corrupted: NostrEvent = { ...event, sig: "0".repeat(128) };
+      delete (corrupted as Record<PropertyKey, unknown>)[verifiedSymbol];
+      return corrupted;
+    }
+
+    it("rejects a signature-corrupted 30443 event before persisting", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+
+      const otherNetwork = new MockNetwork(["wss://relay.test"]);
+      const otherAccount = PrivateKeyAccount.generateNew();
+      const { manager: otherManager } = makeManager(
+        otherNetwork,
+        otherAccount,
+        "other-device",
+      );
+      await otherManager.create({ relays: ["wss://relay.test"] });
+      const foreignEvent = otherNetwork.events.find(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      )!;
+      const corrupted = corruptSignature(foreignEvent);
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const result = await manager.track(corrupted);
+
+      expect(result).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("invalid-signature");
+      const refHex = foreignEvent.tags.find((t) => t[0] === "i")![1];
+      expect(await manager.get(refHex)).toBeNull();
+    });
+
+    it("rejects a properly-signed 30443 event carrying a duplicate d tag as tag-cardinality", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      await manager.create({ relays: ["wss://relay.test"] });
+      const real = network.events.find(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      )!;
+
+      const draft = {
+        kind: real.kind,
+        created_at: real.created_at,
+        content: real.content,
+        tags: [...real.tags, ["d", "duplicate-slot"]],
+      };
+      const badEvent = finalizeEvent(draft, generateSecretKey());
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const result = await manager.track(badEvent);
+
+      expect(result).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("tag-cardinality");
+    });
+
+    it("rejects a properly-signed 30443 event with a duplicate i tag as tag-cardinality", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      await manager.create({ relays: ["wss://relay.test"] });
+      const real = network.events.find(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      )!;
+
+      const draft = {
+        kind: real.kind,
+        created_at: real.created_at,
+        content: real.content,
+        tags: [...real.tags, ["i", "b".repeat(64)]],
+      };
+      const badEvent = finalizeEvent(draft, generateSecretKey());
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const result = await manager.track(badEvent);
+
+      expect(result).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("tag-cardinality");
+    });
+
+    it("rejects a 30443 event with a missing mls_protocol_version tag as tag-cardinality", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      await manager.create({ relays: ["wss://relay.test"] });
+      const real = network.events.find(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      )!;
+
+      const draft = {
+        kind: real.kind,
+        created_at: real.created_at,
+        content: real.content,
+        tags: real.tags.filter((t) => t[0] !== "mls_protocol_version"),
+      };
+      const badEvent = finalizeEvent(draft, generateSecretKey());
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const result = await manager.track(badEvent);
+
+      expect(result).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("tag-cardinality");
+    });
+
+    it("rejects a 30443 event whose mls_protocol_version is not 1.0 as tag-cardinality", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      await manager.create({ relays: ["wss://relay.test"] });
+      const real = network.events.find(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      )!;
+
+      const draft = {
+        kind: real.kind,
+        created_at: real.created_at,
+        content: real.content,
+        tags: real.tags.map((t) =>
+          t[0] === "mls_protocol_version" ? ["mls_protocol_version", "2.0"] : t,
+        ),
+      };
+      const badEvent = finalizeEvent(draft, generateSecretKey());
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const result = await manager.track(badEvent);
+
+      expect(result).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("tag-cardinality");
+    });
+
+    it("rejects a 30443 event whose KeyPackage lifetime exceeds the cap as lifetime-cap", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const ciphersuiteImpl = await getCiphersuiteImpl(
+        "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        defaultCryptoProvider,
+      );
+      const pubkey = await account.signer.getPublicKey();
+      const kp = await generateKeyPackage({
+        credential: createCredential(pubkey),
+        ciphersuiteImpl,
+      });
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      const overCapPackage = {
+        ...kp.publicPackage,
+        leafNode: {
+          ...kp.publicPackage.leafNode,
+          lifetime: { notBefore: now, notAfter: now + 7261201n },
+        },
+      };
+      const framedBytes = encode(mlsMessageEncoder, {
+        version: overCapPackage.version,
+        wireformat: wireformats.mls_key_package,
+        keyPackage: overCapPackage,
+      });
+      const draft = {
+        kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+        created_at: Math.floor(Date.now() / 1000),
+        content: bytesToBase64(framedBytes),
+        tags: [
+          ["d", "over-cap-slot"],
+          ["i", "a".repeat(64)],
+          ["mls_protocol_version", "1.0"],
+        ],
+      };
+      const badEvent = finalizeEvent(draft, generateSecretKey());
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const result = await manager.track(badEvent);
+
+      expect(result).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("lifetime-cap");
+    });
+
+    it("rejects a 30443 event whose KeyPackage lifetime is expired beyond the ~1h grace as lifetime-cap", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const ciphersuiteImpl = await getCiphersuiteImpl(
+        "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        defaultCryptoProvider,
+      );
+      const pubkey = await account.signer.getPublicKey();
+      const kp = await generateKeyPackage({
+        credential: createCredential(pubkey),
+        ciphersuiteImpl,
+      });
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      const expiredPackage = {
+        ...kp.publicPackage,
+        leafNode: {
+          ...kp.publicPackage.leafNode,
+          lifetime: { notBefore: now - 100_000n, notAfter: now - 10_000n },
+        },
+      };
+      const framedBytes = encode(mlsMessageEncoder, {
+        version: expiredPackage.version,
+        wireformat: wireformats.mls_key_package,
+        keyPackage: expiredPackage,
+      });
+      const draft = {
+        kind: ADDRESSABLE_KEY_PACKAGE_KIND,
+        created_at: Math.floor(Date.now() / 1000),
+        content: bytesToBase64(framedBytes),
+        tags: [
+          ["d", "expired-slot"],
+          ["i", "b".repeat(64)],
+          ["mls_protocol_version", "1.0"],
+        ],
+      };
+      const badEvent = finalizeEvent(draft, generateSecretKey());
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const result = await manager.track(badEvent);
+
+      expect(result).toBe(false);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1]).toBe("lifetime-cap");
+    });
+
+    it("tracks a fully-valid, in-cap, current, correctly-signed 30443 event successfully", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const pkg = await manager.create({ relays: ["wss://relay.test"] });
+      const real = network.events.find(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      )!;
+
+      const rejections: Array<[NostrEvent, string]> = [];
+      manager.on("rejected", (event, reason) =>
+        rejections.push([event, reason]),
+      );
+
+      const result = await manager.track({ ...real, id: "f".repeat(64) });
+
+      expect(result).toBe(true);
+      expect(rejections).toHaveLength(0);
       const events = await getPublished(manager, pkg.keyPackageRef);
       expect(events).toHaveLength(1);
     });

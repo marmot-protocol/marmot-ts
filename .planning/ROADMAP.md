@@ -152,7 +152,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 **Goal:** [Captured for future planning] — verify group image (avatar) support end-to-end so downstream apps can read/display and update a group's image. Likely touches the group image/avatar-url (0x8007) extension and the group metadata surface.
 **Requirements:** TBD
-**Plans:** 2/2 plans complete
+**Plans:** 4/4 plans complete
 
 Plans:
 

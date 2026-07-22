@@ -1,192 +1,167 @@
 ---
 phase: 02-inbound-trust-wire-boundary
-reviewed: 2026-07-22T00:00:00Z
+reviewed: 2026-07-22T13:08:33Z
 depth: standard
-files_reviewed: 11
+files_reviewed: 6
 files_reviewed_list:
-  - src/client/verify.ts
-  - src/client/marmot-client.ts
-  - src/client/groups-manager.ts
   - src/client/invite-manager.ts
-  - src/client/key-package-manager.ts
-  - src/client/group/invite.ts
+  - src/client/groups-manager.ts
   - src/core/welcome-event.ts
-  - src/core/key-package.ts
-  - src/core/key-package-eligibility.ts
-  - src/core/key-package-event-decode.ts
-  - src/utils/tag-cardinality.ts
-  - src/utils/timestamp.ts
+  - src/client/__tests__/invite-manager.test.ts
+  - src/__tests__/groups-manager.test.ts
+  - src/core/__tests__/welcome.test.ts
 findings:
   critical: 0
   warning: 2
-  info: 4
-  total: 6
+  info: 1
+  total: 3
 status: issues_found
 ---
 
-# Phase 02: Code Review Report
+# Phase 02: Code Review Report (gap-closure re-review, plan 02-04)
 
-**Reviewed:** 2026-07-22T00:00:00Z
+**Reviewed:** 2026-07-22T13:08:33Z
 **Depth:** standard
-**Files Reviewed:** 11 source files (+ colocated tests inspected for expected behavior)
+**Files Reviewed:** 6
 **Status:** issues_found
+
+> This report supersedes the initial phase review. It scopes only the plan 02-04
+> gap-closure diff (base `8146e2f`), which closed the three previously-confirmed
+> defects: the 1059 `p`-tag cardinality gate (was IN-01), the 445 dedup-after-verify
+> reordering (was WR-01), and the duplicate-relay rejection in `createWelcomeRumor`
+> (was WR-02).
 
 ## Summary
 
-Reviewed the inbound-trust / wire-boundary implementation: `safeVerifyEvent`
-(SEC-01), the #236 tag-cardinality readers (`getSingletonTagValue`/`getListTag`),
-the capped/backdated KeyPackage lifetime helpers (WIRE-01), and the four inbound
-gates (445 in `GroupsManager.#connectGroup`, 1059 in `InviteManager.ingestEvent`,
-30443 in `KeyPackageManager.track` and `createInviteIntent`, 444 in
-`getWelcome`).
+Verdict on the three targeted defects — all three are correctly closed:
 
-The core boundary logic is sound: every gate verifies the outer Nostr signature
-_before_ any decode/persist/ingest work, all four gates order signature →
-cardinality → lifetime correctly, `safeVerifyEvent` correctly swallows
-verifier throws (the documented applesauce/nostr-tools gap), and the strict
-cardinality readers reject repeated/empty/extra-value tags as intended. I found
-no signature-verification bypass and no unbounded/throwing-input path that
-escapes a gate.
+1. **1059 `p`-tag cardinality gate (was IN-01)** — Correct. In
+   `InviteManager.ingestEvent` the new gate (invite-manager.ts:224-227) runs
+   _after_ the outer-signature verification (216-219) and _before_ the
+   `seen`/store writes (229-242) — the required verify → cardinality → dedup →
+   store order. The `length === 2` strictness inherited from
+   `getSingletonTagValue` is spec-correct: `refs/marmot/transports/nostr.md`
+   defines the 1059 `p` tag as "exactly one tag, exactly one value" and declares
+   an event with "extra values beyond the one defined here" malformed, so
+   rejecting a `p` tag that carries a relay hint is intended (not an interop
+   regression). No finding.
 
-Two correctness defects are worth fixing before ship: an ordering bug in the 445
-drain that lets an attacker poison the dedup set and silently censor legitimate
-group messages, and a produce/consume asymmetry that can render a Welcome
-un-decodable. The remaining items are defense-in-depth / consistency notes.
+2. **445 dedup-after-verify reordering (was WR-01)** — The core fix is correct.
+   `seen.add(event.id)` now runs only after _both_ the signature and `h`-tag
+   gates pass (groups-manager.ts:518), so a corrupted same-id forgery can no
+   longer poison the dedup slot and censor the genuine same-id event that arrives
+   later. A genuine event never enters `rejectedEvents` (it passes both gates),
+   so the new filter cannot false-censor it, and the WR-01 test asserts the
+   genuine event still ingests. Within-batch behavior is unchanged from before.
+   However, the _auxiliary_ `rejectedEvents` Set added alongside `seen`
+   introduces two new problems (WR-01, WR-02 below).
+
+3. **Duplicate-relay rejection in `createWelcomeRumor` (was WR-02)** — Correct.
+   The new `new Set(groupRelays).size !== groupRelays.length` check
+   (welcome-event.ts:61-64) mirrors exactly the duplicate-rejection rule in the
+   consuming `getListTag` (tag-cardinality.ts:94), achieving producer/consumer
+   parity; the round-trip parity test covers it. No finding.
+
+All remaining findings concern the newly-introduced `rejectedEvents` Set in
+`GroupsManager.#connectGroup` — a mechanism added beyond what the fix required.
 
 ## Warnings
 
-### WR-01: Dedup `seen` set is populated before verification — enables silent censorship of legitimate 445 events
+### WR-01: `rejectedEvents` object-identity dedup relies on an unguaranteed network-layer invariant and is effectively untested
 
-**File:** `src/client/groups-manager.ts:486-507`
-**Issue:** In `#connectGroup`'s `drain`, every fresh event id is added to `seen`
-_before_ the signature/`h`-cardinality gate runs:
+**File:** `src/client/groups-manager.ts:495-499, 509, 515`
+**Issue:** `rejectedEvents` is a `Set<NostrEvent>` and the `fresh` filter tests
+`!rejectedEvents.has(event)` — i.e. **object identity**. Its stated purpose (per
+the code comment at 491-494) is to suppress a duplicate `rejected` emission when
+the _same_ malformed event is redelivered by backfill (`network.request`) and
+then by the live subscription (`network.subscription`).
+
+That suppression only works if the injected `NostrNetworkInterface` hands back
+the _same object instance_ for a given event across `request`, subscription
+replay, and subsequent live redeliveries. The interface contract does **not**
+guarantee this. A production relay pool generally deserializes each relay `EVENT`
+message into a fresh object, so `rejectedEvents.has(freshInstance)` is `false`,
+the malformed event is re-evaluated, and `rejected` fires again — the exact case
+the Set was added to prevent. The mechanism thus carries a cost (see WR-02)
+without reliably delivering its benefit outside the test harness.
+
+It appears to work only because `MockNetwork` (mock-network.ts:71-106) shares a
+single `events` array, so `request` and the subscription replay return identical
+instances. And **no test exercises the suppression path**: the WR-01 test
+(groups-manager.test.ts) redelivers the _genuine_ event (deduped via `seen`, not
+`rejectedEvents`) and never redelivers the rejected forgery, so the
+`rejectedEvents.has(...)` branch is never asserted.
+
+**Fix:** Prefer dropping `rejectedEvents` entirely — a duplicate `rejected`
+emission on redelivery is informational, not a protocol-safety issue (the
+parallel `InviteManager` 1059 path re-emits and is fine). If suppression is
+genuinely wanted, key it on `event.id` in a structure that never feeds the
+trusted `seen` slot, and add a test that redelivers a _distinct-instance_
+forgery carrying the same bytes:
 
 ```ts
-const fresh = events.filter((event) => !seen.has(event.id));
-for (const event of fresh) seen.add(event.id);   // marked seen unconditionally
-if (!fresh.length) return;
-// ... verification happens AFTER this point
-for (const event of fresh) {
-  if (!safeVerifyEvent(this.#verifyEvent, event)) { /* rejected */ continue; }
-  ...
-}
-```
-
-A Nostr event id is the hash of everything except `sig`, so an attacker can take
-a valid, publicly-visible kind-445 event, flip a byte in `sig` (same id), and
-race the corrupted copy to a subscriber (trivial for a malicious relay in the
-group's relay set). The corrupted copy is added to `seen`, rejected for
-`invalid-signature`, and when the genuine same-id event later arrives it is
-dropped by the `!seen.has(event.id)` filter — never verified, never ingested. In
-a convergence protocol, silently dropping a commit forks the member and forces a
-recovery. It self-heals only on reconnect (fresh in-memory `seen`), but the
-window is a real liveness/censorship gap at exactly this trust boundary.
-
-**Fix:** Only record an id in `seen` once it has passed verification (or, at
-minimum, do not let a verification/cardinality failure occupy the id):
-
-```ts
-const fresh = events.filter((event) => !seen.has(event.id));
-if (!fresh.length) return;
-const trusted: NostrEvent[] = [];
-for (const event of fresh) {
-  if (!safeVerifyEvent(this.#verifyEvent, event)) {
+const rejectedIds = new Set<string>();
+// ...
+if (!safeVerifyEvent(this.#verifyEvent, event)) {
+  if (!rejectedIds.has(event.id)) {
+    rejectedIds.add(event.id);
     this.emit("rejected", group.id, event, "invalid-signature");
-    continue;
   }
-  if (getSingletonTagValue(event, "h") === undefined) {
-    this.emit("rejected", group.id, event, "tag-cardinality");
-    continue;
-  }
-  seen.add(event.id); // only trusted ids occupy the dedup slot
-  trusted.push(event);
+  continue;
 }
-if (!trusted.length) return;
 ```
 
-### WR-02: `createWelcomeRumor` permits duplicate relay URLs that the strict consumer (`getWelcome`) then rejects — silently un-joinable invite
+(but note WR-02 — any such set is still unbounded and attacker-fed).
 
-**File:** `src/core/welcome-event.ts:52-77` (producer) vs. `105-107` / `151-155` (consumer)
-**Issue:** The producer only rejects _empty_ relay URLs:
+### WR-02: `rejectedEvents` is an unbounded Set of full event objects fed by untrusted input
+
+**File:** `src/client/groups-manager.ts:495`
+**Issue:** `rejectedEvents` retains a reference to every rejected event _object_
+for the entire lifetime of the connection (released only when the subscription
+closure is GC'd on unsubscribe). Its growth is driven entirely by **untrusted**
+input: a malicious or compromised relay serving the group's `#h` subscription
+can stream an unbounded number of distinct invalid kind-445 events (bad
+signature or malformed `h` tag), each retained forever. This is a
+memory-exhaustion / availability (DoS-adjacent) vector on the inbound trust
+boundary — precisely the surface this phase is hardening.
+
+This is materially worse than the pre-existing `seen` set, which holds only
+string ids of _trusted_ (validly-signed, group-authored) events, bounded by
+legitimate traffic. `rejectedEvents` holds whole objects and is bounded only by
+how many invalid events an adversary chooses to send.
+
+**Fix:** If any suppression is kept, store ids (not objects) and bound the
+structure — an LRU/ring buffer or a size ceiling past which suppression is
+skipped:
 
 ```ts
-if (groupRelays.length === 0 || groupRelays.some((r) => r.length === 0))
-  throw new Error(...);
-// writes ["relays", ...groupRelays] verbatim — no dedup
+const REJECTED_CAP = 1024;
+const rejectedIds = new Set<string>();
+// ...
+if (rejectedIds.size < REJECTED_CAP) rejectedIds.add(event.id);
 ```
 
-But the consumer path reads the same tag through `getWelcomeGroupRelays` →
-`getListTag`, which returns `undefined` on _duplicate_ values, collapsing to
-`[]`, so `getWelcome` throws `"relays tag must contain at least one non-empty
-relay URL"`. Result: if an app's group relay list contains an exact-duplicate
-URL, `createWelcomeRumor` happily builds and gift-wraps the Welcome, but every
-recipient's `getWelcome`/`joinGroupFromWelcome`/`previewWelcome` fails to decode
-it. The invite silently never becomes joinable, with a misleading error.
-
-**Fix:** Make the producer as strict as the consumer — dedup (or reject
-duplicates) before writing the tag, so a rumor this code emits is always
-readable by this code:
-
-```ts
-if (new Set(groupRelays).size !== groupRelays.length)
-  throw new Error("Welcome rumor relays tag must not contain duplicate URLs");
-```
+Preferably remove the mechanism (WR-01) so no attacker-controlled unbounded
+structure exists on the inbound path at all.
 
 ## Info
 
-### IN-01: Kind-1059 `p`-tag cardinality is not enforced despite the table + phase scope listing it
+### IN-01: Rejection-suppression behavior now differs between the two sibling inbound trust boundaries
 
-**File:** `src/client/invite-manager.ts:205-236`, `src/utils/tag-cardinality.ts:19-21`
-**Issue:** `TAG_CARDINALITY[1059].p === "singleton"` and the phase brief lists 1059
-among the entry points gated on cardinality, but `ingestEvent` only runs
-`safeVerifyEvent` — it never checks the `p` tag. This is defensible under the
-module's stated "validate at each required-tag _read_ site" philosophy (nothing
-here reads `p`; routing is done by the relay `#p` filter), so it is not a
-correctness bug. Flagging only so the table-vs-enforcement gap is a deliberate,
-documented decision rather than an oversight.
-**Fix:** Either add a `p` singleton check in `ingestEvent` for symmetry with the
-other three gates, or note in the code that 1059 is intentionally signature-only
-because `p` is never read for a trust decision.
-
-### IN-02: `evaluateKeyPackageForGroup` performs neither signature verification nor credential-vs-author identity matching
-
-**File:** `src/core/key-package-eligibility.ts:85-176`
-**Issue:** This app-facing evaluator decodes the embedded KeyPackage and checks
-membership/capabilities/lifetime, but (unlike `createInviteIntent`) does not
-verify the event signature nor assert `getCredentialPubkey(...) ===
-event.pubkey`. An app that treats an `eligible: true` result as "safe to add"
-and then routes through a path other than `GroupsManager.invite` /
-`createInviteIntent` would skip the trust boundary. The real invite path
-(`createInviteIntent`) re-verifies, so there is no bypass today.
-**Fix:** Document that this function assumes an already-verified event and is not
-itself a trust boundary, or add the signature + identity-match checks so it
-cannot report `eligible` for a spoofed-author KeyPackage.
-
-### IN-03: `isEventId` accepts uppercase hex
-
-**File:** `src/core/welcome-event.ts:20-22`
-**Issue:** `/^[0-9a-fA-F]{64}$/` accepts uppercase, but NIP-01 event ids are
-canonically lowercase hex. Lenient rather than incorrect (a mixed-case `e` tag
-would still not match a real, lowercase-referenced KeyPackage event id
-downstream), so impact is nil, but it diverges from canonical form.
-**Fix:** Tighten to `/^[0-9a-f]{64}$/` if strict canonical matching is desired.
-
-### IN-04: `isLifetimeWithinCap` accepts an inverted (`notAfter < notBefore`) range
-
-**File:** `src/utils/timestamp.ts:95-99`
-**Issue:** The cap check only bounds the upper side (`notAfter - notBefore <=
-MAX`), so a degenerate lifetime where `notAfter < notBefore` yields a negative
-range that trivially passes. Combined with the symmetric grace window in
-`isLifetimeCurrentWithGrace`, a lifetime like `{notBefore: now+1, notAfter:
-now-1}` passes both boundary checks. ts-mls lifetime validation on
-`add`/`joinGroup` should still reject it, so this is a defense-in-depth gap, not
-an exploitable hole.
-**Fix:** Add a lower-bound sanity check (`lifetime.notAfter >=
-lifetime.notBefore`) to `isLifetimeWithinCap` (or the gates) so a nonsensical
-range is rejected at the boundary rather than relying on ts-mls.
+**File:** `src/client/groups-manager.ts:495` vs `src/client/invite-manager.ts:216-227`
+**Issue:** The 445 drain in `GroupsManager` suppresses repeat `rejected`
+emissions via `rejectedEvents`, but the parallel 1059 boundary in
+`InviteManager.ingestEvent` has no equivalent — a malformed gift wrap redelivered
+through `listen()` re-emits `rejected` on every delivery (it is never added to
+`seen`). Two boundaries hardened in the same milestone now behave differently for
+the same scenario. Given WR-01/WR-02, the consistent and safer resolution is to
+remove the `GroupsManager` suppression rather than replicate it into
+`InviteManager`.
+**Fix:** Align the two paths — prefer having both emit `rejected` per delivery,
+and document `rejected` as an at-least-once signal.
 
 ---
 
-_Reviewed: 2026-07-22T00:00:00Z_
+_Reviewed: 2026-07-22T13:08:33Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_

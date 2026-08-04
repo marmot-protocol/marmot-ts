@@ -965,6 +965,9 @@ export class MarmotGroupEngine<TEnvelope> {
       case "invalidated":
       case "removed":
         return true;
+      case "stateInvalidated":
+        // A rewind retraction is convergence-relevant, matching "invalidated".
+        return true;
       case "skipped":
         return (
           result.reason === "past-epoch" ||
@@ -1181,6 +1184,10 @@ export class MarmotGroupEngine<TEnvelope> {
   }
 
   #emitIngestOutcome(result: DispositionedIngestResult<TEnvelope>): void {
+    // A withdrawal has no triggering transport envelope to attribute an audit
+    // msg_id to (D-11); audit wiring for `stateInvalidated` is deferred to the
+    // seam-wiring plan that actually produces this variant.
+    if (result.kind === "stateInvalidated") return;
     const msgId = this.peeler.idOf(result.envelope);
     const outcome = auditIngestOutcome(result);
     if (outcome) {
@@ -1682,6 +1689,7 @@ function auditStaleReason<TEnvelope>(
     case "deferred":
     case "invalidated":
     case "autoCommit":
+    case "stateInvalidated":
       return undefined;
   }
 }
@@ -1692,6 +1700,8 @@ function auditResultEpoch<TEnvelope>(
   switch (result.kind) {
     case "invalidated":
       return result.epoch;
+    case "stateInvalidated":
+      return result.forkEpoch;
     case "deferred":
     case "processed":
     case "rejected":

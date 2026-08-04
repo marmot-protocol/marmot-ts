@@ -23,6 +23,7 @@ import type {
   PendingState,
   ProposalContext,
 } from "../../engine/types.js";
+import type { StateNotification } from "../../engine/state-notifications.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { NostrGroupPeeler } from "../group/nostr-peeler.js";
 import { proposeLeaveGroup } from "../group/proposals/leave-group.js";
@@ -37,6 +38,8 @@ export type ProcessedIngestResult = {
   result: import("ts-mls").ProcessMessageResult;
   event: NostrEvent;
   message: import("ts-mls").MlsMessage;
+  /** Commit-digest-attributed group-state notifications derived from this commit (D-10/D-11). */
+  notifications?: StateNotification[];
 };
 
 export type RejectedIngestResult = {
@@ -44,12 +47,23 @@ export type RejectedIngestResult = {
   result: import("ts-mls").ProcessMessageResult;
   event: NostrEvent;
   message: import("ts-mls").MlsMessage;
+  /**
+   * Additive, extensible rejection reason (D-03). The protocol-visible
+   * category stays `authorization_failed` regardless of which reason fires.
+   */
+  reason?: "admin-policy" | "component-integrity" | "admin-leaf-coupling";
 };
 
 export type SkippedIngestResult = {
   kind: "skipped";
   event: NostrEvent;
-  message: import("ts-mls").MlsMessage;
+  /**
+   * Absent for exactly one reason — `"self-evicted"` — because input for a
+   * group this client has been removed from is classified by its group
+   * before any peel or decrypt (D-13). Every other skip reason still
+   * populates this.
+   */
+  message?: import("ts-mls").MlsMessage;
   reason:
     | "past-epoch"
     | "wrong-wireformat"
@@ -57,7 +71,8 @@ export type SkippedIngestResult = {
     | "duplicate"
     | "beyond-anchor"
     | "missing-retained-anchor"
-    | "invalid-app-payload";
+    | "invalid-app-payload"
+    | "self-evicted";
 };
 
 export type UnreadableIngestResult = {
@@ -97,6 +112,22 @@ export type RemovedIngestResult = {
   result: import("ts-mls").ProcessMessageResult;
   event: NostrEvent;
   message: import("ts-mls").MlsMessage;
+  /** Commit-digest-attributed group-state notifications derived from this commit (D-10/D-11/D-12). */
+  notifications?: StateNotification[];
+};
+
+/**
+ * A rewind superseded a previously-accepted commit and withdrew the
+ * notifications derived from it (D-11). Has no `event` field, for the same
+ * reason the engine variant has no `envelope`: a rewind supersedes a commit,
+ * and there is no triggering transport envelope to attribute the withdrawal
+ * to.
+ */
+export type StateInvalidatedIngestResult = {
+  kind: "stateInvalidated";
+  commitDigest: Uint8Array;
+  forkEpoch: number;
+  withdrawn: StateNotification[];
 };
 
 export type IngestResult =
@@ -107,7 +138,8 @@ export type IngestResult =
   | InvalidatedIngestResult
   | AutoCommitIngestResult
   | RemovedIngestResult
-  | UnreadableIngestResult;
+  | UnreadableIngestResult
+  | StateInvalidatedIngestResult;
 
 export type DispositionedIngestResult = IngestResult & {
   disposition: Disposition;
@@ -176,6 +208,10 @@ export type GroupSessionOptions<
 };
 
 export function ingestResultDisposition(result: IngestResult): Disposition {
+  if (result.kind === "stateInvalidated")
+    return engineIngestResultDisposition(
+      result as EngineIngestResult<NostrEvent>,
+    );
   const { event, ...rest } = result;
   return engineIngestResultDisposition({
     ...rest,
@@ -186,6 +222,9 @@ export function ingestResultDisposition(result: IngestResult): Disposition {
 function mapEngineIngestResult(
   result: EngineDispositionedIngestResult<NostrEvent>,
 ): DispositionedIngestResult {
+  // A withdrawal has no `envelope` to rename to `event` — pass it through
+  // unchanged (D-11).
+  if (result.kind === "stateInvalidated") return result;
   const { envelope, disposition, ...rest } = result;
   return { ...rest, event: envelope, disposition };
 }

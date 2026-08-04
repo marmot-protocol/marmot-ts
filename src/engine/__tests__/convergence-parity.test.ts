@@ -49,12 +49,20 @@
  * calling `processMessage` for exactly those commits, and falls back to the
  * ordinary replay path for everything else (peer commits, unknown commits).
  * No stamping, no committer bookkeeping, no change to `tree-convergence.ts`
- * or `core/convergence.ts` — see `src/engine/fork-recovery.ts`. All three
- * tests below pass with this fix in place.
+ * or `core/convergence.ts` — see `src/engine/fork-recovery.ts`.
+ *
+ * CR-01 follow-up: that map was originally keyed by commit digest ALONE, so
+ * the short-circuit could also fire at a same-epoch node on a COMPETING branch
+ * and graft our canonical chain onto it. It now carries the parent tag the
+ * commit was recorded against and is taken only at that exact node; the fourth
+ * test below is the regression guard, and needs a competing branch two nodes
+ * deep, which the three original scenarios never build.
  */
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
+  acceptAll,
   type CiphersuiteImpl,
+  type ClientState,
   createCommit,
   defaultCryptoProvider,
   defaultProposalTypes,
@@ -63,6 +71,7 @@ import {
   joinGroup,
   type MlsMessage,
   mlsMessageEncoder,
+  processMessage,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
@@ -77,6 +86,7 @@ import {
   commitDigest,
   compareCommitOrderingKeys,
 } from "../../core/convergence.js";
+import { ForkRecovery, type RetainedView } from "../fork-recovery.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import {
@@ -406,6 +416,124 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
     );
     expect(Number(engine.state.groupContext.epoch)).toBe(2);
     expect(engine.lifecycle).toBe("Stable");
+  });
+
+  /**
+   * CR-01 regression. The CONV-04 short-circuit must stay, but it must be
+   * qualified by the PARENT the commit was recorded against.
+   *
+   * `candidatesAt(state)` admits any pooled message whose framed epoch equals
+   * the DFS node's epoch and never checks parentage, and `ours` is prepended to
+   * the pool (`[...ours, ...pool]`). So with a digest-only `knownNextStates`
+   * key, a DFS node on a COMPETING branch that happens to sit at epoch F+1
+   * finds our own canonical commit@F+1 among its candidates, takes the
+   * short-circuit, and adopts our canonical epoch-F+2 state as its own child —
+   * a `ChainLink`/`EdgeSnapshot` for a parent→child transition that never
+   * happened. That grafts our chain's depth and tip digest onto the losing
+   * branch (depth is `selectCanonicalBranch`'s primary key) and, on a win,
+   * feeds `RetainedHistoryStore.record` a parent that never produced that
+   * child.
+   *
+   * Reaching it needs a competing branch ≥2 nodes above the fork root, which
+   * the depth-1 scenarios above never build. This drives `ForkRecovery`
+   * directly so the emitted `edges` — the artifact that carries the bogus
+   * parentage — can be asserted on.
+   */
+  it("does not graft our own canonical commit onto a competing same-epoch fork node (CR-01)", async () => {
+    const { impl, ctx, adminEpoch1, memberEpoch1 } =
+      await twoMemberEpoch1Group();
+    const peeler = testPeeler(impl);
+
+    // Our own canonical chain, two commits deep: epoch 1 -> 2 -> 3. These are
+    // the admin's own `createCommit` results, exactly what
+    // `RetainedHistoryStore` holds after `confirmPublished` -> `#recordCommitNode`.
+    const ourC1 = await selfUpdateCommit(ctx, adminEpoch1);
+    const ourC2 = await selfUpdateCommit(ctx, ourC1.newState);
+    const rootState = adminEpoch1;
+    const s2 = ourC1.newState;
+    const s3 = ourC2.newState;
+
+    // A peer's competing commit at the SAME fork epoch (1), authored from an
+    // independent ClientState so it is genuinely replayable from our side.
+    const sibling = await selfUpdateCommit(ctx, memberEpoch1);
+
+    // The competing node the DFS reaches by replaying `sibling` from the fork
+    // root — this is the node at epoch 2 that must NOT adopt ourC2's child.
+    const forkBReplay = await processMessage({
+      context: {
+        cipherSuite: impl,
+        authService: unsafeTestingAuthenticationService,
+        externalPsks: {},
+      },
+      state: deserializeClientState(serializeClientState(rootState)),
+      message: sibling.commit,
+    });
+    if (forkBReplay.kind !== "newState")
+      throw new Error("expected the sibling commit to replay to a newState");
+    const forkBTag = bytesToHex(forkBReplay.newState.confirmationTag);
+    expect(Number(forkBReplay.newState.groupContext.epoch)).toBe(2);
+    expect(forkBTag).not.toBe(bytesToHex(s2.confirmationTag));
+
+    const statesByEpoch = new Map<number, ClientState>([
+      [1, rootState],
+      [2, s2],
+      [3, s3],
+    ]);
+    const retained: RetainedView = {
+      stateAt: (epoch) => statesByEpoch.get(epoch),
+      appliedCommitsBetween: () => [ourC1.commit, ourC2.commit],
+    };
+
+    const recovery = new ForkRecovery(impl, peeler);
+    const resolution = await recovery.resolveFork({
+      forkEpoch: 1,
+      pool: [sibling.commit],
+      currentState: s3,
+      retained,
+      adminCallback: acceptAll,
+    });
+
+    expect(resolution.outcome).not.toBe("skip");
+    const edges = resolution.outcome === "skip" ? [] : resolution.edges;
+
+    const digestHex = (message: MlsMessage) =>
+      bytesToHex(commitDigest(encode(mlsMessageEncoder, message)));
+    const rootTag = bytesToHex(rootState.confirmationTag);
+
+    // CONV-04 still holds: our own two commits are replayed off their real
+    // parents via the short-circuit, so our branch is a genuine candidate.
+    expect(
+      edges.some(
+        (e) =>
+          e.parentTag === rootTag &&
+          digestHex(ourC1.commit) === bytesToHex(e.commitDigest),
+      ),
+    ).toBe(true);
+    expect(
+      edges.some(
+        (e) =>
+          e.parentTag === bytesToHex(s2.confirmationTag) &&
+          digestHex(ourC2.commit) === bytesToHex(e.commitDigest),
+      ),
+    ).toBe(true);
+
+    // CR-01: no edge claims the competing fork node as ourC2's parent.
+    expect(
+      edges.filter(
+        (e) =>
+          e.parentTag === forkBTag &&
+          digestHex(ourC2.commit) === bytesToHex(e.commitDigest),
+      ),
+    ).toEqual([]);
+    // ...and nothing at all hangs off the competing node claiming our
+    // canonical epoch-3 state as its child.
+    expect(
+      edges.filter(
+        (e) =>
+          e.parentTag === forkBTag &&
+          e.childTag === bytesToHex(s3.confirmationTag),
+      ),
+    ).toEqual([]);
   });
 
   it("selects the same branch when two engines receive the same competing commits in opposite delivery order", async () => {

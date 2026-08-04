@@ -42,6 +42,23 @@ export interface ChainLink {
   child: ClientState;
 }
 
+/**
+ * A resulting state already known for one of our own applied commits, together
+ * with the confirmation tag of the exact parent it was applied to (CONV-04).
+ *
+ * The parent tag is load-bearing, not bookkeeping: `candidatesAt` admits any
+ * pooled message whose framed epoch matches the DFS node's epoch and never
+ * checks parentage, so without it the short-circuit would fire while exploring
+ * a COMPETING fork node at the same epoch and splice our canonical chain onto
+ * that branch — inflating its depth (the primary key `selectCanonicalBranch`
+ * scores on) and, if it then won, corrupting `RetainedHistoryStore` with a
+ * parent→child edge that never happened.
+ */
+interface KnownNextState {
+  parentTag: string;
+  state: ClientState;
+}
+
 /** Candidate branches plus their reached tip states and applied chains. */
 interface BuiltBranches {
   branches: BranchCandidate[];
@@ -110,13 +127,15 @@ export class ForkRecovery<TEnvelope> {
    * the retained `root` state (`convergence.md` "Candidate branches").
    *
    * `knownNextStates` (CONV-04) maps a candidate commit's hex `commitDigest` to
-   * a state already known to result from applying it — supplied by
+   * a {@link KnownNextState} — the state already known to result from applying
+   * it, plus the confirmation tag of the parent it was applied to — supplied by
    * {@link resolveFork} for commits on our own already-applied canonical path
    * (`RetainedHistoryStore` already holds their resulting state; see
    * `resolveFork`'s doc comment for why replaying them via `processMessage`
-   * cannot work). When present, that state is used directly instead of calling
-   * `processMessage`, so an own commit's branch is buildable exactly like any
-   * other candidate's, without reprocessing it.
+   * cannot work). The short-circuit is taken only at the DFS node that IS that
+   * recorded parent, so an own commit's branch is buildable exactly like any
+   * other candidate's without reprocessing it, while a same-epoch node on a
+   * competing fork can never adopt it.
    */
   async #buildBranches(
     root: ClientState,
@@ -124,7 +143,7 @@ export class ForkRecovery<TEnvelope> {
     encrypted: TEnvelope[],
     witnessEnvelopes: TEnvelope[],
     callback: IncomingMessageCallback,
-    knownNextStates: ReadonlyMap<string, ClientState> = new Map(),
+    knownNextStates: ReadonlyMap<string, KnownNextState> = new Map(),
   ): Promise<BuiltBranches> {
     const forkEpoch = Number(root.groupContext.epoch);
     const branches: BranchCandidate[] = [];
@@ -195,7 +214,14 @@ export class ForkRecovery<TEnvelope> {
         const known = knownNextStates.get(
           bytesToHex(this.#commitDigestOf(message)),
         );
-        if (known) {
+        // The short-circuit is valid ONLY at the exact parent this commit was
+        // recorded against. `candidatesAt` matches purely on framed epoch, so
+        // an unqualified digest hit would also fire at a same-epoch node on a
+        // COMPETING branch and graft our canonical chain onto it. When the
+        // parent does not match we fall through to the normal replay path,
+        // where our own commit fails to process against a foreign parent and
+        // is dropped as a candidate — which is the correct outcome.
+        if (known && known.parentTag === bytesToHex(state.confirmationTag)) {
           // A commit we already applied ourselves (own or previously-adopted
           // inbound) cannot be replayed through `processMessage`: its
           // `UpdatePath` never encrypted a path secret to the committer's own
@@ -206,7 +232,7 @@ export class ForkRecovery<TEnvelope> {
           // reprocessing (CONV-04).
           next = {
             kind: "newState",
-            newState: known,
+            newState: known.state,
             actionTaken: "accept",
             consumed: [],
             aad: new Uint8Array(),
@@ -358,16 +384,20 @@ export class ForkRecovery<TEnvelope> {
     // continued exploration from a state consumes/derives further secrets on
     // it, and the original must stay untouched since it is the same object
     // `RetainedHistoryStore` (and possibly the live engine) still holds.
-    const knownNextStates = new Map<string, ClientState>();
+    // The recorded PARENT is captured alongside the resulting state so
+    // `#buildBranches` can only take the short-circuit at the node that
+    // actually produced this child — see {@link KnownNextState}.
+    const knownNextStates = new Map<string, KnownNextState>();
     for (const msg of ours) {
       const sourceEpoch = framedEpoch(msg);
       if (sourceEpoch === undefined) continue;
+      const parent = retained.stateAt(Number(sourceEpoch));
       const next = retained.stateAt(Number(sourceEpoch) + 1);
-      if (!next) continue;
-      knownNextStates.set(
-        bytesToHex(this.#commitDigestOf(msg)),
-        deserializeClientState(serializeClientState(next)),
-      );
+      if (!parent || !next) continue;
+      knownNextStates.set(bytesToHex(this.#commitDigestOf(msg)), {
+        parentTag: bytesToHex(parent.confirmationTag),
+        state: deserializeClientState(serializeClientState(next)),
+      });
     }
 
     const { branches, tips, chains, edges } = await this.#buildBranches(

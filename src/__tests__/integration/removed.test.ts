@@ -1,17 +1,22 @@
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventSigner } from "applesauce-core";
 import type { NostrEvent } from "applesauce-core/helpers/event";
+import { EventEmitter } from "eventemitter3";
 import {
   CiphersuiteImpl,
   type ClientState,
   createCommit,
   defaultCryptoProvider,
   defaultProposalTypes,
+  encode,
   getCiphersuiteImpl,
   joinGroup,
+  type MlsMessage,
+  mlsMessageEncoder,
   type ProposalRemove,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import type {
@@ -19,11 +24,13 @@ import type {
   PublishResponse,
 } from "../../client/nostr-interface.js";
 import { SerializedClientState } from "../../core/client-state.js";
+import { commitDigest } from "../../core/convergence.js";
 import { createCredential } from "../../core/credential.js";
 import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
+import type { GenericKeyValueStore } from "../../utils/key-value.js";
 
 const RELAY = "wss://relay.test";
 
@@ -52,90 +59,105 @@ function marmotGroup(
   impl: CiphersuiteImpl,
   published: NostrEvent[],
   store = new InMemoryKeyValueStore<SerializedClientState>(),
+  removedMarkerStore?: GenericKeyValueStore<boolean>,
 ) {
   return new MarmotGroup(state, {
     store,
     signer: { getPublicKey: async () => pubkey } as EventSigner,
     ciphersuite: impl,
     network: recordingNetwork(published),
+    removedMarkerStore,
   });
+}
+
+/**
+ * Builds a 3-member group (admin "a", "d", "e"), then has the admin commit a
+ * `Remove` targeting "e" — an involuntary removal. Returns "e"'s pre-removal
+ * `ClientState`, the wrapped removing-commit envelope, and the raw commit
+ * message (so a test can independently compute its expected digest).
+ */
+async function buildRemovalFixture() {
+  const adminPubkey = "a".repeat(64);
+  const dPubkey = "d".repeat(64);
+  const ePubkey = "e".repeat(64);
+  const impl = await getCiphersuiteImpl(
+    "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+    defaultCryptoProvider,
+  );
+  const ctx = {
+    cipherSuite: impl,
+    authService: unsafeTestingAuthenticationService,
+  };
+
+  // 3-member group: admin "a" (leaf 0), "d" (leaf 1), "e" (leaf 2).
+  const adminKp = await generateKeyPackage({
+    credential: createCredential(adminPubkey),
+    ciphersuiteImpl: impl,
+  });
+  const { clientState: created } = await createSimpleGroup(
+    adminKp,
+    impl,
+    "Group",
+    { adminPubkeys: [adminPubkey], relays: [RELAY] },
+  );
+  const dKp = await generateKeyPackage({
+    credential: createCredential(dPubkey),
+    ciphersuiteImpl: impl,
+  });
+  const eKp = await generateKeyPackage({
+    credential: createCredential(ePubkey),
+    ciphersuiteImpl: impl,
+  });
+  const { newState: adminEpoch1, welcome } = await createCommit({
+    context: ctx,
+    state: created,
+    wireAsPublicMessage: false,
+    extraProposals: [
+      {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: dKp.publicPackage },
+      },
+      {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: eKp.publicPackage },
+      },
+    ],
+    ratchetTreeExtension: true,
+  });
+  const welcomeMsg = welcome!.welcome ?? (welcome as never);
+  const eEpoch1 = await joinGroup({
+    context: ctx,
+    welcome: welcomeMsg,
+    keyPackage: eKp.publicPackage,
+    privateKeys: eKp.privatePackage,
+    ratchetTree: undefined,
+  });
+
+  // Admin "a" commits a Remove targeting "e" (leaf 2) — an involuntary removal.
+  const removeE: ProposalRemove = {
+    proposalType: defaultProposalTypes.remove,
+    remove: { removed: eEpoch1.privatePath.leafIndex },
+  };
+  const { commit } = await createCommit({
+    context: ctx,
+    state: adminEpoch1,
+    wireAsPublicMessage: true,
+    ratchetTreeExtension: true,
+    extraProposals: [removeE],
+  });
+  const removeCommitEvent = await createGroupEvent({
+    message: commit,
+    state: adminEpoch1,
+    ciphersuite: impl,
+  });
+
+  return { impl, ePubkey, eEpoch1, removeCommitEvent, commit };
 }
 
 describe("involuntary removal signal", () => {
   it("emits `removed` and keeps the tombstone when an admin's commit removes us", async () => {
-    const adminPubkey = "a".repeat(64);
-    const dPubkey = "d".repeat(64);
-    const ePubkey = "e".repeat(64);
-    const impl = await getCiphersuiteImpl(
-      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-      defaultCryptoProvider,
-    );
-    const ctx = {
-      cipherSuite: impl,
-      authService: unsafeTestingAuthenticationService,
-    };
-
-    // 3-member group: admin "a" (leaf 0), "d" (leaf 1), "e" (leaf 2).
-    const adminKp = await generateKeyPackage({
-      credential: createCredential(adminPubkey),
-      ciphersuiteImpl: impl,
-    });
-    const { clientState: created } = await createSimpleGroup(
-      adminKp,
-      impl,
-      "Group",
-      { adminPubkeys: [adminPubkey], relays: [RELAY] },
-    );
-    const dKp = await generateKeyPackage({
-      credential: createCredential(dPubkey),
-      ciphersuiteImpl: impl,
-    });
-    const eKp = await generateKeyPackage({
-      credential: createCredential(ePubkey),
-      ciphersuiteImpl: impl,
-    });
-    const { newState: adminEpoch1, welcome } = await createCommit({
-      context: ctx,
-      state: created,
-      wireAsPublicMessage: false,
-      extraProposals: [
-        {
-          proposalType: defaultProposalTypes.add,
-          add: { keyPackage: dKp.publicPackage },
-        },
-        {
-          proposalType: defaultProposalTypes.add,
-          add: { keyPackage: eKp.publicPackage },
-        },
-      ],
-      ratchetTreeExtension: true,
-    });
-    const welcomeMsg = welcome!.welcome ?? (welcome as never);
-    const eEpoch1 = await joinGroup({
-      context: ctx,
-      welcome: welcomeMsg,
-      keyPackage: eKp.publicPackage,
-      privateKeys: eKp.privatePackage,
-      ratchetTree: undefined,
-    });
-
-    // Admin "a" commits a Remove targeting "e" (leaf 2) — an involuntary removal.
-    const removeE: ProposalRemove = {
-      proposalType: defaultProposalTypes.remove,
-      remove: { removed: eEpoch1.privatePath.leafIndex },
-    };
-    const { commit } = await createCommit({
-      context: ctx,
-      state: adminEpoch1,
-      wireAsPublicMessage: true,
-      ratchetTreeExtension: true,
-      extraProposals: [removeE],
-    });
-    const removeCommitEvent = await createGroupEvent({
-      message: commit,
-      state: adminEpoch1,
-      ciphersuite: impl,
-    });
+    const { impl, ePubkey, eEpoch1, removeCommitEvent } =
+      await buildRemovalFixture();
 
     // "e" ingests the commit that removes it.
     const ePublished: NostrEvent[] = [];
@@ -158,5 +180,89 @@ describe("involuntary removal signal", () => {
     // holds the (now removed) group state.
     expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
     expect(await eStore.getItem(eGroup.idStr)).not.toBeNull();
+  });
+
+  it("attributes a selfRemoved notification to the removing commit's own digest (D-10/D-12)", async () => {
+    const { impl, ePubkey, eEpoch1, removeCommitEvent, commit } =
+      await buildRemovalFixture();
+
+    const eGroup = marmotGroup(eEpoch1, ePubkey, impl, []);
+    await eGroup.save(true);
+
+    const removedResults: { notifications?: { kind: string }[] }[] = [];
+    for await (const r of eGroup.ingest([removeCommitEvent]))
+      if (r.kind === "removed") removedResults.push(r as never);
+
+    expect(removedResults).toHaveLength(1);
+    const notifications = removedResults[0].notifications ?? [];
+    const selfRemoved = notifications.find((n) => n.kind === "selfRemoved") as
+      { kind: "selfRemoved"; commitDigest: Uint8Array } | undefined;
+    expect(selfRemoved).toBeDefined();
+
+    const expectedDigest = bytesToHex(
+      commitDigest(encode(mlsMessageEncoder, commit as MlsMessage)),
+    );
+    expect(bytesToHex(selfRemoved!.commitDigest)).toBe(expectedDigest);
+  });
+
+  it("realizes removal exactly once on a first load with an unset marker, and zero times once the marker is set (D-12)", async () => {
+    const { impl, ePubkey, eEpoch1, removeCommitEvent } =
+      await buildRemovalFixture();
+
+    const eStore = new InMemoryKeyValueStore<SerializedClientState>();
+    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+
+    // Build the removed tombstone WITHOUT a marker store wired, simulating a
+    // process that applied the removing commit and then exited before
+    // persisting realization state (a crash between commit-apply and
+    // notification — D-12's motivating scenario).
+    const liveGroup = marmotGroup(eEpoch1, ePubkey, impl, [], eStore);
+    await liveGroup.save(true);
+    for await (const _ of liveGroup.ingest([removeCommitEvent])) void _;
+    await liveGroup.save(true);
+    expect(liveGroup.state.groupActiveState.kind).toBe("removedFromGroup");
+    expect(await removedMarkerStore.getItem(liveGroup.idStr)).toBeNull();
+
+    // `fromClientState` realizes internally (before returning), so a
+    // listener attached to the returned instance can never observe that
+    // internal emission — spy on the shared EventEmitter prototype instead,
+    // which intercepts every `emit` call regardless of when it fires.
+    const emitSpy = vi.spyOn(
+      EventEmitter.prototype as unknown as { emit: () => boolean },
+      "emit",
+    );
+    try {
+      // First load with the marker store wired: marker is unset, so
+      // `fromClientState` realizes — sets the marker and emits `removed`
+      // exactly once.
+      await MarmotGroup.fromClientState(liveGroup.state, {
+        store: eStore,
+        removedMarkerStore,
+        signer: { getPublicKey: async () => ePubkey } as EventSigner,
+        network: recordingNetwork([]),
+      });
+      const removedCallsAfterFirst = emitSpy.mock.calls.filter(
+        (call) => call[0] === "removed",
+      ).length;
+      expect(removedCallsAfterFirst).toBe(1);
+      expect(await removedMarkerStore.getItem(liveGroup.idStr)).toBe(true);
+
+      emitSpy.mockClear();
+
+      // Second load, same marker store: marker is already set, so
+      // realization is a no-op — zero `removed` emissions.
+      await MarmotGroup.fromClientState(liveGroup.state, {
+        store: eStore,
+        removedMarkerStore,
+        signer: { getPublicKey: async () => ePubkey } as EventSigner,
+        network: recordingNetwork([]),
+      });
+      const removedCallsAfterSecond = emitSpy.mock.calls.filter(
+        (call) => call[0] === "removed",
+      ).length;
+      expect(removedCallsAfterSecond).toBe(0);
+    } finally {
+      emitSpy.mockRestore();
+    }
   });
 });

@@ -136,6 +136,20 @@ export type MarmotGroupOptions<
    * omitted means rewind history is in-memory only (legacy behavior).
    */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
+  /**
+   * Persisted removed-inactive marker (D-12,
+   * `protocol-core/member-departure.md` "Realizing removal"): a sibling
+   * store, keyed by the same group-id hex as {@link store}, that records
+   * whether this group's involuntary removal has already been realized
+   * (marker set) so realization survives a restart — without a full
+   * `ClientState` deserialize just to check. Deliberately NOT a field grafted
+   * onto the serialized `ClientState`: `ClientState` stays exactly what
+   * ts-mls produces, and the marker is independently readable/clearable
+   * (see `#clearRemovalMarker`, used by plan 03-07's CONV-03 rewind-supersede
+   * path). When omitted, realization degrades to in-memory-only — it still
+   * fires exactly once per process, but does not survive a restart.
+   */
+  removedMarkerStore?: GenericKeyValueStore<boolean>;
   /** The signer used for the clients identity */
   signer: EventSigner;
   /** The ciphersuite implementation to use for the group */
@@ -270,6 +284,15 @@ export class MarmotGroup<
     reject: (error: unknown) => void;
   }> = [];
 
+  /** Persisted removed-inactive marker store (D-12); see {@link MarmotGroupOptions.removedMarkerStore}. */
+  readonly #removedMarkerStore?: GenericKeyValueStore<boolean>;
+  /**
+   * In-memory realization fallback used only when {@link #removedMarkerStore}
+   * is not configured — keeps `#realizeRemovalIfNeeded` idempotent within a
+   * single process even without persistence (documented degradation).
+   */
+  #removalRealizedInMemory = false;
+
   private log: Debugger;
 
   get id() {
@@ -390,6 +413,7 @@ export class MarmotGroup<
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
     this.network = options.network;
+    this.#removedMarkerStore = options.removedMarkerStore;
 
     if (options.history) {
       if (typeof options.history === "function") {
@@ -476,7 +500,15 @@ export class MarmotGroup<
       state.groupContext.cipherSuite,
     );
 
-    return new MarmotGroup(state, { ...options, ciphersuite: cipherSuite });
+    const group = new MarmotGroup(state, {
+      ...options,
+      ciphersuite: cipherSuite,
+    });
+    // D-12: a process that exited between commit-apply and notification
+    // realizes removal on this, its next load, instead of never telling the
+    // app it was removed.
+    await group.#realizeRemovalIfNeeded();
+    return group;
   }
 
   /**
@@ -631,6 +663,59 @@ export class MarmotGroup<
   }
 
   /**
+   * Realizes involuntary removal as a state-derived obligation, not a
+   * one-shot side effect of applying one commit (D-12,
+   * `protocol-core/member-departure.md` "Realizing removal"): whenever
+   * canonical state is the `removedFromGroup` tombstone AND realization has
+   * not already happened (the marker is unset), sets the marker, fails any
+   * queued outbound, and emits `removed` — exactly once. A no-op when state
+   * is not the tombstone, and a no-op (no re-emit) when the marker is
+   * already set.
+   *
+   * Called from two places that must never diverge: {@link fromClientState}
+   * (so a process that exited between commit-apply and notification still
+   * realizes on its next load) and the `ingest` handler's `result.kind ===
+   * "removed"` branch (the commit that produces the tombstone in a live
+   * process). Both funnel through this single idempotent implementation.
+   */
+  async #realizeRemovalIfNeeded(): Promise<void> {
+    if (this.state.groupActiveState.kind !== "removedFromGroup") return;
+
+    if (this.#removedMarkerStore) {
+      const alreadyRealized = await this.#removedMarkerStore.getItem(
+        this.idStr,
+      );
+      if (alreadyRealized) return;
+      await this.#removedMarkerStore.setItem(this.idStr, true);
+    } else {
+      // No persisted marker configured: realization degrades to in-memory
+      // only — still idempotent within this process, but not restart-durable
+      // (documented on `MarmotGroupOptions.removedMarkerStore`).
+      if (this.#removalRealizedInMemory) return;
+      this.#removalRealizedInMemory = true;
+    }
+
+    this.#rejectQueuedOutbound("Removed from group; outbound cancelled.");
+    this.emit("removed", this);
+  }
+
+  /**
+   * Clears the persisted removed-inactive marker (D-12). Called from
+   * {@link destroy} so a fully-purged group never leaves a stale marker
+   * entry behind. Plan 03-07 (CONV-03) adds a second call site: when a later
+   * rewind supersedes the removing commit and re-establishes canonical
+   * membership, so a subsequent removal can realize again instead of being
+   * permanently suppressed by a stale marker.
+   */
+  async #clearRemovalMarker(): Promise<void> {
+    if (!this.#removedMarkerStore) {
+      this.#removalRealizedInMemory = false;
+      return;
+    }
+    await this.#removedMarkerStore.removeItem(this.idStr);
+  }
+
+  /**
    * ingests an array of group messages and applies commits to the group state.
    *
    * Processing happens in two stages:
@@ -675,12 +760,13 @@ export class MarmotGroup<
       // our own self_remove). The session has already applied + persisted the
       // `removedFromGroup` tombstone; surface it so the app can react. Per the
       // chosen policy we keep the tombstone rather than auto-destroying — the
-      // app calls destroy() when it wants to purge.
+      // app calls destroy() when it wants to purge. Realization (marker +
+      // reject-queued-outbound + `removed` emit) is the single idempotent
+      // `#realizeRemovalIfNeeded` (D-12), shared with the `fromClientState`
+      // load-time path so the two can never diverge.
       if (result.kind === "removed") {
         this.log("removed from group by inbound commit");
-        // The tombstone can never send again; fail any queued outbound (B5).
-        this.#rejectQueuedOutbound("Removed from group; outbound cancelled.");
-        this.emit("removed", this);
+        await this.#realizeRemovalIfNeeded();
       }
       yield result;
     }
@@ -743,6 +829,11 @@ export class MarmotGroup<
 
     this.log("clearing group media");
     if (this.media) await this.media.clearMedia();
+
+    // Purge the removed-inactive marker alongside full teardown, so a
+    // destroyed-then-recreated group id never inherits a stale marker entry.
+    this.log("clearing removal marker");
+    await this.#clearRemovalMarker();
 
     this.log("removing group from store");
     await this.session.destroyLocalState();

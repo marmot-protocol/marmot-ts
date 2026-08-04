@@ -45,6 +45,15 @@ export type AppliedForkResolution<TEnvelope> =
       outcome: "recovered";
       result: ProcessMessageResult;
       /**
+       * The winning branch's tip commit MLS message, when the winner chain
+       * applied at least one commit to reach it (D-10/D-12) — lets the ingest
+       * loop attribute a `selfRemoved` notification to the exact commit that
+       * produced the `removedFromGroup` tombstone when the rewind lands on
+       * it. `undefined` only when the winner tip is the fork root itself (no
+       * chain applied), which never coincides with a fresh removal.
+       */
+      tipCommitMessage: MlsMessage | undefined;
+      /**
        * App payloads abandoned by the rewind, to report as `invalidated` (M7).
        * Each carries the fork node (`tag`/`epoch`) it had decrypted against so
        * the retraction names its losing branch.
@@ -688,7 +697,21 @@ export async function* ingestEnvelopes<TEnvelope>(
             envelopeLabel(envelope),
           );
           ctx.dedup.remember(message);
-          yield { kind: "removed", result, envelope, message };
+          // D-10/D-12: attribute the selfRemoved notification to THIS commit's
+          // digest — the removing commit itself, reusing the same commitDigest
+          // computation the rest of this file uses (never a second hashing path).
+          yield {
+            kind: "removed",
+            result,
+            envelope,
+            message,
+            notifications: [
+              {
+                kind: "selfRemoved",
+                commitDigest: commitDigest(encode(mlsMessageEncoder, message)),
+              },
+            ],
+          };
           return;
         }
 
@@ -743,19 +766,35 @@ export async function* ingestEnvelopes<TEnvelope>(
         // winning tip is now live state, so report `removed` rather than
         // `processed` (member-departure.md). The rewind's `invalidated`
         // retractions below are still reported — they are independent.
-        yield ctx.getState().groupActiveState.kind === "removedFromGroup"
-          ? {
-              kind: "removed",
-              result: resolution.result,
-              envelope: rep.envelope,
-              message: rep.message,
-            }
-          : {
-              kind: "processed",
-              result: resolution.result,
-              envelope: rep.envelope,
-              message: rep.message,
-            };
+        if (ctx.getState().groupActiveState.kind === "removedFromGroup") {
+          // D-10/D-12: attribute the selfRemoved notification to the winning
+          // branch's OWN tip commit, not `rep.message` (which is merely the
+          // first forkPool entry that triggered this resolution) — the tip
+          // commit is the one that actually produced the tombstone.
+          yield {
+            kind: "removed",
+            result: resolution.result,
+            envelope: rep.envelope,
+            message: rep.message,
+            notifications: resolution.tipCommitMessage
+              ? [
+                  {
+                    kind: "selfRemoved",
+                    commitDigest: commitDigest(
+                      encode(mlsMessageEncoder, resolution.tipCommitMessage),
+                    ),
+                  },
+                ]
+              : undefined,
+          };
+        } else {
+          yield {
+            kind: "processed",
+            result: resolution.result,
+            envelope: rep.envelope,
+            message: rep.message,
+          };
+        }
         for (let i = 1; i < retainedPool.length; i++)
           yield {
             kind: "skipped",

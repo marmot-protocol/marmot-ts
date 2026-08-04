@@ -1603,6 +1603,10 @@ export class MarmotGroupEngine<TEnvelope> {
     return {
       outcome: "recovered",
       result: resolution.result,
+      // D-10/D-12: the winning chain's own tip commit, so a caller attributing
+      // a `selfRemoved` notification to a rewind-landed removal digests the
+      // commit that actually produced it, not an arbitrary forkPool entry.
+      tipCommitMessage: resolution.winnerChain.at(-1)?.message,
       invalidated: invalidated.map(
         ({ envelope, message, payload, stateTag, epoch }) => ({
           envelope,

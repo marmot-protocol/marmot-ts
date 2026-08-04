@@ -23,7 +23,10 @@ import type {
   NostrNetworkInterface,
   PublishResponse,
 } from "../../client/nostr-interface.js";
-import { SerializedClientState } from "../../core/client-state.js";
+import {
+  deserializeClientState,
+  SerializedClientState,
+} from "../../core/client-state.js";
 import { commitDigest } from "../../core/convergence.js";
 import { createCredential } from "../../core/credential.js";
 import { createGroupEvent } from "../../core/group-message.js";
@@ -180,6 +183,58 @@ describe("involuntary removal signal", () => {
     // holds the (now removed) group state.
     expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
     expect(await eStore.getItem(eGroup.idStr)).not.toBeNull();
+  });
+
+  /**
+   * CR-05 regression: the removal marker records "realization already
+   * happened", so it must never be durable ahead of the tombstone it
+   * describes. `GroupSession.ingest` only reaches its trailing `save()` once
+   * the generator is fully drained, so writing the marker inside the
+   * `removed` branch left a window (a throwing `removed` listener, a consumer
+   * that `break`s, a process exit, a rejected save) in which the marker said
+   * "realized" while the persisted state was still a live-membership state.
+   * On the next load `#realizeRemovalIfNeeded` bails on the state check, and
+   * on re-ingest it bails on the marker check — so `removed` is never emitted
+   * and queued outbound is never rejected.
+   */
+  it("persists the tombstone before writing the removal marker (CR-05)", async () => {
+    const { impl, ePubkey, eEpoch1, removeCommitEvent } =
+      await buildRemovalFixture();
+
+    const eStore = new InMemoryKeyValueStore<SerializedClientState>();
+    const inner = new InMemoryKeyValueStore<boolean>();
+
+    // Snapshots whatever the state store holds at the exact moment the marker
+    // is written.
+    let persistedAtMarkerWrite: SerializedClientState | null | undefined;
+    let idHex = "";
+    const removedMarkerStore: GenericKeyValueStore<boolean> = {
+      getItem: (key) => inner.getItem(key),
+      setItem: async (key, value) => {
+        persistedAtMarkerWrite = await eStore.getItem(idHex);
+        await inner.setItem(key, value);
+      },
+      removeItem: (key) => inner.removeItem(key),
+    };
+
+    const eGroup = marmotGroup(
+      eEpoch1,
+      ePubkey,
+      impl,
+      [],
+      eStore,
+      removedMarkerStore,
+    );
+    idHex = eGroup.idStr;
+    await eGroup.save(true);
+
+    for await (const _ of eGroup.ingest([removeCommitEvent])) void _;
+
+    expect(await inner.getItem(idHex)).toBe(true);
+    expect(persistedAtMarkerWrite).toBeTruthy();
+    expect(
+      deserializeClientState(persistedAtMarkerWrite!).groupActiveState.kind,
+    ).toBe("removedFromGroup");
   });
 
   it("attributes a selfRemoved notification to the removing commit's own digest (D-10/D-12)", async () => {

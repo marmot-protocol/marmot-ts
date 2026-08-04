@@ -766,6 +766,23 @@ export class MarmotGroup<
       // load-time path so the two can never diverge.
       if (result.kind === "removed") {
         this.log("removed from group by inbound commit");
+        // CR-05: persist the tombstone BEFORE the marker is written. The
+        // session only reaches its own trailing `save()` after this generator
+        // is fully drained, so writing the marker first leaves a window —
+        // a throwing `removed` listener, a consumer that `break`s out of the
+        // `for await`, a process exit, or a rejected `save()` — in which the
+        // marker says "already realized" while the persisted `ClientState` is
+        // NOT the tombstone. On the next load `#realizeRemovalIfNeeded`
+        // returns early (state is not the tombstone), and when the removing
+        // commit is re-ingested it returns early again (marker set), so the
+        // `removed` event is never emitted and queued outbound is never
+        // rejected — the permanent silent suppression the marker exists to
+        // prevent.
+        //
+        // Forced, because the removal may have arrived on a path that left
+        // `#dirty` false. If it rejects, the marker is never written and the
+        // removal simply realizes on the next load — the safe direction.
+        await this.save(true);
         await this.#realizeRemovalIfNeeded();
       }
 

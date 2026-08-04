@@ -20,6 +20,7 @@
  */
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
+  acceptAll,
   appDataUpdateProposalType,
   type CiphersuiteImpl,
   type ClientState,
@@ -55,6 +56,7 @@ import {
 } from "../../core/group-message.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import type { EdgeSnapshot } from "../history-tree.js";
+import { ForkRecovery, type RetainedView } from "../fork-recovery.js";
 import { AdminDepletionError, MarmotGroupEngine } from "../group-engine.js";
 import type { GroupPeeler } from "../types.js";
 
@@ -638,6 +640,110 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
     expect(
       getAdminPolicy(result.pending.newState.groupContext.extensions),
     ).toEqual(getAdminPolicy(engine.state.groupContext.extensions));
+  });
+});
+
+/**
+ * CR-04 regression: the fourth route by which a commit re-enters candidate
+ * selection is `ForkRecovery`'s CONV-04 short-circuit, which reuses the
+ * already-recorded resulting state for commits on our own canonical path
+ * instead of replaying them. That path used to assign the recorded state
+ * directly and jump PAST `validateCommitLegality` — while its sibling
+ * `#treeResolution` documents and implements a strict fail-closed policy for
+ * the very same input class (`RetainedHistoryStore` is rebuilt on load
+ * straight from the persisted history tree, so `ours` can contain edges
+ * written by a pre-upgrade build that never enforced this gate).
+ *
+ * Two seams, opposite policies, one input class — exactly the divergence
+ * criterion 1 forbids. The commit's proposals are now read off the wire
+ * (`framedCommitProposals`) so the shared adapter can run without a replay.
+ */
+describe("CONV-04 short-circuit re-validates persisted own-path commits (CR-04)", () => {
+  it("does not grandfather a violating commit recorded on our own retained canonical path", async () => {
+    const { impl, ctx, adminEpoch1, admin2Epoch1 } =
+      await twoAdminGroupWithJoin();
+    const rootTag = bytesToHex(adminEpoch1.confirmationTag);
+
+    // A commit that drops a required app component — the WIRE-03 Rule 2
+    // violation every other seam refuses. Authored by admin2 (an admin, so
+    // the MIP-03 gate accepts it) and wired as a PublicMessage, exactly as
+    // Marmot v2 wires handshake content.
+    const violating = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [
+        {
+          proposalType: appDataUpdateProposalType,
+          appDataUpdate: {
+            componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+            operation: "remove",
+          },
+        },
+      ],
+    });
+
+    // A benign sibling at the same fork epoch, so a fork actually exists and
+    // `resolveFork` has something to rebuild candidates against.
+    const rival = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    // Admin1's own perspective of the violating commit, standing in for the
+    // state a pre-upgrade build would have recorded into retained history
+    // after accepting it.
+    const [violatingState] = await buildAdmin1PerspectiveChain(
+      ctx,
+      deserializeClientState(serializeClientState(adminEpoch1)),
+      [violating.commit],
+    );
+
+    const statesByEpoch = new Map<number, ClientState>([
+      [1, adminEpoch1],
+      [2, violatingState],
+    ]);
+    const retained: RetainedView = {
+      stateAt: (epoch) => statesByEpoch.get(epoch),
+      appliedCommitsBetween: () => [violating.commit],
+    };
+
+    const recovery = new ForkRecovery(impl, testPeeler(impl));
+    const resolution = await recovery.resolveFork({
+      forkEpoch: 1,
+      pool: [rival.commit],
+      currentState: violatingState,
+      retained,
+      adminCallback: acceptAll,
+    });
+
+    expect(resolution.outcome).not.toBe("skip");
+    const edges = resolution.outcome === "skip" ? [] : resolution.edges;
+    const digestHexOf = (message: MlsMessage) =>
+      bytesToHex(commitDigest(encode(mlsMessageEncoder, message)));
+
+    // The violating commit creates no candidate edge, even though it sits on
+    // our own already-applied path and the short-circuit had its recorded
+    // resulting state in hand.
+    expect(
+      edges.filter(
+        (e) => bytesToHex(e.commitDigest) === digestHexOf(violating.commit),
+      ),
+    ).toEqual([]);
+
+    // The legal sibling is still rebuilt normally — the gate drops the
+    // violating edge only, it does not abandon fork recovery.
+    expect(
+      edges.some(
+        (e) =>
+          e.parentTag === rootTag &&
+          bytesToHex(e.commitDigest) === digestHexOf(rival.commit),
+      ),
+    ).toBe(true);
   });
 });
 

@@ -1,5 +1,14 @@
 /** @module @category Engine */
-import { type ContentTypeValue, type MlsMessage, wireformats } from "ts-mls";
+import {
+  bytesToBase64,
+  type ClientState,
+  contentTypes,
+  type ContentTypeValue,
+  type MlsMessage,
+  type Proposal,
+  proposalOrRefTypes,
+  wireformats,
+} from "ts-mls";
 
 /**
  * Marmot v2 carries MLS handshake content — Commits and Proposals — as
@@ -43,4 +52,54 @@ export function framedEpoch(message: MlsMessage): bigint | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * The {@link Proposal}s a commit actually carries, read straight off the wire
+ * with NO `processMessage` replay — the union of its inline proposals and the
+ * proposals its `ProposalRef` entries name in `parentState.unappliedProposals`.
+ *
+ * This exists for the one seam that cannot replay: `ForkRecovery`'s CONV-04
+ * short-circuit reuses an already-known resulting state precisely BECAUSE the
+ * commit cannot be reprocessed (an `UpdatePath` never encrypts a path secret to
+ * the committer's own leaf, RFC 9420), so `withCapturedProposals` can never
+ * observe that commit's proposals. Without this, that seam had no way to run
+ * `validateCommitLegality` and silently grandfathered violations every other
+ * seam refuses (CR-04).
+ *
+ * Returns `undefined` — never a partial list — when the proposal set cannot be
+ * fully reconstructed:
+ *  - the message is not a public-message commit (a `PrivateMessage`'s content
+ *    is encrypted; Marmot v2 wires handshake content as `PublicMessage`, so
+ *    this is a defensive branch), or
+ *  - a `ProposalRef` names a proposal absent from `parentState`.
+ *
+ * Callers MUST treat `undefined` as "cannot validate" and fail closed, mirroring
+ * `#treeResolution`'s policy for any link it cannot re-validate.
+ *
+ * @param parentState The state the commit was applied to — the only state whose
+ * `unappliedProposals` can resolve this commit's refs.
+ */
+export function framedCommitProposals(
+  message: MlsMessage,
+  parentState: ClientState,
+): Proposal[] | undefined {
+  if (message.wireformat !== wireformats.mls_public_message) return undefined;
+  const content = message.publicMessage.content;
+  if (content.contentType !== contentTypes.commit) return undefined;
+
+  const proposals: Proposal[] = [];
+  for (const entry of content.commit.proposals) {
+    if (entry.proposalOrRefType === proposalOrRefTypes.proposal) {
+      proposals.push(entry.proposal);
+      continue;
+    }
+    // ts-mls keys `unappliedProposals` by the base64 of the proposal
+    // reference (see its own `applyProposals` lookup).
+    const staged =
+      parentState.unappliedProposals[bytesToBase64(entry.reference)];
+    if (!staged) return undefined;
+    proposals.push(staged.proposal);
+  }
+  return proposals;
 }

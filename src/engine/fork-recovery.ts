@@ -33,7 +33,7 @@ import {
 import { withCapturedProposals } from "./admin-policy.js";
 import type { EdgeSnapshot } from "./history-tree.js";
 import type { GroupPeeler } from "./types.js";
-import { framedEpoch } from "./wire-format.js";
+import { framedCommitProposals, framedEpoch } from "./wire-format.js";
 
 /** One applied step on a candidate branch: parent → message → child. */
 export interface ChainLink {
@@ -217,11 +217,29 @@ export class ForkRecovery<TEnvelope> {
         // The short-circuit is valid ONLY at the exact parent this commit was
         // recorded against. `candidatesAt` matches purely on framed epoch, so
         // an unqualified digest hit would also fire at a same-epoch node on a
-        // COMPETING branch and graft our canonical chain onto it. When the
-        // parent does not match we fall through to the normal replay path,
-        // where our own commit fails to process against a foreign parent and
-        // is dropped as a candidate — which is the correct outcome.
-        if (known && known.parentTag === bytesToHex(state.confirmationTag)) {
+        // COMPETING branch and graft our canonical chain onto it (CR-01). When
+        // the parent does not match we fall through to the normal replay path,
+        // where our own commit fails to process against a foreign parent and is
+        // dropped as a candidate — which is the correct outcome.
+        //
+        // CR-04: reusing a recorded state must NOT also skip the legality gate.
+        // `ours` comes from `RetainedHistoryStore`, which `GroupRegistry`
+        // rebuilds on load straight from the persisted history tree — the exact
+        // pre-upgrade edge class `#treeResolution` explicitly refuses to
+        // grandfather. This commit cannot be replayed (see below), so its
+        // proposals are read off the wire instead: inline entries plus the
+        // parent's staged proposal for each `ProposalRef`. When that
+        // reconstruction is not possible (a `PrivateMessage` commit, whose
+        // content is encrypted) we deliberately fall through to the ordinary
+        // replay path rather than dropping the candidate — replay yields both
+        // the proposals and the same legality gate, and only fails for a commit
+        // this leaf authored, which Marmot never wires as a `PrivateMessage`.
+        const knownProposals =
+          known && known.parentTag === bytesToHex(state.confirmationTag)
+            ? framedCommitProposals(message, state)
+            : undefined;
+
+        if (known && knownProposals) {
           // A commit we already applied ourselves (own or previously-adopted
           // inbound) cannot be replayed through `processMessage`: its
           // `UpdatePath` never encrypted a path secret to the committer's own
@@ -229,7 +247,20 @@ export class ForkRecovery<TEnvelope> {
           // has nothing to decrypt and `processMessage` throws. We already
           // recorded the real resulting state when this commit was first
           // applied (`RetainedHistoryStore.record`), so reuse it instead of
-          // reprocessing (CONV-04).
+          // reprocessing (CONV-04) — but only after it passes the same shared
+          // adapter every other seam runs.
+          let knownViolation: ReturnType<typeof validateCommitLegality>;
+          try {
+            knownViolation = validateCommitLegality({
+              parentState: state,
+              resultingState: known.state,
+              proposals: knownProposals,
+            });
+          } catch {
+            continue;
+          }
+          if (knownViolation) continue;
+
           next = {
             kind: "newState",
             newState: known.state,

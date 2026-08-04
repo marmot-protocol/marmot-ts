@@ -2,6 +2,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { Debugger } from "debug";
 import {
+  appDataUpdateProposalType,
   CiphersuiteImpl,
   ClientState,
   contentTypes,
@@ -26,7 +27,13 @@ import {
 
 import { marmotAuthService } from "../core/auth-service.js";
 import { getMarmotGroupView } from "../core/client-state.js";
+import { encodeAdminPolicyV1 } from "../core/components/admin-policy.js";
+import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../core/components/ids.js";
 import { getCredentialPubkey } from "../core/credential.js";
+import {
+  getGroupMembers,
+  getPubkeyLeafNodeIndexes,
+} from "../core/group-members.js";
 import { decideAutoCommit } from "./auto-committer.js";
 import {
   type ConvergenceStatus,
@@ -92,6 +99,25 @@ import type {
   SendIntent,
   SendResult,
 } from "./types.js";
+
+/**
+ * Thrown by {@link MarmotGroupEngine.send} (`case "commit"`) when a removal
+ * commit's auto-coupled admin-policy update would leave the resulting epoch
+ * with no surviving admin account (D-07). Thrown BEFORE `createCommit` — no
+ * proposal is staged and the lifecycle stays `Stable`. The message names only
+ * the count of admins that would be orphaned, never pubkeys
+ * (diagnostics-privacy rule, `foundation/errors.md`).
+ *
+ * @see refs/mdk/crates/cgka-engine/src/message_processor/send.rs `do_send_remove_members` `AdminDepletion` guard
+ */
+export class AdminDepletionError extends Error {
+  constructor(orphanedAdminCount: number) {
+    super(
+      `This commit would remove the last member leaf of ${orphanedAdminCount} admin account(s), leaving the group with no admin. Refused before staging.`,
+    );
+    this.name = "AdminDepletionError";
+  }
+}
 
 /** An opaque handle returned by {@link ConvergenceScheduler.setTimer}. */
 export type TimerHandle = unknown;
@@ -505,6 +531,84 @@ export class MarmotGroupEngine<TEnvelope> {
 
         const allProposals = [...newProposals, ...selectedProposals];
 
+        // D-05/D-06/D-07/D-08: auto-couple an admin-policy update into a
+        // removal commit that de-leafs an admin account, and refuse a
+        // removal that would empty the admin set entirely — before any
+        // staging. This lives here (send/staging), never in
+        // proposeRemoveUser, because send() accepts arbitrary composed
+        // proposals (D-06): auto-coupling must run over every removal
+        // proposal that will actually land in the commit, including
+        // unapplied proposals createCommit bundles by reference, not just
+        // this call's own by-value proposals.
+        // @see refs/mdk/crates/cgka-engine/src/message_processor/send.rs `do_send_remove_members`
+        let splicedAdminPolicy = false;
+        {
+          // The proposal set that will actually land in the commit:
+          // createCommit bundles every entry of this.state.unappliedProposals
+          // by reference in addition to commitOptions.extraProposals. A scan
+          // set only — never used as the commit payload itself.
+          const committedProposals = [
+            ...Object.values(this.state.unappliedProposals).map(
+              (p) => p.proposal,
+            ),
+            ...allProposals,
+          ];
+
+          // Deliberately EXCLUDES selfRemoveProposalType entries (SelfRemove
+          // carve-out, Pitfall 4): a SelfRemove must not trigger
+          // auto-coupling or the depletion guard. An admin's SelfRemove is
+          // already refused by createAdminCommitPolicyCallback, and a
+          // non-admin's SelfRemove cannot change the admin set.
+          const removedLeaves = new Set<number>();
+          for (const proposal of committedProposals) {
+            if (
+              proposal.proposalType === defaultProposalTypes.remove &&
+              "remove" in proposal
+            ) {
+              removedLeaves.add(Number(proposal.remove.removed));
+            }
+          }
+
+          if (removedLeaves.size > 0) {
+            // D-08: account-level survival — an account survives if at
+            // least one of its leaves is NOT in removedLeaves; leaf-level
+            // would diverge the moment an account has two leaves, which the
+            // wire format already permits.
+            const survivingAccounts = new Set<string>();
+            for (const pubkey of getGroupMembers(this.state)) {
+              const leaves = getPubkeyLeafNodeIndexes(this.state, pubkey);
+              if (leaves.some((leaf) => !removedLeaves.has(leaf))) {
+                survivingAccounts.add(pubkey);
+              }
+            }
+
+            const currentAdmins = groupData.adminPubkeys;
+            const resultingAdmins = currentAdmins.filter((pk) =>
+              survivingAccounts.has(pk),
+            );
+
+            // D-07 guard: refused before any staging, before createCommit,
+            // and before the wrong-layer encodeAdminPolicyV1 "at least one
+            // admin" error could fire.
+            if (currentAdmins.length > 0 && resultingAdmins.length === 0) {
+              throw new AdminDepletionError(currentAdmins.length);
+            }
+
+            // D-05 splice: same commit — never a follow-up commit.
+            if (resultingAdmins.length !== currentAdmins.length) {
+              allProposals.push({
+                proposalType: appDataUpdateProposalType,
+                appDataUpdate: {
+                  componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+                  operation: "update",
+                  update: encodeAdminPolicyV1(resultingAdmins),
+                },
+              });
+              splicedAdminPolicy = true;
+            }
+          }
+        }
+
         // MIP-03 admin-only commits, with the non-admin carve-out from
         // protocol-core/group-messaging.md: a non-admin may commit a
         // self-update-only commit (no proposals, or only self-targeted Update
@@ -535,7 +639,11 @@ export class MarmotGroupEngine<TEnvelope> {
           ratchetTreeExtension: true,
         };
 
-        if (intent.extraProposals || intent.proposalRefs) {
+        if (
+          intent.extraProposals ||
+          intent.proposalRefs ||
+          splicedAdminPolicy
+        ) {
           commitOptions.extraProposals = allProposals;
         }
 

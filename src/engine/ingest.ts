@@ -278,6 +278,23 @@ export async function* ingestEnvelopes<TEnvelope>(
 ): AsyncGenerator<IngestResult<TEnvelope>> {
   const log = ctx.log.extend(`ingest:${Date.now().toString(36).slice(-5)}`);
 
+  // D-13: once canonical state is the removedFromGroup tombstone, later input
+  // for this group is classified `self-evicted` before any per-message work —
+  // no peel, no decrypt, no authentication (`protocol-core/member-departure.md`
+  // "Realizing removal": such input "need not be decrypted or authenticated").
+  // This must be the very first check in the function, ahead of the peel call,
+  // so a whole batch short-circuits uniformly regardless of retry state.
+  if (ctx.getState().groupActiveState.kind === "removedFromGroup") {
+    log(
+      "group is removedFromGroup – yielding %d envelope(s) as self-evicted",
+      envelopes.length,
+    );
+    for (const envelope of envelopes) {
+      yield { kind: "skipped", envelope, reason: "self-evicted" };
+    }
+    return;
+  }
+
   const retryCount = options?.retryCount ?? 0;
   const maxRetries = options?.maxRetries ?? 5;
   const errorList: Array<{ envelope: TEnvelope; error: unknown }> =

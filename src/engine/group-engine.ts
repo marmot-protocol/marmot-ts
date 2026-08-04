@@ -417,6 +417,17 @@ export class MarmotGroupEngine<TEnvelope> {
 
   /** Executes a local send intent and returns the wrapped transport envelope. */
   async send(intent: SendIntent): Promise<SendResult<TEnvelope>> {
+    // D-14: once canonical state is the removedFromGroup tombstone, no
+    // outbound intent may proceed — checked before the audit `send_entry`
+    // emit and before #sendInner, mirroring the `mayPrepareLocalCommit` throw
+    // style below. Canonical state is serialized/persisted, so this also
+    // blocks a fresh `send()` on a freshly-constructed engine after a
+    // restart, not just within the process that observed the removal.
+    if (this.#state.groupActiveState.kind === "removedFromGroup") {
+      throw new Error(
+        "Cannot send: this client has been removed from the group.",
+      );
+    }
     const intentKind = auditSendIntentKind(intent);
     this.#emitAudit({ type: "send_entry", intent_kind: intentKind });
     try {
@@ -919,6 +930,14 @@ export class MarmotGroupEngine<TEnvelope> {
     // on the now-canonical branch are delivered as `processed`. Witness envelopes
     // are this batch plus the pool, so re-convergence sees at least the witnesses
     // pool-replay recovery saw and never reverts a witness-boosted decision.
+    //
+    // Deliberate asymmetry (D-12/CONV-02, CONV-03): when canonical state is the
+    // removedFromGroup tombstone, `ingestEnvelopes` above short-circuits fresh
+    // transport input as `self-evicted` (D-13), so the pool re-feed loop is a
+    // no-op for a removed group. This tree-fed re-convergence pass must still
+    // run regardless — it evaluates already-retained/persisted fork material,
+    // not fresh input — so a later rewind can supersede the removing commit and
+    // clear the removal marker (CONV-03, plan 03-07).
     const tipBeforeReconverge = bytesToHex(this.#state.confirmationTag);
     yield* this.#reconvergeFromTree([...envelopes, ...this.#pool.envelopes()]);
     if (

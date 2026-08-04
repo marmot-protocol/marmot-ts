@@ -768,6 +768,21 @@ export class MarmotGroup<
         this.log("removed from group by inbound commit");
         await this.#realizeRemovalIfNeeded();
       }
+
+      // CONV-03 (D-12): a rewind superseded the commit that removed us —
+      // canonical membership is live again, so the persisted removed-inactive
+      // marker must be cleared, or a later genuine removal would be silently
+      // suppressed by the stale marker. This rides the same `stateInvalidated`
+      // result stream as the withdrawal itself; no separate event is emitted
+      // (re-emission of state notifications is deferred).
+      if (
+        result.kind === "stateInvalidated" &&
+        result.withdrawn.some((n) => n.kind === "selfRemoved")
+      ) {
+        this.log("rewind superseded our removal — clearing removal marker");
+        await this.#clearRemovalMarker();
+      }
+
       yield result;
     }
     if (this.session.historyTree.size !== historySizeBefore)

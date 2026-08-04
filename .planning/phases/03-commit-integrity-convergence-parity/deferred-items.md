@@ -26,3 +26,22 @@ appropriate follow-up).
   `src/client/session/group-session.ts`, `src/core/inbound.ts`) individually pass
   `prettier --check`. Fix belongs in `.prettierignore` (add a `refs/mdk/target/` or
   `refs/mdk/` entry), not in this phase's source-code plans.
+
+## From plan 03-06
+
+- **`removedMarkerStore` (D-12) is not yet threaded through `GroupsManagerOptions` /
+  `GroupRegistryOptions` / `GroupFactoryOptions`.** `MarmotGroupOptions.removedMarkerStore`
+  and `#realizeRemovalIfNeeded` are fully wired at the `MarmotGroup` level (constructor,
+  `fromClientState`, the `ingest` "removed" branch, `destroy`), and CONV-02's
+  restart-durability requirement is proven directly against `MarmotGroup` in
+  `src/__tests__/integration/removed.test.ts`. Checked every `MarmotGroup` construction
+  site per this plan's Task 2 action item: `GroupRegistry.build()` only ever constructs via
+  `MarmotGroup.fromClientState` (already covered), and `GroupFactory.create()` bypasses
+  `fromClientState` but only ever builds a BRAND NEW group (never already removed), so no
+  load-time realization gap exists at either site today. A downstream app driving groups
+  exclusively through the top-level `GroupsManager` convenience API has no way to supply a
+  `removedMarkerStore`, so realization there still degrades to the documented in-memory-only
+  fallback across a restart. Threading the option through all three option types (mirroring
+  how `rewindStore` is already threaded) is a reasonable, small follow-up if/when a plan next
+  touches `group-registry.ts` / `group-factory.ts` / `groups-manager.ts`'s option surface —
+  not required for CONV-02 itself, which this plan closes at the `MarmotGroup` level.

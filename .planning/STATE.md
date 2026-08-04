@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 03
 current_phase_name: commit-integrity-convergence-parity
 status: executing
-stopped_at: Completed 03-04-PLAN.md
-last_updated: "2026-08-04T14:14:15.226Z"
+stopped_at: Completed 03-06-PLAN.md
+last_updated: "2026-08-04T14:39:36.381Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 13
-  completed_plans: 11
+  completed_plans: 12
   percent: 40
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
-Plan: 6 of 7
+Plan: 7 of 7
 Status: Ready to execute
 Last activity: 2026-08-04 — Phase 03 execution started
 
@@ -67,6 +67,7 @@ _Updated after each plan completion_
 | Phase 03 P03 | 50min | 3 tasks | 2 files |
 | Phase 03 P04 | 45min | 3 tasks | 4 files |
 | Phase 03 P05 | 70min | 3 tasks | 2 files |
+| Phase 03 P06 | 20min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -104,6 +105,11 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 03-04]: Did not mark WIRE-03/CONV-01 complete in REQUIREMENTS.md -- the send seam (plan 03-05) is the third and final seam, per explicit instruction
 - [Phase ?]: [Phase 03-05]: Auto-coupling and the D-07 depletion guard live in #sendInner's case commit, never in proposeRemoveUser -- send() must catch every removal proposal landing in the commit, including unapplied proposals bundled by reference
 - [Phase ?]: [Phase 03-05]: Tree-fed re-convergence test fixtures must replay a competing committer's raw commits through a third party's own state before recordEdge -- recording the committer's own createCommit result directly hits ts-mls's RFC 9420 own-commit-replay constraint on later replay
+- [Phase ?]: [Phase 03-06]: D-13 self-evicted short-circuit is the first statement in ingestEnvelopes, ahead of even the retry-count check, so both fresh batches and internal retry recursion are covered uniformly
+- [Phase ?]: [Phase 03-06]: AppliedForkResolution gained tipCommitMessage so a rewind-landed removal attributes its selfRemoved notification to the winning chain's own tip commit, not an arbitrary forkPool entry
+- [Phase ?]: [Phase 03-06]: removedMarkerStore is a sibling GenericKeyValueStore<boolean> keyed by group-id hex, never grafted onto serialized ClientState; #realizeRemovalIfNeeded is the single idempotent funnel shared by fromClientState (load) and the ingest removed branch
+- [Phase ?]: [Phase 03-06]: Did not thread removedMarkerStore through GroupRegistry/GroupFactory/GroupsManager options -- checked every MarmotGroup construction site and found no load-time realization gap (fromClientState is the only loader path); logged as a deferred item
+- [Phase ?]: [Phase 03-06]: Loosened a third toHaveLength(1) rejection-count assertion beyond the two the plan named, since MockNetwork's subscription() replay-on-subscribe produces the same backfill-then-subscribe double delivery the plan itself documents as an accepted consequence
 
 ### Pending Todos
 
@@ -127,7 +133,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-04T14:13:29.221Z
-Stopped at: Completed 03-04-PLAN.md
+Last session: 2026-08-04T14:39:08.774Z
+Stopped at: Completed 03-06-PLAN.md
 Resume file:
 None

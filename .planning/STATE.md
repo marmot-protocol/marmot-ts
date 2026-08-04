@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: Phase 1)
 current_phase: 03
 current_phase_name: commit-integrity-convergence-parity
-status: executing
-stopped_at: Completed 03-06-PLAN.md
-last_updated: "2026-08-04T14:39:36.381Z"
+status: verifying
+stopped_at: Completed 03-07-PLAN.md
+last_updated: "2026-08-04T15:33:21.498Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 13
-  completed_plans: 12
-  percent: 40
+  completed_plans: 13
+  percent: 60
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 
 Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
 Plan: 7 of 7
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-08-04 — Phase 03 execution started
 
 Progress: [████░░░░░░] 40%
@@ -68,6 +68,7 @@ _Updated after each plan completion_
 | Phase 03 P04 | 45min | 3 tasks | 4 files |
 | Phase 03 P05 | 70min | 3 tasks | 2 files |
 | Phase 03 P06 | 20min | 3 tasks | 6 files |
+| Phase 03 P07 | 95min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -110,6 +111,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 03-06]: removedMarkerStore is a sibling GenericKeyValueStore<boolean> keyed by group-id hex, never grafted onto serialized ClientState; #realizeRemovalIfNeeded is the single idempotent funnel shared by fromClientState (load) and the ingest removed branch
 - [Phase ?]: [Phase 03-06]: Did not thread removedMarkerStore through GroupRegistry/GroupFactory/GroupsManager options -- checked every MarmotGroup construction site and found no load-time realization gap (fromClientState is the only loader path); logged as a deferred item
 - [Phase ?]: [Phase 03-06]: Loosened a third toHaveLength(1) rejection-count assertion beyond the two the plan named, since MockNetwork's subscription() replay-on-subscribe produces the same backfill-then-subscribe double delivery the plan itself documents as an accepted consequence
+- [Phase ?]: Tasks 1+2 combined into one commit for 03-07 (mutually-dependent interfaces cannot compile independently)
+- [Phase ?]: 03-07: extended notification derivation to the forkPool rewind site's own winning commit (Rule 2), not just the direct branch, so a rewind-landed commit can itself be superseded later
+- [Phase ?]: 03-07: CONV-03 marker-clearing tested at the MarmotGroup wiring boundary; a fully organic removed-then-un-removed engine scenario is currently unreachable due to ForkRecovery's confirmationTag-based candidate dedup and the direct removal branch skipping tree/retained recording (logged in deferred-items.md)
 
 ### Pending Todos
 
@@ -133,7 +137,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-04T14:39:08.774Z
-Stopped at: Completed 03-06-PLAN.md
+Last session: 2026-08-04T15:33:21.490Z
+Stopped at: Completed 03-07-PLAN.md
 Resume file:
 None

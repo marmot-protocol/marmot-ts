@@ -203,3 +203,16 @@ None - no external service configuration required.
 ---
 *Phase: 03-commit-integrity-convergence-parity*
 *Completed: 2026-08-04*
+
+## Self-Check: PASSED
+
+- FOUND: `src/engine/state-notifications.ts`
+- FOUND: `src/engine/ingest.ts`
+- FOUND: `src/engine/group-engine.ts`
+- FOUND: `src/client/group/marmot-group.ts`
+- FOUND: `src/engine/__tests__/state-notification-withdrawal.test.ts`
+- FOUND: `.planning/phases/03-commit-integrity-convergence-parity/03-07-SUMMARY.md`
+- FOUND: `.planning/phases/03-commit-integrity-convergence-parity/deferred-items.md`
+- FOUND commit: `7c5c5c2` (feat: derive + withdraw state notifications, Tasks 1+2)
+- FOUND commit: `dc068a9` (feat: marker-clearing + withdrawal test suite, Task 3)
+- FOUND commit: `9b815f5` (docs: add plan summary)

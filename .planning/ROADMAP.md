@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Proof v2** - Migrate account-identity-proof v1→v2 to close the headline interop-breaker (completed 2026-07-21)
 - [x] **Phase 2: Inbound Trust & Wire Boundary** - Verify-before-trust, KeyPackage lifetime cap, required-tag cardinality (completed 2026-07-22)
-- [ ] **Phase 3: Commit Integrity & Convergence Parity** - App-component integrity, admin/leaf coupling, SelfEvicted, notification withdrawal, own-commit protection
+- [x] **Phase 3: Commit Integrity & Convergence Parity** - App-component integrity, admin/leaf coupling, SelfEvicted, notification withdrawal, own-commit protection (completed 2026-08-04)
 - [ ] **Phase 4: Feature Parity & Conformance Vectors** - SafeAAD advertisement plus MDK's own test vectors wired up as cross-impl tests
 - [ ] **Phase 5: Quality Gate** - Green suite on every supported runtime; byte-exact MDK cross-checks recorded
 
@@ -101,7 +101,7 @@ membership-changing commit.
 3. On being removed from a group, marmot-ts emits a self-removed notification, marks the group removed-inactive with no further outbound, and classifies subsequent input for that group as SelfEvicted/stale.
 4. Group-state-change notifications are attributed to their originating `commit_digest` and are withdrawn — including clearing removal markers — when that commit is superseded on rewind.
 5. Run against MDK's own-confirmed-commit scenario vectors (#706/#723/#702/#724): a device's own published+confirmed commit is never rolled back in favor of a same-epoch sibling; a clean pass requires no code change, and any divergence found is fixed before this phase closes (verify-first).
-   **Plans**: 6/7 plans executed
+   **Plans**: 7/7 plans complete
 
 Plans:
 **Wave 1**
@@ -121,7 +121,7 @@ Plans:
 
 **Wave 4** _(depends on Wave 3)_
 
-- [ ] 03-07-PLAN.md — CONV-03: commit-digest-attributed state notifications, rewind-scoped withdrawal via the ledger, and removal-marker clearing on supersession
+- [x] 03-07-PLAN.md — CONV-03: commit-digest-attributed state notifications, rewind-scoped withdrawal via the ledger, and removal-marker clearing on supersession
 
 ### Phase 4: Feature Parity & Conformance Vectors
 
@@ -162,7 +162,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | ---------------------------------------- | -------------- | ----------- | ---------- |
 | 1. Proof v2                              | 2/2            | Complete    | 2026-07-21 |
 | 2. Inbound Trust & Wire Boundary         | 4/4            | Complete    | 2026-07-22 |
-| 3. Commit Integrity & Convergence Parity | 6/7 | In Progress|  |
+| 3. Commit Integrity & Convergence Parity | 7/7 | Complete   | 2026-08-04 |
 | 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -          |
 | 5. Quality Gate                          | 0/TBD          | Not started | -          |
 

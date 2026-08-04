@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 03
 current_phase_name: commit-integrity-convergence-parity
 status: executing
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-08-04T11:13:48.379Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-08-04T11:26:21.147Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 13
-  completed_plans: 7
+  completed_plans: 8
   percent: 40
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Status: Ready to execute
 Last activity: 2026-08-04 — Phase 03 execution started
 
@@ -63,6 +63,7 @@ _Updated after each plan completion_
 | Phase 02 P03 | 6min | 3 tasks | 9 files |
 | Phase 02 P04 | 12min | 3 tasks | 6 files |
 | Phase 03 P01 | 25min | 3 tasks | 3 files |
+| Phase 03 P02 | 12min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -90,6 +91,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 02]: Introduced an object-identity-keyed rejectedEvents Set alongside the trusted-only id-keyed seen Set in GroupsManager#connectGroup's drain, to close WR-01 (same-id forgery censorship) without regressing existing single-rejection tests under MockNetwork's backfill+subscribe replay of the same malformed event object
 - [Phase ?]: requiredIds for validateAppComponentIntegrity MUST be derived from the CURRENT (pre-commit) extensions, never resulting, closing the Pitfall 2 re-derivation bug (mdk#707 class)
 - [Phase ?]: validateAdminLeafCoupling evaluates the carried-forward admin set when resulting extensions carry no admin-policy bytes, per Pitfall 3, and deliberately has no SelfRemove carve-out per Pitfall 4
+- [Phase ?]: Declared RejectedIngestResult.reason as an inline literal union in src/engine/types.ts rather than importing from src/core/components/integrity.ts, keeping plan 03-02 independent of sibling plan 03-01 per its explicit instruction
+- [Phase ?]: group-engine.ts's #emitIngestOutcome (audit emission) guards on stateInvalidated and returns early rather than fabricating an audit msg_id from a non-existent envelope; audit wiring for this variant is deferred to a later seam-wiring plan
 
 ### Pending Todos
 
@@ -98,6 +101,7 @@ None yet.
 ### Blockers/Concerns
 
 - Phase 3's CONV-04 is verify-first: run marmot-ts against MDK's own-confirmed-commit scenario vectors before writing any fix; only diverge-and-fix if the vectors actually fail
+- Pre-existing (from 03-01): src/__tests__/exports.test.ts snapshot stale + pnpm lint fails on refs/mdk/target/ noise — logged in phase deferred-items.md, not fixed in 03-02
 
 ## Deferred Items
 
@@ -112,7 +116,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-04T11:13:48.367Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-08-04T11:26:21.132Z
+Stopped at: Completed 03-02-PLAN.md
 Resume file:
 None

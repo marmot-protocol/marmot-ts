@@ -27,8 +27,8 @@ Requirements for catching marmot-ts up to feature parity + byte-for-byte interop
 ### Convergence / membership parity
 
 - [x] **CONV-01**: Admin/leaf coupling is enforced as a resulting-epoch invariant — every membership-changing commit is validated (send + inbound) so that admins ⊆ member leaves, matching MDK's legality decision for removal-without-policy-update commits (additive/convergence; `src/core/components/admin-policy.ts`, `src/engine/admin-policy.ts`; `admin-policy-v1.md`+`convergence.md` #171, mdk #701)
-- [ ] **CONV-02**: SelfEvicted / Realizing removal is handled — on being removed, marmot-ts emits a self-removed notification, marks the group removed-inactive, and classifies later input as SelfEvicted/stale (additive; new; `member-departure.md` #171)
-- [ ] **CONV-03**: Group-state-change notifications are attributed to their `commit_digest` and withdrawn when that commit is superseded on rewind, including clearing removal markers (additive; `src/engine/` convergence, cf. `delivered-payloads.ts`; `convergence.md` #171, mdk #724)
+- [x] **CONV-02**: SelfEvicted / Realizing removal is handled — on being removed, marmot-ts emits a self-removed notification, marks the group removed-inactive, and classifies later input as SelfEvicted/stale (additive; new; `member-departure.md` #171)
+- [x] **CONV-03**: Group-state-change notifications are attributed to their `commit_digest` and withdrawn when that commit is superseded on rewind, including clearing removal markers (additive; `src/engine/` convergence, cf. `delivered-payloads.ts`; `convergence.md` #171, mdk #724)
 - [ ] **CONV-04**: Own-confirmed-commit convergence protection is verified against MDK scenario vectors — a device's own published+confirmed commit is never rolled back for a same-epoch sibling; fixes are added only if marmot-ts diverges (verify-first; `src/engine/fork-recovery.ts`, `tree-convergence.ts`; mdk #706/#723/#702, #724)
 
 ### Conformance vectors
@@ -76,8 +76,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 | WIRE-02     | Phase 2 — Inbound Trust & Wire Boundary         | Complete |
 | WIRE-03     | Phase 3 — Commit Integrity & Convergence Parity | Complete |
 | CONV-01     | Phase 3 — Commit Integrity & Convergence Parity | Complete |
-| CONV-02     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
-| CONV-03     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
+| CONV-02     | Phase 3 — Commit Integrity & Convergence Parity | Complete |
+| CONV-03     | Phase 3 — Commit Integrity & Convergence Parity | Complete |
 | CONV-04     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
 | WIRE-04     | Phase 4 — Feature Parity & Conformance Vectors  | Pending  |
 | CONF-01     | Phase 4 — Feature Parity & Conformance Vectors  | Pending  |

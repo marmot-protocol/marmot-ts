@@ -1829,9 +1829,33 @@ export class MarmotGroupEngine<TEnvelope> {
    * entry for the load path (after the engine hydrates from the tree) and any
    * caller wanting an explicit re-evaluation. Witness-free — the structural keys
    * decide; witnesses refine on the next live ingest/sweep.
+   *
+   * Returns every result the pass produced, dispositioned and audited exactly
+   * as {@link ingest} does, so a caller can route them through the identical
+   * handler.
+   *
+   * CR-06: these results MUST reach the caller. `#reconvergeFromTree` is the
+   * only site that can yield the `stateInvalidated` withdrawal proving a
+   * rewind superseded the commit that removed us, and that withdrawal is what
+   * clears the persisted removed-inactive marker (CONV-03, D-12). While this
+   * method drained into `void _`, a client that was removed on a losing fork,
+   * restarted, and re-converged onto a branch where it is still a member ended
+   * up with canonical membership restored AND a stale marker still set —
+   * silently suppressing the next genuine removal.
    */
-  async reconvergeFromHistory(): Promise<void> {
-    for await (const _ of this.#reconvergeFromTree([])) void _;
+  async reconvergeFromHistory(): Promise<
+    DispositionedIngestResult<TEnvelope>[]
+  > {
+    const results: DispositionedIngestResult<TEnvelope>[] = [];
+    for await (const result of this.#reconvergeFromTree([])) {
+      const dispositioned = {
+        ...result,
+        disposition: ingestResultDisposition(result),
+      };
+      this.#emitIngestOutcome(dispositioned);
+      results.push(dispositioned);
+    }
+    return results;
   }
 
   /**

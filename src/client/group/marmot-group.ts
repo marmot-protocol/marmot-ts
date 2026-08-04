@@ -530,9 +530,22 @@ export class MarmotGroup<
    * client that diverged onto a losing fork converges from disk without waiting
    * for the network to re-deliver the winning branch. Called automatically on
    * load; safe to call explicitly to force a re-evaluation.
+   *
+   * CR-06: the pass's results are routed through the SAME marker-clearing
+   * branch {@link ingest} uses, so a load-time rewind that supersedes the
+   * commit which removed us clears the persisted removed-inactive marker.
+   * Previously every result here was discarded, so the documented "called
+   * automatically on load" path could never clear it and a client restored to
+   * membership kept a stale marker that silently suppressed its next genuine
+   * removal.
    */
   async reconverge(): Promise<void> {
-    await this.session.reconverge();
+    const results = await this.session.reconverge();
+    for (const result of results) await this.#applyRemovalWithdrawal(result);
+    // A tree-fed switch can also land us ON a branch that removes us. The
+    // realization obligation is state-derived (D-12), so re-assert it here;
+    // idempotent, and a no-op unless canonical state is now the tombstone.
+    await this.#realizeRemovalIfNeeded();
   }
 
   /**
@@ -786,24 +799,33 @@ export class MarmotGroup<
         await this.#realizeRemovalIfNeeded();
       }
 
-      // CONV-03 (D-12): a rewind superseded the commit that removed us —
-      // canonical membership is live again, so the persisted removed-inactive
-      // marker must be cleared, or a later genuine removal would be silently
-      // suppressed by the stale marker. This rides the same `stateInvalidated`
-      // result stream as the withdrawal itself; no separate event is emitted
-      // (re-emission of state notifications is deferred).
-      if (
-        result.kind === "stateInvalidated" &&
-        result.withdrawn.some((n) => n.kind === "selfRemoved")
-      ) {
-        this.log("rewind superseded our removal — clearing removal marker");
-        await this.#clearRemovalMarker();
-      }
+      await this.#applyRemovalWithdrawal(result);
 
       yield result;
     }
     if (this.session.historyTree.size !== historySizeBefore)
       this.emit("historyChanged", this);
+  }
+
+  /**
+   * CONV-03 (D-12): a rewind superseded the commit that removed us — canonical
+   * membership is live again, so the persisted removed-inactive marker must be
+   * cleared, or a later genuine removal would be silently suppressed by the
+   * stale marker. This rides the same `stateInvalidated` result stream as the
+   * withdrawal itself; no separate event is emitted (re-emission of state
+   * notifications is deferred).
+   *
+   * Shared by {@link ingest} and {@link reconverge} so the live and load-time
+   * rewind paths can never diverge (CR-06).
+   */
+  async #applyRemovalWithdrawal(result: DispositionedIngestResult) {
+    if (
+      result.kind !== "stateInvalidated" ||
+      !result.withdrawn.some((n) => n.kind === "selfRemoved")
+    )
+      return;
+    this.log("rewind superseded our removal — clearing removal marker");
+    await this.#clearRemovalMarker();
   }
 
   /**

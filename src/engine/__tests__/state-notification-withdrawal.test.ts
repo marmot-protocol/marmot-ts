@@ -763,6 +763,137 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     expect(await removedMarkerStore.getItem(idHex)).toBeFalsy();
   });
 
+  /**
+   * CR-06 regression, and the load-time twin of the `ingest` test above.
+   *
+   * `MarmotGroupEngine.reconvergeFromHistory` used to drain
+   * `#reconvergeFromTree` into `void _`, and `GroupSession.reconverge` exposed
+   * only `Promise<void>`, so every `stateInvalidated` a load-time rewind
+   * produced was discarded before `MarmotGroup` could see it. The documented
+   * "called automatically on load" path could therefore NEVER clear the
+   * removed-inactive marker: a client removed on a losing fork that restarts
+   * and re-converges onto a branch where it is still a member came back with
+   * canonical membership restored and a stale `marker = true`, silently
+   * suppressing its next genuine removal.
+   *
+   * Composing a real removal into a real tree-fed rewind is not reachable for
+   * the same pre-existing engine/ts-mls reason the `ingest` test above
+   * documents (a tombstone's `confirmationTag` equals its parent's, so a
+   * commit that removes the observing party never becomes a distinct
+   * explorable candidate). This asserts the wiring the fix adds: whatever the
+   * session's reconverge reports is routed through the same marker-clearing
+   * branch `ingest` uses.
+   */
+  it("clears the persisted removed-inactive marker when reconverge reports a selfRemoved withdrawal (CONV-03, CR-06)", async () => {
+    const { memberEpoch1, memberPubkey } = await twoMemberEpoch1Group();
+
+    const store = new InMemoryKeyValueStore<SerializedClientState>();
+    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const idHex = bytesToHex(memberEpoch1.groupContext.groupId);
+    await removedMarkerStore.setItem(idHex, true);
+
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const group = new MarmotGroup(memberEpoch1, {
+      store,
+      removedMarkerStore,
+      signer: { getPublicKey: async () => memberPubkey } as EventSigner,
+      ciphersuite: impl,
+      network: noNetwork(),
+    });
+
+    const withdrawnSelfRemoved: import("../state-notifications.js").StateNotification =
+      {
+        kind: "selfRemoved",
+        commitDigest: new Uint8Array(32),
+      };
+    let reconvergeCalls = 0;
+    (
+      group.session as unknown as {
+        reconverge: () => Promise<unknown[]>;
+      }
+    ).reconverge = async () => {
+      reconvergeCalls++;
+      return [
+        {
+          kind: "stateInvalidated",
+          commitDigest: new Uint8Array(32),
+          forkEpoch: 1,
+          withdrawn: [withdrawnSelfRemoved],
+          disposition: { kind: "invalidated" },
+        },
+      ];
+    };
+
+    await group.reconverge();
+
+    expect(reconvergeCalls).toBe(1);
+    expect(await removedMarkerStore.getItem(idHex)).toBeFalsy();
+  });
+
+  /**
+   * CR-06, engine seam: `reconvergeFromHistory` must hand its results back
+   * rather than swallowing them. Uses a real two-tip history tree so the pass
+   * genuinely runs.
+   */
+  it("returns the results a tree-fed reconvergence pass produced instead of discarding them (CR-06)", async () => {
+    const { impl, ctx, adminPubkey, adminEpoch1, memberEpoch1 } =
+      await twoMemberEpoch1Group();
+
+    const engine = new MarmotGroupEngine<NostrEvent>({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    // Our own tip, one commit deep.
+    const sent = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (sent.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    engine.confirmPublished(sent.pending);
+
+    // A competing branch two commits deep, authored by the member, delivered
+    // through the ordinary ingest path so it lands in the history tree.
+    const sibA = await createCommit({
+      context: ctx,
+      state: memberEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const sibB = await createCommit({
+      context: ctx,
+      state: sibA.newState,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    await drain(
+      engine.ingest([
+        await createGroupEvent({
+          message: sibA.commit,
+          state: memberEpoch1,
+          ciphersuite: impl,
+        }),
+        await createGroupEvent({
+          message: sibB.commit,
+          state: sibA.newState,
+          ciphersuite: impl,
+        }),
+      ]),
+    );
+
+    // The contract that CR-06 restores: a resolved array, never `undefined`.
+    const results = await engine.reconvergeFromHistory();
+    expect(Array.isArray(results)).toBe(true);
+  });
+
   it("prunes the notification ledger below the retained anchor, so an old commit's notifications cannot be resurrected past the horizon", async () => {
     const { impl, ctx, adminEpoch1, memberEpoch1 } =
       await twoMemberEpoch1Group();

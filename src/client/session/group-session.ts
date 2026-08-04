@@ -373,10 +373,18 @@ export class GroupSession<
    * persists a resulting switch. Sources candidates from the history tree, so a
    * client that diverged onto a losing fork converges from disk without waiting
    * for the network to re-deliver the winning branch. Called on load.
+   *
+   * Returns the pass's results in the same shape {@link ingest} yields, so the
+   * caller can route them through the identical handler — in particular the
+   * `stateInvalidated` withdrawal that clears the removed-inactive marker
+   * (CONV-03, D-12). This layer used to swallow them (CR-06).
    */
-  async reconverge(): Promise<void> {
-    await this.#engine.reconvergeFromHistory();
+  async reconverge(): Promise<DispositionedIngestResult[]> {
+    const results = (await this.#engine.reconvergeFromHistory()).map(
+      mapEngineIngestResult,
+    );
     await this.save();
+    return results;
   }
 
   async destroyLocalState(): Promise<void> {

@@ -32,6 +32,11 @@ import { classifyLateCommit } from "../core/retained-history.js";
 import { withCapturedProposals } from "./admin-policy.js";
 import { contentDedupId } from "./message-dedup.js";
 import type { RetainedHistoryStore } from "./retained-store.js";
+import {
+  deriveStateNotifications,
+  groupWithdrawnNotificationsByCommit,
+  type StateNotification,
+} from "./state-notifications.js";
 import type { IngestResult, PeeledMessagePair } from "./types.js";
 import { framedContentType, framedEpoch } from "./wire-format.js";
 
@@ -54,6 +59,15 @@ export type AppliedForkResolution<TEnvelope> =
        */
       tipCommitMessage: MlsMessage | undefined;
       /**
+       * The {@link StateNotification}s derived from the winning branch's tip
+       * commit (D-10/D-11), computed and ledger-recorded by
+       * `#applyForkResolution` — the same shared rewind-apply path used by
+       * both pool-replay recovery and tree-fed re-convergence. `undefined`
+       * when the winner tip is the fork root itself (no chain applied,
+       * mirroring `tipCommitMessage`).
+       */
+      notifications: StateNotification[] | undefined;
+      /**
        * App payloads abandoned by the rewind, to report as `invalidated` (M7).
        * Each carries the fork node (`tag`/`epoch`) it had decrypted against so
        * the retraction names its losing branch.
@@ -65,6 +79,15 @@ export type AppliedForkResolution<TEnvelope> =
         tag: string;
         epoch: number;
       }[];
+      /**
+       * Notifications withdrawn because the commit(s) that produced them were
+       * superseded by this rewind (D-11, CONV-03). Flat — not yet grouped by
+       * producing commit digest; the caller groups via
+       * {@link groupWithdrawnNotificationsByCommit} before yielding
+       * `stateInvalidated` results, since a rewind may supersede more than one
+       * commit at once.
+       */
+      withdrawnNotifications: StateNotification[];
     }
   | { outcome: "superseded" | "skip" };
 
@@ -127,6 +150,16 @@ export interface IngestContext<TEnvelope> {
     envelope: TEnvelope,
     message: MlsMessage,
     payload: Uint8Array,
+  ): void;
+  /**
+   * Records the {@link StateNotification}s derived from an accepted commit,
+   * keyed by its `commitDigest` (D-10/D-11), so a later rewind that supersedes
+   * this commit can withdraw exactly these notifications.
+   */
+  recordStateNotifications(
+    digest: Uint8Array,
+    epoch: number,
+    notifications: StateNotification[],
   ): void;
   /** Drives the group to the terminal `Unrecoverable` lifecycle state. */
   toUnrecoverable(): void;
@@ -686,6 +719,18 @@ export async function* ingestEnvelopes<TEnvelope>(
 
         ctx.setState(result.newState);
 
+        // D-10/D-11: the commit's digest is computed once here and reused for
+        // both the notification attribution below and the `removed` branch's
+        // own attribution — never a second hashing path over the same bytes.
+        const acceptedCommitDigest = commitDigest(
+          encode(mlsMessageEncoder, message),
+        );
+        const notifications = deriveStateNotifications({
+          parentState,
+          resultingState: result.newState,
+          commitDigest: acceptedCommitDigest,
+        });
+
         // The commit removed *us* (an admin's Remove, or a peer committing our
         // own self_remove). State is now the `removedFromGroup` tombstone: no
         // secrets advanced, so nothing else in this batch can be decrypted and
@@ -697,32 +742,38 @@ export async function* ingestEnvelopes<TEnvelope>(
             envelopeLabel(envelope),
           );
           ctx.dedup.remember(message);
-          // D-10/D-12: attribute the selfRemoved notification to THIS commit's
-          // digest — the removing commit itself, reusing the same commitDigest
-          // computation the rest of this file uses (never a second hashing path).
+          // D-10/D-12: the derived list always contains a `selfRemoved` entry
+          // on this branch (parent was active, resulting state is the
+          // tombstone), alongside `epochAdvanced` and this member's own
+          // `memberRemoved` entry, for the same commit.
+          ctx.recordStateNotifications(
+            acceptedCommitDigest,
+            Number(result.newState.groupContext.epoch),
+            notifications,
+          );
           yield {
             kind: "removed",
             result,
             envelope,
             message,
-            notifications: [
-              {
-                kind: "selfRemoved",
-                commitDigest: commitDigest(encode(mlsMessageEncoder, message)),
-              },
-            ],
+            notifications,
           };
           return;
         }
 
         ctx.recordCommit(parentState, message, result.newState);
+        ctx.recordStateNotifications(
+          acceptedCommitDigest,
+          Number(result.newState.groupContext.epoch),
+          notifications,
+        );
         ctx.dedup.remember(message);
         log(
           "commit envelope:%s applied – new epoch:%d",
           envelopeLabel(envelope),
           ctx.getState().groupContext.epoch,
         );
-        yield { kind: "processed", result, envelope, message };
+        yield { kind: "processed", result, envelope, message, notifications };
       }
     } catch (error) {
       if (isPermanentDecryptFailure(error)) {
@@ -767,25 +818,19 @@ export async function* ingestEnvelopes<TEnvelope>(
         // `processed` (member-departure.md). The rewind's `invalidated`
         // retractions below are still reported — they are independent.
         if (ctx.getState().groupActiveState.kind === "removedFromGroup") {
-          // D-10/D-12: attribute the selfRemoved notification to the winning
-          // branch's OWN tip commit, not `rep.message` (which is merely the
-          // first forkPool entry that triggered this resolution) — the tip
-          // commit is the one that actually produced the tombstone.
+          // D-10/D-12: attribute the derived notifications (including
+          // `selfRemoved`) to the winning branch's OWN tip commit, not
+          // `rep.message` (which is merely the first forkPool entry that
+          // triggered this resolution) — the tip commit is the one that
+          // actually produced the tombstone. `resolution.notifications` is
+          // derived (and ledger-recorded) by `#applyForkResolution`, the same
+          // shared rewind-apply path the direct commit branch above uses.
           yield {
             kind: "removed",
             result: resolution.result,
             envelope: rep.envelope,
             message: rep.message,
-            notifications: resolution.tipCommitMessage
-              ? [
-                  {
-                    kind: "selfRemoved",
-                    commitDigest: commitDigest(
-                      encode(mlsMessageEncoder, resolution.tipCommitMessage),
-                    ),
-                  },
-                ]
-              : undefined,
+            notifications: resolution.notifications,
           };
         } else {
           yield {
@@ -793,6 +838,7 @@ export async function* ingestEnvelopes<TEnvelope>(
             result: resolution.result,
             envelope: rep.envelope,
             message: rep.message,
+            notifications: resolution.notifications,
           };
         }
         for (let i = 1; i < retainedPool.length; i++)
@@ -802,6 +848,20 @@ export async function* ingestEnvelopes<TEnvelope>(
             message: retainedPool[i].message,
             reason: "past-epoch",
           };
+        // D-11: withdrawn state notifications are yielded BEFORE the
+        // app-payload `invalidated` retractions below, so the two retraction
+        // streams have a deterministic relative order within this drainable
+        // generator.
+        for (const group of groupWithdrawnNotificationsByCommit(
+          resolution.withdrawnNotifications,
+        )) {
+          yield {
+            kind: "stateInvalidated",
+            commitDigest: group.commitDigest,
+            forkEpoch: minForkEpoch,
+            withdrawn: group.withdrawn,
+          };
+        }
         // App payloads delivered on the now-abandoned branch are retracted (M7).
         for (const inv of resolution.invalidated) {
           log(

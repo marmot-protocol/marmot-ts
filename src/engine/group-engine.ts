@@ -11,12 +11,14 @@ import {
   CreateCommitOptions,
   createProposal,
   defaultProposalTypes,
+  encode,
   getCredentialFromLeafIndex,
   type IncomingMessageCallback,
   isSelfRemoveProposal,
   acceptAll,
   type LeafIndex,
   type MlsMessage,
+  mlsMessageEncoder,
   nodeTypes,
   processMessage,
   type ProcessMessageResult,
@@ -44,6 +46,7 @@ import {
 import {
   type AppWitness,
   type BranchCandidate,
+  commitDigest,
   type ConvergencePolicy,
   DEFAULT_CONVERGENCE_POLICY,
   isWitnessEligible,
@@ -86,6 +89,11 @@ import { GroupHistoryTree } from "./history-tree.js";
 import { buildTreeBranchSet, type TreeBranchSet } from "./tree-convergence.js";
 import { IngestionPool, type IngestionPoolOptions } from "./ingestion-pool.js";
 import { contentDedupId } from "./message-dedup.js";
+import {
+  deriveStateNotifications,
+  groupWithdrawnNotificationsByCommit,
+  StateNotificationLedger,
+} from "./state-notifications.js";
 import {
   type AppliedForkResolution,
   type IngestContext,
@@ -238,6 +246,12 @@ export class MarmotGroupEngine<TEnvelope> {
   readonly #forkRecovery: ForkRecovery<TEnvelope>;
   /** App payloads delivered eagerly, retracted as `invalidated` on rewind (M7). */
   readonly #delivered = new DeliveredPayloadLedger<TEnvelope>();
+  /**
+   * Group-state-change notifications derived from accepted commits, keyed by
+   * commit digest, withdrawn on rewind supersession (D-10/D-11, CONV-03).
+   * Structural sibling of {@link #delivered}.
+   */
+  readonly #stateNotifications = new StateNotificationLedger();
 
   /**
    * Content ids of inbound messages already terminally processed — replay dedup
@@ -1451,6 +1465,11 @@ export class MarmotGroupEngine<TEnvelope> {
         const anchor = this.#retained.anchorEpoch();
         if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
       },
+      recordStateNotifications: (digest, epoch, notifications) => {
+        this.#stateNotifications.record(digest, epoch, notifications);
+        const anchor = this.#retained.anchorEpoch();
+        if (anchor !== undefined) this.#stateNotifications.pruneBelow(anchor);
+      },
       toUnrecoverable: () => this.#toUnrecoverable(),
       dedup: {
         classify: (message) => {
@@ -1568,6 +1587,21 @@ export class MarmotGroupEngine<TEnvelope> {
       canonicalTags,
     );
 
+    // D-11: the canonical commit digests for THIS rewind — every digest on
+    // the winning chain — so a notification recorded for a commit that is
+    // NOT among them (i.e. superseded) gets withdrawn. Computed from
+    // `resolution.winnerChain` link messages, the same bytes `commitDigest`
+    // already hashes elsewhere in this file (`fork-recovery.ts`).
+    const canonicalDigests = new Set<string>();
+    for (const link of resolution.winnerChain)
+      canonicalDigests.add(
+        bytesToHex(commitDigest(encode(mlsMessageEncoder, link.message))),
+      );
+    const withdrawnNotifications = this.#stateNotifications.invalidatedByRewind(
+      forkEpoch,
+      canonicalDigests,
+    );
+
     this.#emitAudit({
       type: "convergence_decision",
       current_tip_epoch: Number(this.state.groupContext.epoch),
@@ -1597,8 +1631,38 @@ export class MarmotGroupEngine<TEnvelope> {
     // The canonical path moved; let held fork messages re-decrypt on it.
     this.#pool.resetTried();
 
+    // D-10/D-11: derive and ledger-record the notifications produced by the
+    // winning chain's OWN tip commit — so a *later* rewind that supersedes
+    // THIS commit (e.g. a subsequent tree-fed switch, `#reconvergeFromTree`)
+    // can withdraw exactly these, closing the loop for a commit that lands
+    // via a rewind rather than the direct in-order ingest branch (`ingest.ts`
+    // records notifications there; this is the rewind-landed counterpart).
+    // `undefined` only when the winner tip is the fork root itself (no chain
+    // applied), mirroring `tipCommitMessage`.
+    const tipLink = resolution.winnerChain.at(-1);
+    let tipNotifications:
+      ReturnType<typeof deriveStateNotifications> | undefined;
+    if (tipLink) {
+      const tipDigest = commitDigest(
+        encode(mlsMessageEncoder, tipLink.message),
+      );
+      tipNotifications = deriveStateNotifications({
+        parentState: tipLink.parent,
+        resultingState: resolution.winnerTip,
+        commitDigest: tipDigest,
+      });
+      this.#stateNotifications.record(
+        tipDigest,
+        Number(resolution.winnerTip.groupContext.epoch),
+        tipNotifications,
+      );
+    }
+
     const anchor = this.#retained.anchorEpoch();
-    if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
+    if (anchor !== undefined) {
+      this.#delivered.pruneBelow(anchor);
+      this.#stateNotifications.pruneBelow(anchor);
+    }
 
     return {
       outcome: "recovered",
@@ -1607,6 +1671,8 @@ export class MarmotGroupEngine<TEnvelope> {
       // a `selfRemoved` notification to a rewind-landed removal digests the
       // commit that actually produced it, not an arbitrary forkPool entry.
       tipCommitMessage: resolution.winnerChain.at(-1)?.message,
+      notifications: tipNotifications,
+      withdrawnNotifications,
       invalidated: invalidated.map(
         ({ envelope, message, payload, stateTag, epoch }) => ({
           envelope,
@@ -1665,7 +1731,21 @@ export class MarmotGroupEngine<TEnvelope> {
 
     const forkEpoch = this.#tree.epochOf(set.rootTag) ?? winner.forkEpoch;
     const applied = this.#applyForkResolution(forkEpoch, resolution);
-    if (applied.outcome === "recovered")
+    if (applied.outcome === "recovered") {
+      // D-11: withdrawn state notifications are yielded BEFORE the
+      // app-payload `invalidated` retractions below, matching the pool-replay
+      // rewind site (`ingest.ts`) so the two retraction streams have a
+      // deterministic relative order regardless of which rewind path fired.
+      for (const group of groupWithdrawnNotificationsByCommit(
+        applied.withdrawnNotifications,
+      )) {
+        yield {
+          kind: "stateInvalidated",
+          commitDigest: group.commitDigest,
+          forkEpoch,
+          withdrawn: group.withdrawn,
+        };
+      }
       for (const inv of applied.invalidated)
         yield {
           kind: "invalidated",
@@ -1675,6 +1755,7 @@ export class MarmotGroupEngine<TEnvelope> {
           tag: inv.tag,
           epoch: inv.epoch,
         };
+    }
   }
 
   /**

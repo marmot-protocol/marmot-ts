@@ -20,6 +20,7 @@ import {
 
 import { verifyApplicationRumorAuthorship } from "../core/application-rumor.js";
 import { marmotAuthService } from "../core/auth-service.js";
+import { validateCommitLegality } from "../core/components/integrity.js";
 import {
   type CommitOrderingKey,
   commitDigest,
@@ -28,6 +29,7 @@ import {
 import { getCredentialPubkey } from "../core/credential.js";
 import { type DeferredReason, deferredReasons } from "../core/inbound.js";
 import { classifyLateCommit } from "../core/retained-history.js";
+import { withCapturedProposals } from "./admin-policy.js";
 import { contentDedupId } from "./message-dedup.js";
 import type { RetainedHistoryStore } from "./retained-store.js";
 import type { IngestResult, PeeledMessagePair } from "./types.js";
@@ -534,7 +536,7 @@ export async function* ingestEnvelopes<TEnvelope>(
 
   commits = sortPeeledCommits(commits);
 
-  const adminCallback = ctx.createAdminCallback();
+  const capture = withCapturedProposals(ctx.createAdminCallback());
 
   const forkPool: {
     envelope: TEnvelope;
@@ -593,6 +595,10 @@ export async function* ingestEnvelopes<TEnvelope>(
     );
 
     try {
+      // Clear any proposals left buffered from a prior message in this loop
+      // before processing this one (withCapturedProposals contract).
+      capture.take();
+
       const result = await processMessage({
         context: {
           cipherSuite: ctx.ciphersuite,
@@ -601,8 +607,10 @@ export async function* ingestEnvelopes<TEnvelope>(
         },
         state: ctx.getState(),
         message,
-        callback: adminCallback,
+        callback: capture.callback,
       });
+
+      const capturedProposals = capture.take();
 
       if (result.kind === "newState") {
         if (result.actionTaken === "reject") {
@@ -611,11 +619,45 @@ export async function* ingestEnvelopes<TEnvelope>(
             envelopeLabel(envelope),
           );
           ctx.dedup.remember(message);
-          yield { kind: "rejected", result, envelope, message };
+          yield {
+            kind: "rejected",
+            result,
+            envelope,
+            message,
+            reason: "admin-policy",
+          };
           continue;
         }
 
         const parentState = ctx.getState();
+
+        // WIRE-03/CONV-01 (D-03): validate the commit's resulting GroupContext
+        // AFTER processMessage returns (never inside the callback — Pitfall 1),
+        // BEFORE canonical state advances. A violating commit is rejected here
+        // and never reaches ctx.setState/ctx.recordCommit.
+        const violation = validateCommitLegality({
+          parentState,
+          resultingState: result.newState,
+          proposals: capturedProposals,
+        });
+        if (violation) {
+          log(
+            "commit envelope:%s rejected reason:%s detail:%s",
+            envelopeLabel(envelope),
+            violation.reason,
+            violation.detail,
+          );
+          ctx.dedup.remember(message);
+          yield {
+            kind: "rejected",
+            result,
+            envelope,
+            message,
+            reason: violation.reason,
+          };
+          continue;
+        }
+
         ctx.setState(result.newState);
 
         // The commit removed *us* (an admin's Remove, or a peer committing our

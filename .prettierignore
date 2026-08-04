@@ -13,3 +13,7 @@ pnpm-lock.yaml
 
 .agents/
 .claude/
+
+# GSD planning artifacts. Prettier reformats markdown emphasis and corrupts
+# shell commands embedded in plan docs (e.g. __tests__ -> **tests**).
+.planning/

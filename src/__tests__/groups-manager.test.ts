@@ -193,8 +193,16 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
 
     await manager.connect(group.id);
 
-    expect(rejections).toHaveLength(1);
-    expect(rejections[0][2]).toBe("invalid-signature");
+    // T-03-23 (the folded `groupsmanager-rejectedevents-dos` todo): the drain
+    // no longer caches rejected event objects for the connection lifetime, so
+    // a redelivery of this exact malformed event (e.g. backfill + subscribe
+    // both surfacing it) may now emit `rejected` more than once — informational,
+    // not a protocol-safety regression. Assert at least one rejection fired,
+    // with every rejection carrying the expected reason.
+    expect(rejections.length).toBeGreaterThanOrEqual(1);
+    expect(
+      rejections.every(([, , reason]) => reason === "invalid-signature"),
+    ).toBe(true);
     expect(ingestSpy).not.toHaveBeenCalled();
   });
 
@@ -232,8 +240,12 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
 
     await manager.connect(group.id);
 
-    expect(rejections).toHaveLength(1);
-    expect(rejections[0][2]).toBe("tag-cardinality");
+    // Same T-03-23 relaxation as the invalid-signature test above: at least
+    // one rejection, every rejection carrying the expected reason.
+    expect(rejections.length).toBeGreaterThanOrEqual(1);
+    expect(
+      rejections.every(([, , reason]) => reason === "tag-cardinality"),
+    ).toBe(true);
     expect(ingestSpy).not.toHaveBeenCalled();
   });
 
@@ -295,9 +307,18 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
 
     await manager.connect(group.id);
 
-    // The forgery is rejected and does not reach ingest.
-    expect(rejections).toHaveLength(1);
-    expect(rejections[0][2]).toBe("invalid-signature");
+    // The forgery is rejected and does not reach ingest. MockNetwork's
+    // `subscription()` replays every already-matching event on subscribe, so
+    // `connect()`'s backfill (`request`) and its immediately-following
+    // `subscription().subscribe()` both deliver this SAME corrupted object —
+    // T-03-23 removed the object-identity rejection cache that used to
+    // collapse that redelivery to one `rejected` emit, so two are now
+    // expected (informational, not a protocol-safety regression; see the
+    // `seen`/`rejectedEvents` comment in `#connectGroup`).
+    expect(rejections.length).toBeGreaterThanOrEqual(1);
+    expect(
+      rejections.every(([, , reason]) => reason === "invalid-signature"),
+    ).toBe(true);
     expect(ingestSpy).not.toHaveBeenCalled();
 
     // The genuine, validly-signed event (same id) now arrives via the live

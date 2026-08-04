@@ -485,18 +485,17 @@ export class GroupsManager<
     // Only ids of TRUSTED (verified + `h`-cardinal) events live here (SEC-01/
     // WR-01): an unverified or malformed event's id must never occupy this
     // dedup slot, or a corrupted same-id forgery could poison it and censor
-    // the genuine, validly-signed event arriving later.
+    // the genuine, validly-signed event arriving later. `seen.add` MUST stay
+    // strictly after both trust gates below — never add a rejected event's id
+    // here (T-03-24). Accepted consequence: a backfill-then-subscription
+    // redelivery of the exact same malformed event now re-emits `rejected` on
+    // every delivery, which is informational rather than a protocol-safety
+    // concern, and matches the sibling 1059 ingest boundary's shape
+    // (`invite-manager.ts`), which has no per-connection rejection-object
+    // cache either (T-03-23, the folded `groupsmanager-rejectedevents-dos` todo).
     const seen = new Set<string>();
-    // Tracks event OBJECTS already rejected, so a relay/backfill+subscribe
-    // redelivery of the exact same malformed event (a legitimate resend, not
-    // a new forgery attempt) doesn't re-emit a duplicate `rejected` — while a
-    // genuinely different event object carrying the same id (the WR-01
-    // scenario) is still evaluated fresh.
-    const rejectedEvents = new Set<NostrEvent>();
     const drain = async (events: NostrEvent[]): Promise<void> => {
-      const fresh = events.filter(
-        (event) => !seen.has(event.id) && !rejectedEvents.has(event),
-      );
+      const fresh = events.filter((event) => !seen.has(event.id));
       if (!fresh.length) return;
 
       // Trust boundary (SEC-01/WIRE-02): verify signature and `h` tag
@@ -506,12 +505,10 @@ export class GroupsManager<
       const trusted: NostrEvent[] = [];
       for (const event of fresh) {
         if (!safeVerifyEvent(this.#verifyEvent, event)) {
-          rejectedEvents.add(event);
           this.emit("rejected", group.id, event, "invalid-signature");
           continue;
         }
         if (getSingletonTagValue(event, "h") === undefined) {
-          rejectedEvents.add(event);
           this.emit("rejected", group.id, event, "tag-cardinality");
           continue;
         }

@@ -10,6 +10,7 @@ import type {
 
 import type { MarmotGroupView } from "../core/client-state.js";
 import type { DeferredReason, Disposition } from "../core/inbound.js";
+import type { StateNotification } from "./state-notifications.js";
 
 /** A decrypted transport envelope paired with its MLS message. */
 export type PeeledMessagePair<TEnvelope> = {
@@ -87,6 +88,12 @@ export type ProcessedIngestResult<TEnvelope> = {
   result: ProcessMessageResult;
   envelope: TEnvelope;
   message: MlsMessage;
+  /**
+   * Commit-digest-attributed group-state notifications derived from this
+   * commit (D-10/D-11, `convergence.md` "Applying the selected branch").
+   * Optional — populated by the seam that wires notification derivation.
+   */
+  notifications?: StateNotification[];
 };
 
 /** A commit rejected by the admin-verification callback. */
@@ -95,13 +102,27 @@ export type RejectedIngestResult<TEnvelope> = {
   result: ProcessMessageResult;
   envelope: TEnvelope;
   message: MlsMessage;
+  /**
+   * Additive, extensible rejection reason (D-03). The protocol-visible
+   * category stays `authorization_failed` regardless of which reason fires —
+   * `foundation/errors.md` requires pre-convergence rejections be described
+   * "by category alone".
+   */
+  reason?: "admin-policy" | "component-integrity" | "admin-leaf-coupling";
 };
 
 /** An envelope skipped without processing. */
 export type SkippedIngestResult<TEnvelope> = {
   kind: "skipped";
   envelope: TEnvelope;
-  message: MlsMessage;
+  /**
+   * Absent for exactly one reason — `"self-evicted"` — because input for a
+   * group this client has been removed from is classified by its group
+   * before any peel or decrypt (`member-departure.md`: such input "need not
+   * be decrypted or authenticated"). Every other skip reason still populates
+   * this (D-13).
+   */
+  message?: MlsMessage;
   reason:
     | "past-epoch"
     | "wrong-wireformat"
@@ -109,7 +130,8 @@ export type SkippedIngestResult<TEnvelope> = {
     | "duplicate"
     | "beyond-anchor"
     | "missing-retained-anchor"
-    | "invalid-app-payload";
+    | "invalid-app-payload"
+    | "self-evicted";
 };
 
 /** An envelope that could not be decrypted or processed after all retry attempts. */
@@ -201,6 +223,30 @@ export type RemovedIngestResult<TEnvelope> = {
   result: ProcessMessageResult;
   envelope: TEnvelope;
   message: MlsMessage;
+  /**
+   * Commit-digest-attributed group-state notifications derived from this
+   * commit (D-10/D-11/D-12) — in particular the `selfRemoved` notification
+   * attributed to the very commit that removed us.
+   */
+  notifications?: StateNotification[];
+};
+
+/**
+ * A rewind superseded a previously-accepted commit and withdrew the
+ * notifications derived from it (D-11, `convergence.md` "Applying the
+ * selected branch"). Unlike every other {@link IngestResult} variant, this
+ * carries NO `envelope` and NO `message`: a rewind supersedes a commit, and
+ * there is no triggering transport envelope to attribute the withdrawal to.
+ * It is generic-free — it is not parameterized on `TEnvelope`.
+ */
+export type StateInvalidatedIngestResult = {
+  kind: "stateInvalidated";
+  /** Digest of the superseded commit. */
+  commitDigest: Uint8Array;
+  /** Epoch the rewind selected as canonical. */
+  forkEpoch: number;
+  /** Notifications withdrawn because the commit that produced them was superseded. */
+  withdrawn: StateNotification[];
 };
 
 /** Result from ingesting group transport envelopes. */
@@ -212,7 +258,8 @@ export type IngestResult<TEnvelope> =
   | InvalidatedIngestResult<TEnvelope>
   | AutoCommitIngestResult<TEnvelope>
   | RemovedIngestResult<TEnvelope>
-  | UnreadableIngestResult<TEnvelope>;
+  | UnreadableIngestResult<TEnvelope>
+  | StateInvalidatedIngestResult;
 
 /** An {@link IngestResult} carrying its protocol-visible {@link Disposition}. */
 export type DispositionedIngestResult<TEnvelope> = IngestResult<TEnvelope> & {

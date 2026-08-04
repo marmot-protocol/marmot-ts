@@ -89,6 +89,8 @@ export const convergenceOutcomeToCategory = {
   BeyondAnchor: inputCategories.missingHistory,
   /** The required retained anchor is missing — needs history we dropped. */
   MissingRetainedAnchor: inputCategories.missingHistory,
+  /** Input for a group this client has been removed from — classified by its group, never decrypted. */
+  SelfEvicted: inputCategories.staleEpoch,
 } as const satisfies Record<string, InputCategory>;
 
 /** A convergence outcome name (`PascalCase`). */

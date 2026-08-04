@@ -19,6 +19,11 @@ export function ingestResultDisposition<TEnvelope>(
       return disposition.deferred(result.reason);
     case "invalidated":
       return disposition.invalidated();
+    case "stateInvalidated":
+      // A withdrawn group-state notification is the state-side counterpart of
+      // an invalidated app payload (convergence.md calls withdrawal the
+      // counterpart of app-payload invalidation).
+      return disposition.invalidated();
     case "autoCommit":
       // A locally-staged self_remove-only commit (B6) — an accepted local action,
       // not an inbound message disposition.
@@ -41,6 +46,8 @@ export function ingestResultDisposition<TEnvelope>(
         case "beyond-anchor":
         case "missing-retained-anchor":
           return disposition.stale(inputCategories.missingHistory);
+        case "self-evicted":
+          return disposition.stale(inputCategories.staleEpoch);
       }
     // eslint-disable-next-line no-fallthrough
     case "unreadable":

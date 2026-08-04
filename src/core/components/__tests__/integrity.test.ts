@@ -431,4 +431,41 @@ describe("validateCommitLegality", () => {
     });
     expect(violation).toBeUndefined();
   });
+
+  it("returns a typed violation instead of throwing when the PARENT app_components bytes do not decode", () => {
+    // A prior commit can legally land arbitrary bytes on 0x0001 (rule 3 backs
+    // the change with that commit's own op; rule 2 only checks presence). From
+    // the next commit onward every seam decodes those bytes — a duplicate id
+    // makes `decodeComponentsList` throw. The adapter is documented
+    // non-throwing (D-01/D-02): the convergence/replay seams would otherwise
+    // see the throw escape the ingest generator and skip persistence.
+    const duplicateIds = new BinaryWriter()
+      .vector([
+        new BinaryWriter().uint16(GROUP_PROFILE_COMPONENT_ID).build(),
+        new BinaryWriter().uint16(GROUP_PROFILE_COMPONENT_ID).build(),
+      ])
+      .build();
+
+    const parentState = fakeClientState(
+      dict(componentEntry(APP_COMPONENTS_COMPONENT_ID, duplicateIds)),
+      [ADMIN_PUBKEY],
+    );
+    const resultingState = fakeClientState(
+      dict(componentEntry(APP_COMPONENTS_COMPONENT_ID, duplicateIds)),
+      [ADMIN_PUBKEY],
+    );
+
+    let violation: ReturnType<typeof validateCommitLegality>;
+    expect(() => {
+      violation = validateCommitLegality({
+        parentState,
+        resultingState,
+        proposals: [],
+      });
+    }).not.toThrow();
+    expect(violation!).toEqual({
+      reason: "component-integrity",
+      detail: "current app_components component did not decode",
+    });
+  });
 });

@@ -275,8 +275,28 @@ export function validateCommitLegality(args: {
   proposals: readonly Proposal[];
 }): CommitIntegrityViolation | undefined {
   const appDataUpdateOps = collectAppDataUpdateOps(args.proposals);
-  const requiredIds =
-    getAppComponents(args.parentState.groupContext.extensions) ?? [];
+
+  // The `app_components` (0x0001) bytes are attacker-influenceable: an admin
+  // can land an AppDataUpdate writing arbitrary bytes to that id (Rule 3
+  // accepts it because the change IS backed by that commit's own op, and
+  // Rule 2 only checks presence, never decodability). From the next commit
+  // onward every seam decodes those bytes here, and `decodeComponentsList`
+  // throws on malformed input or a duplicate id. Honour this adapter's
+  // documented non-throwing contract (D-01/D-02) by converting that into a
+  // typed violation — otherwise the throw escapes the convergence/replay
+  // seams (`fork-recovery.ts`, `group-engine.ts` tree re-convergence), which
+  // do not wrap this call, and aborts the ingest generator before the caller
+  // can persist state.
+  let requiredIds: readonly AppComponentId[];
+  try {
+    requiredIds =
+      getAppComponents(args.parentState.groupContext.extensions) ?? [];
+  } catch {
+    return {
+      reason: "component-integrity",
+      detail: "current app_components component did not decode",
+    };
+  }
 
   const integrityViolation = validateAppComponentIntegrity({
     currentExtensions: args.parentState.groupContext.extensions,

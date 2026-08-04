@@ -241,11 +241,23 @@ export class ForkRecovery<TEnvelope> {
           // previously-accepted violating commit becomes unselectable after
           // upgrade (worst case the group reaches Unrecoverable); such a group
           // is already forked from any conformant peer.
-          const violation = validateCommitLegality({
-            parentState: state,
-            resultingState: next.newState,
-            proposals: capturedProposals,
-          });
+          // Defence in depth: `validateCommitLegality` is documented
+          // non-throwing (D-01/D-02) and converts a malformed-component decode
+          // into a typed violation, but this seam sits inside an async
+          // generator whose caller (`ingest.ts` → `GroupSession.ingest`) only
+          // reaches `save()` after a clean drain. A throw escaping here would
+          // abandon state already advanced in the batch, so treat any
+          // unexpected throw exactly like a violation: no candidate edge.
+          let violation: ReturnType<typeof validateCommitLegality>;
+          try {
+            violation = validateCommitLegality({
+              parentState: state,
+              resultingState: next.newState,
+              proposals: capturedProposals,
+            });
+          } catch {
+            continue;
+          }
           if (violation) continue;
         }
         const tag = bytesToHex(next.newState.confirmationTag);

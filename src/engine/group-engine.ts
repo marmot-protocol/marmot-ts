@@ -1870,11 +1870,27 @@ export class MarmotGroupEngine<TEnvelope> {
         return undefined;
       }
 
-      const violation = validateCommitLegality({
-        parentState: link.parent,
-        resultingState: link.child,
-        proposals: capturedProposals,
-      });
+      // Defence in depth (see the matching guard in `fork-recovery.ts`):
+      // `validateCommitLegality` is documented non-throwing, but this seam runs
+      // inside the ingest generator, and a throw escaping here would abandon
+      // state already advanced in the batch before `GroupSession.ingest` can
+      // persist it. Fail closed on an unexpected throw, matching this method's
+      // no-grandfathering policy for every other unverifiable link.
+      let violation: ReturnType<typeof validateCommitLegality>;
+      try {
+        violation = validateCommitLegality({
+          parentState: link.parent,
+          resultingState: link.child,
+          proposals: capturedProposals,
+        });
+      } catch (error) {
+        this.#log()(
+          "tree-fed re-convergence: abandoning winner chain — link %s threw during commit legality: %o",
+          childTag,
+          error,
+        );
+        return undefined;
+      }
       if (violation) {
         this.#log()(
           "tree-fed re-convergence: abandoning winner chain — link %s failed commit legality reason:%s detail:%s",

@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 03
 current_phase_name: commit-integrity-convergence-parity
 status: executing
-stopped_at: Completed 03-03-PLAN.md
-last_updated: "2026-08-04T13:26:56.386Z"
+stopped_at: Completed 03-04-PLAN.md
+last_updated: "2026-08-04T13:47:30.840Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 13
-  completed_plans: 9
+  completed_plans: 10
   percent: 40
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Status: Ready to execute
 Last activity: 2026-08-04 — Phase 03 execution started
 
@@ -65,6 +65,7 @@ _Updated after each plan completion_
 | Phase 03 P01 | 25min | 3 tasks | 3 files |
 | Phase 03 P02 | 12min | 3 tasks | 8 files |
 | Phase 03 P03 | 50min | 3 tasks | 2 files |
+| Phase 03 P04 | 45min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -96,6 +97,10 @@ Recent decisions affecting current work:
 - [Phase ?]: group-engine.ts's #emitIngestOutcome (audit emission) guards on stateInvalidated and returns early rather than fabricating an audit msg_id from a non-existent envelope; audit wiring for this variant is deferred to a later seam-wiring plan
 - [Phase 03]: CONV-04 verify-first found Assumption A1 falsified for D-16 property 1 (ForkRecovery could not replay a device's own already-applied commit); fixed narrowly by reusing RetainedHistoryStore's already-known resulting state instead of replaying via processMessage, without porting MDK's PrevalidatedOwnCommits stamping machinery
 - [Phase 03]: tree-convergence.ts's buildTreeBranchSet needed no change for CONV-04 -- it is structural (reads already-recorded commitDigest/epoch metadata) and never replays via processMessage, so it never shared the own-commit-reprocessing bug
+- [Phase ?]: [Phase 03-04]: withCapturedProposals is a pure decorator around IncomingMessageCallback; createAdminCommitPolicyCallback body is byte-for-byte unchanged (verified via git diff --unified=0)
+- [Phase ?]: [Phase 03-04]: Both ingest.ts and fork-recovery.ts call validateCommitLegality directly with (parentState, resultingState, proposals) rather than re-deriving requiredIds/resultingMemberAccounts locally, so neither seam can drift from the shared adapter
+- [Phase ?]: [Phase 03-04]: fork-recovery.ts's WIRE-03/CONV-01 gate applies only to the processMessage replay branch, not the knownNextStates (CONV-04) own-commit branch, since those commits already passed a legality gate the first time they were applied
+- [Phase ?]: [Phase 03-04]: Did not mark WIRE-03/CONV-01 complete in REQUIREMENTS.md -- the send seam (plan 03-05) is the third and final seam, per explicit instruction
 
 ### Pending Todos
 
@@ -119,7 +124,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-04T13:26:56.378Z
-Stopped at: Completed 03-03-PLAN.md
+Last session: 2026-08-04T13:47:30.833Z
+Stopped at: Completed 03-04-PLAN.md
 Resume file:
 None

@@ -17,30 +17,40 @@
  * VERIFY-FIRST VERDICT (recorded in full in 03-03-SUMMARY.md "CONV-04
  * verdict"): Assumption A1 — "marmot-ts needs no MDK-style own-commit
  * protection because `processMessage` is a pure function with no OpenMLS-style
- * reprocessing restriction" — DOES NOT HOLD for property 1. Reading confirmed
- * the *recording* path is single and authorship-blind (own commits via
- * `MarmotGroupEngine.confirmPublished` -> `#recordCommitNode`; inbound commits
- * via `IngestContext.recordCommit` -> the same `#recordCommitNode`), and
- * property 2 (dual-ordering) does hold — but the *replay* path
- * (`ForkRecovery#buildBranches`, called whenever a same-epoch sibling forces a
- * candidate rebuild) calls `processMessage(root, ownCommitMessage, callback)`
- * to reconstruct our own branch, and ts-mls throws
+ * reprocessing restriction" — DID NOT HOLD AS STATED for property 1, on first
+ * run of these tests. Reading confirmed the *recording* path is single and
+ * authorship-blind (own commits via `MarmotGroupEngine.confirmPublished` ->
+ * `#recordCommitNode`; inbound commits via `IngestContext.recordCommit` ->
+ * the same `#recordCommitNode`), and property 2 (dual-ordering) held outright
+ * — but the *replay* path (`ForkRecovery#buildBranches`, exercised whenever a
+ * same-epoch sibling forces a candidate rebuild) called
+ * `processMessage(root, ownCommitMessage, callback)` to reconstruct our own
+ * branch, and ts-mls threw
  * `InternalError("No overlap between provided private keys and update path")`
- * — because a commit's `UpdatePath` never encrypts a path secret to the
- * committer's own leaf (RFC 9420 — the committer already knows those secrets
- * plaintext), so a receiver whose leaf IS the committer's leaf can never find
- * a decryptable ciphertext for it. `ForkRecovery#buildBranches`'s `explore()`
- * catches that throw and silently drops the candidate (`catch { continue }`),
- * so **our own branch can never be rebuilt once any same-epoch sibling
- * arrives — the sibling always wins, regardless of the deterministic ordering
- * rule.** This is precisely the constraint MDK's `PrevalidatedOwnCommits`
- * exists to work around in OpenMLS; ts-mls turns out to share it. Per this
- * plan's Task 3 gate, building any roll-forward/stamping mechanism to fix this
- * needs a maintainer decision, not an improvisation — so no production code in
- * `src/engine/` or `src/core/` changed as part of this plan. The first test
- * below is therefore an intentionally, honestly FAILING assertion: it states
- * the spec-required property, and the failure is the verify-first finding
- * itself, not an authoring mistake.
+ * — a commit's `UpdatePath` never encrypts a path secret to the committer's
+ * own leaf (RFC 9420 — the committer already knows those secrets plaintext),
+ * so a receiver whose leaf IS the committer's leaf can never find a
+ * decryptable ciphertext for it. `explore()` caught that throw and silently
+ * dropped the candidate, so our own branch could never be rebuilt once any
+ * same-epoch sibling arrived — the sibling won unconditionally, independent
+ * of the deterministic ordering rule. This is precisely the constraint MDK's
+ * `PrevalidatedOwnCommits` exists to work around in OpenMLS; ts-mls turned
+ * out to share it for this one replay path (the tree-fed reconvergence path,
+ * `tree-convergence.ts`'s `buildTreeBranchSet`, is unaffected — it sources
+ * candidates from already-recorded structural metadata, never replays).
+ *
+ * The fix landed is deliberately narrow — NOT a port of MDK's
+ * `PrevalidatedOwnCommits`/committer-priority/consumed-proposal-ref stamping
+ * machinery. `RetainedHistoryStore.record()` already stores the exact
+ * resulting state for every applied commit on our canonical path (own or
+ * inbound), so `ForkRecovery#resolveFork` now looks up that already-known
+ * state for each of `ours` (by commit digest) and hands `#buildBranches` a
+ * `knownNextStates` map; `explore()` uses that state directly instead of
+ * calling `processMessage` for exactly those commits, and falls back to the
+ * ordinary replay path for everything else (peer commits, unknown commits).
+ * No stamping, no committer bookkeeping, no change to `tree-convergence.ts`
+ * or `core/convergence.ts` — see `src/engine/fork-recovery.ts`. All three
+ * tests below pass with this fix in place.
  */
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
@@ -260,12 +270,13 @@ async function selfUpdateCommit(
 const MAX_DIGEST_SEARCH_ATTEMPTS = 25;
 
 describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ordering", () => {
-  // KNOWN FAILING (verify-first finding, see file header + 03-03-SUMMARY.md):
-  // ForkRecovery#buildBranches cannot replay our own already-applied commit
-  // from the retained root (ts-mls throws reprocessing a self-authored
-  // UpdatePath), so this branch never gets rebuilt and the sibling wins
-  // unconditionally — even though the ordering premise below (asserted
-  // explicitly, before the outcome) proves our commit's digest should win.
+  // This is the property that first FAILED (see file header): before the
+  // `knownNextStates` fix in `fork-recovery.ts`, `ForkRecovery#buildBranches`
+  // could not replay our own already-applied commit from the retained root,
+  // so this branch never got rebuilt and the sibling won unconditionally —
+  // even though the ordering premise below (asserted explicitly, before the
+  // outcome) proves our commit's digest should win. It passes now that
+  // `resolveFork` supplies the already-known resulting state for `ours`.
   it("keeps a device's own published+confirmed commit as the live tip when a losing same-epoch sibling arrives", async () => {
     const { impl, ctx, adminPubkey, adminEpoch1, memberEpoch1 } =
       await twoMemberEpoch1Group();
@@ -325,14 +336,15 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
     expect(bytesToHex(engine.state.confirmationTag)).toBe(ownConfirmationTag);
   });
 
-  // NOTE: this test's assertions hold, but NOT for the reason the name
-  // suggests — see the failing test above and the file header. Our own
-  // branch is never actually rebuilt as a competing candidate (it throws and
-  // is dropped inside `ForkRecovery#buildBranches`), so the sibling is
-  // adopted unconditionally, independent of the digest search below. This
-  // test alone is therefore necessary but not sufficient evidence for
-  // materializability; read together with the failing test above, the pair
-  // proves the sibling always wins, which is the actual (divergent) finding.
+  // NOTE: before the `knownNextStates` fix, this test's assertions held for
+  // the WRONG reason — our own branch could never actually be rebuilt as a
+  // competing candidate (it threw and was dropped inside
+  // `ForkRecovery#buildBranches`), so the sibling was adopted unconditionally,
+  // independent of the digest search below, and this test alone could not
+  // distinguish "sibling wins on the merits" from "our branch never competed
+  // at all". Read together with the test above (which used to fail), the
+  // pair is what proved the divergence. Now that our own branch is a genuine
+  // candidate, this test's pass is meaningful on its own terms too.
   it("materializes its own confirmed commit as a convergence candidate when a winning same-epoch sibling arrives", async () => {
     const { impl, ctx, adminPubkey, adminEpoch1, memberEpoch1 } =
       await twoMemberEpoch1Group();

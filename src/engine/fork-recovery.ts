@@ -25,7 +25,10 @@ import {
   selectCanonicalBranch,
 } from "../core/convergence.js";
 import { getCredentialPubkey } from "../core/credential.js";
-import { serializeClientState } from "../core/client-state.js";
+import {
+  deserializeClientState,
+  serializeClientState,
+} from "../core/client-state.js";
 import type { EdgeSnapshot } from "./history-tree.js";
 import type { GroupPeeler } from "./types.js";
 import { framedEpoch } from "./wire-format.js";
@@ -103,6 +106,15 @@ export class ForkRecovery<TEnvelope> {
   /**
    * Builds every candidate branch reachable by replaying the commit `pool` from
    * the retained `root` state (`convergence.md` "Candidate branches").
+   *
+   * `knownNextStates` (CONV-04) maps a candidate commit's hex `commitDigest` to
+   * a state already known to result from applying it — supplied by
+   * {@link resolveFork} for commits on our own already-applied canonical path
+   * (`RetainedHistoryStore` already holds their resulting state; see
+   * `resolveFork`'s doc comment for why replaying them via `processMessage`
+   * cannot work). When present, that state is used directly instead of calling
+   * `processMessage`, so an own commit's branch is buildable exactly like any
+   * other candidate's, without reprocessing it.
    */
   async #buildBranches(
     root: ClientState,
@@ -110,6 +122,7 @@ export class ForkRecovery<TEnvelope> {
     encrypted: TEnvelope[],
     witnessEnvelopes: TEnvelope[],
     callback: IncomingMessageCallback,
+    knownNextStates: ReadonlyMap<string, ClientState> = new Map(),
   ): Promise<BuiltBranches> {
     const forkEpoch = Number(root.groupContext.epoch);
     const branches: BranchCandidate[] = [];
@@ -171,21 +184,43 @@ export class ForkRecovery<TEnvelope> {
         )
           continue;
         let next: ProcessMessageResult;
-        try {
-          next = await processMessage({
-            context: {
-              cipherSuite: this.#ciphersuite,
-              authService: marmotAuthService,
-              externalPsks: {},
-            },
-            state,
-            message,
-            callback,
-          });
-        } catch {
-          continue;
+        const known = knownNextStates.get(
+          bytesToHex(this.#commitDigestOf(message)),
+        );
+        if (known) {
+          // A commit we already applied ourselves (own or previously-adopted
+          // inbound) cannot be replayed through `processMessage`: its
+          // `UpdatePath` never encrypted a path secret to the committer's own
+          // leaf (RFC 9420), so a receiver whose leaf IS the committer's leaf
+          // has nothing to decrypt and `processMessage` throws. We already
+          // recorded the real resulting state when this commit was first
+          // applied (`RetainedHistoryStore.record`), so reuse it instead of
+          // reprocessing (CONV-04).
+          next = {
+            kind: "newState",
+            newState: known,
+            actionTaken: "accept",
+            consumed: [],
+            aad: new Uint8Array(),
+          };
+        } else {
+          try {
+            next = await processMessage({
+              context: {
+                cipherSuite: this.#ciphersuite,
+                authService: marmotAuthService,
+                externalPsks: {},
+              },
+              state,
+              message,
+              callback,
+            });
+          } catch {
+            continue;
+          }
+          if (next.kind !== "newState" || next.actionTaken === "reject")
+            continue;
         }
-        if (next.kind !== "newState" || next.actionTaken === "reject") continue;
         const tag = bytesToHex(next.newState.confirmationTag);
         if (seen.has(tag)) continue;
         extended = true;
@@ -271,12 +306,38 @@ export class ForkRecovery<TEnvelope> {
     const ours = retained.appliedCommitsBetween(forkEpoch, currentTipEpoch);
     if (ours.length === 0) return { outcome: "skip" };
 
+    // CONV-04: every commit in `ours` already applied on our own canonical
+    // branch, so `RetainedHistoryStore` already holds the exact state it
+    // produced — `record()` stores both the parent and the resulting state
+    // for every applied commit (own-authored via `confirmPublished`, or
+    // inbound via `ctx.recordCommit`, through the identical recording path).
+    // `#buildBranches` uses this instead of replaying these commits through
+    // `processMessage`, which cannot reprocess a commit whose committer leaf
+    // is the replaying leaf itself (RFC 9420: an `UpdatePath` never encrypts a
+    // path secret to its own committer). Each state is cloned via a
+    // serialize/deserialize round trip before handing it into the DFS —
+    // continued exploration from a state consumes/derives further secrets on
+    // it, and the original must stay untouched since it is the same object
+    // `RetainedHistoryStore` (and possibly the live engine) still holds.
+    const knownNextStates = new Map<string, ClientState>();
+    for (const msg of ours) {
+      const sourceEpoch = framedEpoch(msg);
+      if (sourceEpoch === undefined) continue;
+      const next = retained.stateAt(Number(sourceEpoch) + 1);
+      if (!next) continue;
+      knownNextStates.set(
+        bytesToHex(this.#commitDigestOf(msg)),
+        deserializeClientState(serializeClientState(next)),
+      );
+    }
+
     const { branches, tips, chains, edges } = await this.#buildBranches(
       root,
       [...ours, ...pool],
       encrypted,
       witnessEnvelopes,
       adminCallback,
+      knownNextStates,
     );
     if (branches.length === 0) return { outcome: "skip" };
 

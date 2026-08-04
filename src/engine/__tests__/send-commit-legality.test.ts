@@ -22,19 +22,30 @@ import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
   appDataUpdateProposalType,
   type CiphersuiteImpl,
+  type ClientState,
   createCommit,
   defaultCryptoProvider,
   defaultProposalTypes,
+  encode,
   getCiphersuiteImpl,
+  joinGroup,
   type LeafIndex,
+  type MlsMessage,
+  mlsMessageEncoder,
+  processMessage,
   UsageError,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
+import {
+  deserializeClientState,
+  serializeClientState,
+} from "../../core/client-state.js";
 import { getAdminPolicy } from "../../core/components/dictionary.js";
 import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../../core/components/ids.js";
+import { commitDigest } from "../../core/convergence.js";
 import { createCredential } from "../../core/credential.js";
 import { getPubkeyLeafNodeIndexes } from "../../core/group-members.js";
 import { createSimpleGroup } from "../../core/group.js";
@@ -43,6 +54,7 @@ import {
   decryptGroupMessages,
 } from "../../core/group-message.js";
 import { generateKeyPackage } from "../../core/key-package.js";
+import type { EdgeSnapshot } from "../history-tree.js";
 import { AdminDepletionError, MarmotGroupEngine } from "../group-engine.js";
 import type { GroupPeeler } from "../types.js";
 
@@ -188,6 +200,143 @@ async function twoLeafAdminGroup() {
   });
 
   return { impl, ctx, adminPubkey, admin2Pubkey, epoch1: add.newState };
+}
+
+/**
+ * A two-admin group at epoch 1 — the root for `#treeResolution`'s
+ * winner-chain validation tests. `adminEpoch1` is admin1's state (the engine
+ * under test); `admin2Epoch1` is admin2's own independent state, joined via
+ * `joinGroup`, used to author the competing sibling chain below. The sibling
+ * chain MUST be authored by a genuinely different leaf than the engine's own
+ * — replaying a commit through `processMessage` from the SAME leaf that
+ * committed it throws (`ValidationError: Could not find common ancestor`),
+ * because an `UpdatePath` never encrypts a path secret to the committer's own
+ * leaf (RFC 9420) — the same constraint CONV-04 (03-03) works around for
+ * `ForkRecovery`'s own-commit replay. Using admin2 as the sibling's author
+ * sidesteps it entirely, since `#treeResolution`'s validation replays each
+ * winner-chain link from admin1's (the engine's) point of view.
+ */
+async function twoAdminGroupWithJoin() {
+  const adminPubkey = "a".repeat(64);
+  const admin2Pubkey = "2".repeat(64);
+  const impl = await getCiphersuiteImpl(
+    "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+    defaultCryptoProvider,
+  );
+  const ctx = {
+    cipherSuite: impl,
+    authService: unsafeTestingAuthenticationService,
+  };
+  const adminKp = await generateKeyPackage({
+    credential: createCredential(adminPubkey),
+    ciphersuiteImpl: impl,
+  });
+  const { clientState: epoch0 } = await createSimpleGroup(
+    adminKp,
+    impl,
+    "Test Group",
+    { adminPubkeys: [admin2Pubkey], relays: ["wss://relay.test"] },
+  );
+
+  const admin2Kp = await generateKeyPackage({
+    credential: createCredential(admin2Pubkey),
+    ciphersuiteImpl: impl,
+  });
+  const add = await createCommit({
+    context: ctx,
+    state: epoch0,
+    wireAsPublicMessage: false,
+    extraProposals: [
+      {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: admin2Kp.publicPackage },
+      },
+    ],
+    ratchetTreeExtension: true,
+  });
+  const adminEpoch1 = add.newState;
+  const admin2Epoch1 = await joinGroup({
+    context: ctx,
+    welcome: add.welcome!.welcome!,
+    keyPackage: admin2Kp.publicPackage,
+    privateKeys: admin2Kp.privatePackage,
+    ratchetTree: undefined,
+  });
+
+  return { impl, ctx, adminPubkey, admin2Pubkey, adminEpoch1, admin2Epoch1 };
+}
+
+/**
+ * Builds the {@link EdgeSnapshot} `GroupHistoryTree.recordEdge` needs, so a
+ * test can inject a branch edge directly into the tree — simulating a
+ * persisted edge written by an earlier build, without going through the
+ * engine's normal ingest/replay gates (which would refuse a violating commit
+ * before it ever became an edge).
+ *
+ * `childState` MUST be a state reached by replaying `commitMessage` from a
+ * perspective OTHER than the commit's own committer (see
+ * `buildAdmin1PerspectiveChain`'s doc comment) — never the committer's own
+ * `createCommit` result. A commit's `UpdatePath` never encrypts a path secret
+ * to its own committer's leaf (RFC 9420), so storing the committer's own
+ * resulting state as a chain link's snapshot makes that link unreplayable
+ * later (`InternalError: No overlap between provided private keys and update
+ * path`) — exactly the CONV-04 (03-03) own-commit-replay constraint, here hit
+ * by construction rather than by the real engine.
+ */
+function edgeFromReplay(
+  parentTag: string,
+  commitMessage: MlsMessage,
+  childState: ClientState,
+): EdgeSnapshot {
+  const commitBytes = encode(mlsMessageEncoder, commitMessage);
+  return {
+    parentTag,
+    childTag: bytesToHex(childState.confirmationTag),
+    childEpoch: Number(childState.groupContext.epoch),
+    commitBytes,
+    commitDigest: commitDigest(commitBytes),
+    childSnapshot: serializeClientState(childState),
+  };
+}
+
+/**
+ * Replays a chain of commits (authored by some OTHER party, e.g. admin2) from
+ * `rootState` — a state belonging to admin1 (the engine under test) — via
+ * `processMessage`, returning the resulting admin1-perspective `ClientState`
+ * after each commit, in order. This is what makes the resulting snapshots
+ * safe to record as chain-link children and later re-replay: they are
+ * admin1's own view, never the original committer's, so admin1's own leaf is
+ * never the committer's leaf on any subsequent replay (see
+ * `edgeFromReplay`'s doc comment). Mirrors exactly what the real
+ * `ForkRecovery#buildBranches`/`explore()` replay path does when building a
+ * genuine candidate branch (`src/engine/fork-recovery.ts`).
+ */
+async function buildAdmin1PerspectiveChain(
+  ctx: {
+    cipherSuite: CiphersuiteImpl;
+    authService: typeof unsafeTestingAuthenticationService;
+  },
+  rootState: ClientState,
+  commitMessages: MlsMessage[],
+): Promise<ClientState[]> {
+  const states: ClientState[] = [];
+  let current = rootState;
+  for (const message of commitMessages) {
+    const result = await processMessage({
+      context: {
+        cipherSuite: ctx.cipherSuite,
+        authService: ctx.authService,
+        externalPsks: {},
+      },
+      state: current,
+      message,
+    });
+    if (result.kind !== "newState")
+      throw new Error("expected newState while building the test fixture");
+    states.push(result.newState);
+    current = result.newState;
+  }
+  return states;
 }
 
 describe("send-seam commit legality (WIRE-03/CONV-01) — D-01/D-02/D-05..D-09", () => {
@@ -388,5 +537,160 @@ describe("send-seam commit legality (WIRE-03/CONV-01) — D-01/D-02/D-05..D-09",
     expect(result.pending.newState).toBeDefined();
     expect(result.pending.parentState).toBeDefined();
     expect(result.pending.commitMessage).toBeDefined();
+  });
+});
+
+describe("#treeResolution winner-chain validation on tree-fed re-convergence (D-04/D-09)", () => {
+  it("switches to a legal winner chain fed entirely from the persisted history tree", async () => {
+    const { impl, ctx, adminPubkey, adminEpoch1, admin2Epoch1 } =
+      await twoAdminGroupWithJoin();
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+    const rootTag = bytesToHex(adminEpoch1.confirmationTag);
+
+    // The engine's own tip: one benign commit deep (root -> ownTip).
+    const sent = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (sent.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    engine.confirmPublished(sent.pending);
+    expect(Number(engine.state.groupContext.epoch)).toBe(2);
+
+    // A competing sibling branch authored by admin2 (a genuinely different
+    // leaf than the engine's own — see twoAdminGroupWithJoin's doc comment) —
+    // two benign commits deep (root -> sib1 -> sib2), so it strictly
+    // outscores the engine's own one-commit-deep tip on validCommitDepth
+    // regardless of tip-digest tie-breaking. Recorded straight into the tree
+    // via recordEdge, simulating a persisted edge, using admin1-perspective
+    // replay snapshots (see buildAdmin1PerspectiveChain/edgeFromReplay).
+    const sib1Commit = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const sib2Commit = await createCommit({
+      context: ctx,
+      state: sib1Commit.newState,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    const adminRootCopy = deserializeClientState(
+      serializeClientState(adminEpoch1),
+    );
+    const [sib1State, sib2State] = await buildAdmin1PerspectiveChain(
+      ctx,
+      adminRootCopy,
+      [sib1Commit.commit, sib2Commit.commit],
+    );
+    const sib1Tag = bytesToHex(sib1State.confirmationTag);
+    engine.history.recordEdge(
+      edgeFromReplay(rootTag, sib1Commit.commit, sib1State),
+    );
+    engine.history.recordEdge(
+      edgeFromReplay(sib1Tag, sib2Commit.commit, sib2State),
+    );
+    expect(engine.history.tips().sort()).toEqual(
+      [
+        bytesToHex(engine.state.confirmationTag),
+        bytesToHex(sib2State.confirmationTag),
+      ].sort(),
+    );
+
+    await engine.reconvergeFromHistory();
+
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(
+      bytesToHex(sib2State.confirmationTag),
+    );
+    expect(Number(engine.state.groupContext.epoch)).toBe(3);
+    expect(engine.lifecycle).toBe("Stable");
+  });
+
+  it("abandons a tree-fed switch when a winner-chain link fails commit legality", async () => {
+    const { impl, ctx, adminPubkey, adminEpoch1, admin2Epoch1 } =
+      await twoAdminGroupWithJoin();
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+    const rootTag = bytesToHex(adminEpoch1.confirmationTag);
+
+    const sent = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (sent.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    engine.confirmPublished(sent.pending);
+    const ownTag = bytesToHex(engine.state.confirmationTag);
+    expect(Number(engine.state.groupContext.epoch)).toBe(2);
+
+    // A competing sibling branch (root -> sib1 -> sib2), also authored by
+    // admin2: sib2 drops a required app component via an AppDataUpdate
+    // "remove" — exactly the WIRE-03 violation
+    // `validateAppComponentIntegrity`'s Rule 2 exists to catch. admin2 is an
+    // admin, so the MIP-03 admin gate accepts this commit on replay; only the
+    // WIRE-03/CONV-01 legality gate below it is meant to catch the violation.
+    // Recorded directly into the tree via recordEdge (admin1-perspective
+    // replay snapshots), simulating a persisted edge written by a
+    // pre-upgrade build — bypassing the normal replay gate that would have
+    // refused it as a candidate edge in the first place.
+    const sib1Commit = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const sib2Commit = await createCommit({
+      context: ctx,
+      state: sib1Commit.newState,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [
+        {
+          proposalType: appDataUpdateProposalType,
+          appDataUpdate: {
+            componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+            operation: "remove",
+          },
+        },
+      ],
+    });
+
+    const adminRootCopy = deserializeClientState(
+      serializeClientState(adminEpoch1),
+    );
+    const [sib1State, sib2State] = await buildAdmin1PerspectiveChain(
+      ctx,
+      adminRootCopy,
+      [sib1Commit.commit, sib2Commit.commit],
+    );
+    const sib1Tag = bytesToHex(sib1State.confirmationTag);
+    engine.history.recordEdge(
+      edgeFromReplay(rootTag, sib1Commit.commit, sib1State),
+    );
+    engine.history.recordEdge(
+      edgeFromReplay(sib1Tag, sib2Commit.commit, sib2State),
+    );
+    expect(engine.history.tips().length).toBe(2);
+
+    await engine.reconvergeFromHistory();
+
+    // The switch was abandoned: the engine's own tip is still canonical.
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTag);
+    expect(Number(engine.state.groupContext.epoch)).toBe(2);
+    expect(engine.lifecycle).toBe("Stable");
   });
 });

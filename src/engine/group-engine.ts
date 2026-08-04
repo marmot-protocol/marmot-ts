@@ -71,7 +71,10 @@ import {
 } from "../audit/index.js";
 import { framedContentType } from "./wire-format.js";
 import { logger } from "../utils/debug.js";
-import { createAdminCommitPolicyCallback } from "./admin-policy.js";
+import {
+  createAdminCommitPolicyCallback,
+  withCapturedProposals,
+} from "./admin-policy.js";
 import { DeliveredPayloadLedger } from "./delivered-payloads.js";
 import {
   type ChainLink,
@@ -1666,9 +1669,18 @@ export class MarmotGroupEngine<TEnvelope> {
    * Assembles a recovered {@link ForkResolution} for a tree-fed switch directly
    * from the persisted history tree — the path `rootTag → winnerTipTag`, with a
    * fresh {@link ClientState} snapshot fetched per chain endpoint (so no two links
-   * alias an object) and the stored commit per edge. No `processMessage` replay:
-   * the tree already holds each branch state. Returns `undefined` if any snapshot
-   * or commit is missing.
+   * alias an object) and the stored commit per edge. No `processMessage` replay
+   * for chain ASSEMBLY: the tree already holds each branch state. It DOES replay
+   * each link once, below, to re-derive the commit's own proposals and
+   * re-validate commit legality before adoption (D-04/D-09) — a persisted tree
+   * edge may have been written by a pre-upgrade build that never enforced
+   * `validateCommitLegality`, so adopting it without re-checking would be
+   * grandfathering a violation the send/inbound/replay seams would all now
+   * refuse. Fails closed: any link that cannot be re-validated abandons the
+   * whole switch (returns `undefined`), leaving the current tip in place. The
+   * accepted consequence (D-04/D-09) is that such a branch becomes
+   * unselectable and, if it was the only candidate, the group stays on its
+   * current tip. Returns `undefined` if any snapshot or commit is missing.
    */
   async #treeResolution(
     rootTag: string,
@@ -1690,6 +1702,85 @@ export class MarmotGroupEngine<TEnvelope> {
     }
     const winnerTip = await this.#tree.stateAt(winnerTipTag);
     if (!winnerTip) return undefined;
+
+    // D-04/D-09: re-derive and re-validate every link's commit legality
+    // before adopting this winner chain, so a persisted tree edge written by
+    // a pre-upgrade build (before this gate existed) is never grandfathered
+    // in. Fail closed on any link.
+    const capture = withCapturedProposals(
+      this.#createAdminVerificationCallback(),
+    );
+    for (const link of winnerChain) {
+      const childTag = bytesToHex(link.child.confirmationTag);
+      // Commit messages are framed (private or public); anything else stored
+      // against a chain link cannot be replayed — fail closed.
+      if (
+        link.message.wireformat !== wireformats.mls_private_message &&
+        link.message.wireformat !== wireformats.mls_public_message
+      ) {
+        this.#log()(
+          "tree-fed re-convergence: abandoning winner chain — link %s has a non-framed stored message",
+          childTag,
+        );
+        return undefined;
+      }
+      capture.take();
+      let replayed: ProcessMessageResult;
+      try {
+        replayed = await processMessage({
+          context: {
+            cipherSuite: this.ciphersuite,
+            authService: marmotAuthService,
+            externalPsks: {},
+          },
+          state: link.parent,
+          message: link.message,
+          callback: capture.callback,
+        });
+      } catch (error) {
+        this.#log()(
+          "tree-fed re-convergence: abandoning winner chain — link %s failed to replay: %o",
+          childTag,
+          error,
+        );
+        return undefined;
+      }
+      const capturedProposals = capture.take();
+
+      if (replayed.kind !== "newState" || replayed.actionTaken === "reject") {
+        this.#log()(
+          "tree-fed re-convergence: abandoning winner chain — link %s was rejected on replay",
+          childTag,
+        );
+        return undefined;
+      }
+
+      if (
+        bytesToHex(replayed.newState.confirmationTag) !==
+        bytesToHex(link.child.confirmationTag)
+      ) {
+        this.#log()(
+          "tree-fed re-convergence: abandoning winner chain — link %s replayed to a different confirmationTag than the stored snapshot",
+          childTag,
+        );
+        return undefined;
+      }
+
+      const violation = validateCommitLegality({
+        parentState: link.parent,
+        resultingState: link.child,
+        proposals: capturedProposals,
+      });
+      if (violation) {
+        this.#log()(
+          "tree-fed re-convergence: abandoning winner chain — link %s failed commit legality reason:%s detail:%s",
+          childTag,
+          violation.reason,
+          violation.detail,
+        );
+        return undefined;
+      }
+    }
 
     return {
       outcome: "recovered",

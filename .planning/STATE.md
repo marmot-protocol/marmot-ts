@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 03
 current_phase_name: commit-integrity-convergence-parity
 status: executing
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-08-04T11:26:21.147Z"
+stopped_at: Completed 03-03-PLAN.md
+last_updated: "2026-08-04T13:26:56.386Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 13
-  completed_plans: 8
+  completed_plans: 9
   percent: 40
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Status: Ready to execute
 Last activity: 2026-08-04 — Phase 03 execution started
 
@@ -64,6 +64,7 @@ _Updated after each plan completion_
 | Phase 02 P04 | 12min | 3 tasks | 6 files |
 | Phase 03 P01 | 25min | 3 tasks | 3 files |
 | Phase 03 P02 | 12min | 3 tasks | 8 files |
+| Phase 03 P03 | 50min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -93,6 +94,8 @@ Recent decisions affecting current work:
 - [Phase ?]: validateAdminLeafCoupling evaluates the carried-forward admin set when resulting extensions carry no admin-policy bytes, per Pitfall 3, and deliberately has no SelfRemove carve-out per Pitfall 4
 - [Phase ?]: Declared RejectedIngestResult.reason as an inline literal union in src/engine/types.ts rather than importing from src/core/components/integrity.ts, keeping plan 03-02 independent of sibling plan 03-01 per its explicit instruction
 - [Phase ?]: group-engine.ts's #emitIngestOutcome (audit emission) guards on stateInvalidated and returns early rather than fabricating an audit msg_id from a non-existent envelope; audit wiring for this variant is deferred to a later seam-wiring plan
+- [Phase 03]: CONV-04 verify-first found Assumption A1 falsified for D-16 property 1 (ForkRecovery could not replay a device's own already-applied commit); fixed narrowly by reusing RetainedHistoryStore's already-known resulting state instead of replaying via processMessage, without porting MDK's PrevalidatedOwnCommits stamping machinery
+- [Phase 03]: tree-convergence.ts's buildTreeBranchSet needed no change for CONV-04 -- it is structural (reads already-recorded commitDigest/epoch metadata) and never replays via processMessage, so it never shared the own-commit-reprocessing bug
 
 ### Pending Todos
 
@@ -100,7 +103,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 3's CONV-04 is verify-first: run marmot-ts against MDK's own-confirmed-commit scenario vectors before writing any fix; only diverge-and-fix if the vectors actually fail
+- [Resolved in 03-03]: CONV-04 verify-first ran; Assumption A1 was falsified for one of the two D-16 properties (own-commit replay) and fixed narrowly in `fork-recovery.ts` — see 03-03-SUMMARY.md "CONV-04 verdict"
 - Pre-existing (from 03-01): src/__tests__/exports.test.ts snapshot stale + pnpm lint fails on refs/mdk/target/ noise — logged in phase deferred-items.md, not fixed in 03-02
 
 ## Deferred Items
@@ -116,7 +119,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-04T11:26:21.132Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-08-04T13:26:56.378Z
+Stopped at: Completed 03-03-PLAN.md
 Resume file:
 None

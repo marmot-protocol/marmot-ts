@@ -164,3 +164,12 @@ None - no external service configuration required.
 ---
 *Phase: 03-commit-integrity-convergence-parity*
 *Completed: 2026-08-04*
+
+## Self-Check: PASSED
+
+- FOUND: `src/engine/__tests__/convergence-parity.test.ts`
+- FOUND: `src/engine/fork-recovery.ts`
+- FOUND: `.planning/phases/03-commit-integrity-convergence-parity/03-03-SUMMARY.md`
+- FOUND commit: `ba16622` (test: harness + D-16 assertions)
+- FOUND commit: `5588954` (fix: knownNextStates minimal fix)
+- FOUND commit: `f9cc11f` (docs: this summary)

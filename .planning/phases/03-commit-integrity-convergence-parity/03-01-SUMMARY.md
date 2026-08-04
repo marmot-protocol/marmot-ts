@@ -134,3 +134,13 @@ None - no external service configuration required.
 ---
 *Phase: 03-commit-integrity-convergence-parity*
 *Completed: 2026-08-04*
+
+## Self-Check: PASSED
+
+- FOUND: `src/core/components/integrity.ts`
+- FOUND: `src/core/components/__tests__/integrity.test.ts`
+- FOUND: `.planning/phases/03-commit-integrity-convergence-parity/03-01-SUMMARY.md`
+- FOUND commit: `fabfdd0` (Task 1)
+- FOUND commit: `9be1e91` (Task 2)
+- FOUND commit: `370f5e9` (Task 3)
+- FOUND commit: `2d31188` (docs: summary)

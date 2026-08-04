@@ -6,14 +6,14 @@ current_phase: 03
 current_phase_name: commit-integrity-convergence-parity
 status: executing
 stopped_at: Completed 03-04-PLAN.md
-last_updated: "2026-08-04T13:47:30.840Z"
+last_updated: "2026-08-04T14:14:15.226Z"
 last_activity: 2026-08-04
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 13
-  completed_plans: 10
+  completed_plans: 11
   percent: 40
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 Status: Ready to execute
 Last activity: 2026-08-04 — Phase 03 execution started
 
@@ -66,6 +66,7 @@ _Updated after each plan completion_
 | Phase 03 P02 | 12min | 3 tasks | 8 files |
 | Phase 03 P03 | 50min | 3 tasks | 2 files |
 | Phase 03 P04 | 45min | 3 tasks | 4 files |
+| Phase 03 P05 | 70min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 03-04]: Both ingest.ts and fork-recovery.ts call validateCommitLegality directly with (parentState, resultingState, proposals) rather than re-deriving requiredIds/resultingMemberAccounts locally, so neither seam can drift from the shared adapter
 - [Phase ?]: [Phase 03-04]: fork-recovery.ts's WIRE-03/CONV-01 gate applies only to the processMessage replay branch, not the knownNextStates (CONV-04) own-commit branch, since those commits already passed a legality gate the first time they were applied
 - [Phase ?]: [Phase 03-04]: Did not mark WIRE-03/CONV-01 complete in REQUIREMENTS.md -- the send seam (plan 03-05) is the third and final seam, per explicit instruction
+- [Phase ?]: [Phase 03-05]: Auto-coupling and the D-07 depletion guard live in #sendInner's case commit, never in proposeRemoveUser -- send() must catch every removal proposal landing in the commit, including unapplied proposals bundled by reference
+- [Phase ?]: [Phase 03-05]: Tree-fed re-convergence test fixtures must replay a competing committer's raw commits through a third party's own state before recordEdge -- recording the committer's own createCommit result directly hits ts-mls's RFC 9420 own-commit-replay constraint on later replay
 
 ### Pending Todos
 
@@ -124,7 +127,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-04T13:47:30.833Z
+Last session: 2026-08-04T14:13:29.221Z
 Stopped at: Completed 03-04-PLAN.md
 Resume file:
 None

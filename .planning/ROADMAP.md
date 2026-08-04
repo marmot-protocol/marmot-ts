@@ -101,7 +101,7 @@ membership-changing commit.
 3. On being removed from a group, marmot-ts emits a self-removed notification, marks the group removed-inactive with no further outbound, and classifies subsequent input for that group as SelfEvicted/stale.
 4. Group-state-change notifications are attributed to their originating `commit_digest` and are withdrawn — including clearing removal markers — when that commit is superseded on rewind.
 5. Run against MDK's own-confirmed-commit scenario vectors (#706/#723/#702/#724): a device's own published+confirmed commit is never rolled back in favor of a same-epoch sibling; a clean pass requires no code change, and any divergence found is fixed before this phase closes (verify-first).
-   **Plans**: 4/7 plans executed
+   **Plans**: 5/7 plans executed
 
 Plans:
 **Wave 1**
@@ -113,7 +113,7 @@ Plans:
 **Wave 2** _(depends on Wave 1)_
 
 - [x] 03-04-PLAN.md — Receive-side seams: proposal-capture side channel, inbound commit rejection gate, and dropped candidate edges in fork recovery
-- [ ] 03-05-PLAN.md — Engine-side seams: admin-policy auto-coupling + `AdminDepletionError` on send, the pre-wrap legality throw, and winner-chain validation on tree-fed re-convergence
+- [x] 03-05-PLAN.md — Engine-side seams: admin-policy auto-coupling + `AdminDepletionError` on send, the pre-wrap legality throw, and winner-chain validation on tree-fed re-convergence
 
 **Wave 3** _(depends on Wave 2)_
 
@@ -162,7 +162,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | ---------------------------------------- | -------------- | ----------- | ---------- |
 | 1. Proof v2                              | 2/2            | Complete    | 2026-07-21 |
 | 2. Inbound Trust & Wire Boundary         | 4/4            | Complete    | 2026-07-22 |
-| 3. Commit Integrity & Convergence Parity | 4/7 | In Progress|  |
+| 3. Commit Integrity & Convergence Parity | 5/7 | In Progress|  |
 | 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -          |
 | 5. Quality Gate                          | 0/TBD          | Not started | -          |
 

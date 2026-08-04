@@ -21,12 +21,12 @@ Requirements for catching marmot-ts up to feature parity + byte-for-byte interop
 
 - [x] **WIRE-01**: Published KeyPackages cap the MLS Lifetime to the 84-day maximum (≤ 7,261,200 s), and inbound KeyPackages with an over-long or expired Lifetime are rejected (interop-breaking; `src/utils/timestamp.ts`, `key-package-event-decode.ts`, `key-package-eligibility.ts`; `foundation/key-packages.md` #236)
 - [x] **WIRE-02**: Required-tag cardinality is enforced — events with repeated, empty, or duplicate required tags are rejected (445 `h`; 1059 `p`; 444 `e`/`relays`; 30443 `d`/`i`/`mls_protocol_version`) (interop-breaking; `src/utils/nostr.ts`, `key-package-event-decode.ts`, `welcome-event.ts`; `transports/nostr.md` #236)
-- [ ] **WIRE-03**: App-component integrity is validated on staged commits — a commit that drops the `app_data_dictionary`, drops a required component, or rewrites a required component's bytes outside a validated `AppDataUpdate` is rejected pre-merge (interop-breaking; `src/engine/ingest.ts` + send + convergence; mdk cgka-engine #704)
+- [x] **WIRE-03**: App-component integrity is validated on staged commits — a commit that drops the `app_data_dictionary`, drops a required component, or rewrites a required component's bytes outside a validated `AppDataUpdate` is rejected pre-merge (interop-breaking; `src/engine/ingest.ts` + send + convergence; mdk cgka-engine #704)
 - [ ] **WIRE-04**: SafeAAD component (`0x0002`) is defined, `0x0001` is advertised in the leaf `app_components` list, and the empty safe_aad entry is emitted, so LeafNode/KeyPackage bytes match the reference (additive; `src/core/components/ids.ts`, `dictionary.ts`; mdk `b9ae3ce`)
 
 ### Convergence / membership parity
 
-- [ ] **CONV-01**: Admin/leaf coupling is enforced as a resulting-epoch invariant — every membership-changing commit is validated (send + inbound) so that admins ⊆ member leaves, matching MDK's legality decision for removal-without-policy-update commits (additive/convergence; `src/core/components/admin-policy.ts`, `src/engine/admin-policy.ts`; `admin-policy-v1.md`+`convergence.md` #171, mdk #701)
+- [x] **CONV-01**: Admin/leaf coupling is enforced as a resulting-epoch invariant — every membership-changing commit is validated (send + inbound) so that admins ⊆ member leaves, matching MDK's legality decision for removal-without-policy-update commits (additive/convergence; `src/core/components/admin-policy.ts`, `src/engine/admin-policy.ts`; `admin-policy-v1.md`+`convergence.md` #171, mdk #701)
 - [ ] **CONV-02**: SelfEvicted / Realizing removal is handled — on being removed, marmot-ts emits a self-removed notification, marks the group removed-inactive, and classifies later input as SelfEvicted/stale (additive; new; `member-departure.md` #171)
 - [ ] **CONV-03**: Group-state-change notifications are attributed to their `commit_digest` and withdrawn when that commit is superseded on rewind, including clearing removal markers (additive; `src/engine/` convergence, cf. `delivered-payloads.ts`; `convergence.md` #171, mdk #724)
 - [x] **CONV-04**: Own-confirmed-commit convergence protection is verified against MDK scenario vectors — a device's own published+confirmed commit is never rolled back for a same-epoch sibling; fixes are added only if marmot-ts diverges (verify-first; `src/engine/fork-recovery.ts`, `tree-convergence.ts`; mdk #706/#723/#702, #724)
@@ -74,8 +74,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 | SEC-01      | Phase 2 — Inbound Trust & Wire Boundary         | Complete |
 | WIRE-01     | Phase 2 — Inbound Trust & Wire Boundary         | Complete |
 | WIRE-02     | Phase 2 — Inbound Trust & Wire Boundary         | Complete |
-| WIRE-03     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
-| CONV-01     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
+| WIRE-03     | Phase 3 — Commit Integrity & Convergence Parity | Complete |
+| CONV-01     | Phase 3 — Commit Integrity & Convergence Parity | Complete |
 | CONV-02     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
 | CONV-03     | Phase 3 — Commit Integrity & Convergence Parity | Pending  |
 | CONV-04     | Phase 3 — Commit Integrity & Convergence Parity | Complete |

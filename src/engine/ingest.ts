@@ -59,12 +59,19 @@ export type AppliedForkResolution<TEnvelope> =
        */
       tipCommitMessage: MlsMessage | undefined;
       /**
-       * The {@link StateNotification}s derived from the winning branch's tip
-       * commit (D-10/D-11), computed and ledger-recorded by
-       * `#applyForkResolution` — the same shared rewind-apply path used by
-       * both pool-replay recovery and tree-fed re-convergence. `undefined`
-       * when the winner tip is the fork root itself (no chain applied,
-       * mirroring `tipCommitMessage`).
+       * The {@link StateNotification}s derived from the WHOLE applied winner
+       * chain (D-10/D-11) — one derivation per `ChainLink`, in chain order,
+       * concatenated. A rewind that adopts an N-commit branch applies N
+       * commits, so reporting only the tip's diff would silently drop every
+       * intermediate commit's membership/component changes (CR-07). Each
+       * entry stays attributed to the commit digest that produced it, so the
+       * caller can still group by commit.
+       *
+       * Computed and ledger-recorded by `#applyForkResolution` — the same
+       * shared rewind-apply path used by both pool-replay recovery and
+       * tree-fed re-convergence — so every one of them is withdrawable by a
+       * later rewind. `undefined` when the winner tip is the fork root itself
+       * (no chain applied, mirroring `tipCommitMessage`).
        */
       notifications: StateNotification[] | undefined;
       /**

@@ -851,4 +851,99 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     expect(Number(engine.state.groupContext.epoch)).toBe(4);
     expect(bytesToHex(engine.state.confirmationTag)).toBe(tipBefore);
   });
+
+  /**
+   * CR-07 regression. `#applyForkResolution` used to diff only
+   * `winnerChain.at(-1)`, so a rewind that applied N commits reported (and
+   * ledger-recorded) notifications for the last one only. Every intermediate
+   * commit's membership/component changes were silently lost, `epochAdvanced`
+   * understated the jump, and — since `invalidatedByRewind` can only withdraw
+   * what was `record()`ed — those notifications could never be withdrawn by a
+   * later rewind, breaking CONV-03's stated invariant.
+   *
+   * The fixture builds a competing branch TWO commits deep so the winner chain
+   * has two links. The member authors both (a genuinely different leaf than
+   * the engine's own, so replay never hits the RFC 9420 own-commit
+   * constraint), and the second is wrapped against the first's resulting
+   * state, so it only decrypts once the branch builder has replayed the first
+   * — the ordinary `encrypted`-candidate path.
+   */
+  it("reports and records notifications for EVERY commit on a multi-commit rewind, not just the tip (CR-07)", async () => {
+    const { impl, ctx, adminPubkey, adminEpoch1, memberEpoch1 } =
+      await twoMemberEpoch1Group();
+
+    const engine = new MarmotGroupEngine<NostrEvent>({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    // Our own one-commit branch: epoch 1 -> 2.
+    const sent = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (sent.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    engine.confirmPublished(sent.pending);
+    expect(Number(engine.state.groupContext.epoch)).toBe(2);
+
+    // The member's competing branch, two self-update commits deep:
+    // epoch 1 -> 2' -> 3'. Self-update-only so a non-admin may author them.
+    const sibA = await createCommit({
+      context: ctx,
+      state: memberEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const sibB = await createCommit({
+      context: ctx,
+      state: sibA.newState,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const sibAEvent = await createGroupEvent({
+      message: sibA.commit,
+      state: memberEpoch1,
+      ciphersuite: impl,
+    });
+    const sibBEvent = await createGroupEvent({
+      message: sibB.commit,
+      state: sibA.newState,
+      ciphersuite: impl,
+    });
+
+    const results: {
+      kind: string;
+      notifications?: { kind: string; from?: number; to?: number }[];
+    }[] = [];
+    for await (const r of engine.ingest([sibAEvent, sibBEvent]))
+      results.push(r as never);
+
+    // The two-commit branch outscores our one-commit branch on depth, so the
+    // rewind really does apply both links.
+    expect(Number(engine.state.groupContext.epoch)).toBe(3);
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(
+      bytesToHex(sibB.newState.confirmationTag),
+    );
+
+    const rewound = results.find(
+      (r) => r.kind === "processed" && r.notifications !== undefined,
+    );
+    expect(rewound).toBeDefined();
+
+    // Both epoch transitions are reported: 1 -> 2' from the first link and
+    // 2' -> 3' from the tip. Before the fix only the second was present, so a
+    // caller sitting at epoch 1 was told the group went from 2 to 3.
+    const epochAdvances = (rewound!.notifications ?? [])
+      .filter((n) => n.kind === "epochAdvanced")
+      .map((n) => [n.from, n.to]);
+    expect(epochAdvances).toEqual([
+      [1, 2],
+      [2, 3],
+    ]);
+  });
 });

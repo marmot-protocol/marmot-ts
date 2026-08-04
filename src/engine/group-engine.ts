@@ -92,6 +92,7 @@ import { contentDedupId } from "./message-dedup.js";
 import {
   deriveStateNotifications,
   groupWithdrawnNotificationsByCommit,
+  type StateNotification,
   StateNotificationLedger,
 } from "./state-notifications.js";
 import {
@@ -1680,31 +1681,46 @@ export class MarmotGroupEngine<TEnvelope> {
     // The canonical path moved; let held fork messages re-decrypt on it.
     this.#pool.resetTried();
 
-    // D-10/D-11: derive and ledger-record the notifications produced by the
-    // winning chain's OWN tip commit — so a *later* rewind that supersedes
-    // THIS commit (e.g. a subsequent tree-fed switch, `#reconvergeFromTree`)
-    // can withdraw exactly these, closing the loop for a commit that lands
-    // via a rewind rather than the direct in-order ingest branch (`ingest.ts`
-    // records notifications there; this is the rewind-landed counterpart).
+    // D-10/D-11: derive and ledger-record the notifications produced by EVERY
+    // commit on the winning chain — so a *later* rewind that supersedes any of
+    // them (e.g. a subsequent tree-fed switch, `#reconvergeFromTree`) can
+    // withdraw exactly what this rewind emitted, closing the loop for commits
+    // that land via a rewind rather than the direct in-order ingest branch
+    // (`ingest.ts` records notifications there; this is the rewind-landed
+    // counterpart).
+    //
+    // CR-07: a rewind that adopts an N-commit branch really does apply N
+    // commits. Diffing only the tip link dropped every intermediate commit's
+    // membership/component changes (a 3-commit branch that added Alice, then
+    // removed Bob, then rotated a key reported only the rotation, with
+    // `epochAdvanced` understating the jump) and — because
+    // `invalidatedByRewind` can only withdraw what was `record()`ed — left
+    // those notifications permanently non-withdrawable, breaking CONV-03's
+    // stated invariant.
+    //
+    // Each link is diffed parent -> child (never parent -> winnerTip), so an
+    // intermediate link reports its own transition rather than a collapsed one.
     // `undefined` only when the winner tip is the fork root itself (no chain
     // applied), mirroring `tipCommitMessage`.
-    const tipLink = resolution.winnerChain.at(-1);
-    let tipNotifications:
-      ReturnType<typeof deriveStateNotifications> | undefined;
-    if (tipLink) {
-      const tipDigest = commitDigest(
-        encode(mlsMessageEncoder, tipLink.message),
-      );
-      tipNotifications = deriveStateNotifications({
-        parentState: tipLink.parent,
-        resultingState: resolution.winnerTip,
-        commitDigest: tipDigest,
-      });
-      this.#stateNotifications.record(
-        tipDigest,
-        Number(resolution.winnerTip.groupContext.epoch),
-        tipNotifications,
-      );
+    let chainNotifications: StateNotification[] | undefined;
+    if (resolution.winnerChain.length > 0) {
+      chainNotifications = [];
+      for (const link of resolution.winnerChain) {
+        const linkDigest = commitDigest(
+          encode(mlsMessageEncoder, link.message),
+        );
+        const derived = deriveStateNotifications({
+          parentState: link.parent,
+          resultingState: link.child,
+          commitDigest: linkDigest,
+        });
+        this.#stateNotifications.record(
+          linkDigest,
+          Number(link.child.groupContext.epoch),
+          derived,
+        );
+        chainNotifications.push(...derived);
+      }
     }
 
     const anchor = this.#retained.anchorEpoch();
@@ -1720,7 +1736,7 @@ export class MarmotGroupEngine<TEnvelope> {
       // a `selfRemoved` notification to a rewind-landed removal digests the
       // commit that actually produced it, not an arbitrary forkPool entry.
       tipCommitMessage: resolution.winnerChain.at(-1)?.message,
-      notifications: tipNotifications,
+      notifications: chainNotifications,
       withdrawnNotifications,
       invalidated: invalidated.map(
         ({ envelope, message, payload, stateTag, epoch }) => ({

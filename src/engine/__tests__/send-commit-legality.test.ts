@@ -540,6 +540,107 @@ describe("send-seam commit legality (WIRE-03/CONV-01) — D-01/D-02/D-05..D-09",
   });
 });
 
+/**
+ * CR-03 regression: `send({ kind: "selfUpdate" })` produces a real commit, and
+ * `createCommit` bundles every entry of `state.unappliedProposals` BY REFERENCE
+ * in addition to `extraProposals` — so `extraProposals: []` does not make it a
+ * proposal-free commit. Before this fix the selfUpdate branch ran none of the
+ * D-05 auto-coupling splice, the D-07 depletion guard, or the D-01/D-02
+ * `validateCommitLegality` gate that `case "commit"` runs, so the engine would
+ * wrap and publish a commit its own inbound seam rejects.
+ *
+ * `send({kind:"proposal"})` + `confirmPublished` is the shortest route to a
+ * genuinely staged unapplied proposal: `createProposal` stages the sender's own
+ * proposal into the returned state, which `confirmPublished` then adopts.
+ */
+describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () => {
+  it("throws UsageError instead of emitting a commit whose by-reference proposals drop a required component (D-01/D-02)", async () => {
+    const { impl, epoch1 } = await twoAdminGroup();
+    const engine = new MarmotGroupEngine({
+      state: epoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    const staged = await engine.send({
+      kind: "proposal",
+      proposal: {
+        proposalType: appDataUpdateProposalType,
+        appDataUpdate: {
+          componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+          operation: "remove",
+        },
+      },
+    });
+    engine.confirmPublished(staged.pending);
+    expect(Object.keys(engine.state.unappliedProposals).length).toBe(1);
+
+    const beforeTag = bytesToHex(engine.state.confirmationTag);
+
+    await expect(engine.send({ kind: "selfUpdate" })).rejects.toThrow(
+      UsageError,
+    );
+
+    // Nothing staged, nothing published, canonical state untouched.
+    expect(engine.lifecycle).toBe("Stable");
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(beforeTag);
+  });
+
+  it("splices the admin-policy update into a selfUpdate that bundles a Remove de-leafing an admin (D-05)", async () => {
+    const { impl, adminPubkey, admin2Pubkey, epoch1 } = await twoAdminGroup();
+    const engine = new MarmotGroupEngine({
+      state: epoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    const [admin2Leaf] = getPubkeyLeafNodeIndexes(engine.state, admin2Pubkey);
+    expect(admin2Leaf).toBeDefined();
+
+    const staged = await engine.send({
+      kind: "proposal",
+      proposal: {
+        proposalType: defaultProposalTypes.remove,
+        remove: { removed: admin2Leaf as LeafIndex },
+      },
+    });
+    engine.confirmPublished(staged.pending);
+    expect(Object.keys(engine.state.unappliedProposals).length).toBe(1);
+
+    const result = await engine.send({ kind: "selfUpdate" });
+    expect(result.kind).toBe("selfUpdate");
+
+    // Without the splice this commit would carry an admin key with no member
+    // leaf in the resulting epoch — the admin-leaf-coupling violation every
+    // conformant peer rejects.
+    const resultingAdmins = getAdminPolicy(
+      result.pending.newState.groupContext.extensions,
+    );
+    expect(resultingAdmins).toEqual([adminPubkey]);
+  });
+
+  it("a selfUpdate with no staged proposals is unaffected (MIP-02 post-Welcome path)", async () => {
+    const { impl, epoch1 } = await twoAdminGroup();
+    const engine = new MarmotGroupEngine({
+      state: epoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    const beforeEpoch = Number(engine.state.groupContext.epoch);
+    const result = await engine.send({ kind: "selfUpdate" });
+
+    expect(result.kind).toBe("selfUpdate");
+    expect(result.pending.kind).toBe("selfUpdate");
+    expect(Number(result.pending.newState.groupContext.epoch)).toBe(
+      beforeEpoch + 1,
+    );
+    expect(
+      getAdminPolicy(result.pending.newState.groupContext.extensions),
+    ).toEqual(getAdminPolicy(engine.state.groupContext.extensions));
+  });
+});
+
 describe("#treeResolution winner-chain validation on tree-fed re-convergence (D-04/D-09)", () => {
   it("switches to a legal winner chain fed entirely from the persisted history tree", async () => {
     const { impl, ctx, adminPubkey, adminEpoch1, admin2Epoch1 } =

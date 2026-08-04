@@ -564,80 +564,16 @@ export class MarmotGroupEngine<TEnvelope> {
         // D-05/D-06/D-07/D-08: auto-couple an admin-policy update into a
         // removal commit that de-leafs an admin account, and refuse a
         // removal that would empty the admin set entirely — before any
-        // staging. This lives here (send/staging), never in
-        // proposeRemoveUser, because send() accepts arbitrary composed
-        // proposals (D-06): auto-coupling must run over every removal
-        // proposal that will actually land in the commit, including
-        // unapplied proposals createCommit bundles by reference, not just
-        // this call's own by-value proposals.
-        // @see refs/mdk/crates/cgka-engine/src/message_processor/send.rs `do_send_remove_members`
-        let splicedAdminPolicy = false;
-        {
-          // The proposal set that will actually land in the commit:
-          // createCommit bundles every entry of this.state.unappliedProposals
-          // by reference in addition to commitOptions.extraProposals. A scan
-          // set only — never used as the commit payload itself.
-          const committedProposals = [
-            ...Object.values(this.state.unappliedProposals).map(
-              (p) => p.proposal,
-            ),
-            ...allProposals,
-          ];
-
-          // Deliberately EXCLUDES selfRemoveProposalType entries (SelfRemove
-          // carve-out, Pitfall 4): a SelfRemove must not trigger
-          // auto-coupling or the depletion guard. An admin's SelfRemove is
-          // already refused by createAdminCommitPolicyCallback, and a
-          // non-admin's SelfRemove cannot change the admin set.
-          const removedLeaves = new Set<number>();
-          for (const proposal of committedProposals) {
-            if (
-              proposal.proposalType === defaultProposalTypes.remove &&
-              "remove" in proposal
-            ) {
-              removedLeaves.add(Number(proposal.remove.removed));
-            }
-          }
-
-          if (removedLeaves.size > 0) {
-            // D-08: account-level survival — an account survives if at
-            // least one of its leaves is NOT in removedLeaves; leaf-level
-            // would diverge the moment an account has two leaves, which the
-            // wire format already permits.
-            const survivingAccounts = new Set<string>();
-            for (const pubkey of getGroupMembers(this.state)) {
-              const leaves = getPubkeyLeafNodeIndexes(this.state, pubkey);
-              if (leaves.some((leaf) => !removedLeaves.has(leaf))) {
-                survivingAccounts.add(pubkey);
-              }
-            }
-
-            const currentAdmins = groupData.adminPubkeys;
-            const resultingAdmins = currentAdmins.filter((pk) =>
-              survivingAccounts.has(pk),
-            );
-
-            // D-07 guard: refused before any staging, before createCommit,
-            // and before the wrong-layer encodeAdminPolicyV1 "at least one
-            // admin" error could fire.
-            if (currentAdmins.length > 0 && resultingAdmins.length === 0) {
-              throw new AdminDepletionError(currentAdmins.length);
-            }
-
-            // D-05 splice: same commit — never a follow-up commit.
-            if (resultingAdmins.length !== currentAdmins.length) {
-              allProposals.push({
-                proposalType: appDataUpdateProposalType,
-                appDataUpdate: {
-                  componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
-                  operation: "update",
-                  update: encodeAdminPolicyV1(resultingAdmins),
-                },
-              });
-              splicedAdminPolicy = true;
-            }
-          }
-        }
+        // staging. Shared with `case "selfUpdate"` via
+        // {@link #adminPolicySpliceFor} so the two commit-producing seams
+        // cannot drift (CR-03).
+        const adminPolicySplice = this.#adminPolicySpliceFor(
+          this.state,
+          groupData.adminPubkeys,
+          allProposals,
+        );
+        const splicedAdminPolicy = adminPolicySplice !== undefined;
+        if (adminPolicySplice) allProposals.push(adminPolicySplice);
 
         // MIP-03 admin-only commits, with the non-admin carve-out from
         // protocol-core/group-messaging.md: a non-admin may commit a
@@ -689,33 +625,10 @@ export class MarmotGroupEngine<TEnvelope> {
 
         // D-01/D-02: validate the staged commit before it is wrapped or
         // published, and before the lifecycle transitions to PendingPublish.
-        // The validated proposal set is the same union Task 1 built above —
-        // the by-reference unapplied proposals plus allProposals (which now
-        // includes any spliced admin-policy update) — matching what
-        // createCommit actually bundles. Using only allProposals would be a
-        // false-positive generator: a caller who staged an AppDataUpdate
-        // proposal separately and committed with no explicit refs has it
-        // bundled by reference, and the integrity validator would otherwise
-        // see a dictionary change with no backing op.
-        {
-          const validatedProposals = [
-            ...Object.values(parentState.unappliedProposals).map(
-              (p) => p.proposal,
-            ),
-            ...allProposals,
-          ];
-          const violation = validateCommitLegality({
-            parentState,
-            resultingState: newState,
-            proposals: validatedProposals,
-          });
-          if (violation) {
-            // The throw happens before the lifecycle transition below, so
-            // the engine is left in Stable with no pending state and no
-            // staged commit to roll back.
-            throw new UsageError(violation.detail);
-          }
-        }
+        // The throw happens before the lifecycle transition below, so the
+        // engine is left in Stable with no pending state and no staged commit
+        // to roll back.
+        this.#assertStagedCommitLegal(parentState, newState, allProposals);
 
         this.#transitionLifecycle(
           groupLifecycleStates.pendingPublish,
@@ -741,6 +654,30 @@ export class MarmotGroupEngine<TEnvelope> {
       }
 
       case "selfUpdate": {
+        const parentState = this.state;
+
+        // CR-03: `extraProposals: []` does NOT make this a proposal-free
+        // commit. `createCommit` bundles every entry of
+        // `state.unappliedProposals` by reference in addition to
+        // `extraProposals`, so a selfUpdate can carry a peer's Remove that
+        // de-leafs the last admin account, or an AppDataUpdate rewriting the
+        // dictionary. This seam therefore runs the SAME D-05 auto-coupling
+        // splice, D-07 depletion guard, and D-01/D-02 legality check as
+        // `case "commit"` — otherwise the engine would wrap and publish a
+        // commit that its own inbound seam (`ingest.ts`) and every conformant
+        // peer reject (the mdk#707 "guard on one seam only" bug class).
+        //
+        // `MarmotGroup.selfUpdate()` is public and non-admin-callable, and
+        // per MIP-02 it is called right after joining from a Welcome — a
+        // moment when staged proposals from other members are plausible.
+        const groupData = getMarmotGroupView(parentState);
+        const adminPolicySplice = groupData
+          ? this.#adminPolicySpliceFor(parentState, groupData.adminPubkeys, [])
+          : undefined;
+        const extraProposals: Proposal[] = adminPolicySplice
+          ? [adminPolicySplice]
+          : [];
+
         const { commit, newState } = await createCommit({
           context: {
             cipherSuite: this.ciphersuite,
@@ -750,8 +687,10 @@ export class MarmotGroupEngine<TEnvelope> {
           // Handshake content is wired as MLS PublicMessage (see wire-format.ts).
           wireAsPublicMessage: true,
           ratchetTreeExtension: true,
-          extraProposals: [],
+          extraProposals,
         });
+
+        this.#assertStagedCommitLegal(parentState, newState, extraProposals);
 
         this.#sentContentIds.add(contentDedupId(commit));
         const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
@@ -763,6 +702,116 @@ export class MarmotGroupEngine<TEnvelope> {
         };
       }
     }
+  }
+
+  /**
+   * D-05/D-06/D-07/D-08: the shared admin-leaf-coupling guard both
+   * commit-producing send seams (`case "commit"` and `case "selfUpdate"`) run
+   * before `createCommit`. Returns the admin-policy `AppDataUpdate` proposal
+   * that MUST be spliced into this commit so the resulting epoch stays legal,
+   * or `undefined` when no admin account loses its last member leaf.
+   *
+   * `byValueProposals` is this call's own composed proposal set. It is unioned
+   * with `state.unappliedProposals` for the SCAN only — never used as the
+   * commit payload — because `createCommit` bundles every unapplied proposal
+   * by reference in addition to `commitOptions.extraProposals` (D-06). Scanning
+   * only the by-value set would miss exactly the removals that arrive as peers'
+   * staged proposals.
+   *
+   * Deliberately EXCLUDES `selfRemoveProposalType` entries (SelfRemove
+   * carve-out, Pitfall 4): a SelfRemove must not trigger auto-coupling or the
+   * depletion guard. An admin's SelfRemove is already refused by
+   * `createAdminCommitPolicyCallback`, and a non-admin's SelfRemove cannot
+   * change the admin set.
+   *
+   * @throws AdminDepletionError when the commit would leave the resulting
+   * epoch with no surviving admin account (D-07) — refused before any staging,
+   * before `createCommit`, and before the wrong-layer `encodeAdminPolicyV1`
+   * "at least one admin" error could fire.
+   * @see refs/mdk/crates/cgka-engine/src/message_processor/send.rs `do_send_remove_members`
+   */
+  #adminPolicySpliceFor(
+    state: ClientState,
+    currentAdmins: readonly string[],
+    byValueProposals: readonly Proposal[],
+  ): Proposal | undefined {
+    const committedProposals = [
+      ...Object.values(state.unappliedProposals).map((p) => p.proposal),
+      ...byValueProposals,
+    ];
+
+    const removedLeaves = new Set<number>();
+    for (const proposal of committedProposals) {
+      if (
+        proposal.proposalType === defaultProposalTypes.remove &&
+        "remove" in proposal
+      ) {
+        removedLeaves.add(Number(proposal.remove.removed));
+      }
+    }
+    if (removedLeaves.size === 0) return undefined;
+
+    // D-08: account-level survival — an account survives if at least one of
+    // its leaves is NOT in removedLeaves; leaf-level would diverge the moment
+    // an account has two leaves, which the wire format already permits.
+    const survivingAccounts = new Set<string>();
+    for (const pubkey of getGroupMembers(state)) {
+      const leaves = getPubkeyLeafNodeIndexes(state, pubkey);
+      if (leaves.some((leaf) => !removedLeaves.has(leaf))) {
+        survivingAccounts.add(pubkey);
+      }
+    }
+
+    const resultingAdmins = currentAdmins.filter((pk) =>
+      survivingAccounts.has(pk),
+    );
+
+    if (currentAdmins.length > 0 && resultingAdmins.length === 0) {
+      throw new AdminDepletionError(currentAdmins.length);
+    }
+
+    // D-05 splice: same commit — never a follow-up commit.
+    if (resultingAdmins.length === currentAdmins.length) return undefined;
+
+    return {
+      proposalType: appDataUpdateProposalType,
+      appDataUpdate: {
+        componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+        operation: "update",
+        update: encodeAdminPolicyV1(resultingAdmins),
+      },
+    };
+  }
+
+  /**
+   * D-01/D-02: the shared send/staging commit-legality gate, run by both
+   * commit-producing send seams against the SAME proposal union
+   * `createCommit` actually bundles — the by-reference unapplied proposals
+   * plus this call's `byValueProposals` (including any spliced admin-policy
+   * update).
+   *
+   * Validating only `byValueProposals` would be a false-positive generator: a
+   * caller who staged an AppDataUpdate proposal separately and committed with
+   * no explicit refs has it bundled by reference, and the integrity validator
+   * would otherwise see a dictionary change with no backing op.
+   *
+   * @throws UsageError carrying the violation's diagnostic detail.
+   */
+  #assertStagedCommitLegal(
+    parentState: ClientState,
+    resultingState: ClientState,
+    byValueProposals: readonly Proposal[],
+  ): void {
+    const validatedProposals = [
+      ...Object.values(parentState.unappliedProposals).map((p) => p.proposal),
+      ...byValueProposals,
+    ];
+    const violation = validateCommitLegality({
+      parentState,
+      resultingState,
+      proposals: validatedProposals,
+    });
+    if (violation) throw new UsageError(violation.detail);
   }
 
   /** Applies staged state after publish confirmation (publish-before-apply). */

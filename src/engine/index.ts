@@ -1,5 +1,6 @@
 /** @module @category Engine */
 export * from "./types.js";
+export * from "./state-notifications.js";
 export * from "./admin-policy.js";
 export * from "./ingest-disposition.js";
 export * from "./retained-store.js";

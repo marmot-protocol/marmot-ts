@@ -162,3 +162,9 @@ None - no external service configuration required.
 ---
 *Phase: 03-commit-integrity-convergence-parity*
 *Completed: 2026-08-04*
+
+## Self-Check: PASSED
+
+All created files (`src/engine/state-notifications.ts`, `src/engine/__tests__/state-notifications.test.ts`,
+this SUMMARY, `deferred-items.md`) exist on disk; all four task/docs commit hashes
+(`c33639e`, `0b280f4`, `1991ea3`, `99b8200`) verified present in `git log`.

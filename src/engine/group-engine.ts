@@ -22,12 +22,14 @@ import {
   type ProcessMessageResult,
   Proposal,
   selfRemoveProposalType,
+  UsageError,
   wireformats,
 } from "ts-mls";
 
 import { marmotAuthService } from "../core/auth-service.js";
 import { getMarmotGroupView } from "../core/client-state.js";
 import { encodeAdminPolicyV1 } from "../core/components/admin-policy.js";
+import { validateCommitLegality } from "../core/components/integrity.js";
 import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../core/components/ids.js";
 import { getCredentialPubkey } from "../core/credential.js";
 import {
@@ -656,6 +658,36 @@ export class MarmotGroupEngine<TEnvelope> {
           state: this.state,
           ...commitOptions,
         });
+
+        // D-01/D-02: validate the staged commit before it is wrapped or
+        // published, and before the lifecycle transitions to PendingPublish.
+        // The validated proposal set is the same union Task 1 built above —
+        // the by-reference unapplied proposals plus allProposals (which now
+        // includes any spliced admin-policy update) — matching what
+        // createCommit actually bundles. Using only allProposals would be a
+        // false-positive generator: a caller who staged an AppDataUpdate
+        // proposal separately and committed with no explicit refs has it
+        // bundled by reference, and the integrity validator would otherwise
+        // see a dictionary change with no backing op.
+        {
+          const validatedProposals = [
+            ...Object.values(parentState.unappliedProposals).map(
+              (p) => p.proposal,
+            ),
+            ...allProposals,
+          ];
+          const violation = validateCommitLegality({
+            parentState,
+            resultingState: newState,
+            proposals: validatedProposals,
+          });
+          if (violation) {
+            // The throw happens before the lifecycle transition below, so
+            // the engine is left in Stable with no pending state and no
+            // staged commit to roll back.
+            throw new UsageError(violation.detail);
+          }
+        }
 
         this.#transitionLifecycle(
           groupLifecycleStates.pendingPublish,

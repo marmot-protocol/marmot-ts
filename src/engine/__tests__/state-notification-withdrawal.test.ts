@@ -513,22 +513,24 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     // Search for a `winner` digest that beats `applied`'s (lower wins the
     // same-epoch tie-break), so the SECOND-arriving commit forces a real
     // rewind rather than losing (mirrors convergence-parity.test.ts).
-    let attempts = 0;
-    const appliedKey = () =>
-      commitDigest(encode(mlsMessageEncoder, applied.commit));
-    const winnerKey = () =>
-      commitDigest(encode(mlsMessageEncoder, winner.commit));
+    //
+    // BOTH sides are regenerated on every attempt. Varying only `winner`
+    // against a fixed `applied` does not give independent 50/50 trials: it
+    // asks "is `applied` the minimum of the whole candidate set", which fails
+    // with probability 1/(attempts+1) — ~4% at 25 attempts, and that is
+    // exactly how often this test used to fail. Re-drawing both makes each
+    // attempt independent, so 25 attempts fail with probability 2^-25.
+    //
     // AppDataUpdate-only commits carry no UpdatePath (nothing tree-related to
     // randomize), so `createCommit` is fully deterministic for identical
     // inputs — the search must vary the component bytes per attempt, not rely
     // on internal randomization (unlike a path-changing proposal).
-    while (
-      Buffer.compare(Buffer.from(appliedKey()), Buffer.from(winnerKey())) <=
-        0 &&
-      attempts < 25
-    ) {
-      attempts++;
-      winner = await createCommit({
+    const appliedKey = () =>
+      commitDigest(encode(mlsMessageEncoder, applied.commit));
+    const winnerKey = () =>
+      commitDigest(encode(mlsMessageEncoder, winner.commit));
+    const commitWithComponent = (update: Uint8Array) =>
+      createCommit({
         context: ctx,
         state: adminEpoch1,
         wireAsPublicMessage: true,
@@ -539,11 +541,19 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
             appDataUpdate: {
               componentId: CUSTOM_COMPONENT_ID,
               operation: "update",
-              update: new Uint8Array([2, attempts]),
+              update,
             },
           },
         ],
       });
+    for (
+      let attempts = 1;
+      attempts <= 25 &&
+      Buffer.compare(Buffer.from(appliedKey()), Buffer.from(winnerKey())) <= 0;
+      attempts++
+    ) {
+      applied = await commitWithComponent(new Uint8Array([1, attempts]));
+      winner = await commitWithComponent(new Uint8Array([2, attempts]));
     }
     expect(
       Buffer.compare(Buffer.from(appliedKey()), Buffer.from(winnerKey())),
@@ -623,24 +633,29 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
       ratchetTreeExtension: true,
       extraProposals: [],
     });
-    let attempts = 0;
     const appliedKey = () =>
       commitDigest(encode(mlsMessageEncoder, applied.commit));
     const winnerKey = () =>
       commitDigest(encode(mlsMessageEncoder, winner.commit));
-    while (
-      Buffer.compare(Buffer.from(appliedKey()), Buffer.from(winnerKey())) <=
-        0 &&
-      attempts < 25
-    ) {
-      winner = await createCommit({
+    const selfUpdate = () =>
+      createCommit({
         context: ctx,
         state: adminEpoch1,
         wireAsPublicMessage: true,
         ratchetTreeExtension: true,
         extraProposals: [],
       });
-      attempts++;
+    // Re-draw BOTH sides per attempt — see the same search in "withdraws
+    // exactly a superseded commit's notifications" for why varying only
+    // `winner` gives a ~4% failure rate instead of 2^-25.
+    for (
+      let attempts = 0;
+      attempts < 25 &&
+      Buffer.compare(Buffer.from(appliedKey()), Buffer.from(winnerKey())) <= 0;
+      attempts++
+    ) {
+      applied = await selfUpdate();
+      winner = await selfUpdate();
     }
     expect(
       Buffer.compare(Buffer.from(appliedKey()), Buffer.from(winnerKey())),

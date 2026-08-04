@@ -297,38 +297,54 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
       peeler,
     });
 
-    const sent = await engine.send({
-      kind: "commit",
-      actorPubkey: adminPubkey,
-      extraProposals: [],
-    });
-    if (sent.kind !== "groupEvolution")
-      throw new Error("expected groupEvolution");
-    engine.confirmPublished(sent.pending);
-    expect(Number(engine.state.groupContext.epoch)).toBe(2);
-    const ownConfirmationTag = bytesToHex(engine.state.confirmationTag);
-    const ownKey = orderingKeyOf(sent.pending.commitMessage!, 1);
+    const stageOwnCommit = async () => {
+      const result = await engine.send({
+        kind: "commit",
+        actorPubkey: adminPubkey,
+        extraProposals: [],
+      });
+      if (result.kind !== "groupEvolution")
+        throw new Error("expected groupEvolution");
+      return result;
+    };
 
-    // Search for a sibling commit whose ordering key LOSES against our own
-    // (i.e. our commit's digest orders strictly before the sibling's — lower
-    // `tipDigest` wins the same-epoch tie-break per `compareBranchScores`).
-    // `createCommit` re-randomizes the path secrets on every call, so this
-    // converges in a handful of attempts.
+    // Search for a pairing where our own commit's ordering key LOSES to
+    // nothing — i.e. our digest orders strictly before the sibling's, so it
+    // deterministically wins the same-epoch tie-break per `compareBranchScores`.
+    //
+    // BOTH sides are re-drawn per attempt (the staged own commit is rolled
+    // back with `publishFailed`, which is a no-op on state under
+    // publish-before-apply). Re-drawing only the sibling against a FIXED own
+    // commit is not an independent trial: it asks "is our digest the minimum
+    // of the whole candidate set", which fails with probability
+    // 1/(attempts+1) — ~4% here, and that is exactly how often this test used
+    // to fail. Re-drawing both makes each attempt independent, so the search
+    // fails with probability 2^-25.
+    let sent = await stageOwnCommit();
     let sibling = await selfUpdateCommit(ctx, memberEpoch1);
-    let siblingKey = orderingKeyOf(sibling.commit, 1);
-    let attempts = 0;
-    while (
-      compareCommitOrderingKeys(ownKey, siblingKey) >= 0 &&
-      attempts < MAX_DIGEST_SEARCH_ATTEMPTS
+    for (
+      let attempts = 0;
+      attempts < MAX_DIGEST_SEARCH_ATTEMPTS &&
+      compareCommitOrderingKeys(
+        orderingKeyOf(sent.pending.commitMessage!, 1),
+        orderingKeyOf(sibling.commit, 1),
+      ) >= 0;
+      attempts++
     ) {
+      engine.publishFailed(sent.pending);
+      sent = await stageOwnCommit();
       sibling = await selfUpdateCommit(ctx, memberEpoch1);
-      siblingKey = orderingKeyOf(sibling.commit, 1);
-      attempts++;
     }
+    const ownKey = orderingKeyOf(sent.pending.commitMessage!, 1);
+    const siblingKey = orderingKeyOf(sibling.commit, 1);
     // Explicit ordering premise, asserted before the outcome: our commit MUST
     // order before the sibling's, so it deterministically wins the tie-break
     // by construction, not by accident of which one happened to be applied.
     expect(compareCommitOrderingKeys(ownKey, siblingKey)).toBeLessThan(0);
+
+    engine.confirmPublished(sent.pending);
+    expect(Number(engine.state.groupContext.epoch)).toBe(2);
+    const ownConfirmationTag = bytesToHex(engine.state.confirmationTag);
 
     const envelope = await peeler.wrapGroupMessage(
       sibling.commit,
@@ -365,31 +381,41 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
       peeler,
     });
 
-    const sent = await engine.send({
-      kind: "commit",
-      actorPubkey: adminPubkey,
-      extraProposals: [],
-    });
-    if (sent.kind !== "groupEvolution")
-      throw new Error("expected groupEvolution");
+    const stageOwnCommit = async () => {
+      const result = await engine.send({
+        kind: "commit",
+        actorPubkey: adminPubkey,
+        extraProposals: [],
+      });
+      if (result.kind !== "groupEvolution")
+        throw new Error("expected groupEvolution");
+      return result;
+    };
+
+    // Search for a pairing where the sibling's ordering key WINS against our
+    // own. Both sides are re-drawn per attempt for the same reason as the
+    // test above (independent trials, 2^-25 instead of ~4% failure).
+    let sent = await stageOwnCommit();
+    let sibling = await selfUpdateCommit(ctx, memberEpoch1);
+    for (
+      let attempts = 0;
+      attempts < MAX_DIGEST_SEARCH_ATTEMPTS &&
+      compareCommitOrderingKeys(
+        orderingKeyOf(sent.pending.commitMessage!, 1),
+        orderingKeyOf(sibling.commit, 1),
+      ) <= 0;
+      attempts++
+    ) {
+      engine.publishFailed(sent.pending);
+      sent = await stageOwnCommit();
+      sibling = await selfUpdateCommit(ctx, memberEpoch1);
+    }
+    const ownKey = orderingKeyOf(sent.pending.commitMessage!, 1);
+    const siblingKey = orderingKeyOf(sibling.commit, 1);
+    expect(compareCommitOrderingKeys(ownKey, siblingKey)).toBeGreaterThan(0);
+
     engine.confirmPublished(sent.pending);
     expect(Number(engine.state.groupContext.epoch)).toBe(2);
-    const ownKey = orderingKeyOf(sent.pending.commitMessage!, 1);
-
-    // Search for a sibling commit whose ordering key WINS against our own
-    // (the sibling's digest orders strictly before ours).
-    let sibling = await selfUpdateCommit(ctx, memberEpoch1);
-    let siblingKey = orderingKeyOf(sibling.commit, 1);
-    let attempts = 0;
-    while (
-      compareCommitOrderingKeys(ownKey, siblingKey) <= 0 &&
-      attempts < MAX_DIGEST_SEARCH_ATTEMPTS
-    ) {
-      sibling = await selfUpdateCommit(ctx, memberEpoch1);
-      siblingKey = orderingKeyOf(sibling.commit, 1);
-      attempts++;
-    }
-    expect(compareCommitOrderingKeys(ownKey, siblingKey)).toBeGreaterThan(0);
 
     const envelope = await peeler.wrapGroupMessage(
       sibling.commit,

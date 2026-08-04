@@ -15,6 +15,7 @@ import {
 } from "ts-mls";
 
 import { marmotAuthService } from "../core/auth-service.js";
+import { validateCommitLegality } from "../core/components/integrity.js";
 import {
   type AppWitness,
   type BranchCandidate,
@@ -29,6 +30,7 @@ import {
   deserializeClientState,
   serializeClientState,
 } from "../core/client-state.js";
+import { withCapturedProposals } from "./admin-policy.js";
 import type { EdgeSnapshot } from "./history-tree.js";
 import type { GroupPeeler } from "./types.js";
 import { framedEpoch } from "./wire-format.js";
@@ -131,13 +133,19 @@ export class ForkRecovery<TEnvelope> {
     const edges: EdgeSnapshot[] = [];
     let counter = 0;
 
+    // WIRE-03/CONV-01 (D-04/D-09): wrap the callback once so the commit's own
+    // proposals are captured for validateCommitLegality at the point a
+    // candidate edge would be created — the same shared adapter the inbound
+    // seam (ingest.ts) uses, so neither seam can drift from the other.
+    const capture = withCapturedProposals(callback);
+
     const witnessesAt = (state: ClientState): Promise<AppWitness[]> =>
       collectWitnessesAt({
         peeler: this.#peeler,
         ciphersuite: this.#ciphersuite,
         state,
         witnessEnvelopes,
-        callback,
+        callback: capture.callback,
       });
 
     const candidatesAt = async (state: ClientState): Promise<MlsMessage[]> => {
@@ -204,6 +212,10 @@ export class ForkRecovery<TEnvelope> {
             aad: new Uint8Array(),
           };
         } else {
+          // withCapturedProposals contract: clear any proposals left buffered
+          // from a prior candidate before this processMessage call, then read
+          // this commit's own proposals immediately after it resolves.
+          capture.take();
           try {
             next = await processMessage({
               context: {
@@ -213,13 +225,28 @@ export class ForkRecovery<TEnvelope> {
               },
               state,
               message,
-              callback,
+              callback: capture.callback,
             });
           } catch {
             continue;
           }
+          const capturedProposals = capture.take();
           if (next.kind !== "newState" || next.actionTaken === "reject")
             continue;
+
+          // WIRE-03/CONV-01 (D-04/D-09): a candidate commit that fails commit
+          // legality creates no branch edge at all — no grandfathering for
+          // edges replayed out of persisted retained history. The accepted
+          // consequence (D-04/D-09) is that a stored branch containing a
+          // previously-accepted violating commit becomes unselectable after
+          // upgrade (worst case the group reaches Unrecoverable); such a group
+          // is already forked from any conformant peer.
+          const violation = validateCommitLegality({
+            parentState: state,
+            resultingState: next.newState,
+            proposals: capturedProposals,
+          });
+          if (violation) continue;
         }
         const tag = bytesToHex(next.newState.confirmationTag);
         if (seen.has(tag)) continue;

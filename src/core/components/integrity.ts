@@ -1,11 +1,14 @@
 /** @module @category Core - App Components */
 import {
   appDataUpdateProposalType,
+  ClientState,
   getAppDataDictionary,
   GroupContextExtension,
   Proposal,
 } from "ts-mls";
 
+import { getAdminPolicy, getAppComponents } from "./dictionary.js";
+import { getGroupMembers } from "../group-members.js";
 import { APP_COMPONENTS_COMPONENT_ID, AppComponentId } from "./ids.js";
 import { compareBytes } from "./bytes.js";
 
@@ -28,7 +31,7 @@ export type CommitIntegrityViolationReason =
 
 /**
  * A typed, non-throwing violation returned by {@link validateAppComponentIntegrity},
- * `validateAdminLeafCoupling`, or `validateCommitLegality`.
+ * {@link validateAdminLeafCoupling}, or {@link validateCommitLegality}.
  *
  * `detail` is a diagnostic string naming component ids and counts only — never
  * raw pubkeys or other protocol-sensitive material (diagnostics-privacy rule,
@@ -178,4 +181,116 @@ export function validateAppComponentIntegrity(args: {
   }
 
   return undefined;
+}
+
+/**
+ * Ported from `validate_admin_leaf_coupling_for_staged_commit`: enforces the
+ * admin-policy resulting-epoch invariant (admin-policy-v1.md "Validation") —
+ * every admin key in the resulting epoch's admin set MUST correspond to an
+ * account with at least one member leaf in the resulting epoch.
+ *
+ * `resultingMemberAccounts` is the set of hex account pubkeys that have at
+ * least one member leaf in the RESULTING epoch (D-08: account-level, not
+ * leaf-level — an account with two leaves survives if only one is removed).
+ * Callers derive it from the post-apply state; this validator stays pure and
+ * MLS-free.
+ *
+ * When the resulting extensions carry no admin-policy bytes, this evaluates
+ * the carried-forward (current-epoch) admin set instead of skipping the check
+ * (Pitfall 3): a membership-only commit that de-leafs an admin without
+ * touching admin-policy bytes must still be rejected.
+ *
+ * An empty resolved admin set returns `undefined` (vacuously satisfied):
+ * component bytes cannot encode an empty admin list, so an empty resolved set
+ * means the epoch carries no admin-policy state at all — not a bypass, per
+ * MDK's own documented rationale for the same early return.
+ *
+ * Does NOT special-case SelfRemove (Pitfall 4): a non-admin's SelfRemove never
+ * changes the admin set and passes trivially here; an admin's SelfRemove is
+ * already refused earlier by `createAdminCommitPolicyCallback`
+ * (`src/engine/admin-policy.ts`), so this validator never needs its own
+ * carve-out for it.
+ *
+ * @see refs/mdk/crates/cgka-engine/src/app_components.rs `validate_admin_leaf_coupling_for_staged_commit`, `reject_admins_without_member_accounts`
+ * @see Marmot v2 spec: app-components/admin-policy-v1.md "Validation"
+ */
+export function validateAdminLeafCoupling(args: {
+  currentExtensions: GroupContextExtension[];
+  resultingExtensions: GroupContextExtension[];
+  resultingMemberAccounts: readonly string[];
+}): CommitIntegrityViolation | undefined {
+  let resultingAdmins: string[];
+  try {
+    const resultingSet = getAdminPolicy(args.resultingExtensions);
+    if (resultingSet !== undefined) {
+      resultingAdmins = resultingSet;
+    } else {
+      const carriedForward = getAdminPolicy(args.currentExtensions);
+      resultingAdmins = carriedForward ?? [];
+    }
+  } catch {
+    return {
+      reason: "admin-leaf-coupling",
+      detail: "resulting admin-policy component did not decode",
+    };
+  }
+
+  // An empty resolved admin set means the epoch has no admin-policy state at
+  // all (component bytes cannot encode an empty list) — vacuously satisfied,
+  // not a bypass.
+  if (resultingAdmins.length === 0) return undefined;
+
+  const memberAccounts = new Set(args.resultingMemberAccounts);
+  const orphaned = resultingAdmins.filter(
+    (admin) => !memberAccounts.has(admin),
+  );
+  if (orphaned.length > 0) {
+    return {
+      reason: "admin-leaf-coupling",
+      detail: `${orphaned.length} admin key(s) have no member leaf in the resulting epoch`,
+    };
+  }
+
+  return undefined;
+}
+
+/**
+ * The single shared seam adapter for commit legality: derives every argument
+ * {@link validateAppComponentIntegrity} and {@link validateAdminLeafCoupling}
+ * need from `parentState`/`resultingState`/`proposals`, so no seam re-derives
+ * them independently (the mdk#707 bug class — "a guard that exists on one
+ * seam only is a documented bug").
+ *
+ * Stays pure: reads two `ClientState` values, performs no I/O, and calls
+ * nothing from `src/engine` or `src/client`.
+ *
+ * Each calling seam supplies its own disposition for a returned violation:
+ * throw on send (D-02), `rejected` with the violation's `reason` on inbound
+ * (D-03), or drop the candidate edge on convergence/replay (D-04/D-09). This
+ * adapter itself is seam-agnostic.
+ */
+export function validateCommitLegality(args: {
+  parentState: ClientState;
+  resultingState: ClientState;
+  proposals: readonly Proposal[];
+}): CommitIntegrityViolation | undefined {
+  const appDataUpdateOps = collectAppDataUpdateOps(args.proposals);
+  const requiredIds =
+    getAppComponents(args.parentState.groupContext.extensions) ?? [];
+
+  const integrityViolation = validateAppComponentIntegrity({
+    currentExtensions: args.parentState.groupContext.extensions,
+    resultingExtensions: args.resultingState.groupContext.extensions,
+    appDataUpdateOps,
+    requiredIds,
+  });
+  if (integrityViolation) return integrityViolation;
+
+  const resultingMemberAccounts = getGroupMembers(args.resultingState);
+
+  return validateAdminLeafCoupling({
+    currentExtensions: args.parentState.groupContext.extensions,
+    resultingExtensions: args.resultingState.groupContext.extensions,
+    resultingMemberAccounts,
+  });
 }

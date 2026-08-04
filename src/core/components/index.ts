@@ -9,3 +9,4 @@ export * from "./avatar-url.js";
 export * from "./encrypted-media.js";
 export * from "./agent-text-stream.js";
 export * from "./dictionary.js";
+export * from "./integrity.js";

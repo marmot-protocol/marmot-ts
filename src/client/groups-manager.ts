@@ -85,6 +85,16 @@ export type GroupsManagerOptions<
    * convergence rewind window is persisted and survives a restart. Optional.
    */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
+  /**
+   * Dedicated backend for the persisted removed-inactive marker (D-12), keyed
+   * by the same group-id hex as {@link store}. When provided, the fact that an
+   * involuntary removal has already been realized survives a restart, so the
+   * `removed` event fires exactly once across process boundaries and a rewind
+   * that supersedes the removal can clear it durably. Optional — when omitted,
+   * realization degrades to in-memory-only (fires once per process, does not
+   * survive a restart).
+   */
+  removedMarkerStore?: GenericKeyValueStore<boolean>;
   /** The signer used for the clients identity */
   signer: EventSigner;
   /**
@@ -214,6 +224,7 @@ export class GroupsManager<
     this.#registry = new GroupRegistry<THistory, TMedia>({
       store: options.store,
       rewindStore: options.rewindStore,
+      removedMarkerStore: options.removedMarkerStore,
       convergencePolicy: options.convergencePolicy,
       ingestionPool: options.ingestionPool,
       signer: options.signer,
@@ -228,6 +239,7 @@ export class GroupsManager<
     this.#factory = new GroupFactory<THistory, TMedia>({
       store: options.store,
       rewindStore: options.rewindStore,
+      removedMarkerStore: options.removedMarkerStore,
       convergencePolicy: options.convergencePolicy,
       ingestionPool: options.ingestionPool,
       signer: options.signer,

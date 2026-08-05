@@ -19,6 +19,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { MarmotGroup } from "../../client/group/marmot-group.js";
+import { GroupsManager } from "../../client/groups-manager.js";
 import type {
   NostrNetworkInterface,
   PublishResponse,
@@ -316,6 +317,82 @@ describe("involuntary removal signal", () => {
         (call) => call[0] === "removed",
       ).length;
       expect(removedCallsAfterSecond).toBe(0);
+    } finally {
+      emitSpy.mockRestore();
+    }
+  });
+
+  /**
+   * CR-10 regression: `removedMarkerStore` must be reachable through the
+   * public client API, not only by hand-constructing a {@link MarmotGroup}.
+   * `GroupsManagerOptions` now carries it and forwards it to both the
+   * `GroupRegistry` (load path) and the `GroupFactory` (create path), so the
+   * D-12 marker is durable for real consumers.
+   *
+   * Without the plumbing, `MarmotGroup` falls back to
+   * `#removalRealizedInMemory`, which is reset by process exit — so the
+   * marker store stays empty and a "restart" (a second `GroupsManager` over
+   * the same backing stores) realizes the removal a second time, emitting a
+   * duplicate `removed`. Both assertions below fail on the unplumbed code.
+   */
+  it("plumbs removedMarkerStore through GroupsManager so realization survives a restart (CR-10)", async () => {
+    const { impl, ePubkey, eEpoch1, removeCommitEvent } =
+      await buildRemovalFixture();
+
+    // Backing stores shared across the simulated restart.
+    const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
+    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const signer = { getPublicKey: async () => ePubkey } as EventSigner;
+
+    const managerOptions = {
+      store: stateStore,
+      removedMarkerStore,
+      signer,
+      network: recordingNetwork([]),
+      cryptoProvider: defaultCryptoProvider,
+    };
+
+    // --- process 1: adopt "e"'s live state, then ingest the removing commit.
+    const manager1 = new GroupsManager(managerOptions);
+    const group = await manager1.import(eEpoch1);
+    const idHex = group.idStr;
+
+    // Sanity: the group is live and unmarked before the removing commit.
+    expect(await removedMarkerStore.getItem(idHex)).toBeNull();
+
+    const kinds: string[] = [];
+    for await (const r of manager1.ingest(group.id, [removeCommitEvent]))
+      kinds.push(r.kind);
+    expect(kinds).toContain("removed");
+    expect(group.state.groupActiveState.kind).toBe("removedFromGroup");
+
+    // The marker reached the durable store through the manager — this is the
+    // plumbing CR-10 was about. Unplumbed, this is still `null`.
+    expect(await removedMarkerStore.getItem(idHex)).toBe(true);
+
+    // --- process 2: a fresh manager over the same stores (a "restart").
+    // `MarmotGroup.fromClientState` realizes internally before returning, so
+    // spy on the shared prototype to observe emissions the loader makes.
+    const emitSpy = vi.spyOn(
+      EventEmitter.prototype as unknown as { emit: () => boolean },
+      "emit",
+    );
+    try {
+      const manager2 = new GroupsManager({
+        ...managerOptions,
+        network: recordingNetwork([]),
+      });
+      const reloaded = await manager2.get(idHex);
+
+      // Still the tombstone...
+      expect(reloaded.state.groupActiveState.kind).toBe("removedFromGroup");
+      // ...but realization already happened in process 1 and the marker is
+      // durable, so the load must NOT re-emit `removed`. With the in-memory
+      // fallback this fires again — a duplicate removal for the app.
+      const removedEmissions = emitSpy.mock.calls.filter(
+        (call) => call[0] === "removed",
+      ).length;
+      expect(removedEmissions).toBe(0);
     } finally {
       emitSpy.mockRestore();
     }

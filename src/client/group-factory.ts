@@ -32,6 +32,11 @@ export type GroupFactoryOptions<
   store: GenericKeyValueStore<SerializedClientState>;
   /** Dedicated store for the per-group rewind-history blob (optional). */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
+  /**
+   * Persisted removed-inactive marker store (D-12) inherited by new groups;
+   * see {@link MarmotGroupOptions.removedMarkerStore}.
+   */
+  removedMarkerStore?: GenericKeyValueStore<boolean>;
   signer: EventSigner;
   network: NostrNetworkInterface;
   /** Optional forensic audit sink inherited by new groups. */
@@ -64,6 +69,7 @@ export class GroupFactory<
 > {
   readonly #store: GenericKeyValueStore<SerializedClientState>;
   readonly #rewindStore?: GenericKeyValueStore<Uint8Array>;
+  readonly #removedMarkerStore?: GenericKeyValueStore<boolean>;
   readonly #signer: EventSigner;
   readonly #network: NostrNetworkInterface;
   readonly #audit?: AuditSink;
@@ -78,6 +84,7 @@ export class GroupFactory<
   constructor(options: GroupFactoryOptions<THistory, TMedia>) {
     this.#store = options.store;
     this.#rewindStore = options.rewindStore;
+    this.#removedMarkerStore = options.removedMarkerStore;
     this.#convergencePolicy = options.convergencePolicy;
     this.#ingestionPool = options.ingestionPool;
     this.#signer = options.signer;
@@ -134,6 +141,7 @@ export class GroupFactory<
       ciphersuite: ciphersuiteImpl,
       store: this.#store,
       rewindStore: this.#rewindStore,
+      removedMarkerStore: this.#removedMarkerStore,
       convergencePolicy: this.#convergencePolicy,
       ingestionPool: this.#ingestionPool,
       signer: this.#signer,

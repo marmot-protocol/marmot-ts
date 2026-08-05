@@ -110,6 +110,16 @@ export type MarmotClientOptions<
    */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
   /**
+   * Dedicated backend for the persisted removed-inactive marker (D-12), keyed
+   * by group-id hex like `groupStateStore`. When provided, the fact that an
+   * involuntary removal was already realized survives a restart, so the
+   * `removed` event fires exactly once across process boundaries and a
+   * re-convergence that supersedes the removing commit can clear it durably.
+   * Back it with the same durable backend as `groupStateStore`. Optional —
+   * when omitted, realization is in-memory-only and does not survive a restart.
+   */
+  removedMarkerStore?: GenericKeyValueStore<boolean>;
+  /**
    * Convergence policy applied to every group: branch selection and the
    * `maxRewindCommits` rollback horizon. Set `maxRewindCommits: Infinity` to
    * preserve the whole MLS history and keep forks of any age eligible for
@@ -212,6 +222,7 @@ export class MarmotClient<
     this.groups = new GroupsManager<THistory, TMedia>({
       store: options.groupStateStore,
       rewindStore: options.rewindStore,
+      removedMarkerStore: options.removedMarkerStore,
       convergencePolicy: options.convergencePolicy,
       ingestionPool: options.ingestionPool,
       signer: this.signer,

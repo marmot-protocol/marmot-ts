@@ -37,6 +37,12 @@ export type GroupRegistryOptions<
   store: GenericKeyValueStore<SerializedClientState>;
   /** Dedicated store for the per-group full-fork history tree (optional). */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
+  /**
+   * Persisted removed-inactive marker store (D-12) inherited by loaded groups;
+   * see {@link MarmotGroupOptions.removedMarkerStore}. Without it, removal
+   * realization degrades to in-memory-only and cannot survive a restart.
+   */
+  removedMarkerStore?: GenericKeyValueStore<boolean>;
   signer: EventSigner;
   network: NostrNetworkInterface;
   /** Optional forensic audit sink inherited by loaded groups. */
@@ -78,6 +84,7 @@ export class GroupRegistry<
 > extends EventEmitter<GroupRegistryEvents<THistory, TMedia>> {
   readonly store: GenericKeyValueStore<SerializedClientState>;
   readonly rewindStore?: GenericKeyValueStore<Uint8Array>;
+  readonly removedMarkerStore?: GenericKeyValueStore<boolean>;
   readonly signer: EventSigner;
   readonly network: NostrNetworkInterface;
   readonly audit?: AuditSink;
@@ -107,6 +114,7 @@ export class GroupRegistry<
     super();
     this.store = options.store;
     this.rewindStore = options.rewindStore;
+    this.removedMarkerStore = options.removedMarkerStore;
     this.signer = options.signer;
     this.network = options.network;
     this.audit = options.audit;
@@ -141,6 +149,7 @@ export class GroupRegistry<
     return MarmotGroup.fromClientState<THistory, TMedia>(state, {
       store: this.store,
       rewindStore: this.rewindStore,
+      removedMarkerStore: this.removedMarkerStore,
       retained,
       historyTree,
       convergencePolicy: this.convergencePolicy,

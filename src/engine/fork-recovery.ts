@@ -34,6 +34,9 @@ import { withCapturedProposals } from "./admin-policy.js";
 import type { EdgeSnapshot } from "./history-tree.js";
 import type { GroupPeeler } from "./types.js";
 import { framedCommitProposals, framedEpoch } from "./wire-format.js";
+import { logger } from "../utils/debug.js";
+
+const log = logger.extend("ForkRecovery");
 
 /** One applied step on a candidate branch: parent → message → child. */
 export interface ChainLink {
@@ -234,10 +237,31 @@ export class ForkRecovery<TEnvelope> {
         // replay path rather than dropping the candidate — replay yields both
         // the proposals and the same legality gate, and only fails for a commit
         // this leaf authored, which Marmot never wires as a `PrivateMessage`.
-        const knownProposals =
-          known && known.parentTag === bytesToHex(state.confirmationTag)
-            ? framedCommitProposals(message, state)
-            : undefined;
+        const knownAtThisParent =
+          known !== undefined &&
+          known.parentTag === bytesToHex(state.confirmationTag);
+        const knownProposals = knownAtThisParent
+          ? framedCommitProposals(message, state)
+          : undefined;
+
+        // CR-08: make the fall-through observable. Reaching it for a commit we
+        // recorded against THIS parent means the proposal set could not be
+        // reconstructed, and replay is the only remaining route. For a commit
+        // this leaf authored, replay is guaranteed to throw (RFC 9420: an
+        // `UpdatePath` never encrypts a path secret to the committer's own
+        // leaf), so the candidate — potentially our own deeper canonical
+        // branch — is dropped entirely, letting a shallower competitor win the
+        // rewind. The root cause was own staged proposals never reaching the
+        // tree node snapshot; `MarmotGroupEngine.#recordProposalStaged` now
+        // runs for our own proposals too, so reconstruction succeeds. This log
+        // exists so any residual occurrence is diagnosable instead of silent.
+        if (knownAtThisParent && !knownProposals) {
+          log(
+            "known-state short-circuit unavailable at parent %s: could not reconstruct proposals for commit %s (private-message commit, or a ProposalRef absent from the parent's unappliedProposals) — falling back to replay, which drops the candidate if we authored it",
+            bytesToHex(state.confirmationTag),
+            bytesToHex(this.#commitDigestOf(message)),
+          );
+        }
 
         if (known && knownProposals) {
           // A commit we already applied ourselves (own or previously-adopted

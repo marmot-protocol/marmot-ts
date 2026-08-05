@@ -383,6 +383,33 @@ export class MarmotGroupEngine<TEnvelope> {
   }
 
   /**
+   * Refreshes the history-tree node snapshot for a state whose
+   * `unappliedProposals` just changed, so the persisted snapshot reflects the
+   * proposals staged against it.
+   *
+   * CR-08: this MUST run for our OWN staged proposals as well as inbound ones.
+   * A tree node snapshot is captured when its commit is recorded and is never
+   * refreshed by `recordCommit`, so a proposal staged afterwards was invisible
+   * to the persisted tree. After a restart `GroupRegistry.#retainedFromTree`
+   * rebuilds `RetainedHistoryStore` purely from those snapshots, leaving
+   * `retained.stateAt(forkEpoch).unappliedProposals === {}` — so
+   * `framedCommitProposals` could not resolve the `ProposalRef` of a commit
+   * that bundled our own staged proposal by reference, the CONV-04
+   * short-circuit fell through to replay, replaying our own commit threw
+   * (RFC 9420: an `UpdatePath` never encrypts a path secret to the committer's
+   * own leaf), and our own deeper canonical branch was dropped as a candidate
+   * entirely — handing the rewind to a shallower competitor.
+   */
+  #recordProposalStaged(state: ClientState): void {
+    try {
+      const tag = bytesToHex(state.confirmationTag);
+      if (this.#tree.hasNode(tag)) this.#tree.updateSnapshot(tag, state);
+    } catch (error) {
+      this.#log()("history tree recordProposalStaged failed: %o", error);
+    }
+  }
+
+  /**
    * Epochs the active lifecycle still needs and that retained-history pruning
    * MUST NOT drop, even when older than the rollback horizon (`retained-history.md`
    * "Pruning"). Currently a staged local commit awaiting publish confirmation
@@ -899,6 +926,13 @@ export class MarmotGroupEngine<TEnvelope> {
     }
 
     this.#setState(pending.newState);
+    // CR-08: a proposal WE staged must land in the tree node snapshot exactly
+    // as an inbound one does (`ingest.ts` → `recordProposalStaged`). Without
+    // this, the persisted snapshot for the current tip keeps
+    // `unappliedProposals === {}` and a later commit that bundles this
+    // proposal by reference becomes unvalidatable — and therefore unbuildable
+    // as a candidate — after a restart.
+    if (pending.kind === "proposal") this.#recordProposalStaged(this.#state);
   }
 
   /**
@@ -1544,14 +1578,7 @@ export class MarmotGroupEngine<TEnvelope> {
       setState: (state) => this.#setState(state),
       recordCommit: (parentState, message, newState) =>
         this.#recordCommitNode(parentState, message, newState),
-      recordProposalStaged: (state) => {
-        try {
-          const tag = bytesToHex(state.confirmationTag);
-          if (this.#tree.hasNode(tag)) this.#tree.updateSnapshot(tag, state);
-        } catch (error) {
-          this.#log()("history tree recordProposalStaged failed: %o", error);
-        }
-      },
+      recordProposalStaged: (state) => this.#recordProposalStaged(state),
       createAdminCallback: () => this.#createAdminVerificationCallback(),
       resolveFork: (forkEpoch, pool, encrypted, witnessEnvelopes) =>
         this.#resolveFork(forkEpoch, pool, encrypted, witnessEnvelopes),

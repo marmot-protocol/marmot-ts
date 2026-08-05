@@ -323,6 +323,73 @@ describe("involuntary removal signal", () => {
   });
 
   /**
+   * WR-16 regression: `#applyRemovalWithdrawal` cleared the marker on ANY
+   * `stateInvalidated` carrying a withdrawn `selfRemoved`, with no check that
+   * canonical state had actually left the tombstone.
+   *
+   * A withdrawn `selfRemoved` only means the commit that removed us was
+   * superseded — not that we are a member again. A live rewind can supersede
+   * removal-commit A and land on branch B which ALSO removes us. Clearing
+   * unconditionally left `marker = false` while `groupActiveState.kind ===
+   * "removedFromGroup"` and re-emitted nothing, so the NEXT load realized the
+   * removal all over again and emitted a duplicate `removed` — violating the
+   * exactly-once contract from the other side.
+   */
+  it("keeps the removal marker when a rewind supersedes one removal but leaves us removed (WR-16)", async () => {
+    const { impl, ePubkey, eEpoch1, removeCommitEvent } =
+      await buildRemovalFixture();
+
+    const eStore = new InMemoryKeyValueStore<SerializedClientState>();
+    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+
+    const eGroup = marmotGroup(
+      eEpoch1,
+      ePubkey,
+      impl,
+      [],
+      eStore,
+      removedMarkerStore,
+    );
+    const idHex = eGroup.idStr;
+    await eGroup.save(true);
+
+    let removedEmissions = 0;
+    eGroup.on("removed", () => removedEmissions++);
+
+    // A genuine removal: tombstone persisted, marker written, `removed` once.
+    for await (const _ of eGroup.ingest([removeCommitEvent])) void _;
+    expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
+    expect(await removedMarkerStore.getItem(idHex)).toBe(true);
+    expect(removedEmissions).toBe(1);
+
+    // Now a rewind that withdraws that removal's `selfRemoved` notification
+    // while canonical state REMAINS the tombstone (it landed on another
+    // branch that also removes us). Stub the session stream to yield exactly
+    // the shape the engine produces at such a rewind site.
+    (
+      eGroup.session as unknown as {
+        ingest: (events: NostrEvent[]) => AsyncGenerator<unknown>;
+      }
+    ).ingest = async function* () {
+      yield {
+        kind: "stateInvalidated",
+        commitDigest: new Uint8Array(32),
+        forkEpoch: 1,
+        withdrawn: [{ kind: "selfRemoved", commitDigest: new Uint8Array(32) }],
+        disposition: { kind: "invalidated" },
+      };
+    };
+
+    for await (const _ of eGroup.ingest([])) void _;
+
+    // Membership was never restored, so the marker must survive...
+    expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
+    expect(await removedMarkerStore.getItem(idHex)).toBe(true);
+    // ...and no duplicate `removed` is emitted for what is one removal.
+    expect(removedEmissions).toBe(1);
+  });
+
+  /**
    * CR-10 regression: `removedMarkerStore` must be reachable through the
    * public client API, not only by hand-constructing a {@link MarmotGroup}.
    * `GroupsManagerOptions` now carries it and forwards it to both the

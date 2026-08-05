@@ -545,6 +545,8 @@ export class MarmotGroup<
     // A tree-fed switch can also land us ON a branch that removes us. The
     // realization obligation is state-derived (D-12), so re-assert it here;
     // idempotent, and a no-op unless canonical state is now the tombstone.
+    // WR-16: `ingest()` runs this identical trailing step, so neither rewind
+    // path can drift from the other.
     await this.#realizeRemovalIfNeeded();
   }
 
@@ -803,6 +805,16 @@ export class MarmotGroup<
 
       yield result;
     }
+
+    // WR-16: same trailing re-assert as `reconverge()`, so the live and
+    // load-time rewind paths run an identical sequence (per-result
+    // withdrawal handling, then a state-derived realization check). A rewind
+    // during ingest can land us ON a branch that removes us without producing
+    // a `removed` result, and the realization obligation is state-derived
+    // (D-12). Idempotent: a no-op unless canonical state is the tombstone and
+    // realization has not happened yet.
+    await this.#realizeRemovalIfNeeded();
+
     if (this.session.historyTree.size !== historySizeBefore)
       this.emit("historyChanged", this);
   }
@@ -824,6 +836,22 @@ export class MarmotGroup<
       !result.withdrawn.some((n) => n.kind === "selfRemoved")
     )
       return;
+
+    // WR-16: a withdrawn `selfRemoved` means the commit that removed us was
+    // superseded — NOT necessarily that we are a member again. A rewind can
+    // supersede removal-commit A and land on branch B which ALSO removes us.
+    // Clearing unconditionally left `marker = false` while
+    // `groupActiveState.kind === "removedFromGroup"`, with no re-emitted
+    // `removed` — so the next load realized the removal all over again and
+    // emitted a duplicate, violating the exactly-once contract from the other
+    // side. Only clear once canonical state has actually left the tombstone.
+    if (this.state.groupActiveState.kind === "removedFromGroup") {
+      this.log(
+        "rewind superseded one removal but canonical state is still removed — keeping the marker",
+      );
+      return;
+    }
+
     this.log("rewind superseded our removal — clearing removal marker");
     await this.#clearRemovalMarker();
   }

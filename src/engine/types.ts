@@ -38,9 +38,17 @@ export interface GroupPeeler<TEnvelope> {
 export type PendingState = {
   kind: "proposal" | "commit" | "selfUpdate";
   newState: ClientState;
-  /** Parent state before apply; required for commits (retained-history). */
+  /**
+   * Parent state before apply. Required for BOTH commit-producing kinds —
+   * `"commit"` and `"selfUpdate"` (CR-09) — because `confirmPublished` records
+   * the applied commit into retained history and the fork tree from it.
+   * Absent only for `"proposal"`.
+   */
   parentState?: ClientState;
-  /** Applied commit MLS message; required for commits (retained-history). */
+  /**
+   * Applied commit MLS message. Required for both `"commit"` and
+   * `"selfUpdate"`; absent only for `"proposal"`.
+   */
   commitMessage?: MlsMessage;
 };
 

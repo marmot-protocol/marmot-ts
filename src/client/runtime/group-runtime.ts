@@ -134,10 +134,20 @@ export class GroupRuntime {
     envelope: NostrEvent,
     pending: PendingState,
   ): Promise<Record<string, PublishResponse>> {
-    const response = await this.#publishToGroupRelays(
-      envelope,
-      "Failed to publish commit event",
-    );
+    // A selfUpdate is a commit and now stages through `PendingPublish`
+    // (CR-09/WR-17), so a publish failure MUST roll the lifecycle back —
+    // otherwise the engine is stuck and can never prepare another commit.
+    let response: Record<string, PublishResponse>;
+    try {
+      response = await this.#publishToGroupRelays(
+        envelope,
+        "Failed to publish commit event",
+      );
+    } catch (err) {
+      this.#publishFailed(pending);
+      throw err;
+    }
+
     this.#confirmPublished(pending);
     await this.#save();
     return response;

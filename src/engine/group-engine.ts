@@ -657,6 +657,18 @@ export class MarmotGroupEngine<TEnvelope> {
       case "selfUpdate": {
         const parentState = this.state;
 
+        // WR-17: a selfUpdate IS a commit — it advances the epoch and produces
+        // a new confirmation tag — so it runs the same lifecycle gate as
+        // `case "commit"`. Without it, a selfUpdate issued while another commit
+        // is staged in PendingPublish builds a second commit off the same
+        // parent and whichever `confirmPublished` lands second silently
+        // overwrites the other's state, forking the group against itself.
+        if (!mayPrepareLocalCommit(this.#lifecycle)) {
+          throw new Error(
+            `Cannot prepare a commit while the group is ${this.#lifecycle}`,
+          );
+        }
+
         // CR-03: `extraProposals: []` does NOT make this a proposal-free
         // commit. `createCommit` bundles every entry of
         // `state.unappliedProposals` by reference in addition to
@@ -693,13 +705,35 @@ export class MarmotGroupEngine<TEnvelope> {
 
         this.#assertStagedCommitLegal(parentState, newState, extraProposals);
 
+        // WR-17: same post-staging bookkeeping as `case "commit"` — the
+        // throw above happens first, so a rejected selfUpdate leaves the
+        // engine Stable with nothing to roll back. The parent-epoch pin keeps
+        // retained pruning from dropping the epoch this commit branches from
+        // while its publish is unconfirmed.
+        this.#transitionLifecycle(
+          groupLifecycleStates.pendingPublish,
+          "begin_pending",
+          "selfUpdate",
+        );
+        this.#stagedCommitParentEpoch = Number(parentState.groupContext.epoch);
+
         this.#sentContentIds.add(contentDedupId(commit));
         const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
 
+        // CR-09: carry `parentState` and `commitMessage` so `confirmPublished`
+        // can record this commit into retained history and the fork tree. A
+        // selfUpdate that is only `#setState`d leaves the tree with no node for
+        // the new tip, which makes `GroupRegistry.#loadHistory` discard the
+        // whole persisted fork history on the next load.
         return {
           kind: "selfUpdate",
           envelope,
-          pending: { kind: "selfUpdate", newState },
+          pending: {
+            kind: "selfUpdate",
+            newState,
+            parentState,
+            commitMessage: commit,
+          },
         };
       }
     }
@@ -815,9 +849,21 @@ export class MarmotGroupEngine<TEnvelope> {
     if (violation) throw new UsageError(violation.detail);
   }
 
-  /** Applies staged state after publish confirmation (publish-before-apply). */
+  /**
+   * Applies staged state after publish confirmation (publish-before-apply).
+   *
+   * CR-09: `selfUpdate` takes the identical path to `commit` — it is a commit
+   * in every sense that matters here (it advances the epoch and produces a new
+   * confirmation tag), so it must be recorded into retained history and the
+   * fork tree. Recording it only via `#setState` left `RetainedHistoryStore`
+   * with no `stateAt(newEpoch)` (so `resolveFork` could never rebuild across a
+   * selfUpdate) and the tree with no node for the new tip (so the next
+   * `GroupRegistry.#loadHistory` discarded the entire persisted fork history).
+   * Since MIP-02 tells clients to selfUpdate immediately after joining from a
+   * Welcome, the normal join path destroyed its own convergence persistence.
+   */
   confirmPublished(pending: PendingState): void {
-    if (pending.kind === "commit") {
+    if (pending.kind === "commit" || pending.kind === "selfUpdate") {
       if (!pending.parentState || !pending.commitMessage) {
         throw new Error(
           "Commit pending state requires parentState and commitMessage",
@@ -855,9 +901,14 @@ export class MarmotGroupEngine<TEnvelope> {
     this.#setState(pending.newState);
   }
 
-  /** Reverts lifecycle when a staged commit publish fails or is abandoned. */
+  /**
+   * Reverts lifecycle when a staged commit publish fails or is abandoned.
+   * Covers both commit-producing seams (CR-09/WR-17): a selfUpdate now also
+   * transitions to `PendingPublish`, so a failed publish must roll it back or
+   * the engine would be stuck unable to prepare any further commit.
+   */
   publishFailed(pending: PendingState): void {
-    if (pending.kind !== "commit") return;
+    if (pending.kind !== "commit" && pending.kind !== "selfUpdate") return;
     if (this.#lifecycle !== groupLifecycleStates.pendingPublish) return;
     const pendingEpoch = Number(pending.newState.groupContext.epoch);
     const restoredEpoch = Number(this.#state.groupContext.epoch);

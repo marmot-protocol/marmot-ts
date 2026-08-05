@@ -1801,11 +1801,31 @@ export class MarmotGroupEngine<TEnvelope> {
           linkDigest,
           linkEpoch,
         );
-        const derived = deriveStateNotifications({
-          parentState: link.parent,
-          resultingState: link.child,
-          commitDigest: linkDigest,
-        });
+        // WR-15: this is the ONE derivation site that runs after state has
+        // already advanced — `#setState(resolution.winnerTip)` above — so an
+        // escaping throw would abandon the rewind mid-flight, before
+        // `GroupSession.ingest` can persist it. Its sibling seams
+        // (`fork-recovery.ts`, `#treeResolution`) all wrap their validators
+        // for exactly this reason. `deriveStateNotifications` reaches
+        // `getGroupMembers` → `getCredentialPubkey`, which throws for a leaf
+        // whose identity is not a valid 32-byte hex key; that leaf is now
+        // skipped at the source, but log-and-continue here keeps one bad link
+        // from taking down the whole chain.
+        let derived: StateNotification[];
+        try {
+          derived = deriveStateNotifications({
+            parentState: link.parent,
+            resultingState: link.child,
+            commitDigest: linkDigest,
+          });
+        } catch (error) {
+          this.#log()(
+            "state notification derivation failed for link %s: %o",
+            bytesToHex(link.child.confirmationTag),
+            error,
+          );
+          continue;
+        }
         this.#stateNotifications.record(linkDigest, linkEpoch, derived);
         if (!alreadyRecorded) chainNotifications.push(...derived);
       }

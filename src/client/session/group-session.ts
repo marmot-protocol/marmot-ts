@@ -38,7 +38,16 @@ export type ProcessedIngestResult = {
   result: import("ts-mls").ProcessMessageResult;
   event: NostrEvent;
   message: import("ts-mls").MlsMessage;
-  /** Commit-digest-attributed group-state notifications derived from this commit (D-10/D-11). */
+  /**
+   * Commit-digest-attributed group-state notifications (D-10/D-11).
+   *
+   * ATTRIBUTION (WR-18): not necessarily derived from this `message`. When
+   * this result reports an applied fork resolution, the array concatenates the
+   * notifications of EVERY commit on the adopted winner chain, and `message`
+   * is only the representative fork-pool envelope the rewind was reported
+   * against. Group by each entry's `commitDigest`; never pair the array with
+   * `message` positionally.
+   */
   notifications?: StateNotification[];
 };
 
@@ -112,7 +121,14 @@ export type RemovedIngestResult = {
   result: import("ts-mls").ProcessMessageResult;
   event: NostrEvent;
   message: import("ts-mls").MlsMessage;
-  /** Commit-digest-attributed group-state notifications derived from this commit (D-10/D-11/D-12). */
+  /**
+   * Commit-digest-attributed group-state notifications (D-10/D-11/D-12).
+   *
+   * ATTRIBUTION (WR-18): as with {@link ProcessedIngestResult.notifications},
+   * a result reporting an applied fork resolution carries the WHOLE adopted
+   * winner chain's notifications, not just this `message`'s. Attribute by
+   * `commitDigest`.
+   */
   notifications?: StateNotification[];
 };
 

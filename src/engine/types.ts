@@ -97,9 +97,18 @@ export type ProcessedIngestResult<TEnvelope> = {
   envelope: TEnvelope;
   message: MlsMessage;
   /**
-   * Commit-digest-attributed group-state notifications derived from this
-   * commit (D-10/D-11, `convergence.md` "Applying the selected branch").
-   * Optional — populated by the seam that wires notification derivation.
+   * Commit-digest-attributed group-state notifications (D-10/D-11,
+   * `convergence.md` "Applying the selected branch"). Optional — populated by
+   * the seam that wires notification derivation.
+   *
+   * ATTRIBUTION (WR-18): these are NOT always this `message`'s own
+   * notifications. In the normal in-order case they are. But when this result
+   * reports an applied fork resolution, the array is the concatenation of the
+   * notifications derived from EVERY commit on the adopted winner chain, while
+   * `message` is merely the representative fork-pool envelope the rewind was
+   * reported against — it may be unrelated to most of the entries. Never pair
+   * `message` with `notifications` positionally; each entry carries its own
+   * `commitDigest`, which is the only correct way to attribute it.
    */
   notifications?: StateNotification[];
 };
@@ -232,9 +241,14 @@ export type RemovedIngestResult<TEnvelope> = {
   envelope: TEnvelope;
   message: MlsMessage;
   /**
-   * Commit-digest-attributed group-state notifications derived from this
-   * commit (D-10/D-11/D-12) — in particular the `selfRemoved` notification
-   * attributed to the very commit that removed us.
+   * Commit-digest-attributed group-state notifications (D-10/D-11/D-12) — in
+   * particular the `selfRemoved` notification attributed to the very commit
+   * that removed us.
+   *
+   * ATTRIBUTION (WR-18): as with {@link ProcessedIngestResult.notifications},
+   * when this result reports an applied fork resolution the array spans the
+   * WHOLE adopted winner chain, not just this `message`. Attribute entries by
+   * their `commitDigest`, never by position against `message`.
    */
   notifications?: StateNotification[];
 };

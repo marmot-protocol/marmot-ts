@@ -832,6 +832,12 @@ export async function* ingestEnvelopes<TEnvelope>(
           // actually produced the tombstone. `resolution.notifications` is
           // derived (and ledger-recorded) by `#applyForkResolution`, the same
           // shared rewind-apply path the direct commit branch above uses.
+          //
+          // WR-18: `notifications` here spans the WHOLE applied winner chain,
+          // while `message` is only `rep.message`. This is the one place the
+          // per-commit reading of `ProcessedIngestResult`/`RemovedIngestResult`
+          // does not hold — consumers must attribute by each entry's
+          // `commitDigest`, as those types now document.
           yield {
             kind: "removed",
             result: resolution.result,

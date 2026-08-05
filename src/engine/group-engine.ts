@@ -1787,17 +1787,27 @@ export class MarmotGroupEngine<TEnvelope> {
         const linkDigest = commitDigest(
           encode(mlsMessageEncoder, link.message),
         );
+        const linkEpoch = Number(link.child.groupContext.epoch);
+        // WR-14: `invalidatedByRewind` KEEPS entries whose digest is on the
+        // winning chain, so a prefix link that was already applied and
+        // ledger-recorded in-order (`ingest.ts`) is still recorded here. It
+        // must not be reported to the caller a second time — the fork root can
+        // sit below the divergence point, e.g. competing commits at epochs F
+        // and F+1 give a winner chain of [F->c1 (already applied), F+1->peer].
+        // `record` is idempotent, but the caller-facing `chainNotifications`
+        // needs the same filter or the app sees a duplicate delivery for a
+        // commit it already processed.
+        const alreadyRecorded = this.#stateNotifications.has(
+          linkDigest,
+          linkEpoch,
+        );
         const derived = deriveStateNotifications({
           parentState: link.parent,
           resultingState: link.child,
           commitDigest: linkDigest,
         });
-        this.#stateNotifications.record(
-          linkDigest,
-          Number(link.child.groupContext.epoch),
-          derived,
-        );
-        chainNotifications.push(...derived);
+        this.#stateNotifications.record(linkDigest, linkEpoch, derived);
+        if (!alreadyRecorded) chainNotifications.push(...derived);
       }
     }
 

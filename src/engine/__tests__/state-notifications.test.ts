@@ -38,6 +38,39 @@ describe("StateNotificationLedger", () => {
     expect(ledger.size).toBe(1);
   });
 
+  /**
+   * WR-14 regression: `invalidatedByRewind` KEEPS entries whose digest is on
+   * the winning chain, so every prefix link already ledger-recorded when it
+   * was first applied in-order survives the rewind. The CR-07 loop then
+   * `record()`s each winner-chain link again, which used to push a SECOND
+   * entry with the same digest and epoch. A later rewind superseding those
+   * links then withdrew each of their notifications twice, breaking CONV-03's
+   * "withdraw exactly the notifications it derived" invariant from the other
+   * direction, and compounding the ledger's unbounded growth (WR-02).
+   */
+  it("record is idempotent on (digest, epoch), so a rewind cannot duplicate an already-recorded link", () => {
+    const ledger = new StateNotificationLedger();
+    ledger.record(digest("c1"), 2, [epochAdvanced("c1", 1, 2)]);
+
+    // The CR-07 winner-chain loop re-records the same already-applied link.
+    ledger.record(digest("c1"), 2, [epochAdvanced("c1", 1, 2)]);
+    expect(ledger.size).toBe(1);
+
+    // A later rewind that supersedes it withdraws its notifications exactly
+    // once, not twice.
+    const withdrawn = ledger.invalidatedByRewind(1, new Set());
+    expect(withdrawn).toHaveLength(1);
+    expect(ledger.size).toBe(0);
+  });
+
+  it("has distinguishes the same digest at a different epoch", () => {
+    const ledger = new StateNotificationLedger();
+    ledger.record(digest("c1"), 2, [epochAdvanced("c1", 1, 2)]);
+    expect(ledger.has(digest("c1"), 2)).toBe(true);
+    expect(ledger.has(digest("c1"), 3)).toBe(false);
+    expect(ledger.has(digest("other"), 2)).toBe(false);
+  });
+
   it("invalidatedByRewind returns notifications above the fork epoch whose digest is absent from canonicalDigests, and removes them", () => {
     const ledger = new StateNotificationLedger();
     ledger.record(digest("shared"), 1, [epochAdvanced("shared", 0, 1)]);

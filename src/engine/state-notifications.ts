@@ -187,8 +187,30 @@ export class StateNotificationLedger {
   }
 
   /**
+   * Whether a commit's notifications are already recorded for `(digest,
+   * epoch)`.
+   *
+   * WR-14: `invalidatedByRewind` KEEPS entries whose digest is on the winning
+   * chain, so every prefix link that was already ledger-recorded when it was
+   * first applied in-order survives a rewind. Callers use this to avoid
+   * re-reporting those links to the application as freshly-applied.
+   */
+  has(digest: Uint8Array, epoch: number): boolean {
+    const key = bytesToHex(digest);
+    return this.#entries.some((e) => e.digest === key && e.epoch === epoch);
+  }
+
+  /**
    * Remembers the notifications derived from a commit at `epoch`. A record
    * with an empty notification array is skipped so the ledger stays bounded.
+   *
+   * Idempotent on `(digest, epoch)` (WR-14): a rewind whose winning chain
+   * includes links that were already applied and recorded in-order would
+   * otherwise push a second entry with the same digest and epoch. A later
+   * rewind that superseded them then withdrew each of those notifications
+   * TWICE, breaking CONV-03's "withdraw exactly the notifications it derived"
+   * invariant from the other direction, and compounding the ledger's
+   * unbounded growth.
    */
   record(
     digest: Uint8Array,
@@ -196,6 +218,7 @@ export class StateNotificationLedger {
     notifications: StateNotification[],
   ): void {
     if (notifications.length === 0) return;
+    if (this.has(digest, epoch)) return;
     this.#entries.push({ digest: bytesToHex(digest), epoch, notifications });
   }
 

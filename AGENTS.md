@@ -49,6 +49,7 @@
 ---
 
 <!-- GSD:project-start source:PROJECT.md -->
+
 ## Project
 
 **marmot-ts**
@@ -79,21 +80,28 @@ correctly, across every supported runtime.
   `--frozen-lockfile`; `pnpm lint` is prettier-only.
 - **Scope discipline**: single-device wire interop is the finish line; do not build
   multi-device or push in this milestone.
+
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:codebase/STACK.md -->
+
 ## Technology Stack
 
 ## Languages
+
 - TypeScript 6.0.3 — all library source under `src/`, strict mode, `module: NodeNext`
 - Shell — `scripts/publish-nostr.sh` (release notification)
+
 ## Runtime
+
 - Node.js >=20.0.0 (primary target; tested on 20.x, 22.x, 24.x in CI)
 - Bun >=1.1.0 (supported; tested on latest and 1.1 in CI)
 - Deno >=2.0.0 (supported; tested via `deno run -A --node-modules-dir=auto npm:vitest run` in CI)
 - pnpm 10
 - Lockfile: `pnpm-lock.yaml` present; CI always runs with `--frozen-lockfile`
+
 ## Frameworks
+
 - None (pure ESM TypeScript library; no web or server framework)
 - Vitest 3.2.6 — config at `vitest.config.ts`; environment: `node`; matches `src/**/*.test.ts`
 - VitePress 2.0.0-alpha.17 — `docs/` as source; built to `.vitepress/dist`
@@ -103,7 +111,9 @@ correctly, across every supported runtime.
 - Prettier 3.9.3 — formatting; config at `.prettierrc` (2-space indent, spaces not tabs)
 - Husky 9.1.7 + lint-staged 17.0.8 — pre-commit hook formats staged files only
 - @changesets/cli 2.31.0 — changelog management; config at `.changeset/config.json`; publishes with npm provenance (`changeset publish --provenance`)
+
 ## Key Dependencies
+
 - `ts-mls` (workspace `./ts-mls`, v2.0.0-rc.14) — MLS RFC 9420 implementation; the foundational cryptographic group protocol engine
 - `@hpke/core` ^1.9.0 — Hybrid Public Key Encryption (HPKE); used by ts-mls and directly for key encapsulation
 - `@noble/ciphers` ^2.2.0 — ChaCha20-Poly1305 (`src/utils/nip44-binary.ts`), AES (`src/core/`)
@@ -115,11 +125,15 @@ correctly, across every supported runtime.
 - `debug` ^4.4.3 — scoped debug logging throughout library
 - `eventemitter3` ^5.0.4 — EventEmitter used in client layer
 - `applesauce-accounts` ^6.2.0 — `PrivateKeyAccount` used in all integration and client tests; not a runtime dependency of the library itself
+
 ## Workspace Layout
+
 - `.` — the main library (`@internet-privacy/marmot-ts`)
 - `ts-mls` — local MLS implementation (submodule / nested package)
 - `examples/*` — example applications (`opentui`, `forker`, `tunnels`)
+
 ## TypeScript Configuration
+
 - Target: `ES2022`
 - Module/ModuleResolution: `NodeNext` (requires `.js` extension on all relative imports in `src/`)
 - Strict: all `noImplicit*`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`, `noImplicitReturns`
@@ -127,7 +141,9 @@ correctly, across every supported runtime.
 - Excludes: test files and `__tests__` directories
 - Extends `tsconfig.build.json`
 - Adds `noEmit: true`; includes `src` and `__tests__`; types: `vitest`, `vitest/globals`, `node`
+
 ## Public Entrypoints
+
 - `.` → `dist/index.js` — re-exports client + core + utils + engine surface
 - `./mls` → `dist/mls.js` — re-exports `ts-mls` for downstream apps
 - `./client` → `dist/client/index.js`
@@ -138,22 +154,29 @@ correctly, across every supported runtime.
 - `./extra/audit/node` → `dist/extra/audit/node.js`
 - `./extra/audit/browser` → `dist/extra/audit/browser.js`
 - `./utils` → `dist/utils/index.js`
+
 ## Configuration
+
 - No `.env` files present in repo
 - Required secrets are injected via GitHub Actions environment variables (`NPM_TOKEN`, `NOSTR_KEY`, `GITHUB_TOKEN`)
 - `tsconfig.build.json` — TypeScript emit config
 - `typedoc.json` — TypeDoc reference generation
 - `vitest.config.ts` — test runner config
+
 ## Platform Requirements
+
 - Node.js 20+ with pnpm 10
 - Runtime-agnostic ESM library (Node.js 20+, Bun 1.1+, Deno 2+)
 - Published to npm as `@internet-privacy/marmot-ts` with public access
+
 <!-- GSD:stack-end -->
 
 <!-- GSD:conventions-start source:CONVENTIONS.md -->
+
 ## Conventions
 
 ## Naming Patterns
+
 - kebab-case throughout: `group-engine.ts`, `key-package-event-decode.ts`, `in-memory-key-value-store.ts`
 - Test files: same name with `.test.ts` suffix, placed under `__tests__/` sibling directories
 - Helper/utility files: descriptive nouns or verb-noun pairs: `mock-network.ts`, `account-proof.ts`
@@ -170,29 +193,41 @@ correctly, across every supported runtime.
 - Test-file top-level constants: SCREAMING_SNAKE_CASE: `ADMIN`, `MEMBER`, `CIPHERSUITE`, `RELAY`
 - Native `#` private fields (not TypeScript `private`): `#state`, `#lifecycle`, `#retained`, `#tree`
 - See `src/engine/group-engine.ts` for the canonical pattern
+
 ## Code Style
+
 - Tool: Prettier
 - Config: `/home/user/Projects/marmot-ts/.prettierrc` — `tabWidth: 2`, `useTabs: false`
 - Pre-commit hook (Husky + lint-staged) formats staged files only
 - No root ESLint config; `ts-mls` subpackage has its own `eslint.config.mjs`
 - TypeScript strict mode with `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns` (build fails on violations)
+
 ## Import Organization
+
 ## Error Handling
+
 - Throw `new Error(message)` for domain/validation failures: wrong credential type, invalid binary encoding, missing required state
 - Custom error subclasses for codec failures: `BinaryDecodeError` in `src/core/binary.ts` — subclasses `Error`, sets `this.name`
 - Result types for expected multi-outcome flows (discriminated unions via `kind`) rather than try/catch at caller boundary
 - Async errors propagate as rejected Promises; callers use `await expect(...).rejects.toThrow(...)`
+
 ## Logging
+
 ## Comments
+
 - `@param name - description`
 - `@returns description`
 - `@throws description of what triggers it`
 - `@see cross-reference to spec doc`
+
 ## Function Design
+
 - `Promise<T>` for async operations
 - `AsyncGenerator<IngestResult<TEnvelope>>` for streaming ingest pipelines
 - Discriminated unions for multi-outcome results (never `null | result`)
+
 ## Module Design
+
 - Named exports only — no default exports anywhere in `src/`
 - Re-export aggregators via `index.ts` barrel files per directory: `src/core/index.ts`, `src/client/index.ts`
 - Each major directory has an `index.ts` that re-exports with `export * from "./module.js"`
@@ -200,41 +235,52 @@ correctly, across every supported runtime.
 - All binary protocol data is `Uint8Array`
 - Hex encoding/decoding via `@noble/hashes/utils.js`: `bytesToHex`, `hexToBytes`
 - No `Buffer` usage (must stay runtime-agnostic for Deno and Bun)
+
 ## Discriminated Union Pattern
+
 <!-- GSD:conventions-end -->
 
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
+
 ## Architecture
 
 ## System Overview
+
 ```text
+
 ```
+
 ## Component Responsibilities
-| Component | Responsibility | File |
-|-----------|----------------|------|
-| `MarmotGroupEngine` | Transport-agnostic MLS state machine: ingest, send, fork recovery, lifecycle | `src/engine/group-engine.ts` |
-| `GroupPeeler<TEnvelope>` | Crypto bridge — peel/wrap transport envelopes to/from MLS messages | `src/engine/types.ts` |
-| `NostrGroupPeeler` | Implements `GroupPeeler<NostrEvent>` for Nostr kind-445 events | `src/client/group/nostr-peeler.ts` |
-| `GroupHistoryTree` | Full-fork history tree keyed by MLS confirmation tag; persisted | `src/engine/history-tree.ts` |
-| `RetainedHistoryStore` | Canonical states within rollback horizon for convergence rewind | `src/engine/retained-store.ts` |
-| `IngestionPool` | Holds undecryptable envelopes for retry as tree grows | `src/engine/ingestion-pool.ts` |
-| `ForkRecovery` | Builds candidate branches and selects canonical branch | `src/engine/fork-recovery.ts` |
-| `ingestEnvelopes` | Pure ingest pipeline function (stateless, driven by `IngestContext`) | `src/engine/ingest.ts` |
-| `GroupSession` | Wires `NostrGroupPeeler` into engine; translates engine types to Nostr events | `src/client/session/group-session.ts` |
-| `GroupRuntime` | Drives Nostr publish effects; confirms or rolls back staged state | `src/client/runtime/group-runtime.ts` |
-| `MarmotGroup` | Public facade: composes `GroupSession` + `GroupRuntime` + stores | `src/client/group/marmot-group.ts` |
-| `GroupsManager` | Manages a collection of `MarmotGroup` instances; handles join/load | `src/client/groups-manager.ts` |
-| `MarmotClient` | Top-level client API: groups, invites, key packages, welcome preview | `src/client/marmot-client.ts` |
-| `core/*` | Protocol definitions, MLS extensions, convergence primitives, lifecycle FSM | `src/core/` |
-| `audit/*` | Optional forensic audit log: sink, emitter, recorder | `src/audit/` |
-| `extra/*` | Optional store implementations and platform-specific audit sinks | `src/extra/` |
+
+| Component                | Responsibility                                                                | File                                  |
+| ------------------------ | ----------------------------------------------------------------------------- | ------------------------------------- |
+| `MarmotGroupEngine`      | Transport-agnostic MLS state machine: ingest, send, fork recovery, lifecycle  | `src/engine/group-engine.ts`          |
+| `GroupPeeler<TEnvelope>` | Crypto bridge — peel/wrap transport envelopes to/from MLS messages            | `src/engine/types.ts`                 |
+| `NostrGroupPeeler`       | Implements `GroupPeeler<NostrEvent>` for Nostr kind-445 events                | `src/client/group/nostr-peeler.ts`    |
+| `GroupHistoryTree`       | Full-fork history tree keyed by MLS confirmation tag; persisted               | `src/engine/history-tree.ts`          |
+| `RetainedHistoryStore`   | Canonical states within rollback horizon for convergence rewind               | `src/engine/retained-store.ts`        |
+| `IngestionPool`          | Holds undecryptable envelopes for retry as tree grows                         | `src/engine/ingestion-pool.ts`        |
+| `ForkRecovery`           | Builds candidate branches and selects canonical branch                        | `src/engine/fork-recovery.ts`         |
+| `ingestEnvelopes`        | Pure ingest pipeline function (stateless, driven by `IngestContext`)          | `src/engine/ingest.ts`                |
+| `GroupSession`           | Wires `NostrGroupPeeler` into engine; translates engine types to Nostr events | `src/client/session/group-session.ts` |
+| `GroupRuntime`           | Drives Nostr publish effects; confirms or rolls back staged state             | `src/client/runtime/group-runtime.ts` |
+| `MarmotGroup`            | Public facade: composes `GroupSession` + `GroupRuntime` + stores              | `src/client/group/marmot-group.ts`    |
+| `GroupsManager`          | Manages a collection of `MarmotGroup` instances; handles join/load            | `src/client/groups-manager.ts`        |
+| `MarmotClient`           | Top-level client API: groups, invites, key packages, welcome preview          | `src/client/marmot-client.ts`         |
+| `core/*`                 | Protocol definitions, MLS extensions, convergence primitives, lifecycle FSM   | `src/core/`                           |
+| `audit/*`                | Optional forensic audit log: sink, emitter, recorder                          | `src/audit/`                          |
+| `extra/*`                | Optional store implementations and platform-specific audit sinks              | `src/extra/`                          |
+
 ## Pattern Overview
+
 - `MarmotGroupEngine<TEnvelope>` is fully transport-agnostic via the `GroupPeeler<TEnvelope>` interface — the engine never touches Nostr types
 - `src/core` has zero I/O dependencies; it contains only pure protocol/crypto/state logic
 - Publish-before-apply: local commits are staged (`PendingPublish`) before publish is confirmed; state advances only on confirmation
 - Fork detection and convergence run inside the engine on every ingest batch; the lifecycle FSM (`Stable → PendingPublish → Merging → Recovering → Stable`) is the single source of truth for when outbound work is safe
 - All binary/protocol data uses `Uint8Array`; hex conversion uses `@noble/hashes/utils.js`
+
 ## Layers
+
 - Purpose: Protocol/crypto/state primitives with no I/O
 - Location: `src/core/`
 - Contains: MLS extensions, group lifecycle FSM, convergence policy/selection, credential helpers, key-package encoding, group-message crypto, binary codec, Nostr event builders
@@ -263,15 +309,22 @@ correctly, across every supported runtime.
 - Purpose: Shared cross-cutting utilities
 - Location: `src/utils/`
 - Contains: `debug.ts` (logger), `key-value.ts` (store interface), `encoding.ts`, `nostr.ts`, `nip44-binary.ts`, `timestamp.ts`, `relay-url.ts`
+
 ## Data Flow
+
 ### Inbound: Receiving a Nostr group message
+
 ### Outbound: Sending a message or commit
+
 ### Welcome / Invite flow
+
 - Canonical group state (`ts-mls` `ClientState`) lives in `MarmotGroupEngine.#state`
 - Persisted via `GenericKeyValueStore<SerializedClientState>` injected into `MarmotGroup`
 - Fork history tree persisted via a separate `GenericKeyValueStore<Uint8Array>` (`rewindStore`)
 - No global module-level state; all group state is instance-owned
+
 ## Key Abstractions
+
 - Purpose: Decouples the engine from Nostr — any transport implementing this interface can drive the engine
 - Methods: `peelGroupMessages(envelopes, state)`, `wrapGroupMessage(message, state)`, `idOf(envelope)`
 - Concrete implementation: `NostrGroupPeeler` (`src/client/group/nostr-peeler.ts`)
@@ -285,47 +338,63 @@ correctly, across every supported runtime.
 - Gates when local commits may be prepared (`mayPrepareLocalCommit`) and when outbound may be released
 - Purpose: Optional forensic audit log — callers opt in by passing `audit` + `auditContext` to engine/group
 - Both engine and client layer accept it; no-op when absent
+
 ## Entry Points
+
 - Re-exports client, core, utils, plus selected engine exports
 - Consumed by `@internet-privacy/marmot-ts` import (`.` subpath)
 - Exposes `MarmotGroupEngine`, `GroupPeeler`, ingest types, `ForkRecovery`, retained store
 - For callers building a custom transport layer
 - Exposes `MarmotClient`, `MarmotGroup`, `GroupsManager`, `GroupSession`, `GroupRuntime`, `NostrNetworkInterface`
 - Re-exports all of `ts-mls` for downstream apps that need raw MLS primitives
+
 ## Architectural Constraints
+
 - **Threading:** Single-threaded ESM event loop; no worker threads. `MarmotGroupEngine.ingest()` is an `AsyncGenerator`; callers must drain it fully before the next batch.
 - **Global state:** None. All state is per-instance. The `debug` logger namespace (`marmot:*`) is module-level but read-only.
 - **Circular imports:** None observed. Dependency direction is strict: `utils ← core ← engine ← client`.
 - **`.js` extensions:** All relative imports in `src/` require the emitted `.js` extension (NodeNext module resolution). Violating this breaks the build.
 - **Named exports only:** No default exports in the library source.
 - **`ts-mls` local workspace:** `ts-mls` is a local workspace package at `./ts-mls`, not from npm. It must be built (`pnpm --filter ts-mls build`) before the library.
+
 ## Anti-Patterns
+
 ### Importing engine types through the client barrel
+
 ### Mutating `MarmotGroupEngine.state` directly
+
 ### Calling `ingest()` without draining the generator
+
 ## Error Handling
+
 - `transitionLifecycle()` (`src/core/group-lifecycle.ts`) throws on illegal FSM transitions
 - `ingestEnvelopes()` (`src/engine/ingest.ts`) emits `unreadable`/`rejected`/`skipped` results rather than throwing
 - `GroupHistoryTree.recordCommit()` (`src/engine/history-tree.ts`) logs tree errors rather than propagating them (tree hiccups must not break protocol processing)
 - Audit errors in `AuditEmitter.emit()` are caught and silenced (non-blocking, best-effort)
+
 ## Cross-Cutting Concerns
+
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start source:skills/ -->
+
 ## Project Skills
 
-| Skill | Description | Path |
-|-------|-------------|------|
+| Skill      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Path                                 |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
 | applesauce | Reactive Nostr SDK for TypeScript and JavaScript built on RxJS and a single in-memory EventStore. Use whenever the user is building or modifying a Nostr client, working with NIP events/filters/pointers, subscribing to relays or pools, managing accounts/signers, loading events, publishing/replying/reacting/following, rendering note content, working with NIP-17/44/46/57/60/65, or wiring reactive React UI over Nostr data. Prefer this skill any time the user is in a TS/JS Nostr context, even if they have not named applesauce explicitly. | `.agents/skills/applesauce/SKILL.md` |
-| opentui | Build terminal UIs with OpenTUI. Covers the core API, native audio, keymaps, React and Solid bindings, components, layout, keyboard input, plugins, and testing. | `.agents/skills/opentui/SKILL.md` |
+| opentui    | Build terminal UIs with OpenTUI. Covers the core API, native audio, keymaps, React and Solid bindings, components, layout, keyboard input, plugins, and testing.                                                                                                                                                                                                                                                                                                                                                                                           | `.agents/skills/opentui/SKILL.md`    |
+
 <!-- GSD:skills-end -->
 
 <!-- GSD:workflow-start source:GSD defaults -->
+
 ## GSD Workflow Enforcement
 
 Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.
 
 Use these entry points:
+
 - `/gsd-quick` for small fixes, doc updates, and ad-hoc tasks
 - `/gsd-debug` for investigation and bug fixing
 - `/gsd-execute-phase` for planned phase work
@@ -333,11 +402,11 @@ Use these entry points:
 Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
 <!-- GSD:workflow-end -->
 
-
-
 <!-- GSD:profile-start -->
+
 ## Developer Profile
 
 > Profile not yet configured. Run `/gsd-profile-user` to generate your developer profile.
 > This section is managed by `generate-claude-profile` -- do not edit manually.
+
 <!-- GSD:profile-end -->

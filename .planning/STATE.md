@@ -5,10 +5,10 @@ milestone_name: Phase 1)
 current_phase: 03
 current_phase_name: commit-integrity-convergence-parity
 status: verifying
-stopped_at: Completed 03-07-PLAN.md
-last_updated: "2026-08-04T15:33:21.498Z"
-last_activity: 2026-08-04
-last_activity_desc: Phase 03 execution started
+stopped_at: Review-fix recovery merged; re-review pending
+last_updated: "2026-08-05T00:00:00.000Z"
+last_activity: 2026-08-05
+last_activity_desc: Recovered interrupted review-fix run (7 criticals) and merged to dark-matter
 progress:
   total_phases: 5
   completed_phases: 3
@@ -28,12 +28,12 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 
 ## Current Position
 
-Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
+Phase: 03 (commit-integrity-convergence-parity) — REVIEW FIXES MERGED
 Plan: 7 of 7
-Status: Phase complete — ready for verification
-Last activity: 2026-08-04 — Phase 03 execution started
+Status: All 7 code-review criticals (CR-01..CR-07) fixed and merged to dark-matter; suite green (75 files / 716 tests, `pnpm compile` clean). Re-review pending before phase close. 13 warnings from 03-REVIEW.md remain unaddressed.
+Last activity: 2026-08-05 — recovered interrupted review-fix run from orphaned worktree branch
 
-Progress: [████░░░░░░] 40%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
@@ -137,7 +137,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-04T15:33:21.490Z
-Stopped at: Completed 03-07-PLAN.md
+Last session: 2026-08-05
+Stopped at: Session resumed — recovered the interrupted `/gsd-code-review --fix` run whose worktree (`/tmp/sv-03-reviewfix-enqo8m`) had been cleaned. Branch `gsd-reviewfix/03-654779` (8 commits, CR-01..CR-07 + a de-flake) verified green and fast-forwarded into `dark-matter`; recovery marker and merged branch deleted. Proceeding to re-review before closing Phase 3.
 Resume file:
 None

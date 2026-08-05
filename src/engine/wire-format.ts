@@ -4,9 +4,12 @@ import {
   type ClientState,
   contentTypes,
   type ContentTypeValue,
+  type LeafIndex,
   type MlsMessage,
   type Proposal,
+  type ProposalWithSender,
   proposalOrRefTypes,
+  senderTypes,
   wireformats,
 } from "ts-mls";
 
@@ -84,22 +87,63 @@ export function framedCommitProposals(
   message: MlsMessage,
   parentState: ClientState,
 ): Proposal[] | undefined {
+  return framedCommitProposalsWithSender(message, parentState)?.proposals.map(
+    (entry) => entry.proposal,
+  );
+}
+
+/**
+ * The sender-attributed form of {@link framedCommitProposals}, plus the
+ * commit's own committer leaf index.
+ *
+ * This reproduces exactly what ts-mls's `applyProposals` assembles as
+ * `allProposals` and hands to an {@link IncomingMessageCallback}: an inline
+ * (by-value) proposal is attributed to the COMMITTER's leaf, while a
+ * `ProposalRef` carries the ORIGINAL proposer's leaf from
+ * `parentState.unappliedProposals` (`ts-mls/src/clientState.ts`
+ * `applyProposals`). Getting that attribution right is load-bearing — the
+ * MIP-03 admin gate's self_remove rule and its non-admin self-update carve-out
+ * both branch on per-proposal sender identity.
+ *
+ * Exists so `ForkRecovery`'s CONV-04 known-state short-circuit can run the same
+ * admin-policy callback that `#treeResolution` runs on the identical class of
+ * persisted edge (CR-11) — that seam cannot replay the commit, so it cannot
+ * obtain these from `processMessage`.
+ *
+ * Returns `undefined` under exactly the same conditions as
+ * {@link framedCommitProposals}: a non-public-message commit, or a
+ * `ProposalRef` absent from `parentState`.
+ */
+export function framedCommitProposalsWithSender(
+  message: MlsMessage,
+  parentState: ClientState,
+):
+  | { proposals: ProposalWithSender[]; senderLeafIndex: LeafIndex | undefined }
+  | undefined {
   if (message.wireformat !== wireformats.mls_public_message) return undefined;
   const content = message.publicMessage.content;
   if (content.contentType !== contentTypes.commit) return undefined;
 
-  const proposals: Proposal[] = [];
+  const senderLeafIndex =
+    content.sender.senderType === senderTypes.member
+      ? (content.sender.leafIndex as LeafIndex)
+      : undefined;
+
+  const proposals: ProposalWithSender[] = [];
   for (const entry of content.commit.proposals) {
     if (entry.proposalOrRefType === proposalOrRefTypes.proposal) {
-      proposals.push(entry.proposal);
+      // By-value proposals are attributed to the committer, exactly as
+      // ts-mls's `applyProposals` does.
+      proposals.push({ proposal: entry.proposal, senderLeafIndex });
       continue;
     }
     // ts-mls keys `unappliedProposals` by the base64 of the proposal
-    // reference (see its own `applyProposals` lookup).
+    // reference (see its own `applyProposals` lookup). The staged entry
+    // already carries the original proposer's leaf.
     const staged =
       parentState.unappliedProposals[bytesToBase64(entry.reference)];
     if (!staged) return undefined;
-    proposals.push(staged.proposal);
+    proposals.push(staged);
   }
-  return proposals;
+  return { proposals, senderLeafIndex };
 }

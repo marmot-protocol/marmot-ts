@@ -5,6 +5,7 @@ import {
   type ClientState,
   encode,
   getCredentialFromLeafIndex,
+  type IncomingMessageAction,
   type IncomingMessageCallback,
   type LeafIndex,
   mlsMessageEncoder,
@@ -33,7 +34,7 @@ import {
 import { withCapturedProposals } from "./admin-policy.js";
 import type { EdgeSnapshot } from "./history-tree.js";
 import type { GroupPeeler } from "./types.js";
-import { framedCommitProposals, framedEpoch } from "./wire-format.js";
+import { framedCommitProposalsWithSender, framedEpoch } from "./wire-format.js";
 import { logger } from "../utils/debug.js";
 
 const log = logger.extend("ForkRecovery");
@@ -240,9 +241,10 @@ export class ForkRecovery<TEnvelope> {
         const knownAtThisParent =
           known !== undefined &&
           known.parentTag === bytesToHex(state.confirmationTag);
-        const knownProposals = knownAtThisParent
-          ? framedCommitProposals(message, state)
+        const knownFramed = knownAtThisParent
+          ? framedCommitProposalsWithSender(message, state)
           : undefined;
+        const knownProposals = knownFramed?.proposals.map((p) => p.proposal);
 
         // CR-08: make the fall-through observable. Reaching it for a commit we
         // recorded against THIS parent means the proposal set could not be
@@ -263,7 +265,45 @@ export class ForkRecovery<TEnvelope> {
           );
         }
 
-        if (known && knownProposals) {
+        if (known && knownFramed && knownProposals) {
+          // CR-11: the short-circuit must run the MIP-03 admin gate too, not
+          // just `validateCommitLegality`. `known` comes from
+          // `RetainedHistoryStore`, which `GroupRegistry` rebuilds on load
+          // straight from the persisted history tree — the SAME pre-upgrade
+          // edge class `#treeResolution` replays under
+          // `#createAdminVerificationCallback()` and abandons on
+          // `actionTaken === "reject"`. Hardcoding `actionTaken: "accept"`
+          // here meant a persisted edge written by a build whose admin set
+          // differed (or a pre-MIP-03 build) was replayed into a WINNING
+          // candidate by ForkRecovery and refused by `#treeResolution` — so
+          // whichever seam ran first decided whether the group converged,
+          // non-deterministically across peers.
+          //
+          // The callback is invoked directly (not through `capture`, whose
+          // take()-around-processMessage contract does not apply here) on a
+          // synthesized `incoming` matching what ts-mls's `applyProposals`
+          // would have produced. A throw ("unverifiable commit sender") is
+          // treated as a refusal, consistent with this seam's fail-closed
+          // policy: no candidate edge.
+          let adminAction: IncomingMessageAction;
+          try {
+            adminAction = callback({
+              kind: "commit",
+              senderLeafIndex: knownFramed.senderLeafIndex,
+              proposals: knownFramed.proposals,
+            });
+          } catch {
+            continue;
+          }
+          if (adminAction === "reject") {
+            log(
+              "known-state short-circuit refused by admin policy at parent %s for commit %s",
+              bytesToHex(state.confirmationTag),
+              bytesToHex(this.#commitDigestOf(message)),
+            );
+            continue;
+          }
+
           // A commit we already applied ourselves (own or previously-adopted
           // inbound) cannot be replayed through `processMessage`: its
           // `UpdatePath` never encrypted a path secret to the committer's own

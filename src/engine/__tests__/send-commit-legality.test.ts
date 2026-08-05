@@ -29,6 +29,7 @@ import {
   defaultProposalTypes,
   encode,
   getCiphersuiteImpl,
+  type IncomingMessageCallback,
   joinGroup,
   type LeafIndex,
   type MlsMessage,
@@ -737,6 +738,115 @@ describe("CONV-04 short-circuit re-validates persisted own-path commits (CR-04)"
 
     // The legal sibling is still rebuilt normally — the gate drops the
     // violating edge only, it does not abandon fork recovery.
+    expect(
+      edges.some(
+        (e) =>
+          e.parentTag === rootTag &&
+          bytesToHex(e.commitDigest) === digestHexOf(rival.commit),
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * CR-11 regression (the unresolved remainder of CR-04): the short-circuit
+   * ran `validateCommitLegality` but still hardcoded `actionTaken: "accept"`,
+   * so the MIP-03 admin gate — `createAdminCommitPolicyCallback`, which
+   * enforces admin-only commits, the account-identity-proof check on `Add`
+   * proposals, and the admin-cannot-self-remove rule — was never consulted.
+   *
+   * `#treeResolution` does the opposite for the SAME persisted-edge input
+   * class: it replays each winner-chain link under
+   * `withCapturedProposals(this.#createAdminVerificationCallback())` and
+   * abandons the chain on `actionTaken === "reject"`. So a persisted edge
+   * written by a build whose admin set differed (or a pre-MIP-03 build) was
+   * replayed into a WINNING candidate by ForkRecovery and refused by
+   * `#treeResolution` — whichever seam ran first decided whether the group
+   * converged, non-deterministically across peers.
+   *
+   * The commit under test is authored by admin1 — the engine's OWN leaf — so
+   * the known-state short-circuit is the ONLY route by which it can produce an
+   * edge: replaying it through `processMessage` throws, because an
+   * `UpdatePath` never encrypts a path secret to the committer's own leaf
+   * (RFC 9420). An edge for it therefore proves the short-circuit fired and
+   * accepted without asking the admin callback.
+   */
+  it("runs the MIP-03 admin callback on the known-state short-circuit, not just commit legality", async () => {
+    const { impl, ctx, adminEpoch1, admin2Epoch1 } =
+      await twoAdminGroupWithJoin();
+    const rootTag = bytesToHex(adminEpoch1.confirmationTag);
+
+    // Our OWN commit, on our own already-applied canonical path. Perfectly
+    // legal per `validateCommitLegality` — the only thing that can refuse it
+    // is the admin policy callback.
+    const ours = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    // A competing sibling at the same fork epoch, authored by admin2, so a
+    // fork genuinely exists and recovery has something else to build.
+    const rival = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    const statesByEpoch = new Map<number, ClientState>([
+      [1, adminEpoch1],
+      [2, ours.newState],
+    ]);
+    const retained: RetainedView = {
+      stateAt: (epoch) => statesByEpoch.get(epoch),
+      appliedCommitsBetween: () => [ours.commit],
+    };
+
+    // Stands in for an admin policy under which OUR leaf (leaf 0) is no longer
+    // an admin — the pre-upgrade / diverged-admin-set edge class. Asserting on
+    // the sender index also proves the synthesized `incoming` carries the
+    // committer leaf the wire actually names.
+    const seen: (number | undefined)[] = [];
+    const rejectOurLeaf: IncomingMessageCallback = (incoming) => {
+      if (incoming.kind !== "commit") return "accept";
+      seen.push(
+        incoming.senderLeafIndex === undefined
+          ? undefined
+          : Number(incoming.senderLeafIndex),
+      );
+      return Number(incoming.senderLeafIndex) === 0 ? "reject" : "accept";
+    };
+
+    const recovery = new ForkRecovery(impl, testPeeler(impl));
+    const resolution = await recovery.resolveFork({
+      forkEpoch: 1,
+      pool: [rival.commit],
+      currentState: ours.newState,
+      retained,
+      adminCallback: rejectOurLeaf,
+    });
+
+    const edges = resolution.outcome === "skip" ? [] : resolution.edges;
+    const digestHexOf = (message: MlsMessage) =>
+      bytesToHex(commitDigest(encode(mlsMessageEncoder, message)));
+
+    // The callback was actually consulted for our own commit, with leaf 0 —
+    // the committer named on the wire.
+    expect(seen).toContain(0);
+
+    // ...and its refusal dropped the candidate: no edge for our own commit,
+    // even though the short-circuit had its recorded resulting state in hand.
+    expect(
+      edges.filter(
+        (e) => bytesToHex(e.commitDigest) === digestHexOf(ours.commit),
+      ),
+    ).toEqual([]);
+
+    // The admin-accepted sibling is still rebuilt normally — the gate drops
+    // the refused edge only, it does not abandon fork recovery.
     expect(
       edges.some(
         (e) =>

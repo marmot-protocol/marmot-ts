@@ -1,8 +1,9 @@
 ---
 phase: 03-commit-integrity-convergence-parity
-reviewed: 2026-08-04T16:55:00Z
+reviewed: 2026-08-05T12:10:00Z
 depth: standard
-files_reviewed: 23
+round: 2
+files_reviewed: 24
 files_reviewed_list:
   - src/core/components/integrity.ts
   - src/core/components/index.ts
@@ -16,6 +17,7 @@ files_reviewed_list:
   - src/engine/ingest.ts
   - src/engine/fork-recovery.ts
   - src/engine/group-engine.ts
+  - src/engine/wire-format.ts
   - src/engine/__tests__/state-notifications.test.ts
   - src/engine/__tests__/convergence-parity.test.ts
   - src/engine/__tests__/commit-legality-seams.test.ts
@@ -28,782 +30,491 @@ files_reviewed_list:
   - src/__tests__/groups-manager.test.ts
   - src/__tests__/integration/removed.test.ts
 findings:
-  critical: 7
-  warning: 13
+  critical: 4
+  warning: 5
+  info: 0
+  total: 9
+carried_open_from_round_1:
+  warning: 11
   info: 3
-  total: 23
 status: issues_found
 ---
 
-# Phase 3: Code Review Report
+# Phase 3: Code Review Report (Round 2 — re-review after fixes)
 
-**Reviewed:** 2026-08-04T16:55:00Z
+**Reviewed:** 2026-08-05T12:10:00Z
 **Depth:** standard
-**Files Reviewed:** 23
+**Files Reviewed:** 24
+**Fix range:** `2f8fb1c..86139e2`
 **Status:** issues_found
 
-## Summary
+## Round-1 Critical Verdicts
 
-The phase claims three seams (send/staging, inbound, convergence/replay) all funnel
-through one `validateCommitLegality`, that the CONV-04 `knownNextStates` short-circuit
-is safe, and that CONV-02/CONV-03 marker + notification lifecycles are closed. Tracing
-the code, none of those three claims fully holds.
+This section is the decision input for whether Phase 3 can close.
 
-Highest-value defects, in the order the phase context prioritised them:
+| ID | Verdict | One-line basis |
+|----|---------|----------------|
+| CR-01 | **RESOLVED** | Short-circuit is parent-qualified at `fork-recovery.ts:237-240`; map carries `parentTag` at `:421-432`; regression test asserts no edge hangs off the competing node. |
+| CR-02 | **RESOLVED** | `getAppComponents` decode is now converted to a typed violation (`integrity.ts:290-299`) *and* all three replay seams wrap the call defensively. Residual non-throwing-contract leak noted below (WR-15). |
+| CR-03 | **RESOLVED** | `selfUpdate` now runs D-05 splice + D-07 depletion (`group-engine.ts:674-681`) and D-01/D-02 legality (`:694`) via helpers shared with `case "commit"`. No other `send()` kind produces a commit. |
+| CR-04 | **PARTIAL** | `validateCommitLegality` now runs on the known path, but the MIP-03 **admin-policy callback** is still skipped there while `#treeResolution` re-runs it (CR-11), and the new fail-closed fall-through silently drops our own canonical branch (CR-08). |
+| CR-05 | **RESOLVED** | `await this.save(true)` precedes `#realizeRemovalIfNeeded()` (`marmot-group.ts:798-799`); regression test snapshots the state store at marker-write time. |
+| CR-06 | **RESOLVED** (gated) | Results now flow `group-engine.ts:1846-1859` → `group-session.ts:382-388` → `marmot-group.ts:542-549`, through the same `#applyRemovalWithdrawal` branch as `ingest()`. Gated end-to-end by CR-10 — the marker store is still unreachable from the public API. |
+| CR-07 | **RESOLVED** | Every `winnerChain` link is derived and ledger-recorded (`group-engine.ts:1705-1724`), not just the tip; test asserts both `epochAdvanced` transitions of a 2-link rewind. Introduced a duplicate-record side effect (WR-14). |
 
-1. **Seam divergence is real and load-bearing.** `send({kind:"selfUpdate"})` produces a
-   commit and never calls `validateCommitLegality` (nor the D-05 admin-policy splice /
-   D-07 depletion guard) even though `createCommit` bundles every unapplied proposal by
-   reference. `#buildBranches`'s `known` short-circuit skips validation entirely, in
-   direct contradiction of the fail-closed no-grandfathering policy the sibling
-   `#treeResolution` implements for the same class of persisted history. The three seams
-   also bind three *different* admin-verification callbacks (batch-start state, current
-   tip, per-node state).
-2. **The `knownNextStates` short-circuit is keyed only by commit digest.** It is consulted
-   at *any* DFS node whose epoch matches the commit's source epoch — including nodes on a
-   competing fork — so a competitor branch can splice our canonical chain onto itself and
-   win selection on inflated depth.
-3. **`validateCommitLegality` can throw**, and the convergence/replay seams do not catch
-   it; the throw escapes the ingest generator and skips `GroupSession.save()`.
-4. **The CONV-02 marker is written before the state it describes is persisted**, and the
-   one path documented to clear it (`reconverge()` on load) throws its results away.
-5. **A rewind that applies >1 commit derives notifications only for the tip link**, so
-   intermediate commits' membership/component notifications are silently lost and are
-   never ledger-recorded (hence never withdrawable).
+**Net:** 6 of 7 round-1 criticals are resolved. **CR-04 is PARTIAL**, and the fix diff (+1249/−244) introduced three further critical-tier defects (CR-08, CR-09, CR-10 — the last a promotion of round-1 WR-01, now load-bearing for CR-05/CR-06). Phase 3 should not close on this HEAD.
 
-Additionally, the persisted removal marker (`removedMarkerStore`) is not plumbed through
-`GroupsManagerOptions` / `GroupRegistry` / `GroupFactory` / `MarmotClient`, so no
-consumer using the public client API can actually get the persistence CONV-02 promises.
+**Suite status independently confirmed:** the four phase test files (`convergence-parity`, `send-commit-legality`, `state-notification-withdrawal`, `integration/removed`) run 31/31 green on this HEAD. None of the findings below are caught by an existing test.
+
+---
+
+## Verdict Evidence (detail)
+
+### CR-01 — RESOLVED
+
+`KnownNextState` now carries the recorded parent tag (`src/engine/fork-recovery.ts:57-60`), populated from
+`retained.stateAt(sourceEpoch)` at `:425-431`. The DFS consults it only when
+`known.parentTag === bytesToHex(state.confirmationTag)` (`:238`), and on mismatch falls through to the ordinary
+replay path where a foreign parent cannot process our own commit. The regression test
+(`convergence-parity.test.ts`, "does not graft our own canonical commit onto a competing same-epoch fork node")
+builds a genuinely 2-deep competing branch and asserts the `edges` array contains no
+`parentTag === forkBTag` edge for `ourC2` — it would fail with the digest-only key. Genuine guard, not a
+tautology.
+
+### CR-02 — RESOLVED
+
+`validateCommitLegality` wraps `getAppComponents` and returns
+`{reason:"component-integrity", detail:"current app_components component did not decode"}`
+(`src/core/components/integrity.ts:290-299`). Independently, all three replay seams now catch:
+`fork-recovery.ts:252-262` (known path), `:308-317` (replay path), `group-engine.ts:1968-1982`
+(`#treeResolution`). The escape route named in round 1 — throw → `explore` → `#buildBranches` → `resolveFork` →
+`ingest.ts:811` → out of the generator, skipping `GroupSession.save()` — is closed twice over.
+
+### CR-03 — RESOLVED
+
+`case "selfUpdate"` (`src/engine/group-engine.ts:657-704`) now calls `#adminPolicySpliceFor` (D-05 splice,
+D-07 `AdminDepletionError`) and `#assertStagedCommitLegal` (D-01/D-02). Both are shared helpers
+(`:734-785`, `:801-816`) that `case "commit"` also calls (`:571-577`, `:632`), and
+`#assertStagedCommitLegal` validates against the *by-reference union*
+(`Object.values(parentState.unappliedProposals)` ∪ by-value), matching what `createCommit` actually bundles
+(`ts-mls/src/createCommit.ts:281-292`, `bundleAllProposals`, unconditional).
+
+The "every other `send()` kind" half of the question checks out: `applicationMessage` uses
+`createApplicationMessage` and `proposal` uses `createProposal` (`:477`, `:483` and `:498`) — neither calls
+`createCommit`, so neither can bundle unapplied proposals by reference. `commit` and `selfUpdate` are the
+complete set of commit-producing seams, and both are now gated. Adjacent parity gaps in *other* dimensions
+are CR-09 and WR-17.
+
+### CR-04 — PARTIAL
+
+Resolved half: the known path reads the commit's proposals off the wire
+(`framedCommitProposals`, `src/engine/wire-format.ts:83-105`) and runs `validateCommitLegality`
+before reusing the recorded state (`fork-recovery.ts:242-262`); a violation `continue`s, creating no edge.
+
+Not resolved: (a) the MIP-03 admin-policy callback is still bypassed on the known path — see **CR-11**; and
+(b) the newly-added fail-closed fall-through drops our own canonical branch outright — see **CR-08**.
+Criterion 1 ("these three seams behave IDENTICALLY") is therefore still not met.
+
+Note also that the CR-04 regression test in `send-commit-legality.test.ts` is not fully targeted: the violating
+commit is authored by `admin2`, so it is replayable from our leaf, and the test would also pass if the known
+path's validation were removed and the code merely fell through to `processMessage` + the replay-path
+validator. The verdict above rests on code inspection, not on that test.
+
+### CR-05 — RESOLVED
+
+`src/client/group/marmot-group.ts:798-799`: `await this.save(true);` then `await this.#realizeRemovalIfNeeded();`.
+A rejected `save()` now aborts before the marker write, and the removal realizes on the next load — the safe
+direction. The test (`removed.test.ts`, "persists the tombstone before writing the removal marker") wraps
+`setItem` to snapshot the state store at marker-write time and asserts the persisted state deserializes to
+`removedFromGroup`; it fails with the old ordering.
+
+### CR-06 — RESOLVED (gated by CR-10)
+
+`reconvergeFromHistory()` collects, dispositions, audits and returns results
+(`src/engine/group-engine.ts:1846-1859`); `GroupSession.reconverge()` maps and returns them and still saves
+(`src/client/session/group-session.ts:382-388`); `MarmotGroup.reconverge()` routes each through
+`#applyRemovalWithdrawal` — the same helper `ingest()` uses (`marmot-group.ts:543-548`, `:821-829`).
+`GroupRegistry.load` calls it on the documented load path (`group-registry.ts:183`).
+
+The gate: `removedMarkerStore` is still not plumbed through `GroupRegistry.build` (`group-registry.ts:136-155`)
+or `GroupsManagerOptions` (`groups-manager.ts:77-90`), so the marker any real consumer gets is the in-memory
+fallback — which is reset by process exit anyway. The precise CR-06 scenario ("removed on a losing fork,
+**restarts**, re-converges") therefore cannot be exercised through any public entry point. See CR-10.
+
+### CR-07 — RESOLVED
+
+`#applyForkResolution` iterates `resolution.winnerChain` and derives + `record()`s per link, diffing
+`link.parent → link.child` (never `parent → winnerTip`), concatenating into `chainNotifications`
+(`src/engine/group-engine.ts:1705-1724`). Withdrawal is computed *before* the new records
+(`:1650-1653`), so the ordering is right. The test asserts `epochAdvances === [[1,2],[2,3]]` for a 2-link
+rewind — it fails with tip-only derivation. Side effect: WR-14.
+
+---
 
 ## Narrative Findings (AI reviewer)
 
-## Critical Issues
+### CR-08: the new fail-closed fall-through silently drops our own canonical branch, handing the rewind to a shallower competitor — BLOCKER
 
-### CR-01: `knownNextStates` is keyed by commit digest alone — it can fire on the wrong parent
+**File:** `src/engine/fork-recovery.ts:237-242`, `src/engine/wire-format.ts:99-102`,
+`src/engine/group-engine.ts:819-856`, `src/engine/history-tree.ts:354-380`
 
-**File:** `src/engine/fork-recovery.ts:195-215` (lookup), `src/engine/fork-recovery.ts:349-359` (map build), `src/engine/fork-recovery.ts:151-176` (`candidatesAt`)
-
-**Issue:** `candidatesAt(state)` admits any pooled message whose framed epoch equals
-`Number(state.groupContext.epoch)` — it does **not** check that the message's parent is
-`state`. The `known` lookup then keys purely on `bytesToHex(this.#commitDigestOf(message))`.
-Consequently, while exploring a *competing* fork branch, the DFS reaching a node at epoch
-`N` will find our own canonical commit with source epoch `N` in `pool` (it is prepended as
-`[...ours, ...pool]`), hit `knownNextStates`, and adopt our canonical epoch-`N+1` state as
-that fork node's child.
-
-Reachability (depth ≥ 2 above the fork root, which the new
-`convergence-parity.test.ts` scenarios never build):
-
-- root at epoch `F`; `ours` = [commit@F, commit@F+1]; a peer commit@F is in `pool`.
-- DFS explores peer commit@F via `processMessage` → fork-B node at epoch `F+1`.
-- At fork-B, `candidatesAt` returns our commit@F+1 (epoch matches) → `known` hit → `next.newState`
-  is our canonical state at `F+2`, which fork-B's commit never produced.
-
-Consequences:
-- A bogus `ChainLink { parent: forkB, message: ourCommit, child: ourCanonicalState }` is
-  appended, so the losing branch inherits our canonical chain's depth and tip digest —
-  directly biasing `selectCanonicalBranch`, whose primary key is branch depth.
-- If that branch wins, `#applyForkResolution` calls
-  `this.#retained.record(link.parent, link.message, link.child)` (`group-engine.ts:1622-1629`)
-  with a parent that never produced that child, corrupting `RetainedHistoryStore`'s
-  epoch→state / epoch→commit mapping used by every subsequent `resolveFork`.
-- A false `EdgeSnapshot` is emitted (`fork-recovery.ts:258-265`). This one is currently
-  absorbed because `GroupHistoryTree.recordEdge` no-ops when the child tag already exists
-  (`history-tree.ts:394-411`) — that is luck, not a guard.
-
-**Fix:** Only take the short-circuit when the current DFS `state` is the exact parent the
-commit was applied to. Record the parent tag alongside the known child state:
+**Issue:** The CR-04 fix made the CONV-04 short-circuit conditional on being able to reconstruct the commit's
+proposals:
 
 ```ts
-// resolveFork
-const knownNextStates = new Map<string, { parentTag: string; state: ClientState }>();
-for (const msg of ours) {
-  const sourceEpoch = framedEpoch(msg);
-  if (sourceEpoch === undefined) continue;
-  const parent = retained.stateAt(Number(sourceEpoch));
-  const next = retained.stateAt(Number(sourceEpoch) + 1);
-  if (!parent || !next) continue;
-  knownNextStates.set(bytesToHex(this.#commitDigestOf(msg)), {
-    parentTag: bytesToHex(parent.confirmationTag),
-    state: deserializeClientState(serializeClientState(next)),
-  });
-}
-
-// #buildBranches / explore
-const known = knownNextStates.get(bytesToHex(this.#commitDigestOf(message)));
-const useKnown =
-  known !== undefined &&
-  known.parentTag === bytesToHex(state.confirmationTag);
+const knownProposals =
+  known && known.parentTag === bytesToHex(state.confirmationTag)
+    ? framedCommitProposals(message, state)
+    : undefined;
+if (known && knownProposals) { /* validate, reuse recorded state */ }
+else { /* replay via processMessage */ }
 ```
 
-Add a regression test with a fork whose competing branch is ≥2 commits deep.
+`framedCommitProposals` returns `undefined` when a `ProposalRef` names a proposal absent from
+`parentState.unappliedProposals` (`wire-format.ts:99-102`). The code comment at `fork-recovery.ts:231-236`
+justifies the fall-through only for the `PrivateMessage` case; it does not address the `ProposalRef` case at
+all. That case is reachable, and the fall-through is not benign — replaying **our own** commit is exactly what
+CONV-04 exists to avoid (RFC 9420: an `UpdatePath` never encrypts a path secret to the committer's own leaf),
+so `processMessage` throws, `continue` fires (`:288`), and **our own canonical branch is not built as a
+candidate at all**.
 
----
+Reachability, concretely:
 
-### CR-02: `validateCommitLegality` can throw, and the convergence/replay seams do not catch it
+1. Alice calls `MarmotGroup.propose(...)` / `sendProposal(...)`. `GroupRuntime.publishProposal` →
+   `confirmPublished({kind:"proposal", newState})`, which for a non-`"commit"` pending only calls
+   `#setState` (`group-engine.ts:855`). **Nothing writes the new `unappliedProposals` into the history-tree
+   node snapshot** — `recordProposalStaged` is only wired for *inbound* proposals (`ingest.ts:543`).
+2. Alice commits. `createCommit` bundles the staged proposal **by reference** (`bundleAllProposals`,
+   unconditional). `#recordCommitNode` records the *child* node; `GroupHistoryTree.recordCommit` never
+   refreshes the *parent* node's snapshot (`history-tree.ts:360-380`).
+3. Restart. `GroupRegistry.#retainedFromTree` rebuilds `RetainedHistoryStore` purely from tree snapshots
+   (`group-registry.ts:235-251`), so `retained.stateAt(forkEpoch)` has `unappliedProposals === {}`.
+4. A fork arrives at that epoch. `framedCommitProposals` cannot resolve the `ProposalRef` → `undefined` →
+   fall-through → own commit replay throws → candidate dropped.
+5. `selectCanonicalBranch` (`core/convergence.ts:269-285`) scores only the surviving candidates and does not
+   require the winner to beat the current tip; `resolveFork` then reports `outcome: "recovered"` because
+   `winnerTip.confirmationTag !== currentState.confirmationTag` (`fork-recovery.ts:452-456`). The engine
+   rewinds off its own deeper canonical branch onto the competitor.
 
-**File:** `src/core/components/integrity.ts:277-286`; escape paths `src/engine/fork-recovery.ts:244-249`, `src/engine/group-engine.ts:1873-1886`, `src/engine/ingest.ts:804-809`
+Consequence: silent loss of applied local history and divergence from every peer that still has the parent's
+proposals — a strictly worse outcome than the pre-fix grandfathering CR-04 was closing.
 
-**Issue:** `validateCommitLegality` calls
-`getAppComponents(args.parentState.groupContext.extensions)` with no guard.
-`getAppComponents` → `getComponent` → `decodeComponentsList`, which throws on malformed
-bytes or a duplicate component id (`src/core/components/app-components-list.ts:28-41`).
-`validateAdminLeafCoupling` deliberately wraps its own decode in `try/catch` and returns a
-typed violation; the shared adapter does not do the same for `getAppComponents`, so the
-"non-throwing by design (D-01/D-02)" contract documented at
-`integrity.ts:16-26` is violated.
-
-The bytes are attacker-influenceable: an admin can commit an `AppDataUpdate` writing
-arbitrary bytes to component `0x0001`. Rule 3 accepts it (the change *is* backed by that
-commit's own op) and Rule 2 only checks presence, never decodability. From the next commit
-onward, every seam calls `getAppComponents(parentState)` on those bytes:
-
-- **Inbound** (`ingest.ts:697`): caught by the enclosing `try` at `ingest.ts:656`, so the
-  commit is pushed onto `unreadable`/retry and finally reported terminal. Net effect:
-  the group can never apply another commit — permanent stall, with a misleading
-  `invalid_encoding` disposition.
-- **Convergence/replay** (`fork-recovery.ts:244`) and **tree re-convergence**
-  (`group-engine.ts:1873`): **not** wrapped. The throw propagates out of `explore` →
-  `#buildBranches` → `ForkRecovery.resolveFork` → `MarmotGroupEngine.#resolveFork` →
-  `await ctx.resolveFork(...)` at `ingest.ts:804` (no `try`) → out of the ingest async
-  generator. `GroupSession.ingest` (`group-session.ts:548-562`) therefore never reaches
-  `await this.save()`, so any state already advanced in that batch is left unpersisted.
-
-**Fix:** Make the adapter honour its own non-throwing contract, and defensively guard the
-replay seams:
+**Fix:** Do not conflate "cannot reconstruct proposals" with "must replay". Fail closed on the *candidate*,
+not on the branch, only when the commit is genuinely re-validatable another way; otherwise close the
+underlying snapshot gap so reconstruction always succeeds:
 
 ```ts
-export function validateCommitLegality(args: {...}): CommitIntegrityViolation | undefined {
-  const appDataUpdateOps = collectAppDataUpdateOps(args.proposals);
-  let requiredIds: readonly AppComponentId[];
-  try {
-    requiredIds = getAppComponents(args.parentState.groupContext.extensions) ?? [];
-  } catch {
-    return {
-      reason: "component-integrity",
-      detail: "current app_components component did not decode",
-    };
+// group-engine.ts — record own staged proposals into the tree, symmetric with inbound
+confirmPublished(pending: PendingState): void {
+  if (pending.kind === "proposal") {
+    this.#setState(pending.newState);
+    this.#recordProposalStaged(pending.newState);   // NEW — mirrors ingest.ts
+    return;
   }
-  // ...unchanged
+  // ...
 }
 ```
+
+and, in `fork-recovery.ts`, treat an unresolvable-`ProposalRef` known commit explicitly (log + drop the
+*candidate* with a distinguishable reason, or keep the short-circuit and validate with the proposals
+recovered from the child state's transcript) rather than silently routing it into a replay that is
+guaranteed to throw. Add a regression test: own proposal → own commit → serialize/reload from the tree →
+`resolveFork` must still produce our branch as a candidate.
 
 ---
 
-### CR-03: `send({ kind: "selfUpdate" })` bypasses every commit-legality guard the `commit` seam gained
+### CR-09: `selfUpdate` commits are never recorded into retained history or the history tree — the persisted fork tree is discarded on the next load — BLOCKER
 
-**File:** `src/engine/group-engine.ts:743-764` (no validation), compare `src/engine/group-engine.ts:700-718`
+**File:** `src/engine/group-engine.ts:657-704`, `:819-856`, `src/engine/types.ts:38-45`,
+`src/client/runtime/group-runtime.ts:98`, `src/client/group-registry.ts:200-206`
 
-**Issue:** `selfUpdate` builds a real commit via `createCommit(... extraProposals: [])`.
-As the phase's own comment states at `group-engine.ts:578-585`, *"createCommit bundles
-every entry of `this.state.unappliedProposals` by reference in addition to
-`commitOptions.extraProposals`"*. Passing `extraProposals: []` does not exclude the
-by-reference set. A `selfUpdate` therefore commits whatever proposals are staged — a peer's
-`Remove` that de-leafs the last admin account, or an `AppDataUpdate` rewriting the
-dictionary.
+**Issue:** `case "selfUpdate"` returns `pending: { kind: "selfUpdate", newState }` (`group-engine.ts:702`) —
+no `parentState`, no `commitMessage` (the `PendingState` shape at `types.ts:38-45` makes both optional and
+they are only populated for `kind: "commit"`). `confirmPublished` therefore takes the tail path and only calls
+`#setState(pending.newState)` (`:855`). `#recordCommitNode` is never called for a selfUpdate.
 
-Because the `selfUpdate` branch runs none of:
-- the D-05 admin-policy auto-coupling splice,
-- the D-07 `AdminDepletionError` guard,
-- `validateCommitLegality`,
+A selfUpdate **is** a commit: it advances the epoch and produces a new `confirmationTag`. So after every
+selfUpdate:
 
-the engine will happily wrap and publish a commit that its **own inbound seam**
-(`ingest.ts:697-718`) rejects with `admin-leaf-coupling` / `component-integrity`, and that
-every conformant peer rejects. This is exactly the mdk#707 "a guard that exists on one seam
-only" bug class the phase set out to close. `MarmotGroup.selfUpdate()` is a public,
-non-admin-callable API (`marmot-group.ts:546-553`), and per MIP-02 it is called right after
-joining from a Welcome — a moment when staged proposals from other members are plausible.
-No test in `send-commit-legality.test.ts` or `commit-legality-seams.test.ts` mentions
-`selfUpdate`.
+- `RetainedHistoryStore` has no `stateAt(newEpoch)` and no `appliedCommits` entry for the source epoch, so
+  `resolveFork` can never rebuild across a selfUpdate;
+- the `GroupHistoryTree` has no node for the new tip, so `#sweepTree`'s
+  `this.#tree.path(bytesToHex(this.#state.confirmationTag)) ?? []` is empty
+  (`group-engine.ts:1044-1046`) and every pooled app message is classified non-canonical and held silently
+  (`:1169-1171`);
+- `#reconvergeFromTree` computes `currentTipTag` from a tag the tree does not contain (`:1770-1771`);
+- **worst:** on the next load `GroupRegistry.#loadHistory` sees `!tree.hasNode(tipTag)`, logs
+  "discarding stale history tree", and returns `undefined` (`group-registry.ts:202-205`) — the entire
+  persisted fork history and the rebuilt retained window are thrown away.
 
-**Fix:** Factor the post-`createCommit` validation out of `case "commit"` and run it in
-`case "selfUpdate"` too, against the same by-reference union:
+`MarmotGroup.selfUpdate()` is public, documented (`docs/client/marmot-group.md:136`), non-admin-callable, and
+per MIP-02 is the operation callers are told to run right after joining from a Welcome
+(`marmot-client.ts:414`). So on the normal join path, the very first thing a client does destroys its own
+convergence persistence.
+
+This predates the fix diff, but `case "selfUpdate"` was rewritten by `2858d1c` under a docstring asserting
+that "the two commit-producing seams cannot drift", and it directly defeats CONV-02/CONV-03's persistence
+promises, so it is in scope and load-bearing for this phase.
+
+**Fix:** Make `selfUpdate` a first-class commit in the pending contract and record it on confirmation:
 
 ```ts
-case "selfUpdate": {
-  const parentState = this.state;
-  const { commit, newState } = await createCommit({ /* ...unchanged... */ });
-  const violation = validateCommitLegality({
-    parentState,
-    resultingState: newState,
-    proposals: Object.values(parentState.unappliedProposals).map((p) => p.proposal),
-  });
-  if (violation) throw new UsageError(violation.detail);
-  // ...unchanged
+// send(): case "selfUpdate"
+return {
+  kind: "selfUpdate",
+  envelope,
+  pending: { kind: "selfUpdate", newState, parentState, commitMessage: commit },
+};
+
+// confirmPublished()
+if (pending.kind === "commit" || pending.kind === "selfUpdate") {
+  // ...existing commit path, including #recordCommitNode
 }
 ```
 
-Better still: hoist the D-05/D-07 auto-coupling block into a shared helper both branches call.
+Add a test that performs a selfUpdate, saves, reloads through `GroupRegistry`, and asserts the history tree
+survives (`hasNode(tipTag)`), plus one asserting `retainedStates()` contains the post-selfUpdate epoch.
 
 ---
 
-### CR-04: the `known` short-circuit grandfathers exactly the violations `#treeResolution` refuses to grandfather
+### CR-10: `removedMarkerStore` is still unreachable through the public client API, so CR-05 and CR-06 are inert in production — BLOCKER (promoted from round-1 WR-01)
 
-**File:** `src/engine/fork-recovery.ts:198-215` vs `src/engine/group-engine.ts:1810-1887`
+**File:** `src/client/group-registry.ts:136-155`, `src/client/groups-manager.ts:77-90`, `:216`, `:230`,
+`src/client/marmot-client.ts:111`, `:214`, `src/client/group/marmot-group.ts:152`
 
-**Issue:** `#treeResolution` documents and implements a strict fail-closed policy: *"a
-persisted tree edge may have been written by a pre-upgrade build that never enforced
-`validateCommitLegality`, so adopting it without re-checking would be grandfathering a
-violation the send/inbound/replay seams would all now refuse"* — and abandons the whole
-switch on any failing link.
+**Issue:** Unchanged since round 1: `grep -rn removedMarkerStore src` finds it only on `MarmotGroupOptions`,
+inside `MarmotGroup`, and in tests. `GroupsManagerOptions` plumbs `store` and `rewindStore` through to both
+`GroupRegistry` and `GroupFactory` (`groups-manager.ts:216`, `:230`) and `MarmotClient` forwards
+`rewindStore` (`marmot-client.ts:214`) — but neither ever mentions `removedMarkerStore`, and
+`GroupRegistry.build` does not pass it (`group-registry.ts:136-155`).
 
-`#buildBranches`'s `known` branch does the opposite for the same class of data. Commits in
-`ours` come from `RetainedHistoryStore`, which is rebuilt on load from the persisted
-history tree — i.e. exactly the pre-upgrade edges `#treeResolution` distrusts. The `known`
-path assigns `next` directly and jumps past both `capture.take()` and
-`validateCommitLegality`, so a violating commit that was accepted by an older build is
-replayed into a winning candidate branch without any re-check.
+Round 1 rated this a WARNING. It is now critical-tier because **two of the seven critical fixes hang off it**:
 
-Two seams, opposite policies, on the same input class. Criterion 1 ("these three behave
-IDENTICALLY") is not met.
+- CR-05's ordering guarantee only matters if the marker is durable; without a store, `#realizeRemovalIfNeeded`
+  falls back to `#removalRealizedInMemory` (`marmot-group.ts:703-709`), which is reset by process exit — so
+  the whole class of bug CR-05 fixed cannot occur *and cannot be fixed*, because realization never survives a
+  restart at all.
+- CR-06's stated scenario is literally "restarts, and re-converges from disk". Through
+  `GroupsManager`/`MarmotClient`, `#clearRemovalMarker()` clears an in-memory boolean that was already `false`
+  (`marmot-group.ts:723-729`). The fix is provably unreachable for every real consumer.
 
-**Fix:** Even on the `known` path, run the validator using the recorded parent and known
-child, deriving proposals from a replay-free source (the stored commit's proposals can be
-decoded from `link.message`, or the parent-matched edge can be re-validated as
-`#treeResolution` does). At minimum, document + assert the invariant that everything in
-`ours` was validated by this build, and re-validate whenever the retained store was
-rehydrated from disk.
+The integration test constructs `MarmotGroup` directly (`removed.test.ts:65-72`), so it never exercises the
+real wiring. Silent degradation, no error, no warning log.
 
----
-
-### CR-05: the removal marker is persisted before the tombstone `ClientState` is persisted
-
-**File:** `src/client/group/marmot-group.ts:681-700`, `src/client/group/marmot-group.ts:767-770`, `src/client/session/group-session.ts:548-562`
-
-**Issue:** Ordering in the live-removal path is:
-
-1. `ingestEnvelopes` applies the removing commit and yields `{kind:"removed"}`
-   (in-memory state → `removedFromGroup`).
-2. `MarmotGroup.ingest` awaits `#realizeRemovalIfNeeded()`, which **writes
-   `removedMarkerStore[idStr] = true`** and emits `removed`.
-3. Only after the generator is fully drained does `GroupSession.ingest` reach
-   `await this.save()` (`group-session.ts:562`) and persist the tombstone.
-
-Any failure between 2 and 3 — a throw from a `removed` listener, an aborted `for await`
-(e.g. a consumer that `break`s, which `GroupsManager.#connectGroup` does not but any app
-may), a process exit, or a `save()` rejection — leaves `marker = true` with a **non-tombstone**
-persisted `ClientState`.
-
-On the next load, `fromClientState` → `#realizeRemovalIfNeeded` returns early
-(`marmot-group.ts:682`, state is not the tombstone). When the removing commit is re-ingested
-from relays, the `removed` result fires `#realizeRemovalIfNeeded` again, which reads
-`alreadyRealized === true` and returns at line 688 — **the `removed` event is never emitted,
-and queued outbound is never rejected.** That is the permanent silent suppression the
-marker exists to prevent.
-
-**Fix:** Persist the state before setting the marker, or make the marker write the last
-step of an atomic realization:
-
-```ts
-if (result.kind === "removed") {
-  this.log("removed from group by inbound commit");
-  await this.save(true);            // persist the tombstone first
-  await this.#realizeRemovalIfNeeded();
-}
-```
-
-and drop the marker write if the subsequent save fails.
+**Fix:** Add `removedMarkerStore?: GenericKeyValueStore<boolean>` to `GroupsManagerOptions`,
+`MarmotClientOptions`, and `GroupRegistryOptions`/`GroupFactoryOptions`; forward it in
+`GroupRegistry.build()` alongside `store`/`rewindStore`; add a test that drives a removal +
+restart + reconverge through `GroupsManager` rather than a hand-built `MarmotGroup`.
 
 ---
 
-### CR-06: `reconverge()` discards `stateInvalidated` results, so a load-time rewind never clears the marker
+### CR-11: the CONV-04 short-circuit still bypasses the MIP-03 admin-policy callback that `#treeResolution` re-runs — BLOCKER (unresolved remainder of CR-04)
 
-**File:** `src/engine/group-engine.ts:1768-1770`, `src/client/session/group-session.ts:377-380`, `src/client/group/marmot-group.ts:778-784`
+**File:** `src/engine/fork-recovery.ts:242-270` vs `src/engine/group-engine.ts:1903-1949`
 
-**Issue:** The only site that clears the removal marker on supersession is the
-`stateInvalidated` handler inside `MarmotGroup.ingest`. But `reconvergeFromHistory()` is:
-
-```ts
-async reconvergeFromHistory(): Promise<void> {
-  for await (const _ of this.#reconvergeFromTree([])) void _;
-}
-```
-
-Every `stateInvalidated` result `#reconvergeFromTree` yields (`group-engine.ts:1739-1748`)
-is thrown away, and `GroupSession.reconverge()` (`group-session.ts:377-380`) exposes only
-`Promise<void>` — so `MarmotGroup.reconverge()` and the documented "Called automatically on
-load" path can never clear the marker.
-
-Concretely: a client that was removed on a losing fork, restarts, and re-converges from disk
-onto a branch where it is still a member ends up with canonical membership restored **and a
-stale `marker = true`**. A later genuine removal is then silently suppressed (see CR-05 for
-the same terminal symptom). This is precisely the scenario the doc comment at
-`marmot-group.ts:702-709` says the CONV-03 path must handle.
-
-**Fix:** Make the reconverge path yield its results, or give it an explicit hook:
+**Issue:** CR-04's premise is that `ours` comes from `RetainedHistoryStore`, which `GroupRegistry` rebuilds on
+load straight from the persisted history tree — the same pre-upgrade edge class `#treeResolution` explicitly
+refuses to grandfather. The fix re-runs `validateCommitLegality` on that path, but the known branch still
+constructs its result by hand:
 
 ```ts
-// GroupSession
-async *reconverge(): AsyncGenerator<DispositionedIngestResult> {
-  for await (const r of this.#engine.reconvergeFromTree([])) {
-    yield { ...mapEngineIngestResult(r), disposition: ingestResultDisposition(r) };
-  }
-  await this.save();
-}
-// MarmotGroup.reconverge drains it through the same
-// `stateInvalidated`/`selfRemoved` marker-clearing branch as ingest().
+next = { kind: "newState", newState: known.state, actionTaken: "accept", consumed: [], aad: new Uint8Array() };
 ```
 
----
+with `actionTaken` hardcoded to `"accept"`. The MIP-03 admin gate — `createAdminCommitPolicyCallback`, which
+enforces admin-only commits, the account-identity-proof check on `Add` proposals, and the
+admin-cannot-self-remove rule (`admin-policy.ts:38-116`) — is never consulted.
 
-### CR-07: a rewind spanning more than one commit derives notifications only for the tip link
+`#treeResolution` does the opposite for the same input class: it replays each link with
+`withCapturedProposals(this.#createAdminVerificationCallback())` (`group-engine.ts:1903-1932`) and abandons
+the whole chain if `replayed.actionTaken === "reject"` (`:1943-1949`). Two seams, same persisted-edge input,
+opposite policies — the exact divergence criterion 1 forbids and CR-04 named.
 
-**File:** `src/engine/group-engine.ts:1642-1659`
+Concretely: a persisted edge written by a build whose admin set differed (or a pre-MIP-03 build) is replayed
+into a winning candidate by `ForkRecovery` and refused by `#treeResolution`, so which seam happens to run
+first decides whether the group converges — non-deterministically across peers.
 
-**Issue:**
-
-```ts
-const tipLink = resolution.winnerChain.at(-1);
-if (tipLink) {
-  const tipDigest = commitDigest(encode(mlsMessageEncoder, tipLink.message));
-  tipNotifications = deriveStateNotifications({
-    parentState: tipLink.parent,
-    resultingState: resolution.winnerTip,
-    commitDigest: tipDigest,
-  });
-  this.#stateNotifications.record(tipDigest, ..., tipNotifications);
-}
-```
-
-`winnerChain` can hold N links (`fork-recovery.ts:266-272` accumulates one per applied
-commit; `#treeResolution` builds one per path segment). Only the last one is diffed. Two
-concrete failures:
-
-1. **Lost notifications.** If the rewind adopts a 3-commit branch that added Alice at
-   `F+1`, removed Bob at `F+2`, and rotated a key at `F+3`, the caller is told only about
-   `F+3`. `memberAdded(Alice)` and `memberRemoved(Bob)` are never emitted. `epochAdvanced`
-   reports `F+2 → F+3` even though the client jumped from `F` (or its old losing tip).
-2. **Non-withdrawable ledger.** Because those notifications are never `record()`ed, a
-   *subsequent* rewind that supersedes commits `F+1`/`F+2` has nothing to withdraw for
-   them — `invalidatedByRewind` can only withdraw what was recorded. CONV-03's stated
-   invariant ("a rewind that supersedes the commit can withdraw exactly the notifications
-   it derived") does not hold for multi-commit rewinds.
-
-**Fix:** Derive and record per link, and return the concatenation:
-
-```ts
-const tipNotifications: StateNotification[] = [];
-for (const link of resolution.winnerChain) {
-  const digest = commitDigest(encode(mlsMessageEncoder, link.message));
-  const derived = deriveStateNotifications({
-    parentState: link.parent,
-    resultingState: link.child,
-    commitDigest: digest,
-  });
-  this.#stateNotifications.record(
-    digest,
-    Number(link.child.groupContext.epoch),
-    derived,
-  );
-  tipNotifications.push(...derived);
-}
-```
-
-(`AppliedForkResolution.notifications` should then be documented as "for the whole applied
-chain", and `ingest.ts:828-843` keeps working unchanged.)
+**Fix:** Run the admin callback on the known path too, against the recorded parent, before accepting the
+short-circuit. The proposals are already reconstructed by `framedCommitProposals`, so the callback can be
+invoked directly on a synthesized `incoming` value; or, at minimum, gate the short-circuit on a flag that is
+only set for commits this *process* validated (never for a rehydrated retained store) and fall back to
+`#treeResolution`'s replay-and-re-check policy otherwise.
 
 ---
 
 ## Warnings
 
-### WR-01: `removedMarkerStore` is unreachable through the public client API
+### WR-14: a rewind now re-records notifications for already-applied prefix links, duplicating both delivery and withdrawal — WARNING
 
-**File:** `src/client/group/marmot-group.ts:140-152`; absent from `src/client/groups-manager.ts:77-126`, `src/client/group-registry.ts`, `src/client/group-factory.ts`
+**File:** `src/engine/group-engine.ts:1650-1653`, `:1705-1724`
 
-**Issue:** `grep -rn removedMarkerStore src/` finds it only on `MarmotGroupOptions`, inside
-`MarmotGroup`, and in tests. `GroupsManagerOptions` plumbs `store` and `rewindStore` to both
-`GroupRegistry` and `GroupFactory` but never `removedMarkerStore`, and `MarmotClient` has no
-knob either. Every consumer going through `GroupsManager`/`MarmotClient` — i.e. all of them —
-silently gets the documented in-memory degradation, so CONV-02's "realization survives a
-restart" is not achievable in practice. The integration test constructs `MarmotGroup`
-directly (`removed.test.ts:62-69`), so it never exercises the real wiring.
+**Issue:** `invalidatedByRewind` **keeps** entries whose digest is in `canonicalDigests`
+(`state-notifications.ts:219-225`), i.e. every link on the winning chain that was already ledger-recorded when
+it was first applied (`ingest.ts:772-776`). The CR-07 loop then `record()`s all of them again (`:1717-1721`),
+producing two ledger entries with the same digest and epoch, and pushes their notifications into
+`chainNotifications`, which is surfaced to the caller as `processed`/`removed` `notifications`
+(`ingest.ts:840`, `:848`).
 
-**Fix:** Add `removedMarkerStore?: GenericKeyValueStore<boolean>` to `GroupsManagerOptions`
-and forward it through `GroupRegistry` and `GroupFactory` into `MarmotGroupOptions`, plus a
-test that goes through `GroupsManager`.
+Reachable whenever the fork root sits below the divergence point — e.g. fork pool carries competing commits at
+both epoch `F` and `F+1`: the winner chain is `[F→c1 (already applied inbound), F+1→peer]`, so `c1`'s
+notifications are re-recorded and re-reported. A later rewind that supersedes `F+1..` then withdraws each of
+`c1`'s notifications twice, breaking CONV-03's "withdraw exactly the notifications it derived" invariant from
+the other direction, and compounding WR-02's unbounded-ledger problem.
 
----
-
-### WR-02: `StateNotificationLedger` is unbounded under the explicitly supported `maxRewindCommits: Infinity`
-
-**File:** `src/engine/state-notifications.ts:193-200`, `src/engine/state-notifications.ts:236-238`; `src/engine/group-engine.ts:1468-1472`, `src/engine/group-engine.ts:1661-1665`
-
-**Issue:** The ledger's only bound is `pruneBelow(anchorEpoch())`. With
-`maxRewindCommits: Infinity` — documented as supported on both
-`MarmotGroupEngineOptions.convergencePolicy` (`group-engine.ts:171-176`) and
-`MarmotGroupOptions.convergencePolicy` (`marmot-group.ts:163-168`) —
-`prunableRetainedEpochs` computes `floor = Math.max(0, tip - Infinity) === 0`
-(`src/core/retained-history.ts:89`), so `RetainedHistoryStore` never prunes,
-`anchorEpoch()` stays pinned at the initial epoch forever, and `pruneBelow` is a permanent
-no-op. Every commit's notifications accumulate for the process lifetime. `DeliveredPayloadLedger`
-has the identical shape and the identical problem (`group-engine.ts:1464-1466`). The class
-doc's claim that entries "stay bounded to the rollback horizon" is false in that
-configuration.
-
-**Fix:** Add an absolute entry cap independent of the anchor (mirror `IngestionPoolOptions`'s
-`maxEntries`), evicting oldest-epoch entries first:
+**Fix:** Skip links already in the ledger, or make `record` idempotent on `(digest, epoch)`:
 
 ```ts
-constructor(private readonly maxEntries = 4096) {}
-record(...) {
+record(digest, epoch, notifications) {
   if (notifications.length === 0) return;
-  this.#entries.push({ digest: bytesToHex(digest), epoch, notifications });
-  if (this.#entries.length > this.maxEntries)
-    this.#entries.splice(0, this.#entries.length - this.maxEntries);
+  const key = bytesToHex(digest);
+  if (this.#entries.some((e) => e.digest === key && e.epoch === epoch)) return;
+  this.#entries.push({ digest: key, epoch, notifications });
 }
 ```
+and filter `chainNotifications` to links whose digest is not already recorded, so the caller is not told about
+a commit it already processed.
 
 ---
 
-### WR-03: the audit log hardcodes `admin_policy` for every rejection, misattributing the two new reasons
+### WR-15: `deriveStateNotifications` is the one unguarded call site, and it runs *after* state has already advanced — WARNING
 
-**File:** `src/engine/group-engine.ts:1388-1394`
+**File:** `src/engine/group-engine.ts:1671-1724`, `src/core/components/integrity.ts:309`,
+`src/core/group-members.ts:19-27`, `src/core/credential.ts:48-64`
 
-**Issue:**
+**Issue:** `fork-recovery.ts:252-262`, `:308-317` and `group-engine.ts:1968-1982` all wrap
+`validateCommitLegality` with the explicit rationale "a throw escaping here would abandon state already
+advanced in the batch before `GroupSession.ingest` can persist it". `#applyForkResolution` violates that same
+policy at the one place where the state genuinely *has* already advanced: `this.#setState(resolution.winnerTip)`
+runs at `:1671`, and the per-link `deriveStateNotifications(...)` loop at `:1705-1723` is unguarded.
 
-```ts
-if (result.kind === "rejected") {
-  this.#emitAudit({ type: "rejection", msg_id: msgId, reason: "admin_policy" });
-}
-```
+`deriveStateNotifications` calls `getGroupMembers` (`state-notifications.ts:93-94`), which calls
+`getCredentialPubkey`, which throws for a basic credential whose identity is not a valid 32-byte hex key
+(`credential.ts:49-62`); `getGroupMembers` filters on `credentialType` but not on identity validity
+(`group-members.ts:22-24`). `validateCommitLegality` has the same exposure at `integrity.ts:309`, so the
+docblock's "non-throwing by design (D-01/D-02)" contract (`integrity.ts:16-26`) is still not literally true.
 
-`RejectedIngestResult.reason` is now a 3-value union (`admin-policy` |
-`component-integrity` | `admin-leaf-coupling`, `types.ts:99-112`), and `ingest.ts` populates
-it correctly. The forensic audit trail — the one artifact a post-incident investigator reads
-— records all three as `admin_policy`, making the new WIRE-03/CONV-01 rejections invisible
-and actively misleading.
+Reachability is low — `marmotAuthService.validateCredential` gates identities on the inbound path
+(`core/auth-service.ts:16-27`) — but a state hydrated from a Welcome or a `ratchet_tree` extension is not
+covered by that gate, and the CR-07 fix multiplies the number of derivations per rewind by N.
 
-**Fix:**
-
-```ts
-if (result.kind === "rejected") {
-  this.#emitAudit({
-    type: "rejection",
-    msg_id: msgId,
-    reason: (result.reason ?? "admin-policy").replace(/-/g, "_"),
-  });
-}
-```
-
----
-
-### WR-04: the send seam discards `violation.reason` and throws a generic `UsageError`
-
-**File:** `src/engine/group-engine.ts:707-717`
-
-**Issue:** `throw new UsageError(violation.detail)` propagates only the diagnostic string,
-which `integrity.ts:36-38` explicitly designates as *"a diagnostic string ... The
-protocol-visible signal is `reason`."* Callers wanting to branch on
-`component-integrity` vs `admin-leaf-coupling` must string-match a message that the same
-docblock says is free to change. It is also inconsistent with the sibling guard in this very
-switch, which throws a typed `AdminDepletionError` (`group-engine.ts:126-133`).
-
-**Fix:** Add a typed error carrying the violation:
+**Fix:** Wrap the loop the same way its siblings are wrapped, and log-and-continue rather than aborting the
+generator mid-rewind:
 
 ```ts
-export class CommitLegalityError extends Error {
-  constructor(readonly violation: CommitIntegrityViolation) {
-    super(violation.detail);
-    this.name = "CommitLegalityError";
-  }
-}
-// ...
-if (violation) throw new CommitLegalityError(violation);
-```
-
----
-
-### WR-05: `validateAdminLeafCoupling` misattributes a *current*-epoch decode failure to the resulting epoch
-
-**File:** `src/core/components/integrity.ts:222-236`
-
-**Issue:** The `try` block spans both `getAdminPolicy(args.resultingExtensions)` and the
-carried-forward `getAdminPolicy(args.currentExtensions)`. When the *current* (inherited,
-already-accepted) admin-policy bytes fail to decode, the returned violation reads
-`"resulting admin-policy component did not decode"` — blaming a commit that did not touch
-admin policy at all, and rejecting it. Every subsequent commit is rejected the same way,
-wedging the group with a diagnostic that points the operator at the wrong epoch.
-
-**Fix:** Split the two decodes so the detail names the right side, and consider treating a
-malformed *carried-forward* policy as a separate, non-commit-attributable condition:
-
-```ts
-let resultingSet: string[] | undefined;
+let derived: StateNotification[];
 try {
-  resultingSet = getAdminPolicy(args.resultingExtensions);
-} catch {
-  return { reason: "admin-leaf-coupling", detail: "resulting admin-policy component did not decode" };
-}
-let resultingAdmins: string[];
-if (resultingSet !== undefined) resultingAdmins = resultingSet;
-else {
-  try {
-    resultingAdmins = getAdminPolicy(args.currentExtensions) ?? [];
-  } catch {
-    return { reason: "admin-leaf-coupling", detail: "carried-forward admin-policy component did not decode" };
-  }
+  derived = deriveStateNotifications({ parentState: link.parent, resultingState: link.child, commitDigest: linkDigest });
+} catch (error) {
+  this.#log()("state notification derivation failed for link %s: %o", bytesToHex(link.child.confirmationTag), error);
+  continue;
 }
 ```
+Additionally, harden `getGroupMembers` to skip (not throw on) an unparseable identity.
 
 ---
 
-### WR-06: `#maybeAutoCommitSelfRemoves` has no `removedFromGroup` guard, and `send()` now throws for a removed group
+### WR-16: the removal marker is still cleared without re-checking the tombstone, and `ingest()` / `reconverge()` now disagree about re-asserting realization — WARNING (promoted from round-1 WR-10)
 
-**File:** `src/engine/group-engine.ts:880-888`, `src/engine/group-engine.ts:1198-1272`, `src/engine/group-engine.ts:440-444`
+**File:** `src/client/group/marmot-group.ts:821-829`, `:542-549`, `:780-800`
 
-**Issue:** `ingest()` unconditionally calls `#maybeAutoCommitSelfRemoves()` after draining
-the batch, including on the path where `ingestEnvelopes` just returned after applying a
-commit that removed us. D-14 added an unconditional throw at the top of `send()`
-("Cannot send: this client has been removed from the group."). If the tombstone state still
-carries pending `self_remove` proposals in `unappliedProposals` and this client is elected
-committer, `#maybeAutoCommitSelfRemoves` reaches `await this.send({kind:"commit", ...})`
-(line 1259) and the throw escapes `ingest()` entirely, aborting the generator — and with it
-`GroupSession.ingest`'s trailing `await this.save()`, so the tombstone is not persisted.
+**Issue:** `#applyRemovalWithdrawal` clears the marker on *any* `stateInvalidated` carrying a `selfRemoved`,
+with no check that canonical state actually left the tombstone (`:822-828`). The CR-06 fix made this
+reachable from two paths that now behave differently:
 
-Today this is *usually* masked because `getCredentialFromLeafIndex(state.ratchetTree,
-state.privatePath.leafIndex)` at line 1237-1245 throws for a blanked own leaf and is caught.
-That is incidental, not a guard, and D-13/D-14 apply the check explicitly everywhere else.
+- `reconverge()` clears, then re-asserts with `await this.#realizeRemovalIfNeeded()` (`:548`);
+- `ingest()` clears (`:802`) and never re-asserts.
 
-**Fix:**
+So a live rewind that supersedes removal-commit A but lands on branch B which *also* removes us leaves
+`marker = false` with `groupActiveState.kind === "removedFromGroup"` and no re-emitted `removed`. The next
+load then emits a duplicate `removed`, violating the exactly-once contract from the other side. On the
+`reconverge()` path the re-assert fires immediately and emits a *second* `removed` in the same process for
+what the app sees as one removal.
 
-```ts
-async #maybeAutoCommitSelfRemoves(): Promise<AutoCommitIngestResult<TEnvelope> | undefined> {
-  if (this.#state.groupActiveState.kind === "removedFromGroup") return undefined;
-  if (!mayPrepareLocalCommit(this.#lifecycle)) return undefined;
-  // ...
-}
-```
+Two call sites of a helper whose entire purpose is "the live and load-time rewind paths can never diverge"
+(`:818-819`) currently diverge.
 
----
-
-### WR-07: the D-13 self-eviction short-circuit is incomplete — `#sweepTree` still decrypts after removal
-
-**File:** `src/engine/ingest.ts:329-338`, `src/engine/group-engine.ts:900-978`
-
-**Issue:** The D-13 guard is placed inside `ingestEnvelopes`, but `#ingestWithPool` continues
-past it: `#sweepTree()` (line 939) peels and `processMessage`s every pooled envelope against
-every retained tree node and can yield `processed` application messages, and `evictStale`
-(line 964) still yields `unreadable`. `member-departure.md` is quoted in the guard's own
-comment as saying such input *"need not be decrypted or authenticated"* — the sweep does
-both, for a group we have been evicted from.
-
-The deliberate exemption documented at `group-engine.ts:948-954` is for
-`#reconvergeFromTree` (which evaluates already-retained material, not fresh input); it does
-not cover `#sweepTree`.
-
-**Fix:** Gate the pooled sweeps on membership:
+**Fix:** Guard the clear, and make the two paths symmetric:
 
 ```ts
-const evicted = this.#state.groupActiveState.kind === "removedFromGroup";
-if (!evicted && this.#pool.size > 0) yield* this.#sweepTree();
-```
-(keep `#reconvergeFromTree` unconditional, per the documented asymmetry).
-
----
-
-### WR-08: the `seen` dedup Set is unbounded and attacker-growable; removing `rejectedEvents` re-verifies invalid events on every redelivery
-
-**File:** `src/client/groups-manager.ts:496`, `src/client/groups-manager.ts:505-517`
-
-**Issue:** This phase removed the `rejectedEvents` Set but left `seen` unbounded. `seen`
-accumulates the id of every *trusted* kind-445 event for the life of the subscription. The
-`h` routing tag is public, and any keypair can sign a valid kind-445 event carrying it — such
-an event passes both trust gates, is added to `seen` permanently, **and** is handed to
-`group.ingest()`. So the "unbounded Set" the todo aimed to remove is still present in the
-larger of the two.
-
-Separately, the removal means an invalid-signature event redelivered by a relay is
-re-verified (a secp256k1 verification per delivery) and re-emitted as `rejected` every time,
-because `fresh` filters on `seen` only. The tradeoff is documented, but it converts a
-cached rejection into unbounded repeated work + repeated app-level callbacks under a replay
-flood.
-
-**Fix:** Bound `seen` with an LRU/ring (e.g. last 10k ids) and, if repeated `rejected`
-emissions matter to consumers, bound a rejected-id (not object) cache the same way rather
-than reintroducing an unbounded Set.
-
----
-
-### WR-09: `#realizeRemovalIfNeeded` has a check-then-act race across its `await`
-
-**File:** `src/client/group/marmot-group.ts:684-689`
-
-**Issue:**
-
-```ts
-const alreadyRealized = await this.#removedMarkerStore.getItem(this.idStr);
-if (alreadyRealized) return;
-await this.#removedMarkerStore.setItem(this.idStr, true);
-```
-
-Two concurrent invocations — e.g. `GroupRegistry` loading the group
-(`fromClientState` → line 510) while a `connectAll` drain is already ingesting the removing
-commit — can both observe `alreadyRealized === false` before either writes, producing two
-`removed` emissions and two `#rejectQueuedOutbound` calls. The method's contract is "exactly
-once".
-
-**Fix:** Guard with an in-flight promise:
-
-```ts
-#realizing?: Promise<void>;
-async #realizeRemovalIfNeeded(): Promise<void> {
-  return (this.#realizing ??= this.#realizeRemovalInner().finally(() => {
-    this.#realizing = undefined;
-  }));
-}
-```
-
----
-
-### WR-10: the marker is cleared without re-checking that canonical state left the tombstone
-
-**File:** `src/client/group/marmot-group.ts:778-784`
-
-**Issue:** The clear fires on *any* `stateInvalidated` whose `withdrawn` contains a
-`selfRemoved`, regardless of the state the rewind actually landed on. A rewind that
-supersedes removal-commit A but lands on a branch that also removes us (commit B) withdraws
-A's `selfRemoved`, clears the marker, and leaves `groupActiveState.kind ===
-"removedFromGroup"` — with no re-emit of `removed`. The next `fromClientState` load then
-sees tombstone + no marker and emits a duplicate `removed`, violating the "exactly once"
-contract from the other direction.
-
-**Fix:**
-
-```ts
-if (
-  result.kind === "stateInvalidated" &&
-  result.withdrawn.some((n) => n.kind === "selfRemoved") &&
-  this.state.groupActiveState.kind !== "removedFromGroup"
-) {
+async #applyRemovalWithdrawal(result: DispositionedIngestResult) {
+  if (result.kind !== "stateInvalidated" || !result.withdrawn.some((n) => n.kind === "selfRemoved")) return;
+  if (this.state.groupActiveState.kind === "removedFromGroup") return; // still removed — nothing to clear
   await this.#clearRemovalMarker();
 }
 ```
+and drop the extra `#realizeRemovalIfNeeded()` from `reconverge()` (or add it to `ingest()`), so both paths
+run the same sequence.
 
 ---
 
-### WR-11: the three seams bind three different admin-verification callbacks
+### WR-17: `selfUpdate` still skips the lifecycle gate, the `PendingPublish` transition, and the staged-parent pin that `case "commit"` runs — WARNING
 
-**File:** `src/engine/ingest.ts:598`, `src/engine/group-engine.ts:1531`, `src/engine/group-engine.ts:1814-1816`, `src/engine/group-engine.ts:1079-1081`
+**File:** `src/engine/group-engine.ts:657-704` vs `:521-655`
 
-**Issue:** `withCapturedProposals` now wraps a callback whose admin set / ratchet tree is
-snapshotted at four different moments:
-- inbound: `ctx.createAdminCallback()` built **once before the commit loop**, so the second
-  and later commits in a multi-commit batch are checked against the pre-batch admin set and
-  ratchet tree;
-- pool-replay: `#createAdminVerificationCallback()` at the current tip, then applied to
-  candidate states at arbitrary earlier epochs;
-- tree re-convergence: `#createAdminVerificationCallback()` at the current tip, applied to
-  every `link.parent` on a persisted chain;
-- sweep: `#createAdminVerificationCallback(state)`, correctly per-node.
+**Issue:** Parity between the two commit-producing seams was closed for legality/admin-coupling but not for
+lifecycle. `case "commit"` checks `mayPrepareLocalCommit(this.#lifecycle)` (`:527-531`), transitions to
+`pendingPublish` (`:634-638`), and sets `#stagedCommitParentEpoch` so the parent epoch is pinned against
+retained pruning (`:639`). `case "selfUpdate"` does none of these.
 
-Since MIP-03 admin membership can change mid-batch (an `AppDataUpdate` to `0x8002`), the
-same commit can be accepted on one seam and rejected on another. Criterion 1 requires these
-to agree.
+Consequently an engine-level `send({kind:"selfUpdate"})` issued while a commit is staged in `PendingPublish`
+builds a second commit off the same parent, and whichever `confirmPublished` lands second overwrites the
+other's state — a silent fork against the group. The client layer masks it because
+`MarmotGroup.submitIntent` gates on `mayReleaseOutbound(status, lifecycle)`, which requires `Stable`
+(`core/convergence-status.ts:128-133`), but `MarmotGroupEngine` is a documented public entrypoint
+(`./engine` subpath) for callers building their own transport, and the round-1 comment style elsewhere in this
+file treats "masked by an incidental guard" as a defect, not a fix.
 
-**Fix:** Always derive the callback from the state the commit is being applied to. In
-`ingest.ts`, rebuild it per iteration:
-
-```ts
-const capture = withCapturedProposals(ctx.createAdminCallback());
-// -> move inside the loop, or add ctx.createAdminCallbackFor(state)
-```
-and pass `state` in `#buildBranches`/`#treeResolution`.
+**Fix:** Hoist the gate and the pending/pin bookkeeping into the shared path both branches call — see CR-09,
+which needs the same restructuring.
 
 ---
 
-### WR-12: engine and session `IngestResult` unions are hand-duplicated and already diverge
+### WR-18: `notifications` semantics widened to whole-chain, but the consuming result types still document per-commit — WARNING
 
-**File:** `src/client/session/group-session.ts:36-142` vs `src/engine/types.ts:86-262`
+**File:** `src/engine/ingest.ts:61-76`, `:840`, `:848`, `src/engine/types.ts:91-97`,
+`src/client/session/group-session.ts:41-42`, `:115-116`
 
-**Issue:** `GroupSession` redeclares all nine result variants by hand. The engine's
-`UnreadableIngestResult` carries `decryptFailure?: boolean` (`types.ts:138-150`); the session's
-does not (`group-session.ts:78-82`) — but `mapEngineIngestResult` spreads it through, so the
-runtime value carries a field the public type denies. `ProcessedIngestResult` similarly uses
-inline `import("ts-mls")` types instead of the shared imports. Every future variant/field must
-be edited in two places; this one already drifted.
+**Issue:** `AppliedForkResolution.notifications` is now explicitly "derived from the WHOLE applied winner
+chain … concatenated" (`ingest.ts:61-76`). That value is assigned straight into `ProcessedIngestResult` /
+`RemovedIngestResult` at `ingest.ts:840` and `:848`, whose own docs still read "derived from **this** commit"
+(`types.ts:92-94`, `group-session.ts:41`, `:115-116`). A consumer that pairs `result.message` with
+`result.notifications` — the obvious reading of the type — now attributes an entire multi-commit chain to one
+representative fork-pool envelope (`rep.message`, which the code itself notes is "merely the first forkPool
+entry"). The per-entry `commitDigest` makes correct attribution *possible*, but nothing in the type says the
+caller must regroup.
 
-**Fix:** Derive the session types mechanically from the engine ones:
-
-```ts
-type Renamed<T> = T extends { envelope: NostrEvent }
-  ? Omit<T, "envelope"> & { event: NostrEvent }
-  : T;
-export type IngestResult = Renamed<EngineIngestResult<NostrEvent>>;
-```
+**Fix:** Update the three docblocks to state the rewind case explicitly, and consider surfacing the rewind's
+notifications as their own result variant (symmetric with `stateInvalidated`) rather than piggy-backing them
+on a `processed`/`removed` result whose `message` is unrelated.
 
 ---
 
-### WR-13: duplicate byte-equality predicates with divergent bodies
+## Round-1 Warning / Info Carry-Forward
 
-**File:** `src/core/components/integrity.ts:88-96`, `src/engine/state-notifications.ts:49-57`
+One line each, per instructions. Only WR-01 and WR-10 were promoted (to CR-10 and WR-16); the rest are carried
+unchanged.
 
-**Issue:** `bytesEqual` and `componentBytesEqual` are the same predicate, defined twice.
-`bytesEqual` adds `&& a.length === b.length`, which is dead — `compareBytes` already returns
-`a.length - b.length` when the common prefix matches (`src/core/components/bytes.ts:9`).
-Beyond the duplication, the divergence invites a future "fix" to one that does not land on the
-other, silently desynchronising integrity checking from notification diffing.
-
-**Fix:** Export one `bytesEqual` from `src/core/components/bytes.ts` and import it in both
-places; drop the redundant length comparison.
-
----
-
-## Info
-
-### IN-01: fallthrough + a no-op eslint directive in the disposition map
-
-**File:** `src/engine/ingest-disposition.ts:36-55`
-
-**Issue:** The `skipped` case relies on the inner switch being exhaustive so control never
-reaches the `// eslint-disable-next-line no-fallthrough` comment and drops into
-`case "unreadable"`. This does compile-time-fail if a new `reason` is added
-(`noFallthroughCasesInSwitch` is on in `tsconfig.build.json`), so it is safe today — but the
-control flow is non-obvious, and the eslint directive is inert since there is no root ESLint
-config (only `ts-mls/eslint.config.mjs`).
-
-**Fix:** Replace the fallthrough with an explicit exhaustiveness assertion:
-
-```ts
-case "skipped": {
-  switch (result.reason) { /* ...cases... */ }
-}
-case "unreadable":
-  return disposition.stale(inputCategories.invalidEncoding);
-```
-→ give the inner switch a `default: { const _never: never = result.reason; return _never; }`
-and remove the comment.
+| ID | Status | Note |
+|----|--------|------|
+| WR-01 | **promoted → CR-10** | Unchanged in code; now load-bearing for CR-05 and CR-06. |
+| WR-02 | still-open | `StateNotificationLedger` still has no absolute cap (`state-notifications.ts:193-200`); WR-14 makes it grow faster. |
+| WR-03 | still-open | `group-engine.ts:1438-1444` still hardcodes `reason: "admin_policy"` for all three rejection reasons. |
+| WR-04 | still-open | `#assertStagedCommitLegal` throws `new UsageError(violation.detail)` (`:815`), discarding `violation.reason`; now on two seams instead of one. |
+| WR-05 | still-open | `validateAdminLeafCoupling`'s single `try` still spans both decodes (`integrity.ts:222-236`), mislabelling a current-epoch failure. |
+| WR-06 | still-open | `#maybeAutoCommitSelfRemoves` still has no `removedFromGroup` guard (`group-engine.ts:1248-1251`). |
+| WR-07 | still-open | `#sweepTree` still runs unconditionally for an evicted group (`group-engine.ts:989`). |
+| WR-08 | still-open | `groups-manager.ts` untouched by the fix diff; `seen` still unbounded. |
+| WR-09 | still-open | `#realizeRemovalIfNeeded` still check-then-acts across the `await` (`marmot-group.ts:697-702`); CR-06 added a third concurrent caller (`reconverge()`), widening the window. |
+| WR-10 | **promoted → WR-16** | Now reachable from two paths that disagree. |
+| WR-11 | still-open | Inbound still builds `capture` once before the commit loop (`ingest.ts:605`); pool-replay and tree re-convergence still bind the tip's callback (`group-engine.ts:1581`, `:1904`). |
+| WR-12 | still-open | Session/engine `IngestResult` unions still hand-duplicated; `UnreadableIngestResult.decryptFailure` still missing from the session type (`group-session.ts:78-82`). |
+| WR-13 | still-open | `bytesEqual` (`integrity.ts:89-96`) and `componentBytesEqual` (`state-notifications.ts:50-57`) still duplicated with divergent bodies. |
+| IN-01 | still-open | `ingest-disposition.ts:52` fallthrough + inert eslint directive unchanged. |
+| IN-02 | still-open | `groups-manager.test.ts` still asserts `toBeGreaterThanOrEqual(1)`. |
+| IN-03 | still-open | `#emitIngestOutcome` still narrows on `kind === "stateInvalidated"` rather than field presence (`group-engine.ts:1416`); audit wiring still deferred. |
 
 ---
 
-### IN-02: trust-boundary tests relaxed from exact counts to `>= 1`
-
-**File:** `src/__tests__/groups-manager.test.ts:196-205`, `:243-248`, `:310-321`
-
-**Issue:** Three assertions changed from `expect(rejections).toHaveLength(1)` to
-`expect(rejections.length).toBeGreaterThanOrEqual(1)`. The relaxation is justified by the
-`rejectedEvents` removal, but it now also passes if a regression emits hundreds of
-`rejected` events per delivery.
-
-**Fix:** Assert the exact expected count for the known fixture (2 for the
-backfill+subscribe redelivery case, 1 elsewhere) rather than an open lower bound.
-
----
-
-### IN-03: `#emitIngestOutcome` narrows on `stateInvalidated` only to avoid `idOf(undefined)`
-
-**File:** `src/engine/group-engine.ts:1362-1367`
-
-**Issue:** The early return is correct, but the reason is a structural one (the variant has
-no `envelope`), enforced only by a comment. If a future generic-free variant is added, the
-next `this.peeler.idOf(result.envelope)` is a runtime `undefined` deref. Audit wiring for
-`stateInvalidated` is also explicitly deferred, so these rewind withdrawals produce no audit
-record at all.
-
-**Fix:** Narrow on the presence of the field (`if (!("envelope" in result)) return;`) and
-file the deferred audit wiring as a tracked item.
-
----
-
-_Reviewed: 2026-08-04T16:55:00Z_
+_Reviewed: 2026-08-05T12:10:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
-_Depth: standard_
+_Depth: standard (round 2)_

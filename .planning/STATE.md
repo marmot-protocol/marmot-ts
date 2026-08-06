@@ -124,6 +124,12 @@ None yet.
 - [Resolved in 03-03]: CONV-04 verify-first ran; Assumption A1 was falsified for one of the two D-16 properties (own-commit replay) and fixed narrowly in `fork-recovery.ts` — see 03-03-SUMMARY.md "CONV-04 verdict"
 - Pre-existing (from 03-01): src/__tests__/exports.test.ts snapshot stale + pnpm lint fails on refs/mdk/target/ noise — logged in phase deferred-items.md, not fixed in 03-02
 
+## Quick Tasks Completed
+
+| Date       | Slug                       | Summary                                                                                          |
+| ---------- | -------------------------- | ------------------------------------------------------------------------------------------------ |
+| 2026-08-06 | reference-findings-phase-4 | Rolled marmot/mdk submodule findings into Phase 4; added standing per-phase reference-check rule |
+
 ## Deferred Items
 
 | Category        | Item                                                                | Status       | Deferred At     |

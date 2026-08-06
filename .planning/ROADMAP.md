@@ -24,8 +24,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Proof v2** - Migrate account-identity-proof v1→v2 to close the headline interop-breaker (completed 2026-07-21)
 - [x] **Phase 2: Inbound Trust & Wire Boundary** - Verify-before-trust, KeyPackage lifetime cap, required-tag cardinality (completed 2026-07-22)
-- [ ] **Phase 3: Commit Integrity & Convergence Parity** - App-component integrity, admin/leaf coupling, SelfEvicted, notification withdrawal, own-commit protection (all 7 plans executed; phase completion held — code review found 7 blockers, 3 confirmed against success criteria 1 and 5; see 03-REVIEW.md)
-- [ ] **Phase 4: Feature Parity & Conformance Vectors** - SafeAAD advertisement plus MDK's own test vectors wired up as cross-impl tests
+- [ ] **Phase 3: Commit Integrity & Convergence Parity** - App-component integrity, admin/leaf coupling, SelfEvicted, notification withdrawal, own-commit protection (all 7 plans executed; completion held through 3 code-review rounds — see 03-REVIEW.md. The CR-08/CR-11 own-commit convergence defect class has moved to Phase 4 for a structural fix; Phase 3's remaining scope is its local findings CR-12/CR-13/CR-14, the round-1 carry-forwards, and WR-24's stale MIP citations)
+- [ ] **Phase 4: Feature Parity & Conformance Vectors** - SafeAAD advertisement, MDK's own test vectors as cross-impl tests, and the own-commit convergence stamp port that closes CR-08/CR-11
 - [ ] **Phase 5: Quality Gate** - Green suite on every supported runtime; byte-exact MDK cross-checks recorded
 
 ## Phase Details
@@ -126,16 +126,24 @@ Plans:
 ### Phase 4: Feature Parity & Conformance Vectors
 
 **Goal**: marmot-ts's LeafNode/KeyPackage bytes match the reference's SafeAAD advertisement,
-and MDK's own conformance-simulator test vectors run as automated cross-impl checks rather
-than manual spot-checks.
+MDK's own conformance-simulator test vectors run as automated cross-impl checks rather than
+manual spot-checks, and own-commit convergence metadata is recorded at confirm time (porting
+MDK's `OwnCommitConvergenceStamp`) instead of reconstructed at recovery time — which closes
+the Phase 3 CR-08/CR-11 defect class structurally rather than by further incremental patching.
 **Depends on**: Phase 3
 **Requirements**: WIRE-04, CONF-01
+**Reference basis**: `04-REFERENCE-FINDINGS.md` (read from `refs/marmot` @ `4ad4ae2`,
+`refs/mdk` @ `790eb86`; submodule bump `d8ab0ac`)
 **Success Criteria** (what must be TRUE):
 
 1. Leaf/KeyPackage `app_components` advertise `0x0001` and an empty SafeAAD (`0x0002`) entry, matching MDK's leaf dictionary byte-for-byte; safe_aad is still rejected as group-component state.
 2. The `nostr-routing-v1-*` byte fixtures (`valid-state`, `valid-update`, `invalid-duplicate-relay`) pass as automated tests against `src/core/components/nostr-routing.ts` encode/decode, including the duplicate-relay reject case.
 3. The convergence/admin-policy/fork-recovery scenario vectors (`convergence-committer-selected`, `convergence-witness-selected`, `admin-policy-update`, `group-data-update`, `group-data-fork-recovery`, `concurrent-invite-fork-recovery`, and related manifest entries) run as an automated parity harness against `src/engine/fork-recovery.ts` and related convergence code.
 4. The Phase 1 proof-v2 Rust-signed → TS-verified round-trip is wired up as a permanent, repeatable automated test rather than a one-off manual check.
+5. An own commit's convergence metadata — authenticated committer, authorization-aware ordering priority, and consumed proposal references — is recorded when the staged commit is confirmed and persisted alongside its wire bytes, so fork recovery after a restart never reconstructs a proposal set from a parent snapshot. Concretely: `framedCommitProposalsWithSender` is no longer on the own-commit path, and the CR-08 fall-through in `src/engine/fork-recovery.ts` cannot drop a self-authored candidate. (Ports `OwnCommitConvergenceStamp`, `refs/mdk/crates/traits/src/message.rs:23`.)
+6. A commit whose candidate parent cannot be resolved is **deferred**, not dropped, while its authenticated source epoch is inside the rollback horizon, with epoch-based expiry `canonical_tip_epoch - commit_source_epoch > max_rewind_commits` — per `refs/marmot/protocol-core/convergence.md`. The known-state and `#treeResolution` seams agree on what a refusal does.
+7. `restart-delivery-faults.v1.json` runs as an automated test, closing the persist → reload → converge coverage gap that allowed CR-08 and CR-09 to ship green through two review rounds. `publish-fail.v1.json` and `invite-publish-fail.v1.json` likewise cover the publish-before-apply rollback path.
+8. Cross-impl comparison uses the canonical snapshot projection defined in `refs/marmot/foundation/conformance.md` (group id, epoch, `SHA256` of serialized `GroupContext`, exporter commitment `MLS-Exporter("marmot", "convergence-conformance-v1", 32)`, leaves in index order, `app_data_dictionary` entries, lifecycle, convergence status, per-input dispositions) rather than an ad-hoc field-by-field comparison.
    **Plans**: TBD
 
 ### Phase 5: Quality Gate

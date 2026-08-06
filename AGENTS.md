@@ -41,6 +41,29 @@
 - When adding a docs page under `docs/`, also add it to `.vitepress/config.ts`; VitePress uses `srcDir: "docs"`.
 - TypeDoc reference is generated from `src/index.ts` into `.vitepress/dist/reference` using `typedoc.json` and `typedocs/cascade-category.mjs`.
 
+## Reference Submodules
+
+`refs/marmot` (the spec) and `refs/mdk` (the Rust reference) are the source of truth for wire
+format and protocol behavior. They move fast and independently of this repo.
+
+- **At the start of every phase, check both for upstream changes** before planning:
+  ```
+  git -C refs/marmot fetch origin && git -C refs/marmot log --oneline HEAD..origin/HEAD
+  git -C refs/mdk    fetch origin && git -C refs/mdk    log --oneline HEAD..origin/HEAD
+  ```
+  Read the diffs for anything touching the phase's area, then fast-forward and commit the
+  submodule pointer bump as its own `chore(refs):` commit.
+- Do this even when the phase looks unrelated to the spec. The 2026-08-06 sweep found the
+  submodules 4 and 193 commits behind, and the Rust reference already contained a structural
+  solution to a defect class three rounds of code review had failed to close incrementally
+  (see `.planning/phases/04-feature-parity-conformance-vectors/04-REFERENCE-FINDINGS.md`).
+- Before hand-rolling a fix to convergence, fork recovery, or wire encoding, check how MDK
+  does it first. Diverging from the reference is a decision to record, not a default.
+- MIP numbering (`MIP-00`..`MIP-06`) is **deprecated**. The spec is topic-organized under
+  `refs/marmot/{foundation,protocol-core,app-components,transports,features}/`;
+  `refs/marmot/mip-coverage.md` maps old MIP numbers to their new homes. Cite the new paths
+  in code comments — there are still stale `MIP-NN` citations in `src/`.
+
 ## Git Workflow
 
 - Commit after finishing a feature, once it builds and its tests pass; keep each feature in its own commit rather than batching unrelated work.

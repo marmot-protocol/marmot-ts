@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Phase 1)
-current_phase: 03
-current_phase_name: commit-integrity-convergence-parity
-status: verifying
-stopped_at: Review-fix recovery merged; re-review pending
-last_updated: "2026-08-05T00:00:00.000Z"
-last_activity: 2026-08-05
-last_activity_desc: Recovered interrupted review-fix run (7 criticals) and merged to dark-matter
+current_phase: 03.1
+current_phase_name: phase-3-review-closure
+status: ready-to-plan
+stopped_at: Phases 03.1 and 04.1 inserted; 03.1 ready to plan
+last_updated: "2026-08-06T09:14:45.873Z"
+last_activity: 2026-08-06
+last_activity_desc: Reference sweep, round-3 review, roadmap restructure (03.1 + 04.1 inserted)
 progress:
-  total_phases: 5
+  total_phases: 7
   completed_phases: 3
   total_plans: 13
   completed_plans: 13
-  percent: 60
+  percent: 43
 ---
 
 # Project State
@@ -24,16 +24,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-21)
 
 **Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
-**Current focus:** Phase 03 — commit-integrity-convergence-parity
+**Current focus:** Phase 03.1 — phase-3-review-closure
 
 ## Current Position
 
-Phase: 03 (commit-integrity-convergence-parity) — REVIEW FIXES MERGED
-Plan: 7 of 7
-Status: All 7 code-review criticals (CR-01..CR-07) fixed and merged to dark-matter; suite green (75 files / 716 tests, `pnpm compile` clean). Re-review pending before phase close. 13 warnings from 03-REVIEW.md remain unaddressed.
-Last activity: 2026-08-05 — recovered interrupted review-fix run from orphaned worktree branch
+Phase: 03.1 (phase-3-review-closure) — READY TO PLAN
+Plan: 0 of TBD
+Status: Phase 3's 7 plans are all executed and its round-1/round-2 review fixes are merged (suite green: 78 files / 727 tests, `pnpm compile` and `pnpm lint` clean). Three review rounds each found blockers in the previous round's fixes (7 → 4 → 5), so the remaining 30 findings from `03-REVIEW.md` round 3 were split: CR-08/CR-11 (own-commit convergence) moved to Phase 4 for a structural fix via MDK's `OwnCommitConvergenceStamp`; everything else became Phase 03.1.
+Last activity: 2026-08-06 — reference sweep, round-3 deep review, roadmap restructure
 
-Progress: [██████░░░░] 60%
+Progress: [██████░░░░] 43% (7 phases)
+
+**Next recommended run:** `/gsd-plan-phase 03.1`
 
 ## Performance Metrics
 
@@ -123,6 +125,11 @@ None yet.
 
 - [Resolved in 03-03]: CONV-04 verify-first ran; Assumption A1 was falsified for one of the two D-16 properties (own-commit replay) and fixed narrowly in `fork-recovery.ts` — see 03-03-SUMMARY.md "CONV-04 verdict"
 - Pre-existing (from 03-01): src/__tests__/exports.test.ts snapshot stale + pnpm lint fails on refs/mdk/target/ noise — logged in phase deferred-items.md, not fixed in 03-02
+
+### Roadmap Evolution
+
+- Phase 03.1 inserted after Phase 3: Phase 3 Review Closure - close round-3 findings as planned work (URGENT)
+- Phase 04.1 inserted after Phase 4: Terminal Group Disbanding - new marmot.group.lifecycle.v1 spec scope
 
 ## Quick Tasks Completed
 

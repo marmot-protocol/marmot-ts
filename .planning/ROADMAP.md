@@ -25,7 +25,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Proof v2** - Migrate account-identity-proof v1→v2 to close the headline interop-breaker (completed 2026-07-21)
 - [x] **Phase 2: Inbound Trust & Wire Boundary** - Verify-before-trust, KeyPackage lifetime cap, required-tag cardinality (completed 2026-07-22)
 - [ ] **Phase 3: Commit Integrity & Convergence Parity** - App-component integrity, admin/leaf coupling, SelfEvicted, notification withdrawal, own-commit protection (all 7 plans executed; completion held through 3 code-review rounds — see 03-REVIEW.md. The CR-08/CR-11 own-commit convergence defect class has moved to Phase 4 for a structural fix; Phase 3's remaining scope is its local findings CR-12/CR-13/CR-14, the round-1 carry-forwards, and WR-24's stale MIP citations)
+- [ ] **Phase 3.1: Phase 3 Review Closure** (INSERTED) - Close the 30 open findings from 03-REVIEW.md round 3; excludes CR-08/CR-11, which moved to Phase 4
 - [ ] **Phase 4: Feature Parity & Conformance Vectors** - SafeAAD advertisement, MDK's own test vectors as cross-impl tests, and the own-commit convergence stamp port that closes CR-08/CR-11
+- [ ] **Phase 4.1: Terminal Group Disbanding** (INSERTED) - New `marmot.group.lifecycle.v1` `disbanded` component and its forced `Stable → Recovering` admission rule
 - [ ] **Phase 5: Quality Gate** - Green suite on every supported runtime; byte-exact MDK cross-checks recorded
 
 ## Phase Details
@@ -123,6 +125,32 @@ Plans:
 
 - [x] 03-07-PLAN.md — CONV-03: commit-digest-attributed state notifications, rewind-scoped withdrawal via the ledger, and removal-marker clearing on supersession
 
+### Phase 03.1: Phase 3 Review Closure (INSERTED)
+
+**Goal**: Close the findings that held Phase 3's completion, so the phase's five success
+criteria are true in the code rather than only claimed. Three code-review rounds each found
+blockers in the previous round's fixes (7 → 4 → 5); this phase closes the remainder as planned
+work with verification, rather than a fourth self-graded fix pass.
+**Depends on**: Phase 3
+**Requirements**: CONV-02, CONV-03 (completion of Phase 3's scope)
+**Scope note**: CR-08 and CR-11 are **excluded** — the own-commit convergence defect class moved
+to Phase 4 for a structural fix (porting `OwnCommitConvergenceStamp`). See
+`.planning/phases/04-feature-parity-conformance-vectors/04-REFERENCE-FINDINGS.md`.
+**Success Criteria** (what must be TRUE):
+
+1. A `removed` event raised during `fromClientState` load reaches the consumer: `GroupRegistry.track()`'s forwarder is attached before realization can emit, so CR-10's durable marker cannot make the loss permanent. The round-2 `EventEmitter.prototype` spy workaround in `removed.test.ts` is gone, replaced by an assertion on the real consumer path. (CR-12)
+2. `send({ kind: "selfUpdate" })` runs a commit-authorization gate, and the `commit` seam's gate scans the by-reference proposal union — the same set every peer's inbound gate scans — so marmot-ts cannot author a commit that a conformant peer rejects as non-admin per `refs/marmot/protocol-core/group-messaging.md`. (CR-13)
+3. A locally-authored commit derives and ledger-records its state notifications, so CONV-03's withdrawal invariant holds for our own commits and not only for inbound ones. A local commit also emits `historyChanged` when it grows the tree. (CR-14, WR-25)
+4. The `StateNotificationLedger` is indexed by commit digest and pruned to the history tree's own retention, so it stays bounded under the supported `maxRewindCommits: Infinity` without capping rewind depth, and `record()` is not O(n) over an unbounded array. (WR-02, interacts with WR-14)
+5. `#sweepTree` is gated on payload delivery rather than on eviction, so the D-13 self-eviction short-circuit does not starve the CONV-03 rewind path. (WR-07 — note round 3 found the round-1 remedy for this finding was itself wrong.)
+6. No `MIP-NN` citation remains in any Phase 3-touched source file; each is replaced by its `refs/marmot/...` path per `refs/marmot/mip-coverage.md`. (WR-24, 21 sites)
+7. The remaining re-derived round-1 carry-forwards (WR-03..WR-05, WR-08..WR-13 and the infos) are each either fixed or explicitly recorded as accepted with a rationale in `deferred-items.md` — none silently dropped.
+   **Plans**: TBD
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 03.1 to break down)
+
 ### Phase 4: Feature Parity & Conformance Vectors
 
 **Goal**: marmot-ts's LeafNode/KeyPackage bytes match the reference's SafeAAD advertisement,
@@ -144,7 +172,30 @@ the Phase 3 CR-08/CR-11 defect class structurally rather than by further increme
 6. A commit whose candidate parent cannot be resolved is **deferred**, not dropped, while its authenticated source epoch is inside the rollback horizon, with epoch-based expiry `canonical_tip_epoch - commit_source_epoch > max_rewind_commits` — per `refs/marmot/protocol-core/convergence.md`. The known-state and `#treeResolution` seams agree on what a refusal does.
 7. `restart-delivery-faults.v1.json` runs as an automated test, closing the persist → reload → converge coverage gap that allowed CR-08 and CR-09 to ship green through two review rounds. `publish-fail.v1.json` and `invite-publish-fail.v1.json` likewise cover the publish-before-apply rollback path.
 8. Cross-impl comparison uses the canonical snapshot projection defined in `refs/marmot/foundation/conformance.md` (group id, epoch, `SHA256` of serialized `GroupContext`, exporter commitment `MLS-Exporter("marmot", "convergence-conformance-v1", 32)`, leaves in index order, `app_data_dictionary` entries, lifecycle, convergence status, per-input dispositions) rather than an ad-hoc field-by-field comparison.
+9. The convergence-policy deltas from the updated contract are implemented: `DEFAULT_CONVERGENCE_POLICY` carries `max_convergence_pass_ms` (v1 default `5000`) measured on the local monotonic clock and never extended by later input; the scheduler does not admit inbound input into a new pass while the lifecycle is `PendingPublish` or `Merging`; and after a bounded pass settles in `Stable`, one already-queued admin-authorized local intent gets one preparation attempt before another pass opens solely because more inbound input is queued.
    **Plans**: TBD
+
+### Phase 04.1: Terminal Group Disbanding (INSERTED)
+
+**Goal**: Implement the new `marmot.group.lifecycle.v1` app component and its terminal
+`disbanded` state, including the convergence rule that a disband candidate is always admitted
+through a bounded convergence pass. Marked INSERTED mechanically by `/gsd-phase`; this is new
+spec scope surfaced by the 2026-08-06 reference sweep, not urgent remediation.
+**Depends on**: Phase 4 (shares the convergence-pass machinery)
+**Requirements**: TBD (new — not in the original v1.0 catchup requirement set)
+**Reference**: `refs/marmot/app-components/group-lifecycle-v1.md` (new in `4ad4ae2`),
+`refs/marmot/protocol-core/convergence.md` "Fork detection"
+**Success Criteria** (what must be TRUE):
+
+1. `marmot.group.lifecycle.v1` encodes and decodes byte-for-byte per its component doc, and participates in `app_data_dictionary` component-integrity validation like any other required component.
+2. A valid Commit that changes the component to `disbanded` forces `Stable → Recovering` on admission **even when it is a linear edge and no divergent edge exists**, so terminalization can only occur after branch selection.
+3. That forced transition does **not** restart either convergence timer, resnapshot `pass_base_epoch`, or give the disband candidate special branch-scoring priority — it is a terminalization boundary, not a scoring rule.
+4. Once `disbanded` is canonical, the group is terminal: no further outbound, and subsequent input is classified consistently with the existing removed-inactive handling.
+   **Plans**: TBD
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 04.1 to break down)
 
 ### Phase 5: Quality Gate
 

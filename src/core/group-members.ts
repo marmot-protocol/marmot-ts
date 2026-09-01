@@ -48,14 +48,22 @@ export function getPubkeyLeafNodes(
   state: ClientState,
   pubkey: string,
 ): LeafNode[] {
-  return state.ratchetTree
-    .filter((node) => node?.nodeType === nodeTypes.leaf)
-    .filter(
-      (node) =>
-        node.leaf.credential.credentialType === defaultCredentialTypes.basic &&
-        getCredentialPubkey(node.leaf.credential) === pubkey,
+  const leaves: LeafNode[] = [];
+  for (const node of state.ratchetTree) {
+    if (
+      !node ||
+      node.nodeType !== nodeTypes.leaf ||
+      node.leaf.credential.credentialType !== defaultCredentialTypes.basic
     )
-    .map((node) => node.leaf);
+      continue;
+    try {
+      if (getCredentialPubkey(node.leaf.credential) === pubkey)
+        leaves.push(node.leaf);
+    } catch {
+      // Not a valid Marmot account identity — skip this leaf.
+    }
+  }
+  return leaves;
 }
 
 /**
@@ -78,8 +86,12 @@ export function getPubkeyLeafNodeIndexes(
       node.nodeType === nodeTypes.leaf &&
       node.leaf.credential.credentialType === defaultCredentialTypes.basic
     ) {
-      if (getCredentialPubkey(node.leaf.credential) === pubkey)
-        leafIndexes.push(Number(nodeToLeafIndex(nodeIndex)));
+      try {
+        if (getCredentialPubkey(node.leaf.credential) === pubkey)
+          leafIndexes.push(Number(nodeToLeafIndex(nodeIndex)));
+      } catch {
+        // Not a valid Marmot account identity — skip this leaf.
+      }
     }
   }
 

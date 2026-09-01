@@ -7,8 +7,10 @@ import {
   defaultProposalTypes,
   getCiphersuiteImpl,
   joinGroup,
+  nodeTypes,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
+import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { encodeAdminPolicyV1 } from "../../core/components/admin-policy.js";
 import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../../core/components/ids.js";
@@ -47,6 +49,7 @@ function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
 async function memberGroup() {
   const adminPubkey = "a".repeat(64);
   const memberPubkey = "d".repeat(64);
+  const siblingPubkey = "3".repeat(64);
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -69,6 +72,10 @@ async function memberGroup() {
     credential: createCredential(memberPubkey),
     ciphersuiteImpl: impl,
   });
+  const siblingKp = await generateKeyPackage({
+    credential: createCredential(siblingPubkey),
+    ciphersuiteImpl: impl,
+  });
   const add = await createCommit({
     context,
     state: epoch0,
@@ -77,6 +84,10 @@ async function memberGroup() {
       {
         proposalType: defaultProposalTypes.add,
         add: { keyPackage: memberKp.publicPackage },
+      },
+      {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: siblingKp.publicPackage },
       },
     ],
     ratchetTreeExtension: true,
@@ -140,12 +151,15 @@ describe("outbound commit authorization seams", () => {
 
   it("allows a valid local self-update when an unrelated leaf credential is malformed", async () => {
     const { impl, memberState } = await memberGroup();
+    const localNodeIndex = Number(memberState.privatePath.leafIndex) * 2;
     const unrelatedLeaf = memberState.ratchetTree.find(
-      (node) =>
-        node?.nodeType === "leaf" &&
-        node !== memberState.ratchetTree[Number(memberState.privatePath.leafIndex) * 2],
+      (node, nodeIndex) =>
+        node?.nodeType === nodeTypes.leaf &&
+        nodeIndex !== localNodeIndex &&
+        node.leaf.credential.identity.length === 32 &&
+        bytesToHex(node.leaf.credential.identity) !== "a".repeat(64),
     );
-    if (!unrelatedLeaf || unrelatedLeaf.nodeType !== "leaf")
+    if (!unrelatedLeaf || unrelatedLeaf.nodeType !== nodeTypes.leaf)
       throw new Error("expected unrelated leaf");
     unrelatedLeaf.leaf.credential = {
       credentialType: 1,

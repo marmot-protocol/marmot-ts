@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 03.1
 current_phase_name: Phase 3 Review Closure
 status: executing
-stopped_at: Completed 03.1-01-PLAN.md
-last_updated: "2026-09-01T23:33:25.088Z"
+stopped_at: Completed 03.1-04-PLAN.md
+last_updated: "2026-09-01T23:38:54.671Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 03.1 execution started
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 28
-  completed_plans: 18
+  completed_plans: 19
   percent: 43
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03.1 (Phase 3 Review Closure) — EXECUTING
-Plan: 2 of 11
+Plan: 3 of 11
 Status: Ready to execute
 Last activity: 2026-09-01 — Phase 03.1 execution started
 
-Progress: [██████░░░░] 64% (7 phases)
+Progress: [███████░░░] 68% (7 phases)
 
 **Next recommended run:** `/gsd-plan-phase 03.1`
 
@@ -81,6 +81,7 @@ _Updated after each plan completion_
 | Phase 03 P10 | 5min | 2 tasks | 3 files |
 | Phase 03 P11 | 4min | 2 tasks | 2 files |
 | Phase 03.1 P01 | 5min | 2 tasks | 3 files |
+| Phase 03.1 P04 | 4min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -136,6 +137,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 03-11]: Run the shared admin callback over one normalized outbound proposal-with-sender union before createCommit.
 - [Phase ?]: [Phase 03.1]: Keep GroupRegistry.load hydration-only and activate persisted forks only after registry listeners attach.
 - [Phase ?]: [Phase 03.1]: Serialize the complete removal-realization transaction with a retry-safe instance-owned Promise.
+- [Phase ?]: [Phase 03.1-04]: Outbound commit authorization is a pure typed core decision over the exact proposal union, with actor identity derived from the local MLS leaf.
+- [Phase ?]: [Phase 03.1-04]: Malformed basic credentials are skipped uniformly by all member enumeration helpers while valid siblings remain visible.
 
 ### Pending Todos
 
@@ -170,7 +173,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T23:33:25.069Z
-Stopped at: Completed 03.1-01-PLAN.md
+Last session: 2026-09-01T23:38:54.653Z
+Stopped at: Completed 03.1-04-PLAN.md
 Resume file:
 None

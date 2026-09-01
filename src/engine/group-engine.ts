@@ -23,6 +23,7 @@ import {
   processMessage,
   type ProcessMessageResult,
   Proposal,
+  type ProposalWithSender,
   selfRemoveProposalType,
   UsageError,
   wireformats,
@@ -574,7 +575,6 @@ export class MarmotGroupEngine<TEnvelope> {
           }
         }
 
-        const selectedProposals: Proposal[] = [];
         if (intent.proposalRefs) {
           for (const ref of intent.proposalRefs) {
             const proposalWithSender = this.state.unappliedProposals[ref];
@@ -583,49 +583,15 @@ export class MarmotGroupEngine<TEnvelope> {
                 `Proposal reference not found in unappliedProposals: ${ref}`,
               );
             }
-            selectedProposals.push(proposalWithSender.proposal);
           }
         }
 
-        const allProposals = [...newProposals, ...selectedProposals];
-
-        // D-05/D-06/D-07/D-08: auto-couple an admin-policy update into a
-        // removal commit that de-leafs an admin account, and refuse a
-        // removal that would empty the admin set entirely — before any
-        // staging. Shared with `case "selfUpdate"` via
-        // {@link #adminPolicySpliceFor} so the two commit-producing seams
-        // cannot drift (CR-03).
-        const adminPolicySplice = this.#adminPolicySpliceFor(
+        const prepared = this.#prepareOutboundCommitProposals(
           this.state,
           groupData.adminPubkeys,
-          allProposals,
+          intent.actorPubkey,
+          newProposals,
         );
-        const splicedAdminPolicy = adminPolicySplice !== undefined;
-        if (adminPolicySplice) allProposals.push(adminPolicySplice);
-
-        // MIP-03 admin-only commits, with the non-admin carve-out from
-        // protocol-core/group-messaging.md: a non-admin may commit a
-        // self-update-only commit (no proposals, or only self-targeted Update
-        // proposals — an Update can only target the committer's own leaf) or a
-        // self_remove-only commit (committing peers' departures — this is the
-        // auto-committer path). Anything that changes other members or group
-        // state needs admin. This mirrors the inbound admin policy
-        // (admin-policy.ts) so a commit we emit is one a conformant peer accepts.
-        if (!groupData.adminPubkeys.includes(intent.actorPubkey)) {
-          const selfUpdateOnly = allProposals.every(
-            (p) => p.proposalType === defaultProposalTypes.update,
-          );
-          const selfRemoveOnly =
-            allProposals.length > 0 &&
-            allProposals.every(
-              (p) => p.proposalType === selfRemoveProposalType,
-            );
-          if (!selfUpdateOnly && !selfRemoveOnly) {
-            throw new Error(
-              "Not a group admin. Non-admins may only commit a self-update-only or self_remove-only commit.",
-            );
-          }
-        }
 
         const commitOptions: CreateCommitOptions = {
           // Handshake content is wired as MLS PublicMessage (see wire-format.ts).
@@ -633,12 +599,8 @@ export class MarmotGroupEngine<TEnvelope> {
           ratchetTreeExtension: true,
         };
 
-        if (
-          intent.extraProposals ||
-          intent.proposalRefs ||
-          splicedAdminPolicy
-        ) {
-          commitOptions.extraProposals = allProposals;
+        if (prepared.extraProposals.length > 0) {
+          commitOptions.extraProposals = prepared.extraProposals;
         }
 
         const parentState = this.state;
@@ -656,7 +618,11 @@ export class MarmotGroupEngine<TEnvelope> {
         // The throw happens before the lifecycle transition below, so the
         // engine is left in Stable with no pending state and no staged commit
         // to roll back.
-        this.#assertStagedCommitLegal(parentState, newState, allProposals);
+        this.#assertStagedCommitLegal(
+          parentState,
+          newState,
+          prepared.committedProposals,
+        );
 
         this.#transitionLifecycle(
           groupLifecycleStates.pendingPublish,
@@ -711,12 +677,21 @@ export class MarmotGroupEngine<TEnvelope> {
         // per MIP-02 it is called right after joining from a Welcome — a
         // moment when staged proposals from other members are plausible.
         const groupData = getMarmotGroupView(parentState);
-        const adminPolicySplice = groupData
-          ? this.#adminPolicySpliceFor(parentState, groupData.adminPubkeys, [])
-          : undefined;
-        const extraProposals: Proposal[] = adminPolicySplice
-          ? [adminPolicySplice]
-          : [];
+        if (!groupData) {
+          throw new Error("MarmotGroupData not found in ClientState.");
+        }
+        const actorPubkey = getCredentialPubkey(
+          getCredentialFromLeafIndex(
+            parentState.ratchetTree,
+            parentState.privatePath.leafIndex as LeafIndex,
+          ),
+        );
+        const prepared = this.#prepareOutboundCommitProposals(
+          parentState,
+          groupData.adminPubkeys,
+          actorPubkey,
+          [],
+        );
 
         const { commit, newState } = await createCommit({
           context: {
@@ -727,10 +702,14 @@ export class MarmotGroupEngine<TEnvelope> {
           // Handshake content is wired as MLS PublicMessage (see wire-format.ts).
           wireAsPublicMessage: true,
           ratchetTreeExtension: true,
-          extraProposals,
+          extraProposals: prepared.extraProposals,
         });
 
-        this.#assertStagedCommitLegal(parentState, newState, extraProposals);
+        this.#assertStagedCommitLegal(
+          parentState,
+          newState,
+          prepared.committedProposals,
+        );
 
         // WR-17: same post-staging bookkeeping as `case "commit"` — the
         // throw above happens first, so a rejected selfUpdate leaves the
@@ -767,18 +746,87 @@ export class MarmotGroupEngine<TEnvelope> {
   }
 
   /**
+   * Resolves the exact proposal union `createCommit` will commit, applies the
+   * D-05 coupling splice once, and runs the same actor authorization callback
+   * used by inbound processing before MLS construction begins.
+   *
+   * Unapplied proposals remain references in `createCommit`; selected refs are
+   * therefore validated by the caller but are never copied into
+   * `extraProposals`. This preserves proposal identity and prevents a selected
+   * reference from being counted a second time as a by-value proposal.
+   */
+  #prepareOutboundCommitProposals(
+    state: ClientState,
+    adminPubkeys: readonly string[],
+    actorPubkey: string,
+    byValueProposals: readonly Proposal[],
+  ): {
+    extraProposals: Proposal[];
+    committedProposals: Proposal[];
+  } {
+    const actorLeaves = getPubkeyLeafNodeIndexes(state, actorPubkey);
+    const actorLeaf = actorLeaves.find(
+      (leaf) => Number(leaf) === Number(state.privatePath.leafIndex),
+    );
+    if (actorLeaf === undefined) {
+      throw new Error("Commit actor does not match the local member leaf.");
+    }
+
+    const referenced: ProposalWithSender[] = Object.values(
+      state.unappliedProposals,
+    );
+    const localByValue: ProposalWithSender[] = byValueProposals.map(
+      (proposal) => ({ proposal, senderLeafIndex: Number(actorLeaf) }),
+    );
+    const committedWithSenders = [...referenced, ...localByValue];
+    const committedProposals = committedWithSenders.map((p) => p.proposal);
+    const extraProposals = [...byValueProposals];
+
+    const adminPolicySplice = this.#adminPolicySpliceFor(
+      state,
+      adminPubkeys,
+      committedProposals,
+    );
+    if (adminPolicySplice) {
+      extraProposals.push(adminPolicySplice);
+      committedProposals.push(adminPolicySplice);
+      committedWithSenders.push({
+        proposal: adminPolicySplice,
+        senderLeafIndex: Number(actorLeaf),
+      });
+    }
+
+    const authorize = createAdminCommitPolicyCallback({
+      ratchetTree: state.ratchetTree,
+      adminPubkeys: [...adminPubkeys],
+      ciphersuiteId: state.groupContext.cipherSuite,
+      onUnverifiableCommit: "reject",
+    });
+    if (
+      authorize({
+        kind: "commit",
+        senderLeafIndex: actorLeaf,
+        proposals: committedWithSenders,
+      }) === "reject"
+    ) {
+      throw new Error(
+        "Not a group admin. Non-admins may only commit a self-update-only or self_remove-only commit.",
+      );
+    }
+
+    return { extraProposals, committedProposals };
+  }
+
+  /**
    * D-05/D-06/D-07/D-08: the shared admin-leaf-coupling guard both
    * commit-producing send seams (`case "commit"` and `case "selfUpdate"`) run
    * before `createCommit`. Returns the admin-policy `AppDataUpdate` proposal
    * that MUST be spliced into this commit so the resulting epoch stays legal,
    * or `undefined` when no admin account loses its last member leaf.
    *
-   * `byValueProposals` is this call's own composed proposal set. It is unioned
-   * with `state.unappliedProposals` for the SCAN only — never used as the
-   * commit payload — because `createCommit` bundles every unapplied proposal
-   * by reference in addition to `commitOptions.extraProposals` (D-06). Scanning
-   * only the by-value set would miss exactly the removals that arrive as peers'
-   * staged proposals.
+   * `committedProposals` is the already-normalized exact proposal union from
+   * {@link #prepareOutboundCommitProposals}. It includes every unapplied
+   * reference exactly once plus caller-supplied by-value proposals.
    *
    * Deliberately EXCLUDES `selfRemoveProposalType` entries (SelfRemove
    * carve-out, Pitfall 4): a SelfRemove must not trigger auto-coupling or the
@@ -795,13 +843,8 @@ export class MarmotGroupEngine<TEnvelope> {
   #adminPolicySpliceFor(
     state: ClientState,
     currentAdmins: readonly string[],
-    byValueProposals: readonly Proposal[],
+    committedProposals: readonly Proposal[],
   ): Proposal | undefined {
-    const committedProposals = [
-      ...Object.values(state.unappliedProposals).map((p) => p.proposal),
-      ...byValueProposals,
-    ];
-
     const removedLeaves = new Set<number>();
     for (const proposal of committedProposals) {
       if (
@@ -862,16 +905,12 @@ export class MarmotGroupEngine<TEnvelope> {
   #assertStagedCommitLegal(
     parentState: ClientState,
     resultingState: ClientState,
-    byValueProposals: readonly Proposal[],
+    committedProposals: readonly Proposal[],
   ): void {
-    const validatedProposals = [
-      ...Object.values(parentState.unappliedProposals).map((p) => p.proposal),
-      ...byValueProposals,
-    ];
     const violation = validateCommitLegality({
       parentState,
       resultingState,
-      proposals: validatedProposals,
+      proposals: committedProposals,
     });
     if (violation) throw new UsageError(violation.detail);
   }

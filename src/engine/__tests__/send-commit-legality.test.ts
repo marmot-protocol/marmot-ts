@@ -46,6 +46,7 @@ import {
   serializeClientState,
 } from "../../core/client-state.js";
 import { getAdminPolicy } from "../../core/components/dictionary.js";
+import { encodeAdminPolicyV1 } from "../../core/components/admin-policy.js";
 import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../../core/components/ids.js";
 import { commitDigest } from "../../core/convergence.js";
 import { createCredential } from "../../core/credential.js";
@@ -600,6 +601,33 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
     expect(Object.keys(engine.state.unappliedProposals)).toEqual(
       beforeProposalRefs,
     );
+  });
+
+  it("allows an admin selfUpdate consuming the same admin-only proposal origin", async () => {
+    const { impl, adminPubkey, admin2Pubkey, epoch1 } =
+      await twoAdminGroup();
+    const engine = new MarmotGroupEngine({
+      state: epoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    const staged = await engine.send({
+      kind: "proposal",
+      proposal: {
+        proposalType: appDataUpdateProposalType,
+        appDataUpdate: {
+          componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+          operation: "update",
+          update: encodeAdminPolicyV1([adminPubkey, admin2Pubkey]),
+        },
+      },
+    });
+    engine.confirmPublished(staged.pending);
+
+    const result = await engine.send({ kind: "selfUpdate" });
+    expect(result.kind).toBe("selfUpdate");
+    expect(engine.lifecycle).toBe("PendingPublish");
   });
 
   it("throws UsageError instead of emitting a commit whose by-reference proposals drop a required component (D-01/D-02)", async () => {

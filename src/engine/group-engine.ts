@@ -30,6 +30,7 @@ import {
 
 import { marmotAuthService } from "../core/auth-service.js";
 import { getMarmotGroupView } from "../core/client-state.js";
+import { decideCommitAuthorization } from "../core/commit-authorization.js";
 import { encodeAdminPolicyV1 } from "../core/components/admin-policy.js";
 import { validateCommitLegality } from "../core/components/integrity.js";
 import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../core/components/ids.js";
@@ -588,7 +589,6 @@ export class MarmotGroupEngine<TEnvelope> {
         const prepared = this.#prepareOutboundCommitProposals(
           this.state,
           groupData.adminPubkeys,
-          intent.actorPubkey,
           newProposals,
         );
 
@@ -679,16 +679,9 @@ export class MarmotGroupEngine<TEnvelope> {
         if (!groupData) {
           throw new Error("MarmotGroupData not found in ClientState.");
         }
-        const actorPubkey = getCredentialPubkey(
-          getCredentialFromLeafIndex(
-            parentState.ratchetTree,
-            parentState.privatePath.leafIndex as LeafIndex,
-          ),
-        );
         const prepared = this.#prepareOutboundCommitProposals(
           parentState,
           groupData.adminPubkeys,
-          actorPubkey,
           [],
         );
 
@@ -757,19 +750,15 @@ export class MarmotGroupEngine<TEnvelope> {
   #prepareOutboundCommitProposals(
     state: ClientState,
     adminPubkeys: readonly string[],
-    actorPubkey: string,
     byValueProposals: readonly Proposal[],
   ): {
     extraProposals: Proposal[];
     committedProposals: Proposal[];
   } {
-    const actorLeaves = getPubkeyLeafNodeIndexes(state, actorPubkey);
-    const actorLeaf = actorLeaves.find(
-      (leaf) => Number(leaf) === Number(state.privatePath.leafIndex),
+    const actorLeaf = state.privatePath.leafIndex as LeafIndex;
+    const actorPubkey = getCredentialPubkey(
+      getCredentialFromLeafIndex(state.ratchetTree, actorLeaf),
     );
-    if (actorLeaf === undefined) {
-      throw new Error("Commit actor does not match the local member leaf.");
-    }
 
     const referenced: ProposalWithSender[] = Object.values(
       state.unappliedProposals,
@@ -795,21 +784,15 @@ export class MarmotGroupEngine<TEnvelope> {
       });
     }
 
-    const authorize = createAdminCommitPolicyCallback({
-      ratchetTree: state.ratchetTree,
-      adminPubkeys: [...adminPubkeys],
-      ciphersuiteId: state.groupContext.cipherSuite,
-      onUnverifiableCommit: "reject",
+    const authorization = decideCommitAuthorization({
+      actorPubkey,
+      actorLeafIndex: Number(actorLeaf),
+      adminPubkeys,
+      proposals: committedWithSenders,
     });
-    if (
-      authorize({
-        kind: "commit",
-        senderLeafIndex: actorLeaf as LeafIndex,
-        proposals: committedWithSenders,
-      }) === "reject"
-    ) {
+    if (!authorization.authorized) {
       throw new Error(
-        "Not a group admin. Non-admins may only commit a self-update-only or self_remove-only commit.",
+        "Not a group admin. Non-admins may only commit a self-update-only or self_remove-only commit. Wait for the staged proposal to be committed, or ask an admin to commit it.",
       );
     }
 

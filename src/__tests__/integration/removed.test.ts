@@ -279,47 +279,35 @@ describe("involuntary removal signal", () => {
     expect(liveGroup.state.groupActiveState.kind).toBe("removedFromGroup");
     expect(await removedMarkerStore.getItem(liveGroup.idStr)).toBeNull();
 
-    // `fromClientState` realizes internally (before returning), so a
-    // listener attached to the returned instance can never observe that
-    // internal emission — spy on the shared EventEmitter prototype instead,
-    // which intercepts every `emit` call regardless of when it fires.
-    const emitSpy = vi.spyOn(
-      EventEmitter.prototype as unknown as { emit: () => boolean },
-      "emit",
-    );
-    try {
-      // First load with the marker store wired: marker is unset, so
-      // `fromClientState` realizes — sets the marker and emits `removed`
-      // exactly once.
-      await MarmotGroup.fromClientState(liveGroup.state, {
-        store: eStore,
-        removedMarkerStore,
-        signer: { getPublicKey: async () => ePubkey } as EventSigner,
-        network: recordingNetwork([]),
-      });
-      const removedCallsAfterFirst = emitSpy.mock.calls.filter(
-        (call) => call[0] === "removed",
-      ).length;
-      expect(removedCallsAfterFirst).toBe(1);
-      expect(await removedMarkerStore.getItem(liveGroup.idStr)).toBe(true);
+    // Construction is deliberately side-effect free. The owning registry
+    // attaches its forwarding listener first, then invokes this explicit
+    // realization boundary so the consumer can observe the event.
+    const firstLoad = await MarmotGroup.fromClientState(liveGroup.state, {
+      store: eStore,
+      removedMarkerStore,
+      signer: { getPublicKey: async () => ePubkey } as EventSigner,
+      network: recordingNetwork([]),
+    });
+    const firstRemoved = vi.fn();
+    firstLoad.on("removed", firstRemoved);
+    await firstLoad.realizeRemovalIfNeeded();
 
-      emitSpy.mockClear();
+    expect(firstRemoved).toHaveBeenCalledOnce();
+    expect(await removedMarkerStore.getItem(liveGroup.idStr)).toBe(true);
 
-      // Second load, same marker store: marker is already set, so
-      // realization is a no-op — zero `removed` emissions.
-      await MarmotGroup.fromClientState(liveGroup.state, {
-        store: eStore,
-        removedMarkerStore,
-        signer: { getPublicKey: async () => ePubkey } as EventSigner,
-        network: recordingNetwork([]),
-      });
-      const removedCallsAfterSecond = emitSpy.mock.calls.filter(
-        (call) => call[0] === "removed",
-      ).length;
-      expect(removedCallsAfterSecond).toBe(0);
-    } finally {
-      emitSpy.mockRestore();
-    }
+    // Second load, same marker store: marker is already set, so explicit
+    // realization is a no-op — zero `removed` emissions.
+    const secondLoad = await MarmotGroup.fromClientState(liveGroup.state, {
+      store: eStore,
+      removedMarkerStore,
+      signer: { getPublicKey: async () => ePubkey } as EventSigner,
+      network: recordingNetwork([]),
+    });
+    const secondRemoved = vi.fn();
+    secondLoad.on("removed", secondRemoved);
+    await secondLoad.realizeRemovalIfNeeded();
+
+    expect(secondRemoved).not.toHaveBeenCalled();
   });
 
   /**

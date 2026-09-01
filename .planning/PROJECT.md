@@ -46,6 +46,7 @@ runtime, and app/tooling crates are cataloged during the review but deliberately
 - ✓ B7 deferred disposition for future-epoch / missing-parent commits — existing
 - ✓ M1–M8 validation & convergence hardening (welcome/KeyPackage validation, authorship binding, x-only curve check, relay-URL profile, convergence-policy + witness window, invalidated-on-rewind, non-admin self-update carve-out) — existing
 - ✓ Fork-aware engine with tree-fed re-convergence (switch forks live and on restart) — existing
+- ✓ Commit-integrity and convergence parity (exact proposal-union authorization, listener-safe durable removal, rewind-aware notifications, and structurally complete own-commit convergence) — validated in Phase 03
 - ✓ encrypted-media-v1 wire format (locators, ciphertext/plaintext sha256, key derivation/AAD, strict imeta validation) — existing
 - ✓ m1/m4/m5/m6 cleanup & retention hardening (legacy fallback retired, pruning pin rule, eligibility split verified, content-derived cross-source dedup) — existing
 
@@ -132,4 +133,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-_Last updated: 2026-07-21 — milestone v1.0 repurposed as "catchup" (resync to marmot spec + MDK Rust reference)_
+_Last updated: 2026-09-01 — Phase 03 commit-integrity and convergence parity validated_

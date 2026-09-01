@@ -162,58 +162,78 @@ async function buildRemovalFixture() {
 }
 
 async function buildPersistedRemovalForkFixture() {
-  const { impl, ePubkey, eEpoch1, adminEpoch1, commit: removeCommit } =
+  const { impl, ePubkey, eEpoch1, adminEpoch1 } =
     await buildRemovalFixture();
-  const adminPubkey = "a".repeat(64);
   const ctx = {
     cipherSuite: impl,
     authService: unsafeTestingAuthenticationService,
   };
   const memberSnapshot = serializeClientState(eEpoch1);
-  const removeDigest = commitDigest(encode(mlsMessageEncoder, removeCommit));
-
-  let losingCommit: MlsMessage | undefined;
-  let losingState: ClientState | undefined;
-  for (let attempt = 0; attempt < 32; attempt++) {
-    const candidate = await createCommit({
-      context: ctx,
-      state: deserializeClientState(serializeClientState(adminEpoch1)),
-      wireAsPublicMessage: true,
-      ratchetTreeExtension: true,
-      extraProposals: [],
-    });
-    const candidateDigest = commitDigest(
-      encode(mlsMessageEncoder, candidate.commit),
-    );
-    if (bytesToHex(removeDigest) >= bytesToHex(candidateDigest)) continue;
-    const applied = await processMessage({
-      context: ctx,
-      state: deserializeClientState(memberSnapshot),
-      message: candidate.commit,
-    });
-    if (applied.kind !== "newState") throw new Error("expected newState");
-    losingCommit = candidate.commit;
-    losingState = applied.newState;
-    break;
-  }
-  if (!losingCommit || !losingState)
-    throw new Error("failed to build a higher-digest competing tip");
-
-  const removed = await processMessage({
+  const forkA = await createCommit({
+    context: ctx,
+    state: deserializeClientState(serializeClientState(adminEpoch1)),
+    wireAsPublicMessage: true,
+    ratchetTreeExtension: true,
+    extraProposals: [],
+  });
+  const forkB = await createCommit({
+    context: ctx,
+    state: deserializeClientState(serializeClientState(adminEpoch1)),
+    wireAsPublicMessage: true,
+    ratchetTreeExtension: true,
+    extraProposals: [],
+  });
+  const digestA = bytesToHex(
+    commitDigest(encode(mlsMessageEncoder, forkA.commit)),
+  );
+  const digestB = bytesToHex(
+    commitDigest(encode(mlsMessageEncoder, forkB.commit)),
+  );
+  const canonical = digestA < digestB ? forkA : forkB;
+  const competing = digestA < digestB ? forkB : forkA;
+  const canonicalMember = await processMessage({
     context: ctx,
     state: deserializeClientState(memberSnapshot),
-    message: removeCommit,
+    message: canonical.commit,
   });
-  if (removed.kind !== "newState") throw new Error("expected removed state");
+  const competingMember = await processMessage({
+    context: ctx,
+    state: deserializeClientState(memberSnapshot),
+    message: competing.commit,
+  });
+  if (canonicalMember.kind !== "newState" || competingMember.kind !== "newState")
+    throw new Error("expected fork states");
+
+  const remove = await createCommit({
+    context: ctx,
+    state: canonical.newState,
+    wireAsPublicMessage: true,
+    ratchetTreeExtension: true,
+    extraProposals: [{
+      proposalType: defaultProposalTypes.remove,
+      remove: { removed: canonicalMember.newState.privatePath.leafIndex },
+    }],
+  });
+  const removeEvent = await createGroupEvent({
+    message: remove.commit,
+    state: canonical.newState,
+    ciphersuite: impl,
+  });
+  const removedGroup = marmotGroup(canonicalMember.newState, ePubkey, impl, []);
+  for await (const _ of removedGroup.ingest([removeEvent])) void _;
+  const removedState = deserializeClientState(
+    serializeClientState(removedGroup.state),
+  );
+  removedGroup.dispose();
 
   return {
     impl,
     ePubkey,
     eEpoch1: deserializeClientState(memberSnapshot),
-    removeCommit,
-    removedState: removed.newState,
-    losingCommit,
-    losingState,
+    canonicalCommit: canonical.commit,
+    removedState,
+    competingCommit: competing.commit,
+    competingState: competingMember.newState,
   };
 }
 
@@ -226,11 +246,11 @@ describe("involuntary removal signal", () => {
     const groupId = bytesToHex(fixture.eEpoch1.groupContext.groupId);
     const rootTag = bytesToHex(fixture.eEpoch1.confirmationTag);
     const tree = new GroupHistoryTree(fixture.eEpoch1);
-    tree.recordCommit(rootTag, fixture.removeCommit, fixture.removedState);
-    tree.recordCommit(rootTag, fixture.losingCommit, fixture.losingState);
+    tree.recordCommit(rootTag, fixture.canonicalCommit, fixture.removedState);
+    tree.recordCommit(rootTag, fixture.competingCommit, fixture.competingState);
     tree.bindStore(rewindStore);
     await tree.flush();
-    await stateStore.setItem(groupId, serializeClientState(fixture.losingState));
+    await stateStore.setItem(groupId, serializeClientState(fixture.removedState));
 
     const manager = new GroupsManager({
       store: stateStore,

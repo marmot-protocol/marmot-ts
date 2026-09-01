@@ -183,15 +183,7 @@ export class GroupRegistry<
       ? await this.#retainedFromTree(historyTree, state)
       : undefined;
 
-    const group = await this.build(state, retained, historyTree);
-
-    // Re-evaluate the persisted forks from disk: if this client last followed a
-    // losing branch, switch to the canonical one now — without waiting for the
-    // network to re-deliver the winner. Only worth a pass when a competing fork
-    // is actually retained (more than one tip).
-    if (historyTree && historyTree.tips().length > 1) await group.reconverge();
-
-    return group;
+    return this.build(state, retained, historyTree);
   }
 
   /**
@@ -261,7 +253,7 @@ export class GroupRegistry<
     return retained;
   }
 
-  /** Caches a group, attaches lifecycle forwarders, then realizes removal. */
+  /** Caches a group, attaches lifecycle forwarders, then activates its state. */
   async track(group: MarmotGroup<THistory, TMedia>): Promise<void> {
     const id = bytesToHex(group.id);
     this.#groups.set(id, group);
@@ -276,6 +268,10 @@ export class GroupRegistry<
     this.#groupListeners.set(id, { destroyed, removed });
 
     this.emit("updated", this.loaded);
+    // Hydration is deliberately side-effect free. Persisted competing tips can
+    // change canonical state (including landing on removal), so activate them
+    // only after every public lifecycle forwarder is attached.
+    if (group.forkTree.tips().length > 1) await group.reconverge();
     await group.realizeRemovalIfNeeded();
   }
 

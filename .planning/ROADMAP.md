@@ -154,17 +154,42 @@ to Phase 4 for a structural fix (porting `OwnCommitConvergenceStamp`). See
    **Plans**: 11 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 03.1-01-PLAN.md — listener-first, single-flight removal realization
-- [ ] 03.1-02-PLAN.md — post-confirm ancillary failure semantics
-- [ ] 03.1-03-PLAN.md — public applied-notification stream and withdrawal accounting
 - [ ] 03.1-04-PLAN.md — pure outbound authorization and malformed-member tolerance
-- [ ] 03.1-05-PLAN.md — keyed ledgers, tree horizon, own payload, and sweep delivery gate
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 03.1-02-PLAN.md — post-confirm ancillary failure semantics
 - [ ] 03.1-06-PLAN.md — removal marker namespace and bounded Nostr trust caches
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 03.1-03-PLAN.md — public applied-notification stream and withdrawal accounting
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 03.1-05-PLAN.md — keyed ledgers, tree horizon, own payload, and sweep delivery gate
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 03.1-07-PLAN.md — exact legality and audit diagnostics
-- [ ] 03.1-08-PLAN.md — root public-signature export snapshot
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 03.1-09-PLAN.md — result-union, byte, member, lifecycle, and disposition cleanup
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 03.1-10-PLAN.md — send lifecycle rollback, local history signal, and local teardown closure
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 03.1-08-PLAN.md — root public-signature export snapshot
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
 - [ ] 03.1-11-PLAN.md — exact Phase-3 citation manifest sweep
 
 ### Phase 4: Feature Parity & Conformance Vectors

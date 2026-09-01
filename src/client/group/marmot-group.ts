@@ -504,11 +504,16 @@ export class MarmotGroup<
       ...options,
       ciphersuite: cipherSuite,
     });
-    // D-12: a process that exited between commit-apply and notification
-    // realizes removal on this, its next load, instead of never telling the
-    // app it was removed.
-    await group.#realizeRemovalIfNeeded();
     return group;
+  }
+
+  /**
+   * Realizes a persisted removal after the owning registry has attached its
+   * forwarding listeners. This is idempotent across concurrent loads and
+   * process restarts when a removal marker store is configured.
+   */
+  async realizeRemovalIfNeeded(): Promise<void> {
+    await this.#realizeRemovalIfNeeded();
   }
 
   /**
@@ -687,11 +692,10 @@ export class MarmotGroup<
    * is not the tombstone, and a no-op (no re-emit) when the marker is
    * already set.
    *
-   * Called from two places that must never diverge: {@link fromClientState}
-   * (so a process that exited between commit-apply and notification still
-   * realizes on its next load) and the `ingest` handler's `result.kind ===
-   * "removed"` branch (the commit that produces the tombstone in a live
-   * process). Both funnel through this single idempotent implementation.
+   * Called through {@link realizeRemovalIfNeeded} after registry listeners are
+   * attached on load, and by the `ingest` handler's `result.kind === "removed"`
+   * branch (the commit that produces the tombstone in a live process). Both
+   * funnel through this single idempotent implementation.
    */
   async #realizeRemovalIfNeeded(): Promise<void> {
     if (this.state.groupActiveState.kind !== "removedFromGroup") return;

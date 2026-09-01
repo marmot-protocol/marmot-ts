@@ -140,6 +140,57 @@ describe("GroupsManager session/runtime helpers", () => {
     if (results[0].kind !== "skipped") throw new Error("expected skipped");
     expect(results[0].reason).toBe("self-echo");
   });
+
+  it("emits one public removal after concurrently loading a persisted tombstone", async () => {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
+    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+    const options = {
+      store: stateStore,
+      removedMarkerStore,
+      signer,
+      network,
+    };
+
+    const writer = new GroupsManager(options);
+    const created = await writer.create("Removed Group", {
+      relays: ["wss://relay.test"],
+    });
+    created.state = {
+      ...created.state,
+      groupActiveState: { kind: "removedFromGroup" },
+    };
+    await created.save(true);
+
+    const reader = new GroupsManager(options);
+    const removed: Uint8Array[] = [];
+    reader.on("removed", (groupId) => removed.push(groupId));
+
+    const [first, second] = await Promise.all([
+      reader.get(created.id),
+      reader.get(created.id),
+    ]);
+
+    expect(first).toBe(second);
+    expect(removed).toHaveLength(1);
+    expect(removed[0]).toEqual(created.id);
+    expect(await removedMarkerStore.getItem(created.idStr)).toBe(true);
+
+    const restarted = new GroupsManager(options);
+    const restartRemoved = vi.fn();
+    restarted.on("removed", restartRemoved);
+    const reloaded = await restarted.get(created.id);
+
+    expect(reloaded.state.groupActiveState.kind).toBe("removedFromGroup");
+    expect(restartRemoved).not.toHaveBeenCalled();
+    await expect(
+      restarted.send(reloaded.id, {
+        kind: "applicationMessage",
+        payload: new TextEncoder().encode("blocked"),
+      }),
+    ).rejects.toThrow(/removed/i);
+  });
 });
 
 describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)", () => {

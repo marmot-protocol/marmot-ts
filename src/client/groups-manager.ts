@@ -579,7 +579,7 @@ export class GroupsManager<
     // MarmotGroup.save() is the single writer into the group state store.
     await group.save(true);
 
-    this.#registry.track(group);
+    await this.#registry.track(group);
     this.emit(eventName, group);
     log("adopted group %s (emit=%s)", id, eventName);
 
@@ -743,7 +743,7 @@ export class GroupsManager<
     log("creating group %o", name);
     const group = await this.#factory.create(name, options);
 
-    this.#registry.track(group);
+    await this.#registry.track(group);
     this.emit("created", group);
     log("created group %s", group.idStr);
 

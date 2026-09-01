@@ -261,8 +261,8 @@ export class GroupRegistry<
     return retained;
   }
 
-  /** Caches a group instance and subscribes to its destroy event. */
-  track(group: MarmotGroup<THistory, TMedia>): void {
+  /** Caches a group, attaches lifecycle forwarders, then realizes removal. */
+  async track(group: MarmotGroup<THistory, TMedia>): Promise<void> {
     const id = bytesToHex(group.id);
     this.#groups.set(id, group);
 
@@ -276,6 +276,7 @@ export class GroupRegistry<
     this.#groupListeners.set(id, { destroyed, removed });
 
     this.emit("updated", this.loaded);
+    await group.realizeRemovalIfNeeded();
   }
 
   /** Removes a group instance from the cache and detaches its listeners. */
@@ -326,8 +327,8 @@ export class GroupRegistry<
         group = await existingLoad;
       } else {
         const loadPromise = this.load(groupId)
-          .then((loaded) => {
-            this.track(loaded);
+          .then(async (loaded) => {
+            await this.track(loaded);
             this.emit("loaded", loaded);
             return loaded;
           })

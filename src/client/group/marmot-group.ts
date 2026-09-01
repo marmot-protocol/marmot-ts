@@ -292,6 +292,8 @@ export class MarmotGroup<
    * single process even without persistence (documented degradation).
    */
   #removalRealizedInMemory = false;
+  /** Same-instance serialization for the marker transaction and public event. */
+  #removalRealizationInFlight?: Promise<void>;
 
   private log: Debugger;
 
@@ -698,6 +700,20 @@ export class MarmotGroup<
    * funnel through this single idempotent implementation.
    */
   async #realizeRemovalIfNeeded(): Promise<void> {
+    if (this.#removalRealizationInFlight)
+      return this.#removalRealizationInFlight;
+
+    const realization = this.#performRemovalRealization();
+    this.#removalRealizationInFlight = realization;
+    try {
+      await realization;
+    } finally {
+      if (this.#removalRealizationInFlight === realization)
+        this.#removalRealizationInFlight = undefined;
+    }
+  }
+
+  async #performRemovalRealization(): Promise<void> {
     if (this.state.groupActiveState.kind !== "removedFromGroup") return;
 
     if (this.#removedMarkerStore) {

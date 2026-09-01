@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 03
 current_phase_name: commit-integrity-convergence-parity
 status: executing
-stopped_at: Completed 03-09-PLAN.md
-last_updated: "2026-09-01T21:27:59.314Z"
+stopped_at: Completed 03-10-PLAN.md
+last_updated: "2026-09-01T21:33:49.780Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 17
-  completed_plans: 15
+  completed_plans: 16
   percent: 29
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
-Plan: 9 of 11
+Plan: 10 of 11
 Status: Ready to execute
 Last activity: 2026-09-01 — Phase 03 execution started
 
-Progress: [█████████░] 88% (7 phases)
+Progress: [█████████░] 94% (7 phases)
 
 **Next recommended run:** `/gsd-plan-phase 03.1`
 
@@ -77,6 +77,7 @@ _Updated after each plan completion_
 |------|----------|-------|-------|
 | Phase 03 P08 | 6h | 2 tasks | 0 files |
 | Phase 03 P09 | 7min | 3 tasks | 10 files |
+| Phase 03 P10 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -126,6 +127,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 03-08]: Existing validateCommitLegality suites provide executable WIRE-03/CONV-01 evidence without production edits.
 - [Phase ?]: [Phase 03-09]: Persisted removal realization is invoked by GroupRegistry only after lifecycle forwarding listeners attach.
 - [Phase ?]: [Phase 03-09]: Local confirmed notifications travel on GroupPublishResult and are attributed from encoded MLS commit bytes.
+- [Phase ?]: [Phase 03-10]: Retain each applied commit as an exact parent/message/resulting-state link instead of reconstructing own links from digest plus epoch lookups.
+- [Phase ?]: [Phase 03-10]: Refresh the preceding retained link when its resulting epoch becomes the next commit parent, preserving staged proposal-reference evidence.
 
 ### Pending Todos
 
@@ -160,7 +163,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T21:27:59.299Z
-Stopped at: Completed 03-09-PLAN.md
+Last session: 2026-09-01T21:33:49.765Z
+Stopped at: Completed 03-10-PLAN.md
 Resume file:
 None

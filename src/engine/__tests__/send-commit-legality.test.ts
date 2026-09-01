@@ -139,6 +139,14 @@ async function twoAdminGroup() {
     ratchetTreeExtension: true,
   });
 
+  const memberEpoch1 = await joinGroup({
+    context: ctx,
+    welcome: add.welcome!.welcome!,
+    keyPackage: memberKp.publicPackage,
+    privateKeys: memberKp.privatePackage,
+    ratchetTree: undefined,
+  });
+
   return {
     impl,
     ctx,
@@ -146,6 +154,7 @@ async function twoAdminGroup() {
     admin2Pubkey,
     memberPubkey,
     epoch1: add.newState,
+    memberEpoch1,
   };
 }
 
@@ -557,6 +566,42 @@ describe("send-seam commit legality (WIRE-03/CONV-01) — D-01/D-02/D-05..D-09",
  * proposal into the returned state, which `confirmPublished` then adopts.
  */
 describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () => {
+  it("rejects a non-admin selfUpdate consuming its staged admin-only proposal by reference", async () => {
+    const { impl, memberEpoch1 } = await twoAdminGroup();
+    const engine = new MarmotGroupEngine({
+      state: memberEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    const staged = await engine.send({
+      kind: "proposal",
+      proposal: {
+        proposalType: appDataUpdateProposalType,
+        appDataUpdate: {
+          componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+          operation: "update",
+          update: new Uint8Array([0, 1]),
+        },
+      },
+    });
+    engine.confirmPublished(staged.pending);
+
+    const beforeTag = bytesToHex(engine.state.confirmationTag);
+    const beforeProposalRefs = Object.keys(engine.state.unappliedProposals);
+    expect(beforeProposalRefs).toHaveLength(1);
+
+    await expect(engine.send({ kind: "selfUpdate" })).rejects.toThrow(
+      "Not a group admin",
+    );
+
+    expect(engine.lifecycle).toBe("Stable");
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(beforeTag);
+    expect(Object.keys(engine.state.unappliedProposals)).toEqual(
+      beforeProposalRefs,
+    );
+  });
+
   it("throws UsageError instead of emitting a commit whose by-reference proposals drop a required component (D-01/D-02)", async () => {
     const { impl, epoch1 } = await twoAdminGroup();
     const engine = new MarmotGroupEngine({

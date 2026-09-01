@@ -13,6 +13,7 @@ import {
   joinGroup,
   type MlsMessage,
   mlsMessageEncoder,
+  processMessage,
   type ProposalRemove,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
@@ -26,6 +27,7 @@ import type {
 } from "../../client/nostr-interface.js";
 import {
   deserializeClientState,
+  serializeClientState,
   SerializedClientState,
 } from "../../core/client-state.js";
 import { commitDigest } from "../../core/convergence.js";
@@ -34,6 +36,7 @@ import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
+import { GroupHistoryTree } from "../../engine/history-tree.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 
 const RELAY = "wss://relay.test";
@@ -155,10 +158,101 @@ async function buildRemovalFixture() {
     ciphersuite: impl,
   });
 
-  return { impl, ePubkey, eEpoch1, removeCommitEvent, commit };
+  return { impl, ePubkey, eEpoch1, adminEpoch1, removeCommitEvent, commit };
+}
+
+async function buildPersistedRemovalForkFixture() {
+  const { impl, ePubkey, eEpoch1, adminEpoch1, commit: removeCommit } =
+    await buildRemovalFixture();
+  const adminPubkey = "a".repeat(64);
+  const ctx = {
+    cipherSuite: impl,
+    authService: unsafeTestingAuthenticationService,
+  };
+  const memberSnapshot = serializeClientState(eEpoch1);
+  const removeDigest = commitDigest(encode(mlsMessageEncoder, removeCommit));
+
+  let losingCommit: MlsMessage | undefined;
+  let losingState: ClientState | undefined;
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const candidate = await createCommit({
+      context: ctx,
+      state: deserializeClientState(serializeClientState(adminEpoch1)),
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const candidateDigest = commitDigest(
+      encode(mlsMessageEncoder, candidate.commit),
+    );
+    if (bytesToHex(removeDigest) >= bytesToHex(candidateDigest)) continue;
+    const applied = await processMessage({
+      context: ctx,
+      state: deserializeClientState(memberSnapshot),
+      message: candidate.commit,
+    });
+    if (applied.kind !== "newState") throw new Error("expected newState");
+    losingCommit = candidate.commit;
+    losingState = applied.newState;
+    break;
+  }
+  if (!losingCommit || !losingState)
+    throw new Error("failed to build a higher-digest competing tip");
+
+  const removed = await processMessage({
+    context: ctx,
+    state: deserializeClientState(memberSnapshot),
+    message: removeCommit,
+  });
+  if (removed.kind !== "newState") throw new Error("expected removed state");
+
+  return {
+    impl,
+    ePubkey,
+    eEpoch1: deserializeClientState(memberSnapshot),
+    removeCommit,
+    removedState: removed.newState,
+    losingCommit,
+    losingState,
+  };
 }
 
 describe("involuntary removal signal", () => {
+  it("forwards persisted multi-tip removal before the public loaded event (CR-01)", async () => {
+    const fixture = await buildPersistedRemovalForkFixture();
+    const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
+    const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
+    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const groupId = bytesToHex(fixture.eEpoch1.groupContext.groupId);
+    const rootTag = bytesToHex(fixture.eEpoch1.confirmationTag);
+    const tree = new GroupHistoryTree(fixture.eEpoch1);
+    tree.recordCommit(rootTag, fixture.removeCommit, fixture.removedState);
+    tree.recordCommit(rootTag, fixture.losingCommit, fixture.losingState);
+    tree.bindStore(rewindStore);
+    await tree.flush();
+    await stateStore.setItem(groupId, serializeClientState(fixture.losingState));
+
+    const manager = new GroupsManager({
+      store: stateStore,
+      rewindStore,
+      removedMarkerStore,
+      signer: { getPublicKey: async () => fixture.ePubkey } as EventSigner,
+      network: recordingNetwork([]),
+      cryptoProvider: defaultCryptoProvider,
+    });
+    const events: string[] = [];
+    const removed = vi.fn(() => events.push("removed"));
+    manager.on("removed", removed);
+    manager.on("loaded", () => events.push("loaded"));
+
+    const loaded = await manager.get(groupId);
+
+    expect(loaded.state.groupActiveState.kind).toBe("removedFromGroup");
+    expect(removed).toHaveBeenCalledOnce();
+    expect(await removedMarkerStore.getItem(groupId)).toBe(true);
+    expect(events).toEqual(["removed", "loaded"]);
+  });
+
   it("emits `removed` and keeps the tombstone when an admin's commit removes us", async () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();

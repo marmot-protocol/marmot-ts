@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 03.1
 current_phase_name: Phase 3 Review Closure
 status: executing
-stopped_at: Completed 03-11-PLAN.md
-last_updated: "2026-09-01T23:03:22.392Z"
+stopped_at: Completed 03.1-01-PLAN.md
+last_updated: "2026-09-01T23:33:25.088Z"
 last_activity: 2026-09-01
-last_activity_desc: Phase 03 complete, transitioned to Phase 03.1
+last_activity_desc: Phase 03.1 execution started
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 28
-  completed_plans: 17
+  completed_plans: 18
   percent: 43
 ---
 
@@ -24,16 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-21)
 
 **Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
-**Current focus:** Phase 03 — commit-integrity-convergence-parity
+**Current focus:** Phase 03.1 — Phase 3 Review Closure
 
 ## Current Position
 
-Phase: 03.1 — Phase 3 Review Closure
-Plan: Not started
+Phase: 03.1 (Phase 3 Review Closure) — EXECUTING
+Plan: 2 of 11
 Status: Ready to execute
-Last activity: 2026-09-01 — Phase 03 complete, transitioned to Phase 03.1
+Last activity: 2026-09-01 — Phase 03.1 execution started
 
-Progress: [██████████] 100% (7 phases)
+Progress: [██████░░░░] 64% (7 phases)
 
 **Next recommended run:** `/gsd-plan-phase 03.1`
 
@@ -80,6 +80,7 @@ _Updated after each plan completion_
 | Phase 03 P09 | 7min | 3 tasks | 10 files |
 | Phase 03 P10 | 5min | 2 tasks | 3 files |
 | Phase 03 P11 | 4min | 2 tasks | 2 files |
+| Phase 03.1 P01 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -133,6 +134,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 03-10]: Refresh the preceding retained link when its resulting epoch becomes the next commit parent, preserving staged proposal-reference evidence.
 - [Phase ?]: [Phase 03-11]: Keep unapplied proposals as MLS references and add only true caller/coupled proposals by value.
 - [Phase ?]: [Phase 03-11]: Run the shared admin callback over one normalized outbound proposal-with-sender union before createCommit.
+- [Phase ?]: [Phase 03.1]: Keep GroupRegistry.load hydration-only and activate persisted forks only after registry listeners attach.
+- [Phase ?]: [Phase 03.1]: Serialize the complete removal-realization transaction with a retry-safe instance-owned Promise.
 
 ### Pending Todos
 
@@ -167,7 +170,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T21:39:27.141Z
-Stopped at: Completed 03-11-PLAN.md
+Last session: 2026-09-01T23:33:25.069Z
+Stopped at: Completed 03.1-01-PLAN.md
 Resume file:
 None

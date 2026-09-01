@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Phase 1)
-current_phase: 03.1
-current_phase_name: phase-3-review-closure
-status: ready-to-plan
-stopped_at: Phase 03.1 context gathered
-last_updated: "2026-08-06T13:20:16.082Z"
-last_activity: 2026-08-06
-last_activity_desc: reference sweep, round-3 deep review, roadmap restructure
+current_phase: 03
+current_phase_name: commit-integrity-convergence-parity
+status: executing
+stopped_at: Completed 03-08-PLAN.md
+last_updated: "2026-09-01T21:19:45.317Z"
+last_activity: 2026-09-01
+last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 7
-  completed_phases: 3
-  total_plans: 13
-  completed_plans: 13
-  percent: 43
+  completed_phases: 2
+  total_plans: 17
+  completed_plans: 14
+  percent: 29
 ---
 
 # Project State
@@ -24,16 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-21)
 
 **Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
-**Current focus:** Phase 03.1 — phase-3-review-closure
+**Current focus:** Phase 03 — commit-integrity-convergence-parity
 
 ## Current Position
 
-Phase: 03.1 (phase-3-review-closure) — READY TO PLAN
-Plan: 0 of TBD
-Status: Phase 3's 7 plans are all executed and its round-1/round-2 review fixes are merged (suite green: 78 files / 727 tests, `pnpm compile` and `pnpm lint` clean). Three review rounds each found blockers in the previous round's fixes (7 → 4 → 5), so the remaining 30 findings from `03-REVIEW.md` round 3 were split: CR-08/CR-11 (own-commit convergence) moved to Phase 4 for a structural fix via MDK's `OwnCommitConvergenceStamp`; everything else became Phase 03.1.
-Last activity: 2026-08-06 — reference sweep, round-3 deep review, roadmap restructure
+Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
+Plan: 2 of 11
+Status: Ready to execute
+Last activity: 2026-09-01 — Phase 03 execution started
 
-Progress: [██████░░░░] 43% (7 phases)
+Progress: [████████░░] 82% (7 phases)
 
 **Next recommended run:** `/gsd-plan-phase 03.1`
 
@@ -71,6 +71,11 @@ _Updated after each plan completion_
 | Phase 03 P05 | 70min | 3 tasks | 2 files |
 | Phase 03 P06 | 20min | 3 tasks | 6 files |
 | Phase 03 P07 | 95min | 3 tasks | 5 files |
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 03 P08 | 6h | 2 tasks | 0 files |
 
 ## Accumulated Context
 
@@ -116,6 +121,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Tasks 1+2 combined into one commit for 03-07 (mutually-dependent interfaces cannot compile independently)
 - [Phase ?]: 03-07: extended notification derivation to the forkPool rewind site's own winning commit (Rule 2), not just the direct branch, so a rewind-landed commit can itself be superseded later
 - [Phase ?]: 03-07: CONV-03 marker-clearing tested at the MarmotGroup wiring boundary; a fully organic removed-then-un-removed engine scenario is currently unreachable due to ForkRecovery's confirmationTag-based candidate dedup and the direct removal branch skipping tree/retained recording (logged in deferred-items.md)
+- [Phase ?]: [Phase 03-08]: Treat the user-restored pnpm-lock.yaml hash as authoritative and verify it after every pnpm command.
+- [Phase ?]: [Phase 03-08]: Existing validateCommitLegality suites provide executable WIRE-03/CONV-01 evidence without production edits.
 
 ### Pending Todos
 
@@ -150,7 +157,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-06T13:20:16.075Z
-Stopped at: Phase 03.1 context gathered
+Last session: 2026-09-01T21:19:45.303Z
+Stopped at: Completed 03-08-PLAN.md
 Resume file:
-.planning/phases/03.1-phase-3-review-closure/03.1-CONTEXT.md
+None

@@ -159,6 +159,27 @@ async function twoAdminGroup() {
   };
 }
 
+async function stageAdminPolicyProposal(
+  engine: MarmotGroupEngine<NostrEvent>,
+  admins: string[],
+): Promise<string> {
+  const staged = await engine.send({
+    kind: "proposal",
+    proposal: {
+      proposalType: appDataUpdateProposalType,
+      appDataUpdate: {
+        componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+        operation: "update",
+        update: encodeAdminPolicyV1(admins),
+      },
+    },
+  });
+  engine.confirmPublished(staged.pending);
+  const [ref] = Object.keys(engine.state.unappliedProposals);
+  if (ref === undefined) throw new Error("expected staged proposal reference");
+  return ref;
+}
+
 /**
  * A group at epoch 1 with two admins where `admin2Pubkey` occupies TWO
  * separate leaves (two devices under the same account credential) — the
@@ -714,6 +735,92 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
     expect(
       getAdminPolicy(result.pending.newState.groupContext.extensions),
     ).toEqual(getAdminPolicy(engine.state.groupContext.extensions));
+  });
+});
+
+describe("outbound exact-union actor authorization matrix", () => {
+  it.each([
+    { intentKind: "commit", origin: "by-value" },
+    { intentKind: "commit", origin: "selected-reference" },
+    { intentKind: "commit", origin: "implicit-reference" },
+    { intentKind: "selfUpdate", origin: "implicit-reference" },
+  ] as const)(
+    "rejects a non-admin $intentKind with an admin-only $origin proposal",
+    async ({ intentKind, origin }) => {
+      const {
+        impl,
+        adminPubkey,
+        admin2Pubkey,
+        memberPubkey,
+        memberEpoch1,
+      } = await twoAdminGroup();
+      const engine = new MarmotGroupEngine({
+        state: memberEpoch1,
+        ciphersuite: impl,
+        peeler: testPeeler(impl),
+      });
+      const proposal = {
+        proposalType: appDataUpdateProposalType,
+        appDataUpdate: {
+          componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+          operation: "update" as const,
+          update: encodeAdminPolicyV1([adminPubkey, admin2Pubkey]),
+        },
+      };
+
+      let ref: string | undefined;
+      if (origin !== "by-value") {
+        ref = await stageAdminPolicyProposal(engine, [
+          adminPubkey,
+          admin2Pubkey,
+        ]);
+      }
+      const beforeTag = bytesToHex(engine.state.confirmationTag);
+      const beforeRefs = Object.keys(engine.state.unappliedProposals);
+
+      const send =
+        intentKind === "selfUpdate"
+          ? engine.send({ kind: "selfUpdate" })
+          : engine.send({
+              kind: "commit",
+              actorPubkey: memberPubkey,
+              extraProposals: origin === "by-value" ? [proposal] : undefined,
+              proposalRefs:
+                origin === "selected-reference" && ref !== undefined
+                  ? [ref]
+                  : undefined,
+            });
+
+      await expect(send).rejects.toThrow("Not a group admin");
+      expect(engine.lifecycle).toBe("Stable");
+      expect(bytesToHex(engine.state.confirmationTag)).toBe(beforeTag);
+      expect(Object.keys(engine.state.unappliedProposals)).toEqual(beforeRefs);
+    },
+  );
+
+  it("does not duplicate a selected reference when the admin commits it", async () => {
+    const { impl, adminPubkey, admin2Pubkey, epoch1 } =
+      await twoAdminGroup();
+    const engine = new MarmotGroupEngine({
+      state: epoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+    const ref = await stageAdminPolicyProposal(engine, [
+      adminPubkey,
+      admin2Pubkey,
+    ]);
+
+    const result = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      proposalRefs: [ref],
+    });
+
+    expect(result.kind).toBe("groupEvolution");
+    expect(Number(result.pending.newState.groupContext.epoch)).toBe(
+      Number(engine.state.groupContext.epoch) + 1,
+    );
   });
 });
 

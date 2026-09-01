@@ -24,7 +24,6 @@ import {
   type ProcessMessageResult,
   Proposal,
   type ProposalWithSender,
-  selfRemoveProposalType,
   UsageError,
   wireformats,
 } from "ts-mls";
@@ -805,7 +804,7 @@ export class MarmotGroupEngine<TEnvelope> {
     if (
       authorize({
         kind: "commit",
-        senderLeafIndex: actorLeaf,
+        senderLeafIndex: actorLeaf as LeafIndex,
         proposals: committedWithSenders,
       }) === "reject"
     ) {

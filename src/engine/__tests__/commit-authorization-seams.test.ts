@@ -137,4 +137,29 @@ describe("outbound commit authorization seams", () => {
       expect(memberPubkey).not.toBe(adminPubkey);
     },
   );
+
+  it("allows a valid local self-update when an unrelated leaf credential is malformed", async () => {
+    const { impl, memberState } = await memberGroup();
+    const unrelatedLeaf = memberState.ratchetTree.find(
+      (node) =>
+        node?.nodeType === "leaf" &&
+        node !== memberState.ratchetTree[Number(memberState.privatePath.leafIndex) * 2],
+    );
+    if (!unrelatedLeaf || unrelatedLeaf.nodeType !== "leaf")
+      throw new Error("expected unrelated leaf");
+    unrelatedLeaf.leaf.credential = {
+      credentialType: 1,
+      identity: new Uint8Array(16),
+    } as typeof unrelatedLeaf.leaf.credential;
+
+    const engine = new MarmotGroupEngine({
+      state: memberState,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    const result = await engine.send({ kind: "selfUpdate" });
+    expect(result.kind).toBe("selfUpdate");
+    expect(engine.lifecycle).toBe("PendingPublish");
+  });
 });

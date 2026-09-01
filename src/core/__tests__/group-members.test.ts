@@ -11,7 +11,11 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { createCredential } from "../credential.js";
-import { getGroupMembers } from "../group-members.js";
+import {
+  getGroupMembers,
+  getPubkeyLeafNodeIndexes,
+  getPubkeyLeafNodes,
+} from "../group-members.js";
 
 const VALID_A = "a".repeat(64);
 const VALID_D = "d".repeat(64);
@@ -72,5 +76,20 @@ describe("getGroupMembers", () => {
   it("returns an empty list rather than throwing when every leaf is malformed", () => {
     const state = fakeClientState([malformedBasicCredential(16)]);
     expect(getGroupMembers(state)).toEqual([]);
+  });
+});
+
+describe("pubkey leaf enumeration", () => {
+  it("skips malformed credentials while retaining valid sibling leaves", () => {
+    const state = fakeClientState([
+      createCredential(VALID_A),
+      malformedBasicCredential(16),
+      createCredential(VALID_D),
+    ]);
+
+    expect(() => getPubkeyLeafNodes(state, VALID_D)).not.toThrow();
+    expect(getPubkeyLeafNodes(state, VALID_D)).toHaveLength(1);
+    expect(() => getPubkeyLeafNodeIndexes(state, VALID_D)).not.toThrow();
+    expect(getPubkeyLeafNodeIndexes(state, VALID_D)).toEqual([1]);
   });
 });

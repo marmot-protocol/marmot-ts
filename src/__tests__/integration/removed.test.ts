@@ -273,6 +273,67 @@ describe("involuntary removal signal", () => {
     expect(events).toEqual(["removed", "loaded"]);
   });
 
+  it("single-flights overlapping removal realization and emits once (WR-01)", async () => {
+    const fixture = await buildPersistedRemovalForkFixture();
+    let releaseRead!: (value: boolean | null) => void;
+    const read = new Promise<boolean | null>((resolve) => (releaseRead = resolve));
+    const getItem = vi.fn(async () => read);
+    const setItem = vi.fn(async () => undefined);
+    const removedMarkerStore: GenericKeyValueStore<boolean> = {
+      getItem,
+      setItem,
+      removeItem: vi.fn(async () => undefined),
+    };
+    const group = marmotGroup(
+      fixture.removedState,
+      fixture.ePubkey,
+      fixture.impl,
+      [],
+      undefined,
+      removedMarkerStore,
+    );
+    const removed = vi.fn();
+    group.on("removed", removed);
+
+    const first = group.realizeRemovalIfNeeded();
+    const second = group.realizeRemovalIfNeeded();
+    await Promise.resolve();
+    expect(getItem).toHaveBeenCalledOnce();
+    releaseRead(null);
+    await Promise.all([first, second]);
+
+    expect(setItem).toHaveBeenCalledOnce();
+    expect(removed).toHaveBeenCalledOnce();
+  });
+
+  it("retries removal realization after an in-flight marker failure (WR-01)", async () => {
+    const fixture = await buildPersistedRemovalForkFixture();
+    const getItem = vi
+      .fn<GenericKeyValueStore<boolean>["getItem"]>()
+      .mockRejectedValueOnce(new Error("marker unavailable"))
+      .mockResolvedValueOnce(null);
+    const setItem = vi.fn(async () => undefined);
+    const group = marmotGroup(
+      fixture.removedState,
+      fixture.ePubkey,
+      fixture.impl,
+      [],
+      undefined,
+      { getItem, setItem, removeItem: vi.fn(async () => undefined) },
+    );
+    const removed = vi.fn();
+    group.on("removed", removed);
+
+    await expect(group.realizeRemovalIfNeeded()).rejects.toThrow(
+      "marker unavailable",
+    );
+    await group.realizeRemovalIfNeeded();
+
+    expect(getItem).toHaveBeenCalledTimes(2);
+    expect(setItem).toHaveBeenCalledOnce();
+    expect(removed).toHaveBeenCalledOnce();
+  });
+
   it("emits `removed` and keeps the tombstone when an admin's commit removes us", async () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();

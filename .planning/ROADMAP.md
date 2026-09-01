@@ -147,11 +147,11 @@ to Phase 4 for a structural fix (porting `OwnCommitConvergenceStamp`). See
 1. A `removed` event raised during `fromClientState` load reaches the consumer: `GroupRegistry.track()`'s forwarder is attached before realization can emit, so CR-10's durable marker cannot make the loss permanent. The round-2 `EventEmitter.prototype` spy workaround in `removed.test.ts` is gone, replaced by an assertion on the real consumer path. (CR-12)
 2. `send({ kind: "selfUpdate" })` runs a commit-authorization gate, and the `commit` seam's gate scans the by-reference proposal union — the same set every peer's inbound gate scans — so marmot-ts cannot author a commit that a conformant peer rejects as non-admin per `refs/marmot/protocol-core/group-messaging.md`. (CR-13)
 3. A locally-authored commit derives and ledger-records its state notifications, so CONV-03's withdrawal invariant holds for our own commits and not only for inbound ones. A local commit also emits `historyChanged` when it grows the tree. (CR-14, WR-25)
-4. The `StateNotificationLedger` is indexed by commit digest and pruned to the history tree's own retention, so it stays bounded under the supported `maxRewindCommits: Infinity` without capping rewind depth, and `record()` is not O(n) over an unbounded array. (WR-02, interacts with WR-14)
+4. The `StateNotificationLedger` uses digest-keyed O(1) lookup and correctness-safe `min(anchorEpoch, oldest tree epoch)` pruning, so `record()` is not O(n) and no candidate-namable entry is pruned. `maxRewindCommits: Infinity` explicitly remains memory-unbounded until the deferred `GroupHistoryTree` pruning capability lands. (WR-02, interacts with WR-14; D-05/D-06)
 5. `#sweepTree` is gated on payload delivery rather than on eviction, so the D-13 self-eviction short-circuit does not starve the CONV-03 rewind path. (WR-07 — note round 3 found the round-1 remedy for this finding was itself wrong.)
 6. No `MIP-NN` citation remains in any Phase 3-touched source file; each is replaced by its `refs/marmot/...` path per `refs/marmot/mip-coverage.md`. (WR-24, 21 sites)
 7. The remaining re-derived round-1 carry-forwards (WR-03..WR-05, WR-08..WR-13 and the infos) are each either fixed or explicitly recorded as accepted with a rationale in `deferred-items.md` — none silently dropped.
-   **Plans**: 8 plans
+   **Plans**: 11 plans
 
 Plans:
 
@@ -161,8 +161,11 @@ Plans:
 - [ ] 03.1-04-PLAN.md — pure outbound authorization and malformed-member tolerance
 - [ ] 03.1-05-PLAN.md — keyed ledgers, tree horizon, own payload, and sweep delivery gate
 - [ ] 03.1-06-PLAN.md — removal marker namespace and bounded Nostr trust caches
-- [ ] 03.1-07-PLAN.md — remaining self-contained review carry-forwards
-- [ ] 03.1-08-PLAN.md — root export snapshot and Phase-3 citation sweep
+- [ ] 03.1-07-PLAN.md — exact legality and audit diagnostics
+- [ ] 03.1-08-PLAN.md — root public-signature export snapshot
+- [ ] 03.1-09-PLAN.md — result-union, byte, member, lifecycle, and disposition cleanup
+- [ ] 03.1-10-PLAN.md — send lifecycle rollback, local history signal, and local teardown closure
+- [ ] 03.1-11-PLAN.md — exact Phase-3 citation manifest sweep
 
 ### Phase 4: Feature Parity & Conformance Vectors
 

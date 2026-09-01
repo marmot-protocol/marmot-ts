@@ -39,17 +39,13 @@
  * `tree-convergence.ts`'s `buildTreeBranchSet`, is unaffected — it sources
  * candidates from already-recorded structural metadata, never replays).
  *
- * The fix landed is deliberately narrow — NOT a port of MDK's
- * `PrevalidatedOwnCommits`/committer-priority/consumed-proposal-ref stamping
- * machinery. `RetainedHistoryStore.record()` already stores the exact
- * resulting state for every applied commit on our canonical path (own or
- * inbound), so `ForkRecovery#resolveFork` now looks up that already-known
- * state for each of `ours` (by commit digest) and hands `#buildBranches` a
- * `knownNextStates` map; `explore()` uses that state directly instead of
- * calling `processMessage` for exactly those commits, and falls back to the
- * ordinary replay path for everything else (peer commits, unknown commits).
- * No stamping, no committer bookkeeping, no change to `tree-convergence.ts`
- * or `core/convergence.ts` — see `src/engine/fork-recovery.ts`.
+ * The complete fix follows the structural role of MDK's
+ * `crates/traits/src/message.rs::OwnCommitConvergenceStamp` and
+ * `StoredMessagePayload::OwnCommitWire`: `RetainedHistoryStore.record()` keeps
+ * the exact parent and resulting state for every applied link, including the
+ * parent's consumed proposal-reference evidence. `ForkRecovery#resolveFork`
+ * materializes those parent-bound links without calling `processMessage` for
+ * a locally-authored commit, while ordinary peer/unknown commits still replay.
  *
  * CR-01 follow-up: that map was originally keyed by commit digest ALONE, so
  * the short-circuit could also fire at a same-epoch node on a COMPETING branch
@@ -342,6 +338,9 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
   // outcome) proves our commit's digest should win. It passes now that
   // `resolveFork` supplies the already-known resulting state for `ours`.
   it("keeps a device's own published+confirmed commit as the live tip when a losing same-epoch sibling arrives", async () => {
+    // Derived from MDK
+    // `cgka-engine/src/openmls_projection.rs::already_applied_commit_prefix`:
+    // an already-confirmed own link remains a normal selection candidate.
     const { impl, ctx, adminPubkey, adminEpoch1, memberEpoch1 } =
       await twoMemberEpoch1Group();
     const peeler = testPeeler(impl);
@@ -617,6 +616,8 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
   });
 
   it("selects the same branch when two engines receive the same competing commits in opposite delivery order", async () => {
+    // Derived from MDK `cgka-engine/src/fork_recovery.rs` canonical selection:
+    // candidate arrival order cannot affect the selected confirmation tag.
     const { impl, ctx, adminEpoch1, member1Epoch1, member2Epoch1 } =
       await threeMemberEpoch1Group();
     const peeler = testPeeler(impl);

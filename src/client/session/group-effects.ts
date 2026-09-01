@@ -3,6 +3,7 @@ import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { MlsWelcomeMessage, Proposal } from "ts-mls";
 
 import type { PendingState, ProposalAction } from "../../engine/types.js";
+import type { StateNotification } from "../../engine/state-notifications.js";
 import type { PublishResponse } from "../nostr-interface.js";
 import type { WelcomeRecipient } from "../transport/nostr/welcome-delivery.js";
 
@@ -29,6 +30,8 @@ export type GroupEffects = {
 export type GroupPublishResult = {
   work: GroupPublishWork;
   response: Record<string, PublishResponse>;
+  /** State changes derived only after a commit publish is acknowledged. */
+  notifications: StateNotification[];
 };
 
 /** Local protocol intent accepted by {@link GroupSession}. */

@@ -416,8 +416,8 @@ export class GroupSession<
     this.#engine.dispose();
   }
 
-  confirmPublished(pending: PendingState): void {
-    this.#engine.confirmPublished(pending);
+  confirmPublished(pending: PendingState): StateNotification[] {
+    return this.#engine.confirmPublished(pending);
   }
 
   publishFailed(pending: PendingState): void {

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { MarmotGroupView } from "../../../core/client-state.js";
 import type { PendingState } from "../../../engine/types.js";
+import type { StateNotification } from "../../../engine/state-notifications.js";
 import type {
   NostrNetworkInterface,
   PublishResponse,
@@ -49,7 +50,15 @@ function makeNetwork(
 }
 
 function makeRuntime(overrides: Partial<GroupRuntimeOptions> = {}) {
-  const confirmPublished = vi.fn();
+  const confirmedNotifications: StateNotification[] = [
+    {
+      kind: "epochAdvanced",
+      commitDigest: new Uint8Array(32).fill(7),
+      from: 1,
+      to: 2,
+    },
+  ];
+  const confirmPublished = vi.fn(() => confirmedNotifications);
   const publishFailed = vi.fn();
   const save = vi.fn(async () => {});
   const deliver = vi.fn(async () => ackResponse());
@@ -73,6 +82,7 @@ function makeRuntime(overrides: Partial<GroupRuntimeOptions> = {}) {
     publishFailed,
     save,
     deliver,
+    confirmedNotifications,
   };
 }
 
@@ -145,8 +155,18 @@ describe("GroupRuntime publish acknowledgement", () => {
 
     expect(results).toHaveLength(2);
     expect(results[0].work.kind).toBe("applicationMessage");
+    expect(results[0].notifications).toEqual([]);
     expect(results[1].work.kind).toBe("proposal");
+    expect(results[1].notifications).toEqual([]);
     expect(confirmPublished).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces confirmed commit notifications after publish succeeds", async () => {
+    const { runtime, confirmedNotifications } = makeRuntime();
+
+    const [result] = await runtime.publishEffects({ publish: [commitWork()] });
+
+    expect(result.notifications).toEqual(confirmedNotifications);
   });
 });
 
@@ -184,6 +204,17 @@ describe("GroupRuntime commit rollback", () => {
     expect(publishFailed).toHaveBeenCalledWith(pending);
     expect(confirmPublished).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it("derives no notifications when a commit publish fails", async () => {
+    const { runtime, confirmPublished } = makeRuntime({
+      getNetwork: () => makeNetwork(async () => noAckResponse()),
+    });
+
+    await expect(
+      runtime.publishEffects({ publish: [commitWork()] }),
+    ).rejects.toThrow(/Failed to publish commit/);
+    expect(confirmPublished).not.toHaveBeenCalled();
   });
 
   it("confirms and saves the commit when a relay acks", async () => {

@@ -889,7 +889,7 @@ export class MarmotGroupEngine<TEnvelope> {
    * Since MIP-02 tells clients to selfUpdate immediately after joining from a
    * Welcome, the normal join path destroyed its own convergence persistence.
    */
-  confirmPublished(pending: PendingState): void {
+  confirmPublished(pending: PendingState): StateNotification[] {
     if (pending.kind === "commit" || pending.kind === "selfUpdate") {
       if (!pending.parentState || !pending.commitMessage) {
         throw new Error(
@@ -910,6 +910,17 @@ export class MarmotGroupEngine<TEnvelope> {
         pending.commitMessage,
         pending.newState,
       );
+      const digest = commitDigest(
+        encode(mlsMessageEncoder, pending.commitMessage),
+      );
+      const notifications = deriveStateNotifications({
+        parentState: pending.parentState,
+        resultingState: pending.newState,
+        commitDigest: digest,
+      });
+      this.#stateNotifications.record(digest, toEpoch, notifications);
+      const anchor = this.#retained.anchorEpoch();
+      if (anchor !== undefined) this.#stateNotifications.pruneBelow(anchor);
       this.#emitAudit({
         type: "epoch_confirmed",
         from_epoch: fromEpoch,
@@ -922,7 +933,7 @@ export class MarmotGroupEngine<TEnvelope> {
         pending.kind,
       );
       this.#stagedCommitParentEpoch = undefined;
-      return;
+      return notifications;
     }
 
     this.#setState(pending.newState);
@@ -933,6 +944,7 @@ export class MarmotGroupEngine<TEnvelope> {
     // proposal by reference becomes unvalidatable — and therefore unbuildable
     // as a candidate — after a restart.
     if (pending.kind === "proposal") this.#recordProposalStaged(this.#state);
+    return [];
   }
 
   /**

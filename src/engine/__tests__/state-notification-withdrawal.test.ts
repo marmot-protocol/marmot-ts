@@ -162,6 +162,50 @@ function noNetwork(): NostrNetworkInterface {
 }
 
 describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () => {
+  it("attributes notifications for locally confirmed commit and selfUpdate", async () => {
+    const { impl, adminPubkey, adminEpoch1 } = await twoMemberEpoch1Group();
+    const engine = new MarmotGroupEngine<NostrEvent>({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    const commitResult = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (commitResult.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    const commitNotifications = engine.confirmPublished(commitResult.pending);
+    const localCommitDigest = commitDigest(
+      encode(mlsMessageEncoder, commitResult.pending.commitMessage!),
+    );
+    expect(commitNotifications).toContainEqual({
+      kind: "epochAdvanced",
+      commitDigest: localCommitDigest,
+      from: 1,
+      to: 2,
+    });
+
+    const selfUpdateResult = await engine.send({ kind: "selfUpdate" });
+    if (selfUpdateResult.kind !== "selfUpdate")
+      throw new Error("expected selfUpdate");
+    const selfUpdateNotifications = engine.confirmPublished(
+      selfUpdateResult.pending,
+    );
+    const selfUpdateDigest = commitDigest(
+      encode(mlsMessageEncoder, selfUpdateResult.pending.commitMessage!),
+    );
+    expect(selfUpdateNotifications).toContainEqual({
+      kind: "epochAdvanced",
+      commitDigest: selfUpdateDigest,
+      from: 2,
+      to: 3,
+    });
+    for (const notification of selfUpdateNotifications)
+      expect(notification.commitDigest).toEqual(selfUpdateDigest);
+  });
   it("derives epochAdvanced and memberAdded, both carrying the same commitDigest, for a commit that adds a member", async () => {
     const adminPubkey = "a".repeat(64);
     const member1Pubkey = "d".repeat(64);

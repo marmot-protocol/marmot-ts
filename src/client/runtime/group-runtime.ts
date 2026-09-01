@@ -11,6 +11,7 @@ import {
   type AuditSink,
 } from "../../audit/index.js";
 import type { PendingState } from "../../engine/types.js";
+import type { StateNotification } from "../../engine/state-notifications.js";
 import { hasAck } from "../../utils/index.js";
 import type {
   GroupEffects,
@@ -32,7 +33,7 @@ export type GroupRuntimeOptions = {
   getRelays: () => string[] | undefined;
   getGroupRef: () => string;
   getGroupData: () => MarmotGroupView | null;
-  confirmPublished: (pending: PendingState) => void;
+  confirmPublished: (pending: PendingState) => StateNotification[];
   publishFailed: (pending: PendingState) => void;
   save: () => Promise<void>;
   log?: Debugger;
@@ -56,7 +57,7 @@ export class GroupRuntime {
   readonly #getRelays: () => string[] | undefined;
   readonly #getGroupRef: () => string;
   readonly #getGroupData: () => MarmotGroupView | null;
-  readonly #confirmPublished: (pending: PendingState) => void;
+  readonly #confirmPublished: (pending: PendingState) => StateNotification[];
   readonly #publishFailed: (pending: PendingState) => void;
   readonly #save: () => Promise<void>;
   readonly #log?: Debugger;
@@ -82,9 +83,43 @@ export class GroupRuntime {
   async publishEffects(effects: GroupEffects): Promise<GroupPublishResult[]> {
     const results: GroupPublishResult[] = [];
     for (const work of effects.publish) {
-      results.push({ work, response: await this.publishWork(work) });
+      results.push(await this.#publishWorkResult(work));
     }
     return results;
+  }
+
+  async #publishWorkResult(work: GroupPublishWork): Promise<GroupPublishResult> {
+    switch (work.kind) {
+      case "applicationMessage":
+        return {
+          work,
+          response: await this.publishApplication(work.envelope),
+          notifications: [],
+        };
+      case "proposal":
+        return {
+          work,
+          response: await this.publishProposal(work.envelope, work.pending),
+          notifications: [],
+        };
+      case "selfUpdate": {
+        const { response, notifications } = await this.#publishSelfUpdateResult(
+          work.envelope,
+          work.pending,
+        );
+        return { work, response, notifications };
+      }
+      case "groupEvolution": {
+        const { response, notifications } = await this.#publishCommitResult({
+          envelope: work.envelope,
+          pending: work.pending,
+          actorPubkey: work.actorPubkey,
+          welcome: work.welcome,
+          welcomeRecipients: work.welcomeRecipients,
+        });
+        return { work, response, notifications };
+      }
+    }
   }
 
   async publishWork(
@@ -134,6 +169,16 @@ export class GroupRuntime {
     envelope: NostrEvent,
     pending: PendingState,
   ): Promise<Record<string, PublishResponse>> {
+    return (await this.#publishSelfUpdateResult(envelope, pending)).response;
+  }
+
+  async #publishSelfUpdateResult(
+    envelope: NostrEvent,
+    pending: PendingState,
+  ): Promise<{
+    response: Record<string, PublishResponse>;
+    notifications: StateNotification[];
+  }> {
     // A selfUpdate is a commit and now stages through `PendingPublish`
     // (CR-09/WR-17), so a publish failure MUST roll the lifecycle back —
     // otherwise the engine is stuck and can never prepare another commit.
@@ -148,14 +193,21 @@ export class GroupRuntime {
       throw err;
     }
 
-    this.#confirmPublished(pending);
+    const notifications = this.#confirmPublished(pending);
     await this.#save();
-    return response;
+    return { response, notifications };
   }
 
   async publishCommit(
     options: PublishCommitOptions,
   ): Promise<Record<string, PublishResponse>> {
+    return (await this.#publishCommitResult(options)).response;
+  }
+
+  async #publishCommitResult(options: PublishCommitOptions): Promise<{
+    response: Record<string, PublishResponse>;
+    notifications: StateNotification[];
+  }> {
     let response: Record<string, PublishResponse>;
     try {
       response = await this.#publishToGroupRelays(
@@ -167,7 +219,7 @@ export class GroupRuntime {
       throw err;
     }
 
-    this.#confirmPublished(options.pending);
+    const notifications = this.#confirmPublished(options.pending);
     await this.#save();
 
     const innerWelcome = options.welcome?.welcome;
@@ -179,7 +231,7 @@ export class GroupRuntime {
       );
     }
 
-    return response;
+    return { response, notifications };
   }
 
   async #publishToGroupRelays(

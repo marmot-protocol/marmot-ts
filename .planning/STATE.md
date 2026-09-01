@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 03
 current_phase_name: commit-integrity-convergence-parity
 status: executing
-stopped_at: Completed 03-08-PLAN.md
-last_updated: "2026-09-01T21:19:45.317Z"
+stopped_at: Completed 03-09-PLAN.md
+last_updated: "2026-09-01T21:27:59.314Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 17
-  completed_plans: 14
+  completed_plans: 15
   percent: 29
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
-Plan: 2 of 11
+Plan: 9 of 11
 Status: Ready to execute
 Last activity: 2026-09-01 — Phase 03 execution started
 
-Progress: [████████░░] 82% (7 phases)
+Progress: [█████████░] 88% (7 phases)
 
 **Next recommended run:** `/gsd-plan-phase 03.1`
 
@@ -76,6 +76,7 @@ _Updated after each plan completion_
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 03 P08 | 6h | 2 tasks | 0 files |
+| Phase 03 P09 | 7min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 03-07: CONV-03 marker-clearing tested at the MarmotGroup wiring boundary; a fully organic removed-then-un-removed engine scenario is currently unreachable due to ForkRecovery's confirmationTag-based candidate dedup and the direct removal branch skipping tree/retained recording (logged in deferred-items.md)
 - [Phase ?]: [Phase 03-08]: Treat the user-restored pnpm-lock.yaml hash as authoritative and verify it after every pnpm command.
 - [Phase ?]: [Phase 03-08]: Existing validateCommitLegality suites provide executable WIRE-03/CONV-01 evidence without production edits.
+- [Phase ?]: [Phase 03-09]: Persisted removal realization is invoked by GroupRegistry only after lifecycle forwarding listeners attach.
+- [Phase ?]: [Phase 03-09]: Local confirmed notifications travel on GroupPublishResult and are attributed from encoded MLS commit bytes.
 
 ### Pending Todos
 
@@ -157,7 +160,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T21:19:45.303Z
-Stopped at: Completed 03-08-PLAN.md
+Last session: 2026-09-01T21:27:59.299Z
+Stopped at: Completed 03-09-PLAN.md
 Resume file:
 None

@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   commitDigest,
+  compareCommitOrderingKeys,
   DEFAULT_CONVERGENCE_POLICY,
 } from "../../core/convergence.js";
 import { createCredential } from "../../core/credential.js";
@@ -657,6 +658,110 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     expect(bytesToHex(engine.state.confirmationTag)).toBe(
       bytesToHex(winner.newState.confirmationTag),
     );
+  });
+
+  it("withdraws notifications recorded by confirmPublished when a peer fork wins", async () => {
+    const { impl, ctx, adminPubkey, adminEpoch1, memberEpoch1 } =
+      await twoMemberEpoch1Group();
+    const engine = new MarmotGroupEngine<NostrEvent>({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    const sent = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [
+        {
+          proposalType: appDataUpdateProposalType,
+          appDataUpdate: {
+            componentId: CUSTOM_COMPONENT_ID,
+            operation: "update",
+            update: new Uint8Array([1]),
+          },
+        },
+      ],
+    });
+    if (sent.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    const localDigest = commitDigest(
+      encode(mlsMessageEncoder, sent.pending.commitMessage!),
+    );
+
+    const peerCommit = (_attempt: number) =>
+      createCommit({
+        context: ctx,
+        state: memberEpoch1,
+        wireAsPublicMessage: true,
+        ratchetTreeExtension: true,
+        extraProposals: [],
+      });
+    let winner = await peerCommit(0);
+    for (
+      let attempt = 1;
+      attempt < 256 &&
+      compareCommitOrderingKeys(
+        { sourceEpoch: 1, commitDigest: localDigest },
+        {
+          sourceEpoch: 1,
+          commitDigest: commitDigest(
+            encode(mlsMessageEncoder, winner.commit),
+          ),
+        },
+      ) <= 0;
+      attempt++
+    ) {
+      winner = await peerCommit(attempt);
+    }
+    const winnerDigest = commitDigest(
+      encode(mlsMessageEncoder, winner.commit),
+    );
+    expect(
+      compareCommitOrderingKeys(
+        { sourceEpoch: 1, commitDigest: localDigest },
+        { sourceEpoch: 1, commitDigest: winnerDigest },
+      ),
+    ).toBeGreaterThan(0);
+
+    const confirmed = engine.confirmPublished(sent.pending);
+    expect(confirmed.map((notification) => notification.kind)).toEqual(
+      expect.arrayContaining(["epochAdvanced", "componentChanged"]),
+    );
+
+    const results: {
+      kind: string;
+      commitDigest?: Uint8Array;
+      withdrawn?: import("../state-notifications.js").StateNotification[];
+    }[] = [];
+    for await (const result of engine.ingest([
+      await createGroupEvent({
+        message: winner.commit,
+        state: memberEpoch1,
+        ciphersuite: impl,
+      }),
+    ])) {
+      results.push(result as never);
+    }
+
+    const invalidatedIndex = results.findIndex(
+      (result) => result.kind === "stateInvalidated",
+    );
+    expect(invalidatedIndex).toBeGreaterThanOrEqual(0);
+    const invalidated = results[invalidatedIndex];
+    expect(invalidated.commitDigest).toEqual(localDigest);
+    expect(invalidated.withdrawn?.map((notification) => notification.kind)).toEqual(
+      expect.arrayContaining(["epochAdvanced", "componentChanged"]),
+    );
+    for (const notification of invalidated.withdrawn ?? []) {
+      expect(notification.commitDigest).toEqual(localDigest);
+      expect(notification.commitDigest).not.toEqual(winnerDigest);
+    }
+    const payloadInvalidatedIndex = results.findIndex(
+      (result) => result.kind === "invalidated",
+    );
+    if (payloadInvalidatedIndex >= 0)
+      expect(invalidatedIndex).toBeLessThan(payloadInvalidatedIndex);
   });
 
   it("yields stateInvalidated before any invalidated app-payload result at a rewind site", async () => {

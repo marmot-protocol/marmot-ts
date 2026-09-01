@@ -33,6 +33,7 @@ import {
 } from "../core/client-state.js";
 import { withCapturedProposals } from "./admin-policy.js";
 import type { EdgeSnapshot } from "./history-tree.js";
+import type { RetainedAppliedLink } from "./retained-store.js";
 import type { GroupPeeler } from "./types.js";
 import { framedCommitProposalsWithSender, framedEpoch } from "./wire-format.js";
 import { logger } from "../utils/debug.js";
@@ -93,6 +94,10 @@ export type ForkResolution =
 export interface RetainedView {
   stateAt(epoch: number): ClientState | undefined;
   appliedCommitsBetween(forkEpoch: number, tipEpoch: number): MlsMessage[];
+  appliedLinksBetween?(
+    forkEpoch: number,
+    tipEpoch: number,
+  ): RetainedAppliedLink[];
 }
 
 /**
@@ -463,7 +468,13 @@ export class ForkRecovery<TEnvelope> {
     if (!root) return { outcome: "skip" };
 
     const currentTipEpoch = Number(currentState.groupContext.epoch);
-    const ours = retained.appliedCommitsBetween(forkEpoch, currentTipEpoch);
+    const retainedLinks = retained.appliedLinksBetween?.(
+      forkEpoch,
+      currentTipEpoch,
+    );
+    const ours = retainedLinks
+      ? retainedLinks.map((link) => link.message)
+      : retained.appliedCommitsBetween(forkEpoch, currentTipEpoch);
     if (ours.length === 0) return { outcome: "skip" };
 
     // CONV-04: every commit in `ours` already applied on our own canonical
@@ -483,11 +494,17 @@ export class ForkRecovery<TEnvelope> {
     // `#buildBranches` can only take the short-circuit at the node that
     // actually produced this child — see {@link KnownNextState}.
     const knownNextStates = new Map<string, KnownNextState>();
-    for (const msg of ours) {
-      const sourceEpoch = framedEpoch(msg);
-      if (sourceEpoch === undefined) continue;
-      const parent = retained.stateAt(Number(sourceEpoch));
-      const next = retained.stateAt(Number(sourceEpoch) + 1);
+    for (const [index, msg] of ours.entries()) {
+      const structural = retainedLinks?.[index];
+      const sourceEpoch = Number(
+        structural
+          ? Number(structural.parentState.groupContext.epoch)
+          : framedEpoch(msg),
+      );
+      if (!Number.isFinite(sourceEpoch)) continue;
+      const parent = structural?.parentState ?? retained.stateAt(sourceEpoch);
+      const next =
+        structural?.resultingState ?? retained.stateAt(sourceEpoch + 1);
       if (!parent || !next) continue;
       knownNextStates.set(bytesToHex(this.#commitDigestOf(msg)), {
         parentTag: bytesToHex(parent.confirmationTag),

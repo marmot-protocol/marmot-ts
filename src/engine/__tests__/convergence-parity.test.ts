@@ -280,6 +280,60 @@ async function selfUpdateCommit(
 const MAX_DIGEST_SEARCH_ATTEMPTS = 25;
 
 describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ordering", () => {
+  it("preserves a two-link own branch whose tip consumes an exact-parent proposal reference", async () => {
+    const { impl, adminEpoch1, memberEpoch1 } = await twoMemberEpoch1Group();
+    const peeler = testPeeler(impl);
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler,
+    });
+
+    const first = await engine.send({ kind: "selfUpdate" });
+    engine.confirmPublished(first.pending);
+    expect(Number(engine.state.groupContext.epoch)).toBe(2);
+
+    const joiningKp = await generateKeyPackage({
+      credential: createCredential("e".repeat(64)),
+      ciphersuiteImpl: impl,
+    });
+    const proposal = await engine.send({
+      kind: "proposal",
+      proposal: {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: joiningKp.publicPackage },
+      },
+    });
+    engine.confirmPublished(proposal.pending);
+    const [proposalRef] = Object.keys(engine.state.unappliedProposals);
+    expect(proposalRef).toBeDefined();
+
+    const second = await engine.send({ kind: "selfUpdate" });
+    engine.confirmPublished(second.pending);
+    const ownTipTag = bytesToHex(engine.state.confirmationTag);
+    expect(Number(engine.state.groupContext.epoch)).toBe(3);
+
+    // MDK parity: `openmls_projection.rs::{own_commit_stamp,
+    // stamp_processed_own_commit_record,already_applied_commit_prefix}` keeps
+    // the exact parent-bound consumed proposal evidence needed to materialize
+    // both locally confirmed links without replaying them to their author.
+    const sibling = await selfUpdateCommit(
+      {
+        cipherSuite: impl,
+        authService: unsafeTestingAuthenticationService,
+      },
+      memberEpoch1,
+    );
+    const siblingEnvelope = await peeler.wrapGroupMessage(
+      sibling.commit,
+      memberEpoch1,
+    );
+    for await (const _ of engine.ingest([siblingEnvelope])) void _;
+
+    expect(Number(engine.state.groupContext.epoch)).toBe(3);
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTipTag);
+  });
+
   // This is the property that first FAILED (see file header): before the
   // `knownNextStates` fix in `fork-recovery.ts`, `ForkRecovery#buildBranches`
   // could not replay our own already-applied commit from the retained root,

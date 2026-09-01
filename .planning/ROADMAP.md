@@ -103,14 +103,14 @@ membership-changing commit.
 3. On being removed from a group, marmot-ts emits a self-removed notification, marks the group removed-inactive with no further outbound, and classifies subsequent input for that group as SelfEvicted/stale.
 4. Group-state-change notifications are attributed to their originating `commit_digest` and are withdrawn — including clearing removal markers — when that commit is superseded on rewind.
 5. Run against MDK's own-confirmed-commit scenario vectors (#706/#723/#702/#724): a device's own published+confirmed commit is never rolled back in favor of a same-epoch sibling; a clean pass requires no code change, and any divergence found is fixed before this phase closes (verify-first).
-   **Plans**: 10/11 plans executed
+   **Plans**: 11/11 plans executed
 
 Plans:
 
 - [x] 03-08-PLAN.md
 - [x] 03-09-PLAN.md
 - [x] 03-10-PLAN.md
-- [ ] 03-11-PLAN.md
+- [x] 03-11-PLAN.md
 
 **Wave 1**
 
@@ -227,7 +227,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | ---------------------------------------- | -------------- | ----------- | ---------- |
 | 1. Proof v2                              | 2/2            | Complete    | 2026-07-21 |
 | 2. Inbound Trust & Wire Boundary         | 4/4            | Complete    | 2026-07-22 |
-| 3. Commit Integrity & Convergence Parity | 10/11 | In Progress|  |
+| 3. Commit Integrity & Convergence Parity | 11/11 | In Progress|  |
 | 4. Feature Parity & Conformance Vectors  | 0/TBD          | Not started | -          |
 | 5. Quality Gate                          | 0/TBD          | Not started | -          |
 

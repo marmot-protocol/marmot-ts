@@ -5,16 +5,16 @@ milestone_name: Phase 1)
 current_phase: 03
 current_phase_name: commit-integrity-convergence-parity
 status: executing
-stopped_at: Completed 03-10-PLAN.md
-last_updated: "2026-09-01T21:33:49.780Z"
+stopped_at: Completed 03-11-PLAN.md
+last_updated: "2026-09-01T21:39:27.157Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 03 execution started
 progress:
   total_phases: 7
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 17
-  completed_plans: 16
-  percent: 29
+  completed_plans: 17
+  percent: 43
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03 (commit-integrity-convergence-parity) — EXECUTING
-Plan: 10 of 11
+Plan: 11 of 11
 Status: Ready to execute
 Last activity: 2026-09-01 — Phase 03 execution started
 
-Progress: [█████████░] 94% (7 phases)
+Progress: [██████████] 100% (7 phases)
 
 **Next recommended run:** `/gsd-plan-phase 03.1`
 
@@ -78,6 +78,7 @@ _Updated after each plan completion_
 | Phase 03 P08 | 6h | 2 tasks | 0 files |
 | Phase 03 P09 | 7min | 3 tasks | 10 files |
 | Phase 03 P10 | 5min | 2 tasks | 3 files |
+| Phase 03 P11 | 4min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -129,6 +130,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 03-09]: Local confirmed notifications travel on GroupPublishResult and are attributed from encoded MLS commit bytes.
 - [Phase ?]: [Phase 03-10]: Retain each applied commit as an exact parent/message/resulting-state link instead of reconstructing own links from digest plus epoch lookups.
 - [Phase ?]: [Phase 03-10]: Refresh the preceding retained link when its resulting epoch becomes the next commit parent, preserving staged proposal-reference evidence.
+- [Phase ?]: [Phase 03-11]: Keep unapplied proposals as MLS references and add only true caller/coupled proposals by value.
+- [Phase ?]: [Phase 03-11]: Run the shared admin callback over one normalized outbound proposal-with-sender union before createCommit.
 
 ### Pending Todos
 
@@ -163,7 +166,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T21:33:49.765Z
-Stopped at: Completed 03-10-PLAN.md
+Last session: 2026-09-01T21:39:27.141Z
+Stopped at: Completed 03-11-PLAN.md
 Resume file:
 None

@@ -29,7 +29,7 @@ function nodeToLeafIndex(nodeIndex: number): number {
  * must not abort the whole enumeration — and such a leaf is not a valid
  * Marmot member in the first place.
  */
-export function getGroupMembers(state: ClientState): string[] {
+export function getGroupMemberPubkeys(state: ClientState): string[] {
   const pubkeys = new Set<string>();
   for (const leaf of getMlsGroupMembers(state)) {
     if (leaf.credential.credentialType !== defaultCredentialTypes.basic)
@@ -42,6 +42,9 @@ export function getGroupMembers(state: ClientState): string[] {
   }
   return Array.from(pubkeys);
 }
+
+/** @deprecated Use {@link getGroupMemberPubkeys}. */
+export const getGroupMembers = getGroupMemberPubkeys;
 
 /** Gets all leaf nodes for a given nostr pubkey in a group */
 export function getPubkeyLeafNodes(

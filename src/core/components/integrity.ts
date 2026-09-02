@@ -8,9 +8,9 @@ import {
 } from "ts-mls";
 
 import { getAdminPolicy, getAppComponents } from "./dictionary.js";
-import { getGroupMembers } from "../group-members.js";
+import { getGroupMemberPubkeys } from "../group-members.js";
 import { APP_COMPONENTS_COMPONENT_ID, AppComponentId } from "./ids.js";
-import { compareBytes } from "./bytes.js";
+import { bytesEqual } from "./bytes.js";
 
 /**
  * Ported commit-legality validators for the Marmot app-component layer.
@@ -83,16 +83,6 @@ export function collectAppDataUpdateOps(
     }
   }
   return ops;
-}
-
-/** Treats `undefined` on both sides as equal; `undefined` vs defined is unequal. */
-function bytesEqual(
-  a: Uint8Array | undefined,
-  b: Uint8Array | undefined,
-): boolean {
-  if (a === undefined && b === undefined) return true;
-  if (a === undefined || b === undefined) return false;
-  return compareBytes(a, b) === 0 && a.length === b.length;
 }
 
 /**
@@ -314,7 +304,7 @@ export function validateCommitLegality(args: {
   });
   if (integrityViolation) return integrityViolation;
 
-  const resultingMemberAccounts = getGroupMembers(args.resultingState);
+  const resultingMemberAccounts = getGroupMemberPubkeys(args.resultingState);
 
   return validateAdminLeafCoupling({
     currentExtensions: args.parentState.groupContext.extensions,

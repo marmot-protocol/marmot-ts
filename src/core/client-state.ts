@@ -51,7 +51,7 @@ import {
   getMessageRetention,
   getNostrRouting,
 } from "./components/index.js";
-import { getGroupMembers } from "./group-members.js";
+import { getGroupMemberPubkeys } from "./group-members.js";
 
 /** Default ClientConfig for Marmot. */
 export const defaultMarmotClientConfig: ClientConfig = {
@@ -303,7 +303,7 @@ export function getMarmotGroupInfo(
     ? appComponents.decoded.filter((id): id is number => typeof id === "number")
     : [];
   const members = hasLocalClientState(clientState)
-    ? getGroupMembers(clientState)
+    ? getGroupMemberPubkeys(clientState)
     : [];
 
   return {

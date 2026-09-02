@@ -38,7 +38,7 @@ import {
 import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../core/components/ids.js";
 import { getCredentialPubkey } from "../core/credential.js";
 import {
-  getGroupMembers,
+  getGroupMemberPubkeys,
   getPubkeyLeafNodeIndexes,
 } from "../core/group-members.js";
 import { decideAutoCommit } from "./auto-committer.js";
@@ -874,7 +874,7 @@ export class MarmotGroupEngine<TEnvelope> {
     // its leaves is NOT in removedLeaves; leaf-level would diverge the moment
     // an account has two leaves, which the wire format already permits.
     const survivingAccounts = new Set<string>();
-    for (const pubkey of getGroupMembers(state)) {
+    for (const pubkey of getGroupMemberPubkeys(state)) {
       const leaves = getPubkeyLeafNodeIndexes(state, pubkey);
       if (leaves.some((leaf) => !removedLeaves.has(leaf))) {
         survivingAccounts.add(pubkey);

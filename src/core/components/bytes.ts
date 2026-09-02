@@ -8,3 +8,13 @@ export function compareBytes(a: Uint8Array, b: Uint8Array): number {
   }
   return a.length - b.length;
 }
+
+/** Equality for optional byte arrays; two absent values are equal. */
+export function bytesEqual(
+  a: Uint8Array | undefined,
+  b: Uint8Array | undefined,
+): boolean {
+  if (a === undefined && b === undefined) return true;
+  if (a === undefined || b === undefined) return false;
+  return compareBytes(a, b) === 0;
+}

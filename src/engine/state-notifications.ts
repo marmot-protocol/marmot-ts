@@ -2,8 +2,8 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { getAppDataDictionary, type ClientState } from "ts-mls";
 
-import { compareBytes } from "../core/components/bytes.js";
-import { getGroupMembers } from "../core/group-members.js";
+import { bytesEqual } from "../core/components/bytes.js";
+import { getGroupMemberPubkeys } from "../core/group-members.js";
 
 /**
  * A group-state change derived from an accepted commit on the selected
@@ -46,16 +46,6 @@ export type StateNotification =
       forkEpoch: number;
     };
 
-/** `undefined` on both sides counts as equal; `undefined` vs. defined does not. */
-function componentBytesEqual(
-  a: Uint8Array | undefined,
-  b: Uint8Array | undefined,
-): boolean {
-  if (a === undefined && b === undefined) return true;
-  if (a === undefined || b === undefined) return false;
-  return compareBytes(a, b) === 0;
-}
-
 /**
  * Derives the {@link StateNotification}s produced by a single accepted commit
  * (`convergence.md` "Applying the selected branch") — a pure before/after diff
@@ -90,8 +80,8 @@ export function deriveStateNotifications(args: {
     });
   }
 
-  const beforeMembers = new Set(getGroupMembers(parentState));
-  const afterMembers = new Set(getGroupMembers(resultingState));
+  const beforeMembers = new Set(getGroupMemberPubkeys(parentState));
+  const afterMembers = new Set(getGroupMemberPubkeys(resultingState));
 
   const added = [...afterMembers]
     .filter((pubkey) => !beforeMembers.has(pubkey))
@@ -118,7 +108,7 @@ export function deriveStateNotifications(args: {
         (c) => c.componentId === componentId,
       )?.data;
       const after = afterDict?.find((c) => c.componentId === componentId)?.data;
-      return !componentBytesEqual(before, after);
+      return !bytesEqual(before, after);
     })
     .sort((a, b) => a - b);
   for (const componentId of changedComponentIds)

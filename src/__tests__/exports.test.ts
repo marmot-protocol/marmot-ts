@@ -2,16 +2,32 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   GroupHistoryTree,
   groupWithdrawnNotificationsByCommit,
+  type AuditContextOptions,
+  type AuditSink,
   type AppliedNotificationsIngestResult,
+  type ConvergenceScheduler,
+  type EdgeSnapshot,
+  type HistoryEdge,
+  type HistoryNode,
+  type RetainedHistoryStore,
   type StateInvalidatedIngestResult,
   type StateNotification,
+  type TimerHandle,
 } from "../index.js";
 import * as exports from "../index.js";
 
 type RootSignatureTypes =
   | StateNotification
   | AppliedNotificationsIngestResult
-  | StateInvalidatedIngestResult;
+  | StateInvalidatedIngestResult
+  | AuditContextOptions
+  | AuditSink
+  | ConvergenceScheduler
+  | EdgeSnapshot
+  | HistoryEdge
+  | HistoryNode
+  | RetainedHistoryStore
+  | TimerHandle;
 
 describe("exports", () => {
   it("should name every root public-signature symbol from the root", () => {
@@ -41,6 +57,7 @@ describe("exports", () => {
         "BinaryDecodeError",
         "BinaryReader",
         "BinaryWriter",
+        "BoundedIdCache",
         "DEFAULT_CONVERGENCE_POLICY",
         "DEFAULT_GROUP_COMPONENT_IDS",
         "ENCRYPTED_MEDIA_FORMAT_V1",
@@ -61,6 +78,7 @@ describe("exports", () => {
         "GROUP_NAME_MAX_BYTES",
         "GROUP_PROFILE_COMPONENT",
         "GROUP_PROFILE_COMPONENT_ID",
+        "GroupHistoryTree",
         "GroupMediaService",
         "GroupMediaStore",
         "GroupRumorHistory",
@@ -140,6 +158,7 @@ describe("exports", () => {
         "createSimpleGroup",
         "createThreeMonthLifetime",
         "createWelcomeRumor",
+        "decideCommitAuthorization",
         "decodeAccountIdentityProof",
         "decodeAdminPolicyV1",
         "decodeAgentTextStreamQuicPolicyV1",
@@ -199,6 +218,7 @@ describe("exports", () => {
         "getEpoch",
         "getGroupAvatarUrl",
         "getGroupIdHex",
+        "getGroupMemberPubkeys",
         "getGroupMembers",
         "getGroupProfile",
         "getInboxRelays",
@@ -230,6 +250,7 @@ describe("exports", () => {
         "groupAvatarUrlEntry",
         "groupLifecycleStates",
         "groupProfileEntry",
+        "groupWithdrawnNotificationsByCommit",
         "hasAck",
         "ingestResultDisposition",
         "inputCategories",

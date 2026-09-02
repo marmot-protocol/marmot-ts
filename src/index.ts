@@ -9,11 +9,24 @@ export { createAdminCommitPolicyCallback } from "./engine/admin-policy.js";
 export {
   MarmotGroupEngine,
   type MarmotGroupEngineOptions,
+  type ConvergenceScheduler,
+  type TimerHandle,
 } from "./engine/group-engine.js";
+export {
+  GroupHistoryTree,
+  type EdgeSnapshot,
+  type HistoryEdge,
+  type HistoryNode,
+} from "./engine/history-tree.js";
 export type {
   IngestionPoolOptions,
   PooledEntry,
 } from "./engine/ingestion-pool.js";
+export type { RetainedHistoryStore } from "./engine/retained-store.js";
+export {
+  groupWithdrawnNotificationsByCommit,
+  type StateNotification,
+} from "./engine/state-notifications.js";
 export type {
   GroupPeeler,
   PendingState,
@@ -23,3 +36,4 @@ export type {
   SendIntent,
   SendResult,
 } from "./engine/types.js";
+export type { AuditContextOptions, AuditSink } from "./audit/index.js";

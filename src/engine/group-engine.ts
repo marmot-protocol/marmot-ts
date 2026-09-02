@@ -1027,6 +1027,26 @@ export class MarmotGroupEngine<TEnvelope> {
       };
       this.#emitIngestOutcome(dispositioned);
       yield dispositioned;
+      if (
+        (result.kind === "processed" || result.kind === "removed") &&
+        result.notifications !== undefined
+      ) {
+        for (const group of groupWithdrawnNotificationsByCommit(
+          result.notifications,
+        )) {
+          const appliedNotifications = {
+            kind: "appliedNotifications" as const,
+            commitDigest: group.commitDigest,
+            notifications: group.withdrawn,
+          };
+          const appliedDispositioned = {
+            ...appliedNotifications,
+            disposition: ingestResultDisposition(appliedNotifications),
+          };
+          this.#emitIngestOutcome(appliedDispositioned);
+          yield appliedDispositioned;
+        }
+      }
     }
 
     // A convergence pass ran only if convergence-relevant input arrived; a batch
@@ -1942,6 +1962,18 @@ export class MarmotGroupEngine<TEnvelope> {
     const forkEpoch = this.#tree.epochOf(set.rootTag) ?? winner.forkEpoch;
     const applied = this.#applyForkResolution(forkEpoch, resolution);
     if (applied.outcome === "recovered") {
+      // Tree-fed adoption has no transport envelope to carry notifications on.
+      // Surface each commit's already-recorded notifications as its own named
+      // result before any later withdrawal can retract the same identity.
+      for (const group of groupWithdrawnNotificationsByCommit(
+        applied.notifications ?? [],
+      )) {
+        yield {
+          kind: "appliedNotifications",
+          commitDigest: group.commitDigest,
+          notifications: group.withdrawn,
+        };
+      }
       // D-11: withdrawn state notifications are yielded BEFORE the
       // app-payload `invalidated` retractions below, matching the pool-replay
       // rewind site (`ingest.ts`) so the two retraction streams have a

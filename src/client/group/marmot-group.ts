@@ -443,6 +443,7 @@ export class MarmotGroup<
       ciphersuite: this.ciphersuite,
       store: this.store,
       rewindStore: options.rewindStore,
+      removedMarkerStore: options.removedMarkerStore,
       retained: options.retained,
       historyTree: options.historyTree,
       convergencePolicy: options.convergencePolicy,
@@ -460,6 +461,7 @@ export class MarmotGroup<
       onApplicationMessage: (message) =>
         this.emit("applicationMessage", message),
       onHistoryError: (error) => this.emit("historyError", error),
+      onHistoryChanged: () => this.emit("historyChanged", this),
     });
 
     if (options.media) {
@@ -962,11 +964,6 @@ export class MarmotGroup<
 
     this.log("clearing group media");
     if (this.media) await this.media.clearMedia();
-
-    // Purge the removed-inactive marker alongside full teardown, so a
-    // destroyed-then-recreated group id never inherits a stale marker entry.
-    this.log("clearing removal marker");
-    await this.#clearRemovalMarker();
 
     this.log("removing group from store");
     await this.session.destroyLocalState();

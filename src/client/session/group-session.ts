@@ -103,6 +103,8 @@ export type GroupSessionOptions<
    * and rebuilt from the current tip after each restart.
    */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
+  /** Group-scoped removal marker backend, potentially shared with state storage. */
+  removedMarkerStore?: GenericKeyValueStore<boolean>;
   /**
    * The bounded convergence window, derived from the history tree on load (never
    * persisted separately). Set by the loader ({@link GroupRegistry}); fresh
@@ -133,6 +135,7 @@ export type GroupSessionOptions<
   onStateSaved?: () => void;
   onApplicationMessage?: (message: Uint8Array) => void;
   onHistoryError?: (error: Error) => void;
+  onHistoryChanged?: () => void;
   /** Injectable wall-clock for the convergence quiescence window (B5; tests). */
   now?: () => number;
   /** Quiescence window (ms) before convergence may be treated as settled. */
@@ -182,6 +185,7 @@ export class GroupSession<
   readonly ciphersuite: CiphersuiteImpl;
   readonly store: GenericKeyValueStore<SerializedClientState>;
   readonly rewindStore?: GenericKeyValueStore<Uint8Array>;
+  readonly #removedMarkerStore?: GenericKeyValueStore<boolean>;
   readonly history: THistory;
 
   readonly #engine: MarmotGroupEngine<NostrEvent>;
@@ -195,16 +199,19 @@ export class GroupSession<
   readonly #onStateSaved?: () => void;
   readonly #onApplicationMessage?: (message: Uint8Array) => void;
   readonly #onHistoryError?: (error: Error) => void;
+  readonly #onHistoryChanged?: () => void;
 
   constructor(options: GroupSessionOptions<THistory>) {
     this.ciphersuite = options.ciphersuite;
     this.store = options.store;
     this.rewindStore = options.rewindStore;
+    this.#removedMarkerStore = options.removedMarkerStore;
     this.history = options.history as THistory;
     this.#onStateChanged = options.onStateChanged;
     this.#onStateSaved = options.onStateSaved;
     this.#onApplicationMessage = options.onApplicationMessage;
     this.#onHistoryError = options.onHistoryError;
+    this.#onHistoryChanged = options.onHistoryChanged;
 
     this.#peeler = new NostrGroupPeeler(this.ciphersuite);
     this.#engine = new MarmotGroupEngine({
@@ -337,8 +344,8 @@ export class GroupSession<
   async destroyLocalState(): Promise<void> {
     await this.history?.purgeMessages();
     const idHex = bytesToHex(this.id);
+    await this.#removedMarkerStore?.removeItem(`${idHex}/removed`);
     await this.store.removeItem(idHex);
-    await this.rewindStore?.removeItem(idHex);
     if (this.rewindStore) await GroupHistoryTree.purge(this.rewindStore, idHex);
   }
 
@@ -348,7 +355,11 @@ export class GroupSession<
   }
 
   confirmPublished(pending: PendingState): StateNotification[] {
-    return this.#engine.confirmPublished(pending);
+    const historySizeBefore = this.#engine.history.size;
+    const notifications = this.#engine.confirmPublished(pending);
+    if (this.#engine.history.size !== historySizeBefore)
+      this.#onHistoryChanged?.();
+    return notifications;
   }
 
   publishFailed(pending: PendingState): void {

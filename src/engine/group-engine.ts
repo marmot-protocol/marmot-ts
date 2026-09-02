@@ -518,6 +518,15 @@ export class MarmotGroupEngine<TEnvelope> {
         );
         this.#sentContentIds.add(contentDedupId(message));
         this.#setState(newState);
+        this.#delivered.record({
+          epoch: Number(newState.groupContext.epoch),
+          stateTag: bytesToHex(newState.confirmationTag),
+          envelope,
+          message,
+          payload: intent.payload,
+        });
+        const anchor = this.#retained.anchorEpoch();
+        if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
         return { kind: "applicationMessage", envelope, newState };
       }
 
@@ -934,11 +943,17 @@ export class MarmotGroupEngine<TEnvelope> {
       const digest = commitDigest(
         encode(mlsMessageEncoder, pending.commitMessage),
       );
-      const notifications = deriveStateNotifications({
-        parentState: pending.parentState,
-        resultingState: pending.newState,
-        commitDigest: digest,
-      });
+      let notifications: StateNotification[];
+      try {
+        notifications = deriveStateNotifications({
+          parentState: pending.parentState,
+          resultingState: pending.newState,
+          commitDigest: digest,
+        });
+      } catch (error) {
+        this.#log()("state notification derivation failed for local commit: %o", error);
+        notifications = [];
+      }
       this.#stateNotifications.record(digest, toEpoch, notifications);
       const anchor = this.#retained.anchorEpoch();
       if (anchor !== undefined) this.#stateNotifications.pruneBelow(anchor);
@@ -1304,7 +1319,8 @@ export class MarmotGroupEngine<TEnvelope> {
       // ages out. Returning `undefined` keeps the entry pooled and moves on.
       // `invalidated` is reserved for retracting a payload previously delivered as
       // `accepted` when a rewind abandons its branch (`#applyForkResolution`).
-      return onCanonical
+      return onCanonical &&
+        this.#state.groupActiveState.kind !== "removedFromGroup"
         ? { kind: "processed", result, envelope, message }
         : undefined;
     }
@@ -1881,7 +1897,7 @@ export class MarmotGroupEngine<TEnvelope> {
             bytesToHex(link.child.confirmationTag),
             error,
           );
-          continue;
+          derived = [];
         }
         this.#stateNotifications.record(linkDigest, linkEpoch, derived);
         if (!alreadyRecorded) chainNotifications.push(...derived);

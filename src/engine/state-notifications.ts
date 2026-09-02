@@ -201,8 +201,9 @@ export class StateNotificationLedger {
   }
 
   /**
-   * Remembers the notifications derived from a commit at `epoch`. A record
-   * with an empty notification array is skipped so the ledger stays bounded.
+   * Remembers the notifications derived from a commit at `epoch`. Empty
+   * derivations are retained: their digest identity is still needed to make a
+   * later rewind complete and idempotent even though there is nothing to emit.
    *
    * Idempotent on `(digest, epoch)` (WR-14): a rewind whose winning chain
    * includes links that were already applied and recorded in-order would
@@ -217,7 +218,6 @@ export class StateNotificationLedger {
     epoch: number,
     notifications: StateNotification[],
   ): void {
-    if (notifications.length === 0) return;
     if (this.has(digest, epoch)) return;
     this.#entries.push({ digest: bytesToHex(digest), epoch, notifications });
   }

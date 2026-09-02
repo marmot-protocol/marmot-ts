@@ -878,9 +878,10 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     const store = new InMemoryKeyValueStore<SerializedClientState>();
     const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
     const idHex = bytesToHex(memberEpoch1.groupContext.groupId);
+    const removedMarkerKey = `${idHex}/removed`;
     // Simulate a prior removal already realized (marker set) — exactly the
     // state `#realizeRemovalIfNeeded` leaves behind after a genuine removal.
-    await removedMarkerStore.setItem(idHex, true);
+    await removedMarkerStore.setItem(removedMarkerKey, true);
 
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -924,7 +925,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
 
     for await (const _ of group.ingest([])) void _;
 
-    expect(await removedMarkerStore.getItem(idHex)).toBeFalsy();
+    expect(await removedMarkerStore.getItem(removedMarkerKey)).toBeFalsy();
   });
 
   /**
@@ -954,7 +955,8 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     const store = new InMemoryKeyValueStore<SerializedClientState>();
     const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
     const idHex = bytesToHex(memberEpoch1.groupContext.groupId);
-    await removedMarkerStore.setItem(idHex, true);
+    const removedMarkerKey = `${idHex}/removed`;
+    await removedMarkerStore.setItem(removedMarkerKey, true);
 
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -994,7 +996,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     await group.reconverge();
 
     expect(reconvergeCalls).toBe(1);
-    expect(await removedMarkerStore.getItem(idHex)).toBeFalsy();
+    expect(await removedMarkerStore.getItem(removedMarkerKey)).toBeFalsy();
   });
 
   /**

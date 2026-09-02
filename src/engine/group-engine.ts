@@ -1319,6 +1319,7 @@ export class MarmotGroupEngine<TEnvelope> {
           result.reason === "missing-retained-anchor"
         );
       case "autoCommit":
+      case "appliedNotifications":
       case "unreadable":
         return false;
     }
@@ -1531,7 +1532,10 @@ export class MarmotGroupEngine<TEnvelope> {
     // A withdrawal has no triggering transport envelope to attribute an audit
     // msg_id to (D-11); audit wiring for `stateInvalidated` is deferred to the
     // seam-wiring plan that actually produces this variant.
-    if (result.kind === "stateInvalidated") return;
+    // Envelope-less state outcomes cannot be assigned a transport msg_id.
+    // Audit emission remains deferred while the schema requires msg_id; do
+    // not fabricate transport attribution for either result variant.
+    if (!("envelope" in result)) return;
     const msgId = this.peeler.idOf(result.envelope);
     const outcome = auditIngestOutcome(result);
     if (outcome) {
@@ -2270,6 +2274,7 @@ function auditStaleReason<TEnvelope>(
     case "deferred":
     case "invalidated":
     case "autoCommit":
+    case "appliedNotifications":
     case "stateInvalidated":
       return undefined;
   }
@@ -2283,6 +2288,8 @@ function auditResultEpoch<TEnvelope>(
       return result.epoch;
     case "stateInvalidated":
       return result.forkEpoch;
+    case "appliedNotifications":
+      return undefined;
     case "deferred":
     case "processed":
     case "rejected":

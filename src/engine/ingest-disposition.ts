@@ -24,6 +24,8 @@ export function ingestResultDisposition<TEnvelope>(
       // an invalidated app payload (convergence.md calls withdrawal the
       // counterpart of app-payload invalidation).
       return disposition.invalidated();
+    case "appliedNotifications":
+      return disposition.accepted();
     case "autoCommit":
       // A locally-staged self_remove-only commit (B6) — an accepted local action,
       // not an inbound message disposition.

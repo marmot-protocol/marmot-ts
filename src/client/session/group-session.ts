@@ -146,6 +146,12 @@ export type StateInvalidatedIngestResult = {
   withdrawn: StateNotification[];
 };
 
+export type AppliedNotificationsIngestResult = {
+  kind: "appliedNotifications";
+  commitDigest: Uint8Array;
+  notifications: StateNotification[];
+};
+
 export type IngestResult =
   | ProcessedIngestResult
   | RejectedIngestResult
@@ -155,6 +161,7 @@ export type IngestResult =
   | AutoCommitIngestResult
   | RemovedIngestResult
   | UnreadableIngestResult
+  | AppliedNotificationsIngestResult
   | StateInvalidatedIngestResult;
 
 export type DispositionedIngestResult = IngestResult & {
@@ -224,7 +231,10 @@ export type GroupSessionOptions<
 };
 
 export function ingestResultDisposition(result: IngestResult): Disposition {
-  if (result.kind === "stateInvalidated")
+  if (
+    result.kind === "stateInvalidated" ||
+    result.kind === "appliedNotifications"
+  )
     return engineIngestResultDisposition(
       result as EngineIngestResult<NostrEvent>,
     );
@@ -240,7 +250,11 @@ function mapEngineIngestResult(
 ): DispositionedIngestResult {
   // A withdrawal has no `envelope` to rename to `event` — pass it through
   // unchanged (D-11).
-  if (result.kind === "stateInvalidated") return result;
+  if (
+    result.kind === "stateInvalidated" ||
+    result.kind === "appliedNotifications"
+  )
+    return result;
   const { envelope, disposition, ...rest } = result;
   return { ...rest, event: envelope, disposition };
 }

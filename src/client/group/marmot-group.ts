@@ -8,6 +8,8 @@ import {
   ClientState,
   CryptoProvider,
   defaultCryptoProvider,
+  encode,
+  mlsMessageEncoder,
   Proposal,
 } from "ts-mls";
 
@@ -15,6 +17,7 @@ import type { ProposalAction, ProposalContext } from "../../engine/types.js";
 import type { MediaAttachment } from "../../core/media.js";
 import type { AuditContextOptions, AuditSink } from "../../audit/index.js";
 import { mayReleaseOutbound } from "../../core/convergence-status.js";
+import { commitDigest } from "../../core/convergence.js";
 import type { ConvergenceScheduler } from "../../engine/group-engine.js";
 import type { ConvergencePolicy } from "../../core/convergence.js";
 import type { GroupHistoryTree } from "../../engine/history-tree.js";
@@ -39,6 +42,7 @@ import type {
 } from "../session/group-effects.js";
 import {
   GroupSession,
+  ingestResultDisposition,
   type DispositionedIngestResult,
   type GroupSessionHistory,
   type ProposalBuilder,
@@ -76,6 +80,7 @@ export type {
   DeferredIngestResult,
   InvalidatedIngestResult,
   AutoCommitIngestResult,
+  AppliedNotificationsIngestResult,
   RemovedIngestResult,
   UnreadableIngestResult,
 } from "../session/group-session.js";
@@ -786,15 +791,35 @@ export class MarmotGroup<
       // pending, so a later ingest re-elects and retries — swallow the throw so
       // it does not abort delivery of the rest of the batch.
       if (result.kind === "autoCommit") {
+        yield result;
         try {
-          await this.runtime.publishCommit({
-            envelope: result.event,
-            pending: result.pending,
-            actorPubkey: result.actorPubkey,
+          const [confirmed] = await this.runtime.publishEffects({
+            publish: [
+              {
+                kind: "groupEvolution",
+                envelope: result.event,
+                pending: result.pending,
+                actorPubkey: result.actorPubkey,
+              },
+            ],
           });
+          if (!result.pending.commitMessage)
+            throw new Error("Auto-commit pending state has no commit message");
+          const applied = {
+            kind: "appliedNotifications" as const,
+            commitDigest: commitDigest(
+              encode(mlsMessageEncoder, result.pending.commitMessage),
+            ),
+            notifications: confirmed!.notifications,
+          };
+          yield {
+            ...applied,
+            disposition: ingestResultDisposition(applied),
+          };
         } catch {
           /* rolled back; retried on a later ingest */
         }
+        continue;
       }
 
       // An inbound commit removed us (involuntary Remove, or a peer committing

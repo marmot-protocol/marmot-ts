@@ -271,6 +271,13 @@ export type StateInvalidatedIngestResult = {
   withdrawn: StateNotification[];
 };
 
+/** Notifications made observable after a commit has been confirmed locally or adopted. */
+export type AppliedNotificationsIngestResult = {
+  kind: "appliedNotifications";
+  commitDigest: Uint8Array;
+  notifications: StateNotification[];
+};
+
 /** Result from ingesting group transport envelopes. */
 export type IngestResult<TEnvelope> =
   | ProcessedIngestResult<TEnvelope>
@@ -281,6 +288,7 @@ export type IngestResult<TEnvelope> =
   | AutoCommitIngestResult<TEnvelope>
   | RemovedIngestResult<TEnvelope>
   | UnreadableIngestResult<TEnvelope>
+  | AppliedNotificationsIngestResult
   | StateInvalidatedIngestResult;
 
 /** An {@link IngestResult} carrying its protocol-visible {@link Disposition}. */

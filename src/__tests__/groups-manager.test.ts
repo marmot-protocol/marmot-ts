@@ -8,6 +8,7 @@ import type { NostrEvent } from "applesauce-core/helpers/event";
 import { describe, expect, it, vi } from "vitest";
 
 import { BoundedIdCache, GroupsManager } from "../client/groups-manager.js";
+import { MarmotGroup } from "../client/group/marmot-group.js";
 import type { NostrNetworkInterface } from "../client/nostr-interface.js";
 import { fakeVerifyEvent } from "../client/verify.js";
 import type { SerializedClientState } from "../core/client-state.js";
@@ -221,6 +222,80 @@ describe("GroupsManager session/runtime helpers", () => {
         payload: new TextEncoder().encode("blocked"),
       }),
     ).rejects.toThrow(/removed/i);
+  });
+
+  it("disposes a failed reconvergence activation and retries with a fresh group", async () => {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
+    const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+    const writer = new GroupsManager({ store: stateStore, signer, network });
+    const created = await writer.create("Activation Retry", {
+      relays: ["wss://relay.test"],
+    });
+    await created.save(true);
+
+    const activationError = new Error("reconvergence unavailable");
+    const tips = vi
+      .spyOn(created.forkTree.constructor.prototype, "tips")
+      .mockReturnValue(["tip-a", "tip-b"]);
+    const reconverge = vi
+      .spyOn(MarmotGroup.prototype, "reconverge")
+      .mockRejectedValueOnce(activationError)
+      .mockResolvedValue(undefined);
+    const dispose = vi.spyOn(MarmotGroup.prototype, "dispose");
+    const reader = new GroupsManager({ store: stateStore, signer, network });
+
+    const firstAttempt = [reader.get(created.id), reader.get(created.id)];
+    await expect(firstAttempt[0]).rejects.toBe(activationError);
+    await expect(firstAttempt[1]).rejects.toBe(activationError);
+    expect(reader.loaded).toEqual([]);
+    expect(dispose).toHaveBeenCalledOnce();
+
+    const retried = await reader.get(created.id);
+    expect(retried).not.toBe(created);
+    expect(reader.loaded).toEqual([retried]);
+    expect(reconverge).toHaveBeenCalledTimes(2);
+
+    tips.mockRestore();
+  });
+
+  it("disposes a failed removal-marker activation and retries with a fresh group", async () => {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
+    const markerError = new Error("marker unavailable");
+    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    vi.spyOn(removedMarkerStore, "getItem")
+      .mockRejectedValueOnce(markerError)
+      .mockResolvedValueOnce(null);
+    const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+    const writer = new GroupsManager({ store: stateStore, signer, network });
+    const created = await writer.create("Marker Retry", {
+      relays: ["wss://relay.test"],
+    });
+    created.state = {
+      ...created.state,
+      groupActiveState: { kind: "removedFromGroup" },
+    };
+    await created.save(true);
+
+    const dispose = vi.spyOn(MarmotGroup.prototype, "dispose");
+    const reader = new GroupsManager({
+      store: stateStore,
+      removedMarkerStore,
+      signer,
+      network,
+    });
+    const firstAttempt = [reader.get(created.id), reader.get(created.id)];
+
+    await expect(firstAttempt[0]).rejects.toBe(markerError);
+    await expect(firstAttempt[1]).rejects.toBe(markerError);
+    expect(reader.loaded).toEqual([]);
+    expect(dispose).toHaveBeenCalledOnce();
+
+    const retried = await reader.get(created.id);
+    expect(retried).not.toBe(created);
+    expect(reader.loaded).toEqual([retried]);
+    expect(removedMarkerStore.getItem).toHaveBeenCalledTimes(2);
   });
 });
 

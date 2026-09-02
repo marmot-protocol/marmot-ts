@@ -80,4 +80,21 @@ describe("DeliveredPayloadLedger", () => {
     const invalidated = ledger.invalidatedByRewind(2, new Set());
     expect(invalidated.map((e) => e.envelope.id)).toEqual(["kept"]);
   });
+
+  it("retains entries named by a fork node older than the retained anchor", () => {
+    const ledger = new DeliveredPayloadLedger<Env>();
+    ledger.record(entry("old-fork", 1, "tag-old-fork"));
+    ledger.record(entry("tip", 4, "tag-tip"));
+
+    const retainedAnchor = 3;
+    const oldestTreeEpoch = 1;
+    ledger.pruneBelow(Math.min(retainedAnchor, oldestTreeEpoch));
+
+    expect(ledger.size).toBe(2);
+    expect(
+      ledger.invalidatedByRewind(0, new Set(["tag-tip"])).map((item) =>
+        item.envelope.id,
+      ),
+    ).toEqual(["old-fork"]);
+  });
 });

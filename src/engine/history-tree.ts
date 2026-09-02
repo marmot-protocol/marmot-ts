@@ -154,6 +154,14 @@ export class GroupHistoryTree {
     return this.#nodes.size;
   }
 
+  /** Oldest epoch still named by the tree, or `undefined` when it is empty. */
+  oldestEpoch(): number | undefined {
+    let oldest: number | undefined;
+    for (const node of this.#nodes.values())
+      if (oldest === undefined || node.epoch < oldest) oldest = node.epoch;
+    return oldest;
+  }
+
   /** Whether unflushed changes are pending. */
   get isDirty(): boolean {
     return this.#dirty.size > 0 || this.#rootDirty;

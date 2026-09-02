@@ -423,6 +423,15 @@ export class MarmotGroupEngine<TEnvelope> {
       : [this.#stagedCommitParentEpoch];
   }
 
+  /** Oldest epoch that retained history or the full-fork tree can still name. */
+  #ledgerHorizon(): number | undefined {
+    const anchor = this.#retained.anchorEpoch();
+    const oldestTreeEpoch = this.#tree.oldestEpoch();
+    if (anchor === undefined) return oldestTreeEpoch;
+    if (oldestTreeEpoch === undefined) return anchor;
+    return Math.min(anchor, oldestTreeEpoch);
+  }
+
   get state(): ClientState {
     return this.#state;
   }
@@ -525,8 +534,8 @@ export class MarmotGroupEngine<TEnvelope> {
           message,
           payload: intent.payload,
         });
-        const anchor = this.#retained.anchorEpoch();
-        if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
+        const horizon = this.#ledgerHorizon();
+        if (horizon !== undefined) this.#delivered.pruneBelow(horizon);
         return { kind: "applicationMessage", envelope, newState };
       }
 
@@ -955,8 +964,8 @@ export class MarmotGroupEngine<TEnvelope> {
         notifications = [];
       }
       this.#stateNotifications.record(digest, toEpoch, notifications);
-      const anchor = this.#retained.anchorEpoch();
-      if (anchor !== undefined) this.#stateNotifications.pruneBelow(anchor);
+      const horizon = this.#ledgerHorizon();
+      if (horizon !== undefined) this.#stateNotifications.pruneBelow(horizon);
       this.#emitAudit({
         type: "epoch_confirmed",
         from_epoch: fromEpoch,
@@ -1663,13 +1672,14 @@ export class MarmotGroupEngine<TEnvelope> {
         payload,
       ) => {
         this.#delivered.record({ epoch, stateTag, envelope, message, payload });
-        const anchor = this.#retained.anchorEpoch();
-        if (anchor !== undefined) this.#delivered.pruneBelow(anchor);
+        const horizon = this.#ledgerHorizon();
+        if (horizon !== undefined) this.#delivered.pruneBelow(horizon);
       },
       recordStateNotifications: (digest, epoch, notifications) => {
         this.#stateNotifications.record(digest, epoch, notifications);
-        const anchor = this.#retained.anchorEpoch();
-        if (anchor !== undefined) this.#stateNotifications.pruneBelow(anchor);
+        const horizon = this.#ledgerHorizon();
+        if (horizon !== undefined)
+          this.#stateNotifications.pruneBelow(horizon);
       },
       toUnrecoverable: () => this.#toUnrecoverable(),
       dedup: {
@@ -1904,10 +1914,10 @@ export class MarmotGroupEngine<TEnvelope> {
       }
     }
 
-    const anchor = this.#retained.anchorEpoch();
-    if (anchor !== undefined) {
-      this.#delivered.pruneBelow(anchor);
-      this.#stateNotifications.pruneBelow(anchor);
+    const horizon = this.#ledgerHorizon();
+    if (horizon !== undefined) {
+      this.#delivered.pruneBelow(horizon);
+      this.#stateNotifications.pruneBelow(horizon);
     }
 
     return {

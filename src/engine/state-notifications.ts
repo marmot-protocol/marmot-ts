@@ -169,21 +169,29 @@ export function groupWithdrawnNotificationsByCommit(
  * attributes notifications to the commit that produced them, so the commit
  * digest (rather than a branch/state tag) is the natural withdrawal key.
  *
- * Structural sibling of `DeliveredPayloadLedger`: entries are pruned below
- * the retained anchor so the ledger stays bounded to the rollback horizon,
- * and a rewind withdraws exactly the entries produced above the fork epoch
- * whose commit is not on the canonical branch.
+ * Structural sibling of `DeliveredPayloadLedger`: entries are pruned only
+ * below the oldest state still named by either retained history or the fork
+ * tree. A finite, pruned tree can therefore bound this ledger; with an
+ * unpruned full-history tree (including `maxRewindCommits: Infinity`) the
+ * correctness horizon deliberately implies unbounded retention.
  */
 export class StateNotificationLedger {
-  #entries: {
-    digest: string;
-    epoch: number;
-    notifications: StateNotification[];
-  }[] = [];
+  #entries = new Map<
+    string,
+    {
+      digest: string;
+      epoch: number;
+      notifications: StateNotification[];
+    }
+  >();
+
+  static #key(digest: Uint8Array, epoch: number): string {
+    return `${bytesToHex(digest)}:${epoch}`;
+  }
 
   /** Number of remembered commit-notification entries. */
   get size(): number {
-    return this.#entries.length;
+    return this.#entries.size;
   }
 
   /**
@@ -196,8 +204,7 @@ export class StateNotificationLedger {
    * re-reporting those links to the application as freshly-applied.
    */
   has(digest: Uint8Array, epoch: number): boolean {
-    const key = bytesToHex(digest);
-    return this.#entries.some((e) => e.digest === key && e.epoch === epoch);
+    return this.#entries.has(StateNotificationLedger.#key(digest, epoch));
   }
 
   /**
@@ -219,7 +226,11 @@ export class StateNotificationLedger {
     notifications: StateNotification[],
   ): void {
     if (this.has(digest, epoch)) return;
-    this.#entries.push({ digest: bytesToHex(digest), epoch, notifications });
+    this.#entries.set(StateNotificationLedger.#key(digest, epoch), {
+      digest: bytesToHex(digest),
+      epoch,
+      notifications,
+    });
   }
 
   /**
@@ -234,29 +245,22 @@ export class StateNotificationLedger {
     canonicalDigests: ReadonlySet<string>,
   ): StateNotification[] {
     const invalidated: StateNotification[] = [];
-    const kept: {
-      digest: string;
-      epoch: number;
-      notifications: StateNotification[];
-    }[] = [];
-    for (const entry of this.#entries) {
+    for (const [key, entry] of this.#entries) {
       if (entry.epoch > forkEpoch && !canonicalDigests.has(entry.digest)) {
         invalidated.push(...entry.notifications);
-      } else {
-        kept.push(entry);
+        this.#entries.delete(key);
       }
     }
-    this.#entries = kept;
     return invalidated;
   }
 
   /**
-   * Drops entries below `epoch`. A rewind can never reach below the retained
-   * anchor, so notifications older than it can never be withdrawn and are
-   * dead weight; pruning them keeps the ledger bounded to the rollback
-   * horizon.
+   * Drops entries below the caller's tree-aware correctness horizon. The
+   * engine supplies `min(retained anchor, oldest tree-node epoch)` so no commit
+   * still nameable by a fork candidate loses its withdrawal record.
    */
   pruneBelow(epoch: number): void {
-    this.#entries = this.#entries.filter((entry) => entry.epoch >= epoch);
+    for (const [key, entry] of this.#entries)
+      if (entry.epoch < epoch) this.#entries.delete(key);
   }
 }

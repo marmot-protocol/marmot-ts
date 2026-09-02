@@ -29,22 +29,39 @@ export interface DeliveredAppPayload<TEnvelope> {
  * notification. This ledger lets the engine find exactly those payloads on a
  * rewind.
  *
- * It holds no protocol state of its own; entries are pruned below the retained
- * anchor (a rewind can never reach there), so it stays bounded to the rollback
- * horizon. Mirrors the bookkeeping darkmatter does in
+ * It holds no protocol state of its own; entries are pruned only below the
+ * oldest state still named by retained history or the fork tree. A finite,
+ * pruned tree can bound this ledger. With an unpruned full-history tree — and
+ * especially `maxRewindCommits: Infinity` — correctness requires unbounded
+ * retention until tree pruning exists. Mirrors the bookkeeping darkmatter does in
  * `distributed_convergence.rs` (`AppMessageInvalidated`).
  */
 export class DeliveredPayloadLedger<TEnvelope> {
-  #entries: DeliveredAppPayload<TEnvelope>[] = [];
+  readonly #entries = new Map<
+    string,
+    Map<MlsMessage, DeliveredAppPayload<TEnvelope>>
+  >();
 
   /** Number of remembered payloads. */
   get size(): number {
-    return this.#entries.length;
+    let size = 0;
+    for (const branch of this.#entries.values()) size += branch.size;
+    return size;
+  }
+
+  /** Whether this exact MLS message is recorded against `stateTag`. */
+  has(stateTag: string, message: MlsMessage): boolean {
+    return this.#entries.get(stateTag)?.has(message) ?? false;
   }
 
   /** Remembers a delivered application payload. */
   record(entry: DeliveredAppPayload<TEnvelope>): void {
-    this.#entries.push(entry);
+    let branch = this.#entries.get(entry.stateTag);
+    if (!branch) {
+      branch = new Map();
+      this.#entries.set(entry.stateTag, branch);
+    }
+    if (!branch.has(entry.message)) branch.set(entry.message, entry);
   }
 
   /**
@@ -59,24 +76,28 @@ export class DeliveredPayloadLedger<TEnvelope> {
     canonicalTags: ReadonlySet<string>,
   ): DeliveredAppPayload<TEnvelope>[] {
     const invalidated: DeliveredAppPayload<TEnvelope>[] = [];
-    const kept: DeliveredAppPayload<TEnvelope>[] = [];
-    for (const entry of this.#entries) {
-      if (entry.epoch > forkEpoch && !canonicalTags.has(entry.stateTag)) {
-        invalidated.push(entry);
-      } else {
-        kept.push(entry);
+    for (const [stateTag, branch] of this.#entries) {
+      for (const [message, entry] of branch) {
+        if (entry.epoch > forkEpoch && !canonicalTags.has(entry.stateTag)) {
+          invalidated.push(entry);
+          branch.delete(message);
+        }
       }
+      if (branch.size === 0) this.#entries.delete(stateTag);
     }
-    this.#entries = kept;
     return invalidated;
   }
 
   /**
-   * Drops entries below `epoch`. A rewind can never reach below the retained
-   * anchor, so payloads older than it can never be invalidated and are dead
-   * weight; pruning them keeps the ledger bounded to the rollback horizon.
+   * Drops entries below the caller's tree-aware correctness horizon. The
+   * engine supplies `min(retained anchor, oldest tree-node epoch)` so no
+   * payload still nameable by a fork candidate loses its retraction record.
    */
   pruneBelow(epoch: number): void {
-    this.#entries = this.#entries.filter((entry) => entry.epoch >= epoch);
+    for (const [stateTag, branch] of this.#entries) {
+      for (const [message, entry] of branch)
+        if (entry.epoch < epoch) branch.delete(message);
+      if (branch.size === 0) this.#entries.delete(stateTag);
+    }
   }
 }

@@ -3,6 +3,17 @@
 Out-of-scope discoveries logged during execution (not fixed; see per-item plan for the
 appropriate follow-up).
 
+## From plan 03.1-05
+
+- **`maxRewindCommits: Infinity` plus the unpruned full-history tree implies
+  unbounded payload and notification ledger retention.** Both ledgers now prune
+  only below `min(retained anchor, oldest tree-node epoch)`, which is the oldest
+  state a future candidate can still name and therefore the correctness horizon.
+  Because `GroupHistoryTree` intentionally retains every node today, its root
+  keeps that horizon fixed indefinitely; this is an accepted correctness-first
+  consequence, not a memory bound. A future tree-pruning design must advance the
+  tree's oldest-node epoch before either ledger can safely release older entries.
+
 ## From plan 03-02
 
 - **`src/__tests__/exports.test.ts` inline snapshot is stale** (pre-existing, caused by

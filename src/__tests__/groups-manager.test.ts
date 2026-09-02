@@ -7,7 +7,7 @@ import {
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { describe, expect, it, vi } from "vitest";
 
-import { GroupsManager } from "../client/groups-manager.js";
+import { BoundedIdCache, GroupsManager } from "../client/groups-manager.js";
 import type { NostrNetworkInterface } from "../client/nostr-interface.js";
 import { fakeVerifyEvent } from "../client/verify.js";
 import type { SerializedClientState } from "../core/client-state.js";
@@ -194,6 +194,23 @@ describe("GroupsManager session/runtime helpers", () => {
 });
 
 describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)", () => {
+  it("bounds accepted and rejected event identities with deterministic LRU eviction", () => {
+    const accepted = new BoundedIdCache(2);
+    const rejected = new BoundedIdCache(2);
+
+    accepted.add("accepted-1");
+    accepted.add("accepted-2");
+    accepted.add("accepted-3");
+    rejected.add("rejected-1");
+    rejected.add("rejected-2");
+    rejected.add("rejected-3");
+
+    expect(accepted.size).toBe(2);
+    expect(accepted.has("accepted-1")).toBe(false);
+    expect(rejected.size).toBe(2);
+    expect(rejected.has("rejected-1")).toBe(false);
+  });
+
   /**
    * `finalizeEvent` caches a `true` result under `verifiedSymbol` on the
    * event it just signed; a plain object spread copies that own enumerable
@@ -250,7 +267,7 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
     // both surfacing it) may now emit `rejected` more than once — informational,
     // not a protocol-safety regression. Assert at least one rejection fired,
     // with every rejection carrying the expected reason.
-    expect(rejections.length).toBeGreaterThanOrEqual(1);
+    expect(rejections).toHaveLength(1);
     expect(
       rejections.every(([, , reason]) => reason === "invalid-signature"),
     ).toBe(true);
@@ -293,7 +310,7 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
 
     // Same T-03-23 relaxation as the invalid-signature test above: at least
     // one rejection, every rejection carrying the expected reason.
-    expect(rejections.length).toBeGreaterThanOrEqual(1);
+    expect(rejections).toHaveLength(1);
     expect(
       rejections.every(([, , reason]) => reason === "tag-cardinality"),
     ).toBe(true);
@@ -328,6 +345,45 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
     expect(
       rejections.some(([, , reason]) => reason === "invalid-signature"),
     ).toBe(false);
+  });
+
+  it("rejects a signed event for a different group before ingest or accepted-id caching", async () => {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const manager = makeManager(network);
+    const group = await manager.create("Test Group", {
+      relays: ["wss://relay.test"],
+    });
+
+    await manager.send(group.id, {
+      kind: "applicationMessage",
+      payload: new TextEncoder().encode("hello"),
+    });
+    const genuine = network.events[0];
+    const wrongGroup = finalizeEvent(
+      {
+        kind: genuine.kind,
+        created_at: genuine.created_at,
+        content: genuine.content,
+        tags: genuine.tags.map((tag) =>
+          tag[0] === "h" ? ["h", "f".repeat(64)] : tag,
+        ),
+      },
+      generateSecretKey(),
+    );
+    network.clear();
+    network.events.push(wrongGroup);
+
+    const rejections: Array<[Uint8Array, NostrEvent, string]> = [];
+    manager.on("rejected", (groupId, event, reason) =>
+      rejections.push([groupId, event, reason]),
+    );
+    const ingestSpy = vi.spyOn(group, "ingest");
+
+    await manager.connect(group.id);
+
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]?.[2]).toBe("group-id-mismatch");
+    expect(ingestSpy).not.toHaveBeenCalled();
   });
 
   it("does not let a corrupted same-id forgery censor the genuine event that arrives later (WR-01)", async () => {
@@ -366,7 +422,7 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
     // collapse that redelivery to one `rejected` emit, so two are now
     // expected (informational, not a protocol-safety regression; see the
     // `seen`/`rejectedEvents` comment in `#connectGroup`).
-    expect(rejections.length).toBeGreaterThanOrEqual(1);
+    expect(rejections).toHaveLength(1);
     expect(
       rejections.every(([, , reason]) => reason === "invalid-signature"),
     ).toBe(true);

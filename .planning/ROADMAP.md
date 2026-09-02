@@ -25,7 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Proof v2** - Migrate account-identity-proof v1→v2 to close the headline interop-breaker (completed 2026-07-21)
 - [x] **Phase 2: Inbound Trust & Wire Boundary** - Verify-before-trust, KeyPackage lifetime cap, required-tag cardinality (completed 2026-07-22)
 - [x] **Phase 3: Commit Integrity & Convergence Parity** - App-component integrity, admin/leaf coupling, SelfEvicted, notification withdrawal, own-commit protection (all 7 plans executed; completion held through 3 code-review rounds — see 03-REVIEW.md. The CR-08/CR-11 own-commit convergence defect class has moved to Phase 4 for a structural fix; Phase 3's remaining scope is its local findings CR-12/CR-13/CR-14, the round-1 carry-forwards, and WR-24's stale MIP citations) (completed 2026-09-01)
-- [ ] **Phase 3.1: Phase 3 Review Closure** (INSERTED) - Close the 30 open findings from 03-REVIEW.md round 3; excludes CR-08/CR-11, which moved to Phase 4
+- [x] **Phase 3.1: Phase 3 Review Closure** (INSERTED) - Close the 30 open findings from 03-REVIEW.md round 3; excludes CR-08/CR-11, which moved to Phase 4 (completed 2026-09-02)
 - [ ] **Phase 4: Feature Parity & Conformance Vectors** - SafeAAD advertisement, MDK's own test vectors as cross-impl tests, and the own-commit convergence stamp port that closes CR-08/CR-11
 - [ ] **Phase 4.1: Terminal Group Disbanding** (INSERTED) - New `marmot.group.lifecycle.v1` `disbanded` component and its forced `Stable → Recovering` admission rule
 - [ ] **Phase 5: Quality Gate** - Green suite on every supported runtime; byte-exact MDK cross-checks recorded

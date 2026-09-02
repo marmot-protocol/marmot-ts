@@ -158,11 +158,22 @@ describe("SelfRemove member departure (B6)", () => {
       impl,
       adminPublished,
     );
-    let sawAutoCommit = false;
+    const adminResults = [];
     for await (const r of adminGroup.ingest([selfRemoveEvent])) {
-      if (r.kind === "autoCommit") sawAutoCommit = true;
+      adminResults.push(r);
     }
-    expect(sawAutoCommit).toBe(true);
+    const autoCommitIndex = adminResults.findIndex(
+      (result) => result.kind === "autoCommit",
+    );
+    expect(autoCommitIndex).toBeGreaterThanOrEqual(0);
+    const applied = adminResults[autoCommitIndex + 1];
+    expect(applied?.kind).toBe("appliedNotifications");
+    if (applied?.kind !== "appliedNotifications")
+      throw new Error("expected appliedNotifications after autoCommit");
+    expect(applied.notifications.length).toBeGreaterThan(0);
+    expect(applied.notifications.every((notification) =>
+      bytesToHex(notification.commitDigest) === bytesToHex(applied.commitDigest),
+    )).toBe(true);
     // Published exactly the auto-commit (publish-before-apply confirmed it).
     expect(adminPublished).toHaveLength(1);
     expect(adminGroup.state.groupContext.epoch).toBe(

@@ -8,16 +8,39 @@ import { describe, expect, it } from "vitest";
 import { DeliveredPayloadLedger } from "../delivered-payloads.js";
 
 type Env = { id: string };
-const msg = {} as never;
 const entry = (id: string, epoch: number, stateTag: string) => ({
   epoch,
   stateTag,
   envelope: { id } as Env,
-  message: msg,
+  message: { id } as never,
   payload: new Uint8Array(),
 });
 
 describe("DeliveredPayloadLedger", () => {
+  it("record is idempotent for the same state-tag and message identity", () => {
+    const ledger = new DeliveredPayloadLedger<Env>();
+    const delivered = entry("same", 2, "tag-fork");
+
+    ledger.record(delivered);
+    ledger.record(delivered);
+
+    expect(ledger.size).toBe(1);
+    expect(ledger.has(delivered.stateTag, delivered.message)).toBe(true);
+  });
+
+  it("keeps distinct messages delivered against the same branch state", () => {
+    const ledger = new DeliveredPayloadLedger<Env>();
+    const first = entry("first", 2, "tag-fork");
+    const second = entry("second", 2, "tag-fork");
+
+    ledger.record(first);
+    ledger.record(second);
+
+    expect(ledger.size).toBe(2);
+    expect(ledger.has(first.stateTag, first.message)).toBe(true);
+    expect(ledger.has(second.stateTag, second.message)).toBe(true);
+  });
+
   it("invalidates payloads above the fork epoch whose branch is abandoned", () => {
     const ledger = new DeliveredPayloadLedger<Env>();
     // Two payloads at epoch 2 on competing branches, one at epoch 1 (shared).

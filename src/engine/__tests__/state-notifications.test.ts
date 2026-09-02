@@ -76,6 +76,16 @@ describe("StateNotificationLedger", () => {
     expect(ledger.has(digest("other"), 2)).toBe(false);
   });
 
+  it("keeps the same digest at distinct epochs as separate identities", () => {
+    const ledger = new StateNotificationLedger();
+    ledger.record(digest("same"), 2, [epochAdvanced("same", 1, 2)]);
+    ledger.record(digest("same"), 3, [epochAdvanced("same", 2, 3)]);
+
+    expect(ledger.size).toBe(2);
+    expect(ledger.has(digest("same"), 2)).toBe(true);
+    expect(ledger.has(digest("same"), 3)).toBe(true);
+  });
+
   it("invalidatedByRewind returns notifications above the fork epoch whose digest is absent from canonicalDigests, and removes them", () => {
     const ledger = new StateNotificationLedger();
     ledger.record(digest("shared"), 1, [epochAdvanced("shared", 0, 1)]);

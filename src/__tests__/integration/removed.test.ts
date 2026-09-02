@@ -416,6 +416,49 @@ describe("involuntary removal signal", () => {
     expect(observer).toHaveBeenCalledOnce();
   });
 
+  it("preserves removed listener context, order, and once semantics", async () => {
+    const fixture = await buildPersistedRemovalForkFixture();
+    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const group = marmotGroup(
+      fixture.removedState,
+      fixture.ePubkey,
+      fixture.impl,
+      [],
+      undefined,
+      removedMarkerStore,
+    );
+    const order: string[] = [];
+    const onContext = { name: "on-context" };
+    const onceContext = { name: "once-context" };
+
+    group.on("removed", function (received) {
+      expect(this).toBe(onContext);
+      expect(received).toBe(group);
+      order.push("on");
+      throw new Error("application callback failed");
+    }, onContext);
+    group.once("removed", function (received) {
+      expect(this).toBe(onceContext);
+      expect(received).toBe(group);
+      order.push("once");
+    }, onceContext);
+    group.on("removed", function (received) {
+      expect(this).toBe(onContext);
+      expect(received).toBe(group);
+      order.push("observer");
+    }, onContext);
+
+    await expect(group.realizeRemovalIfNeeded()).resolves.toBeUndefined();
+
+    expect(await removedMarkerStore.getItem(`${group.idStr}/removed`)).toBe(
+      true,
+    );
+    expect(order).toEqual(["on", "once", "observer"]);
+
+    group.emit("removed", group);
+    expect(order).toEqual(["on", "once", "observer", "on", "observer"]);
+  });
+
   it("emits `removed` and keeps the tombstone when an admin's commit removes us", async () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();

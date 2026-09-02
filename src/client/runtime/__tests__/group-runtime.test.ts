@@ -168,6 +168,30 @@ describe("GroupRuntime publish acknowledgement", () => {
 
     expect(result.notifications).toEqual(confirmedNotifications);
   });
+
+  it("preserves confirmed notifications when persistence fails", async () => {
+    const persistenceError = new Error("disk full");
+    const save = vi.fn(async () => {
+      throw persistenceError;
+    });
+    const {
+      runtime,
+      confirmPublished,
+      publishFailed,
+      confirmedNotifications,
+    } = makeRuntime({ save });
+
+    const [result] = await runtime.publishEffects({ publish: [commitWork()] });
+
+    expect(result.notifications).toBe(confirmedNotifications);
+    expect(result.persistence).toEqual({
+      kind: "failed",
+      error: "disk full",
+    });
+    expect(result.retryPublication).toBe(false);
+    expect(confirmPublished).toHaveBeenCalledOnce();
+    expect(publishFailed).not.toHaveBeenCalled();
+  });
 });
 
 describe("GroupRuntime publish failure", () => {

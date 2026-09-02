@@ -568,6 +568,7 @@ describe("MarmotGroupEngine content-derived dedup (inbound-processing.md)", () =
 
     expect((await kinds(engine, env1)).map((r) => r.kind)).toEqual([
       "processed",
+      "appliedNotifications",
     ]);
     expect(Number(engine.state.groupContext.epoch)).toBe(2);
 

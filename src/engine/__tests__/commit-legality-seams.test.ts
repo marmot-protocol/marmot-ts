@@ -333,8 +333,9 @@ describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity",
     const envelope = await peeler.wrapGroupMessage(benign.commit, admin2Epoch1);
 
     const results = await kinds(engine, envelope);
-    expect(results).toHaveLength(1);
+    expect(results).toHaveLength(2);
     expect(results[0].kind).toBe("processed");
+    expect(results[1].kind).toBe("appliedNotifications");
     expect(Number(engine.state.groupContext.epoch)).toBe(2);
   });
 

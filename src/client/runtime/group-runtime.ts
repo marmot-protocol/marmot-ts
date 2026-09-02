@@ -96,6 +96,7 @@ export class GroupRuntime {
           response: await this.publishApplication(work.envelope),
           notifications: [],
           persistence: { kind: "notRequired" },
+          welcomeDelivery: { kind: "notRequired" },
           retryPublication: false,
         };
       case "proposal":
@@ -104,6 +105,7 @@ export class GroupRuntime {
           response: await this.publishProposal(work.envelope, work.pending),
           notifications: [],
           persistence: { kind: "succeeded" },
+          welcomeDelivery: { kind: "notRequired" },
           retryPublication: false,
         };
       case "selfUpdate": {
@@ -111,7 +113,11 @@ export class GroupRuntime {
           work.envelope,
           work.pending,
         );
-        return { work, ...result };
+        return {
+          work,
+          ...result,
+          welcomeDelivery: { kind: "notRequired" },
+        };
       }
       case "groupEvolution": {
         const result = await this.#publishCommitResult({
@@ -214,6 +220,7 @@ export class GroupRuntime {
     response: Record<string, PublishResponse>;
     notifications: StateNotification[];
     persistence: GroupPublishResult["persistence"];
+    welcomeDelivery: GroupPublishResult["welcomeDelivery"];
     retryPublication: false;
   }> {
     let response: Record<string, PublishResponse>;
@@ -231,15 +238,29 @@ export class GroupRuntime {
     const persistence = await this.#persistConfirmedState();
 
     const innerWelcome = options.welcome?.welcome;
+    let welcomeDelivery: GroupPublishResult["welcomeDelivery"] = {
+      kind: "notRequired",
+    };
     if (innerWelcome && options.welcomeRecipients?.length) {
-      await this.#deliverWelcomes(
-        innerWelcome,
-        options.actorPubkey,
-        options.welcomeRecipients,
-      );
+      try {
+        await this.#deliverWelcomes(
+          innerWelcome,
+          options.actorPubkey,
+          options.welcomeRecipients,
+        );
+        welcomeDelivery = { kind: "succeeded" };
+      } catch (error) {
+        welcomeDelivery = { kind: "failed", error: errorDetail(error) };
+      }
     }
 
-    return { response, notifications, persistence, retryPublication: false };
+    return {
+      response,
+      notifications,
+      persistence,
+      welcomeDelivery,
+      retryPublication: false,
+    };
   }
 
   async #persistConfirmedState(): Promise<GroupPublishResult["persistence"]> {

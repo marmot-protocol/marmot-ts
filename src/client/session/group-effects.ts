@@ -40,6 +40,8 @@ export type GroupPublishResult = {
   notifications: StateNotification[];
   /** Persistence performed after the publication became irreversible. */
   persistence: AncillaryEffectOutcome;
+  /** Welcome fanout performed after persistence for group-evolution commits. */
+  welcomeDelivery: AncillaryEffectOutcome;
   /** Confirmed work must never be republished, even if ancillary work failed. */
   retryPublication: boolean;
 };

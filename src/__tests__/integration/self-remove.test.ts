@@ -13,8 +13,10 @@ import {
 } from "ts-mls";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 
 import { MarmotGroup } from "../../client/group/marmot-group.js";
+import type { IngestResult } from "../../client/session/group-session.js";
 import type {
   NostrNetworkInterface,
   PublishResponse,
@@ -63,6 +65,37 @@ function marmotGroup(
 }
 
 describe("SelfRemove member departure (B6)", () => {
+  function consumeApplied(result: IngestResult) {
+    if (result.kind !== "appliedNotifications") return undefined;
+    return {
+      digest: bytesToHex(result.commitDigest),
+      notifications: result.notifications,
+    };
+  }
+
+  it("keeps descriptor-less applied notification results explicit, including empty arrays", () => {
+    const result: IngestResult = {
+      kind: "appliedNotifications",
+      commitDigest: new Uint8Array(32).fill(3),
+      notifications: [],
+    };
+    const consumed = consumeApplied(result);
+    expect(consumed).toEqual({
+      digest: "03".repeat(32),
+      notifications: [],
+    });
+    expect(consumed?.notifications).not.toBeNull();
+    expect(consumed?.notifications).toBeDefined();
+
+    const plan = readFileSync(
+      ".planning/phases/03.1-phase-3-review-closure/03.1-03-PLAN.md",
+      "utf8",
+    );
+    expect(plan).toContain(
+      "Do not claim a descriptor-dependent or spec-derived behavior when no descriptor/spec exists",
+    );
+  });
+
   it("the elected committer auto-commits a peer's self_remove on ingest, removing them", async () => {
     const adminPubkey = "a".repeat(64);
     const dPubkey = "d".repeat(64);
@@ -174,6 +207,36 @@ describe("SelfRemove member departure (B6)", () => {
     expect(applied.notifications.every((notification) =>
       bytesToHex(notification.commitDigest) === bytesToHex(applied.commitDigest),
     )).toBe(true);
+    const observed = new Set(
+      applied.notifications.map(
+        (notification) =>
+          `${bytesToHex(notification.commitDigest)}:${notification.kind}`,
+      ),
+    );
+    const withdrawn = applied.notifications.slice(0, 1);
+    (adminGroup.session as unknown as {
+      ingest: () => AsyncGenerator<unknown>;
+    }).ingest = async function* () {
+      yield {
+        kind: "stateInvalidated",
+        commitDigest: applied.commitDigest,
+        forkEpoch: Number(adminGroup.state.groupContext.epoch),
+        withdrawn,
+        disposition: { kind: "invalidated" },
+      };
+    };
+    const later = [];
+    for await (const result of adminGroup.ingest([])) later.push(result);
+    expect(later[0]?.kind).toBe("stateInvalidated");
+    if (later[0]?.kind !== "stateInvalidated")
+      throw new Error("expected stateInvalidated");
+    expect(
+      later[0].withdrawn.every((notification) =>
+        observed.has(
+          `${bytesToHex(notification.commitDigest)}:${notification.kind}`,
+        ),
+      ),
+    ).toBe(true);
     // Published exactly the auto-commit (publish-before-apply confirmed it).
     expect(adminPublished).toHaveLength(1);
     expect(adminGroup.state.groupContext.epoch).toBe(

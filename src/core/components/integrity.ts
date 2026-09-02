@@ -219,20 +219,28 @@ export function validateAdminLeafCoupling(args: {
   resultingExtensions: GroupContextExtension[];
   resultingMemberAccounts: readonly string[];
 }): CommitIntegrityViolation | undefined {
-  let resultingAdmins: string[];
+  let resultingSet: string[] | undefined;
   try {
-    const resultingSet = getAdminPolicy(args.resultingExtensions);
-    if (resultingSet !== undefined) {
-      resultingAdmins = resultingSet;
-    } else {
-      const carriedForward = getAdminPolicy(args.currentExtensions);
-      resultingAdmins = carriedForward ?? [];
-    }
+    resultingSet = getAdminPolicy(args.resultingExtensions);
   } catch {
     return {
       reason: "admin-leaf-coupling",
       detail: "resulting admin-policy component did not decode",
     };
+  }
+
+  let resultingAdmins: string[];
+  if (resultingSet !== undefined) {
+    resultingAdmins = resultingSet;
+  } else {
+    try {
+      resultingAdmins = getAdminPolicy(args.currentExtensions) ?? [];
+    } catch {
+      return {
+        reason: "admin-leaf-coupling",
+        detail: "carried-forward admin-policy component did not decode",
+      };
+    }
   }
 
   // An empty resolved admin set means the epoch has no admin-policy state at

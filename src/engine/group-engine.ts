@@ -24,7 +24,6 @@ import {
   type ProcessMessageResult,
   Proposal,
   type ProposalWithSender,
-  UsageError,
   wireformats,
 } from "ts-mls";
 
@@ -32,7 +31,10 @@ import { marmotAuthService } from "../core/auth-service.js";
 import { getMarmotGroupView } from "../core/client-state.js";
 import { decideCommitAuthorization } from "../core/commit-authorization.js";
 import { encodeAdminPolicyV1 } from "../core/components/admin-policy.js";
-import { validateCommitLegality } from "../core/components/integrity.js";
+import {
+  type CommitIntegrityViolation,
+  validateCommitLegality,
+} from "../core/components/integrity.js";
 import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../core/components/ids.js";
 import { getCredentialPubkey } from "../core/credential.js";
 import {
@@ -131,6 +133,18 @@ export class AdminDepletionError extends Error {
       `This commit would remove the last member leaf of ${orphanedAdminCount} admin account(s), leaving the group with no admin. Refused before staging.`,
     );
     this.name = "AdminDepletionError";
+  }
+}
+
+/**
+ * Thrown when a locally-staged commit violates a Marmot component-integrity
+ * rule. The structured violation is retained so callers can branch on its
+ * stable reason without matching the human-readable diagnostic message.
+ */
+export class CommitLegalityError extends Error {
+  constructor(readonly violation: CommitIntegrityViolation) {
+    super(violation.detail);
+    this.name = "CommitLegalityError";
   }
 }
 
@@ -900,7 +914,7 @@ export class MarmotGroupEngine<TEnvelope> {
    * no explicit refs has it bundled by reference, and the integrity validator
    * would otherwise see a dictionary change with no backing op.
    *
-   * @throws UsageError carrying the violation's diagnostic detail.
+   * @throws CommitLegalityError carrying the structured violation.
    */
   #assertStagedCommitLegal(
     parentState: ClientState,
@@ -912,7 +926,7 @@ export class MarmotGroupEngine<TEnvelope> {
       resultingState,
       proposals: committedProposals,
     });
-    if (violation) throw new UsageError(violation.detail);
+    if (violation) throw new CommitLegalityError(violation);
   }
 
   /**
@@ -1606,7 +1620,7 @@ export class MarmotGroupEngine<TEnvelope> {
       this.#emitAudit({
         type: "rejection",
         msg_id: msgId,
-        reason: "admin_policy",
+        reason: (result.reason ?? "admin-policy").replaceAll("-", "_"),
       });
     }
   }

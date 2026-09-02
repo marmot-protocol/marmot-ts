@@ -217,6 +217,30 @@ describe("GroupRuntime publish failure", () => {
 });
 
 describe("GroupRuntime commit rollback", () => {
+  it("returns a confirmed failure result when confirmation bookkeeping throws", async () => {
+    let lifecycle = "PendingPublish";
+    const confirmPublished = vi.fn(() => {
+      lifecycle = "Merging";
+      try {
+        throw new Error("history persistence failed");
+      } finally {
+        lifecycle = "Stable";
+      }
+    });
+    const { runtime, publishFailed, save } = makeRuntime({ confirmPublished });
+
+    const [result] = await runtime.publishEffects({ publish: [commitWork()] });
+
+    expect(lifecycle).toBe("Stable");
+    expect(result.notifications).toEqual([]);
+    expect(result.persistence).toEqual({
+      kind: "failed",
+      error: "history persistence failed",
+    });
+    expect(result.retryPublication).toBe(false);
+    expect(publishFailed).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
   it("rolls back pending state when the commit fails to publish", async () => {
     const { runtime, confirmPublished, publishFailed, save } = makeRuntime({
       getNetwork: () => makeNetwork(async () => noAckResponse()),

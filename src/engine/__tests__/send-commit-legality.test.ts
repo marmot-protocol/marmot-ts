@@ -588,6 +588,17 @@ describe("send-seam commit legality (WIRE-03/CONV-01) — D-01/D-02/D-05..D-09",
  * proposal into the returned state, which `confirmPublished` then adopts.
  */
 describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () => {
+  it("restores Stable when wrapping a selfUpdate fails (WR-22)", async () => {
+    const { impl, epoch1 } = await twoAdminGroup();
+    const peeler = testPeeler(impl);
+    peeler.wrapGroupMessage = async () => {
+      throw new Error("wrap failed");
+    };
+    const engine = new MarmotGroupEngine({ state: epoch1, ciphersuite: impl, peeler });
+
+    await expect(engine.send({ kind: "selfUpdate" })).rejects.toThrow("wrap failed");
+    expect(engine.lifecycle).toBe("Stable");
+  });
   it("rejects a non-admin selfUpdate consuming its staged admin-only proposal by reference", async () => {
     const { impl, memberEpoch1 } = await twoAdminGroup();
     const engine = new MarmotGroupEngine({
@@ -735,6 +746,22 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
     expect(
       getAdminPolicy(result.pending.newState.groupContext.extensions),
     ).toEqual(getAdminPolicy(engine.state.groupContext.extensions));
+  });
+});
+
+describe("commit wrapping lifecycle (WR-22)", () => {
+  it("restores Stable when wrapping a commit fails", async () => {
+    const { impl, adminPubkey, epoch1 } = await twoAdminGroup();
+    const peeler = testPeeler(impl);
+    peeler.wrapGroupMessage = async () => {
+      throw new Error("wrap failed");
+    };
+    const engine = new MarmotGroupEngine({ state: epoch1, ciphersuite: impl, peeler });
+
+    await expect(
+      engine.send({ kind: "commit", actorPubkey: adminPubkey, extraProposals: [] }),
+    ).rejects.toThrow("wrap failed");
+    expect(engine.lifecycle).toBe("Stable");
   });
 });
 

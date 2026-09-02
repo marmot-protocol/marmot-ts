@@ -96,6 +96,28 @@ async function buildMemberState() {
 }
 
 describe("selfUpdate commit persistence (CR-09)", () => {
+  it("emits historyChanged once after each locally confirmed commit", async () => {
+    const { impl, memberE1 } = await buildMemberState();
+    const group = new MarmotGroup(memberE1, {
+      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      rewindStore: new InMemoryKeyValueStore<Uint8Array>(),
+      signer: SIGNER,
+      ciphersuite: impl,
+      network: ackingNetwork(),
+    });
+    const sizes: number[] = [];
+    group.on("historyChanged", () =>
+      sizes.push(group.session.historyTree.size),
+    );
+
+    const beforeSelfUpdate = group.session.historyTree.size;
+    await group.selfUpdate();
+    expect(sizes).toEqual([beforeSelfUpdate + 1]);
+
+    const beforeCommit = group.session.historyTree.size;
+    await group.submitIntent({ kind: "commit", actorPubkey: MEMBER });
+    expect(sizes).toEqual([beforeSelfUpdate + 1, beforeCommit + 1]);
+  });
   /**
    * A selfUpdate IS a commit: it advances the epoch and produces a new
    * confirmation tag. Before the fix, `case "selfUpdate"` returned a pending

@@ -64,6 +64,35 @@ describe("GroupsManager", () => {
 });
 
 describe("GroupsManager session/runtime helpers", () => {
+  it("destroys only the namespaced removal marker on a shared backend", async () => {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const shared = new InMemoryKeyValueStore<SerializedClientState | boolean>();
+    const stateStore = shared as GenericKeyValueStore<SerializedClientState>;
+    const markerStore = shared as GenericKeyValueStore<boolean>;
+    const manager = new GroupsManager({
+      store: stateStore,
+      removedMarkerStore: markerStore,
+      signer: { getPublicKey: async () => ADMIN } as EventSigner,
+      network,
+    });
+    const group = await manager.create("Test Group", {
+      relays: ["wss://relay.test"],
+    });
+    await markerStore.setItem(`${group.idStr}/removed`, true);
+    const removeItem = shared.removeItem.bind(shared);
+    const removedKeys: string[] = [];
+    vi.spyOn(shared, "removeItem").mockImplementation(async (key) => {
+      removedKeys.push(key);
+      if (key === `${group.idStr}/removed`)
+        expect(await stateStore.getItem(group.idStr)).not.toBeNull();
+      await removeItem(key);
+    });
+
+    await group.session.destroyLocalState();
+
+    expect(await markerStore.getItem(`${group.idStr}/removed`)).toBeNull();
+    expect(removedKeys).toEqual([`${group.idStr}/removed`, group.idStr]);
+  });
   function makeManager(network: NostrNetworkInterface) {
     const signer = { getPublicKey: async () => ADMIN } as EventSigner;
     return new GroupsManager({
@@ -175,9 +204,9 @@ describe("GroupsManager session/runtime helpers", () => {
     expect(first).toBe(second);
     expect(removed).toHaveLength(1);
     expect(removed[0]).toEqual(created.id);
-    expect(
-      await removedMarkerStore.getItem(`${created.idStr}/removed`),
-    ).toBe(true);
+    expect(await removedMarkerStore.getItem(`${created.idStr}/removed`)).toBe(
+      true,
+    );
 
     const restarted = new GroupsManager(options);
     const restartRemoved = vi.fn();
@@ -374,7 +403,9 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
       }),
     };
     const unfilteredManager = makeManager(unfilteredNetwork);
-    const unfilteredGroup = await unfilteredManager.adoptClientState(group.state);
+    const unfilteredGroup = await unfilteredManager.adoptClientState(
+      group.state,
+    );
 
     const rejections: Array<[Uint8Array, NostrEvent, string]> = [];
     unfilteredManager.on("rejected", (groupId, event, reason) =>

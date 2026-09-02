@@ -120,6 +120,38 @@ describe("GroupRuntime publish acknowledgement", () => {
     expect(publishFailed).not.toHaveBeenCalled();
   });
 
+  it("returns a confirmed proposal result when persistence fails", async () => {
+    const publish = vi.fn(async () => ackResponse());
+    const save = vi.fn(async () => {
+      throw new Error("proposal persistence failed");
+    });
+    const { runtime, confirmPublished, publishFailed } = makeRuntime({
+      getNetwork: () => makeNetwork(publish),
+      save,
+    });
+
+    const [result] = await runtime.publishEffects({
+      publish: [{ kind: "proposal", envelope, pending }],
+    });
+
+    expect(result).toEqual({
+      work: { kind: "proposal", envelope, pending },
+      response: ackResponse(),
+      notifications: [],
+      persistence: {
+        kind: "failed",
+        error: "proposal persistence failed",
+      },
+      welcomeDelivery: { kind: "notRequired" },
+      retryPublication: false,
+    });
+    expect(publish).toHaveBeenCalledOnce();
+    expect(confirmPublished).toHaveBeenCalledOnce();
+    expect(confirmPublished).toHaveBeenCalledWith(pending);
+    expect(save).toHaveBeenCalledOnce();
+    expect(publishFailed).not.toHaveBeenCalled();
+  });
+
   it("confirms and saves a self-update once a relay acks", async () => {
     const { runtime, confirmPublished, save } = makeRuntime();
 

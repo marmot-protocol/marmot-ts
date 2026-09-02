@@ -276,22 +276,39 @@ describe("GroupRuntime Welcome delivery", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("aggregates partial Welcome delivery failures into one error", async () => {
+  it("preserves confirmed notifications when Welcome delivery fails", async () => {
     const deliver = vi
       .fn()
       .mockResolvedValueOnce(ackResponse())
       .mockRejectedValueOnce(new Error("inbox unreachable"));
-    const { runtime } = makeRuntime({
+    const {
+      runtime,
+      confirmPublished,
+      publishFailed,
+      confirmedNotifications,
+    } = makeRuntime({
       welcomeDelivery: { deliver } as unknown as NostrWelcomeDelivery,
     });
 
     const second: WelcomeRecipient = { ...recipient, pubkey: "e".repeat(64) };
 
-    await expect(
-      runtime.publishWork(
+    const [result] = await runtime.publishEffects({
+      publish: [
         commitWork({ welcome, welcomeRecipients: [recipient, second] }),
+      ],
+    });
+
+    expect(result.notifications).toBe(confirmedNotifications);
+    expect(result.persistence).toEqual({ kind: "succeeded" });
+    expect(result.welcomeDelivery).toEqual({
+      kind: "failed",
+      error: expect.stringMatching(
+        /Failed to deliver 1\/2 Welcome message\(s\).*inbox unreachable/,
       ),
-    ).rejects.toThrow(/Failed to deliver 1\/2 Welcome message\(s\)/);
+    });
+    expect(result.retryPublication).toBe(false);
+    expect(confirmPublished).toHaveBeenCalledOnce();
+    expect(publishFailed).not.toHaveBeenCalled();
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 });

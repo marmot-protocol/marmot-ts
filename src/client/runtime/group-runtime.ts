@@ -88,7 +88,9 @@ export class GroupRuntime {
     return results;
   }
 
-  async #publishWorkResult(work: GroupPublishWork): Promise<GroupPublishResult> {
+  async #publishWorkResult(
+    work: GroupPublishWork,
+  ): Promise<GroupPublishResult> {
     switch (work.kind) {
       case "applicationMessage":
         return {
@@ -205,7 +207,17 @@ export class GroupRuntime {
       throw err;
     }
 
-    const notifications = this.#confirmPublished(pending);
+    let notifications: StateNotification[];
+    try {
+      notifications = this.#confirmPublished(pending);
+    } catch (error) {
+      return {
+        response,
+        notifications: [],
+        persistence: { kind: "failed", error: errorDetail(error) },
+        retryPublication: false,
+      };
+    }
     const persistence = await this.#persistConfirmedState();
     return { response, notifications, persistence, retryPublication: false };
   }
@@ -234,7 +246,18 @@ export class GroupRuntime {
       throw err;
     }
 
-    const notifications = this.#confirmPublished(options.pending);
+    let notifications: StateNotification[];
+    try {
+      notifications = this.#confirmPublished(options.pending);
+    } catch (error) {
+      return {
+        response,
+        notifications: [],
+        persistence: { kind: "failed", error: errorDetail(error) },
+        welcomeDelivery: { kind: "notRequired" },
+        retryPublication: false,
+      };
+    }
     const persistence = await this.#persistConfirmedState();
 
     const innerWelcome = options.welcome?.welcome;

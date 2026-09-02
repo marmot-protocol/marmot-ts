@@ -174,12 +174,8 @@ describe("GroupRuntime publish acknowledgement", () => {
     const save = vi.fn(async () => {
       throw persistenceError;
     });
-    const {
-      runtime,
-      confirmPublished,
-      publishFailed,
-      confirmedNotifications,
-    } = makeRuntime({ save });
+    const { runtime, confirmPublished, publishFailed, confirmedNotifications } =
+      makeRuntime({ save });
 
     const [result] = await runtime.publishEffects({ publish: [commitWork()] });
 
@@ -305,14 +301,10 @@ describe("GroupRuntime Welcome delivery", () => {
       .fn()
       .mockResolvedValueOnce(ackResponse())
       .mockRejectedValueOnce(new Error("inbox unreachable"));
-    const {
-      runtime,
-      confirmPublished,
-      publishFailed,
-      confirmedNotifications,
-    } = makeRuntime({
-      welcomeDelivery: { deliver } as unknown as NostrWelcomeDelivery,
-    });
+    const { runtime, confirmPublished, publishFailed, confirmedNotifications } =
+      makeRuntime({
+        welcomeDelivery: { deliver } as unknown as NostrWelcomeDelivery,
+      });
 
     const second: WelcomeRecipient = { ...recipient, pubkey: "e".repeat(64) };
 

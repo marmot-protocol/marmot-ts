@@ -655,6 +655,8 @@ export class MarmotGroupEngine<TEnvelope> {
           prepared.committedProposals,
         );
 
+        const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
+
         this.#transitionLifecycle(
           groupLifecycleStates.pendingPublish,
           "begin_pending",
@@ -662,8 +664,6 @@ export class MarmotGroupEngine<TEnvelope> {
         );
         this.#stagedCommitParentEpoch = Number(parentState.groupContext.epoch);
         this.#sentContentIds.add(contentDedupId(commit));
-
-        const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
 
         return {
           kind: "groupEvolution",
@@ -740,6 +740,8 @@ export class MarmotGroupEngine<TEnvelope> {
         // engine Stable with nothing to roll back. The parent-epoch pin keeps
         // retained pruning from dropping the epoch this commit branches from
         // while its publish is unconfirmed.
+        const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
+
         this.#transitionLifecycle(
           groupLifecycleStates.pendingPublish,
           "begin_pending",
@@ -748,7 +750,6 @@ export class MarmotGroupEngine<TEnvelope> {
         this.#stagedCommitParentEpoch = Number(parentState.groupContext.epoch);
 
         this.#sentContentIds.add(contentDedupId(commit));
-        const envelope = await this.peeler.wrapGroupMessage(commit, this.state);
 
         // CR-09: carry `parentState` and `commitMessage` so `confirmPublished`
         // can record this commit into retained history and the fork tree. A
@@ -957,42 +958,48 @@ export class MarmotGroupEngine<TEnvelope> {
         "publish_confirmed",
         pending.kind,
       );
-      this.#setState(pending.newState);
-      this.#recordCommitNode(
-        pending.parentState,
-        pending.commitMessage,
-        pending.newState,
-      );
-      const digest = commitDigest(
-        encode(mlsMessageEncoder, pending.commitMessage),
-      );
-      let notifications: StateNotification[];
       try {
-        notifications = deriveStateNotifications({
-          parentState: pending.parentState,
-          resultingState: pending.newState,
-          commitDigest: digest,
+        this.#setState(pending.newState);
+        this.#recordCommitNode(
+          pending.parentState,
+          pending.commitMessage,
+          pending.newState,
+        );
+        const digest = commitDigest(
+          encode(mlsMessageEncoder, pending.commitMessage),
+        );
+        let notifications: StateNotification[];
+        try {
+          notifications = deriveStateNotifications({
+            parentState: pending.parentState,
+            resultingState: pending.newState,
+            commitDigest: digest,
+          });
+        } catch (error) {
+          this.#log()(
+            "state notification derivation failed for local commit: %o",
+            error,
+          );
+          notifications = [];
+        }
+        this.#stateNotifications.record(digest, toEpoch, notifications);
+        const horizon = this.#ledgerHorizon();
+        if (horizon !== undefined) this.#stateNotifications.pruneBelow(horizon);
+        this.#emitAudit({
+          type: "epoch_confirmed",
+          from_epoch: fromEpoch,
+          to_epoch: toEpoch,
+          pending_kind: pending.kind,
         });
-      } catch (error) {
-        this.#log()("state notification derivation failed for local commit: %o", error);
-        notifications = [];
+        return notifications;
+      } finally {
+        this.#transitionLifecycle(
+          groupLifecycleStates.stable,
+          "merge_complete",
+          pending.kind,
+        );
+        this.#stagedCommitParentEpoch = undefined;
       }
-      this.#stateNotifications.record(digest, toEpoch, notifications);
-      const horizon = this.#ledgerHorizon();
-      if (horizon !== undefined) this.#stateNotifications.pruneBelow(horizon);
-      this.#emitAudit({
-        type: "epoch_confirmed",
-        from_epoch: fromEpoch,
-        to_epoch: toEpoch,
-        pending_kind: pending.kind,
-      });
-      this.#transitionLifecycle(
-        groupLifecycleStates.stable,
-        "merge_complete",
-        pending.kind,
-      );
-      this.#stagedCommitParentEpoch = undefined;
-      return notifications;
     }
 
     this.#setState(pending.newState);
@@ -1692,8 +1699,7 @@ export class MarmotGroupEngine<TEnvelope> {
       recordStateNotifications: (digest, epoch, notifications) => {
         this.#stateNotifications.record(digest, epoch, notifications);
         const horizon = this.#ledgerHorizon();
-        if (horizon !== undefined)
-          this.#stateNotifications.pruneBelow(horizon);
+        if (horizon !== undefined) this.#stateNotifications.pruneBelow(horizon);
       },
       toUnrecoverable: () => this.#toUnrecoverable(),
       dedup: {

@@ -35,7 +35,6 @@ import {
   type MlsMessage,
   mlsMessageEncoder,
   processMessage,
-  UsageError,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
@@ -59,7 +58,11 @@ import {
 import { generateKeyPackage } from "../../core/key-package.js";
 import type { EdgeSnapshot } from "../history-tree.js";
 import { ForkRecovery, type RetainedView } from "../fork-recovery.js";
-import { AdminDepletionError, MarmotGroupEngine } from "../group-engine.js";
+import {
+  AdminDepletionError,
+  CommitLegalityError,
+  MarmotGroupEngine,
+} from "../group-engine.js";
 import type { GroupPeeler } from "../types.js";
 
 function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
@@ -541,7 +544,7 @@ describe("send-seam commit legality (WIRE-03/CONV-01) — D-01/D-02/D-05..D-09",
           },
         ],
       }),
-    ).rejects.toThrow(UsageError);
+    ).rejects.toThrow(CommitLegalityError);
 
     expect(engine.lifecycle).toBe("Stable");
     expect(bytesToHex(engine.state.confirmationTag)).toBe(beforeTag);
@@ -594,9 +597,15 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
     peeler.wrapGroupMessage = async () => {
       throw new Error("wrap failed");
     };
-    const engine = new MarmotGroupEngine({ state: epoch1, ciphersuite: impl, peeler });
+    const engine = new MarmotGroupEngine({
+      state: epoch1,
+      ciphersuite: impl,
+      peeler,
+    });
 
-    await expect(engine.send({ kind: "selfUpdate" })).rejects.toThrow("wrap failed");
+    await expect(engine.send({ kind: "selfUpdate" })).rejects.toThrow(
+      "wrap failed",
+    );
     expect(engine.lifecycle).toBe("Stable");
   });
   it("rejects a non-admin selfUpdate consuming its staged admin-only proposal by reference", async () => {
@@ -636,8 +645,7 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
   });
 
   it("allows an admin selfUpdate consuming the same admin-only proposal origin", async () => {
-    const { impl, adminPubkey, admin2Pubkey, epoch1 } =
-      await twoAdminGroup();
+    const { impl, adminPubkey, admin2Pubkey, epoch1 } = await twoAdminGroup();
     const engine = new MarmotGroupEngine({
       state: epoch1,
       ciphersuite: impl,
@@ -686,7 +694,7 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
     const beforeTag = bytesToHex(engine.state.confirmationTag);
 
     await expect(engine.send({ kind: "selfUpdate" })).rejects.toThrow(
-      UsageError,
+      CommitLegalityError,
     );
 
     // Nothing staged, nothing published, canonical state untouched.
@@ -756,10 +764,18 @@ describe("commit wrapping lifecycle (WR-22)", () => {
     peeler.wrapGroupMessage = async () => {
       throw new Error("wrap failed");
     };
-    const engine = new MarmotGroupEngine({ state: epoch1, ciphersuite: impl, peeler });
+    const engine = new MarmotGroupEngine({
+      state: epoch1,
+      ciphersuite: impl,
+      peeler,
+    });
 
     await expect(
-      engine.send({ kind: "commit", actorPubkey: adminPubkey, extraProposals: [] }),
+      engine.send({
+        kind: "commit",
+        actorPubkey: adminPubkey,
+        extraProposals: [],
+      }),
     ).rejects.toThrow("wrap failed");
     expect(engine.lifecycle).toBe("Stable");
   });
@@ -774,13 +790,8 @@ describe("outbound exact-union actor authorization matrix", () => {
   ] as const)(
     "rejects a non-admin $intentKind with an admin-only $origin proposal",
     async ({ intentKind, origin }) => {
-      const {
-        impl,
-        adminPubkey,
-        admin2Pubkey,
-        memberPubkey,
-        memberEpoch1,
-      } = await twoAdminGroup();
+      const { impl, adminPubkey, admin2Pubkey, memberPubkey, memberEpoch1 } =
+        await twoAdminGroup();
       const engine = new MarmotGroupEngine({
         state: memberEpoch1,
         ciphersuite: impl,
@@ -826,8 +837,7 @@ describe("outbound exact-union actor authorization matrix", () => {
   );
 
   it("does not duplicate a selected reference when the admin commits it", async () => {
-    const { impl, adminPubkey, admin2Pubkey, epoch1 } =
-      await twoAdminGroup();
+    const { impl, adminPubkey, admin2Pubkey, epoch1 } = await twoAdminGroup();
     const engine = new MarmotGroupEngine({
       state: epoch1,
       ciphersuite: impl,

@@ -263,10 +263,11 @@ describe("rewind history persistence across restart", () => {
       signer: SIGNER,
       network: NETWORK,
     });
-    const reloaded = await registry.load(groupId);
+    const reloaded = await registry.get(groupId);
 
-    // Load-time re-convergence re-scored the persisted forks straight from disk
-    // and switched to the canonical (lower-digest) branch — no network redelivery.
+    // Registry activation re-scores the persisted forks straight from disk and
+    // switches to the canonical (lower-digest) branch — no network redelivery.
+    // `load()` itself remains hydration-only; `get()` tracks/listens first.
     expect(reloaded.state.confirmationTag).toEqual(canonicalTag);
     expect(reloaded.state.confirmationTag).not.toEqual(losingTag);
     expect(reloaded.lifecycle).toBe("Stable");

@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 03.1
 current_phase_name: Phase 3 Review Closure
 status: executing
-stopped_at: Completed 03.1-12-PLAN.md
-last_updated: "2026-09-02T16:32:05.004Z"
+stopped_at: Completed 03.1-14-PLAN.md
+last_updated: "2026-09-02T16:37:23.630Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 03.1 execution started
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 31
-  completed_plans: 29
+  completed_plans: 30
   percent: 43
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03.1 (Phase 3 Review Closure) — EXECUTING
-Plan: 12 of 14
+Plan: 13 of 14
 Status: Ready to execute
 Last activity: 2026-09-01 — Phase 03.1 execution started
 
-Progress: [█████████░] 94% (7 phases)
+Progress: [██████████] 97% (7 phases)
 
 **Next recommended run:** `/gsd-execute-phase 03.1`
 
@@ -92,6 +92,7 @@ _Updated after each plan completion_
 | Phase 03.1 P08 | 2min | 1 tasks | 3 files |
 | Phase 03.1 P11 | 4min | 1 tasks | 14 files |
 | Phase 03.1 P12 | 4min | 1 tasks | 2 files |
+| Phase 03.1 P14 | 3min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -171,6 +172,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 03.1-11]: Map Welcome rotation citations to protocol-core/joining.md and admin/commit citations to protocol-core/group-messaging.md.
 - [Phase ?]: Complete auto-commit publication and confirmation or rollback before yielding autoCommit to the consumer.
 - [Phase ?]: Retain confirmed notifications locally so successful delivery remains autoCommit followed immediately by appliedNotifications.
+- [Phase ?]: [Phase 03.1-14]: Route publishEffects and legacy publishProposal through one proposal result helper so acknowledgement semantics cannot drift.
+- [Phase ?]: [Phase 03.1-14]: Invoke publishFailed only before relay acknowledgement; confirmation and persistence failures remain inspectable and non-retryable afterward.
 
 ### Pending Todos
 
@@ -205,7 +208,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-02T16:32:04.986Z
-Stopped at: Completed 03.1-12-PLAN.md
+Last session: 2026-09-02T16:37:23.612Z
+Stopped at: Completed 03.1-14-PLAN.md
 Resume file:
 None

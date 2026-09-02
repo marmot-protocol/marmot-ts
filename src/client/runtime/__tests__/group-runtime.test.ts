@@ -224,13 +224,17 @@ describe("GroupRuntime publish acknowledgement", () => {
 
 describe("GroupRuntime publish failure", () => {
   it("throws when no relay acknowledges a proposal and never confirms", async () => {
-    const { runtime, confirmPublished, save } = makeRuntime({
-      getNetwork: () => makeNetwork(async () => noAckResponse()),
+    const publish = vi.fn(async () => noAckResponse());
+    const { runtime, confirmPublished, publishFailed, save } = makeRuntime({
+      getNetwork: () => makeNetwork(publish),
     });
 
     await expect(
       runtime.publishWork({ kind: "proposal", envelope, pending }),
     ).rejects.toThrow(/Failed to publish proposal event/);
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publishFailed).toHaveBeenCalledOnce();
+    expect(publishFailed).toHaveBeenCalledWith(pending);
     expect(confirmPublished).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
   });

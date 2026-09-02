@@ -104,11 +104,8 @@ export class GroupRuntime {
       case "proposal":
         return {
           work,
-          response: await this.publishProposal(work.envelope, work.pending),
-          notifications: [],
-          persistence: { kind: "succeeded" },
+          ...(await this.#publishProposalResult(work.envelope, work.pending)),
           welcomeDelivery: { kind: "notRequired" },
-          retryPublication: false,
         };
       case "selfUpdate": {
         const result = await this.#publishSelfUpdateResult(
@@ -168,13 +165,41 @@ export class GroupRuntime {
     envelope: NostrEvent,
     pending: PendingState,
   ): Promise<Record<string, PublishResponse>> {
-    const response = await this.#publishToGroupRelays(
-      envelope,
-      "Failed to publish proposal event",
-    );
-    this.#confirmPublished(pending);
-    await this.#save();
-    return response;
+    return (await this.#publishProposalResult(envelope, pending)).response;
+  }
+
+  async #publishProposalResult(
+    envelope: NostrEvent,
+    pending: PendingState,
+  ): Promise<{
+    response: Record<string, PublishResponse>;
+    notifications: [];
+    persistence: GroupPublishResult["persistence"];
+    retryPublication: false;
+  }> {
+    let response: Record<string, PublishResponse>;
+    try {
+      response = await this.#publishToGroupRelays(
+        envelope,
+        "Failed to publish proposal event",
+      );
+    } catch (error) {
+      this.#publishFailed(pending);
+      throw error;
+    }
+
+    try {
+      this.#confirmPublished(pending);
+    } catch (error) {
+      return {
+        response,
+        notifications: [],
+        persistence: { kind: "failed", error: errorDetail(error) },
+        retryPublication: false,
+      };
+    }
+    const persistence = await this.#persistConfirmedState();
+    return { response, notifications: [], persistence, retryPublication: false };
   }
 
   async publishSelfUpdate(

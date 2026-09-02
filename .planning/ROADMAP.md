@@ -151,7 +151,7 @@ to Phase 4 for a structural fix (porting `OwnCommitConvergenceStamp`). See
 5. `#sweepTree` is gated on payload delivery rather than on eviction, so the D-13 self-eviction short-circuit does not starve the CONV-03 rewind path. (WR-07 — note round 3 found the round-1 remedy for this finding was itself wrong.)
 6. No `MIP-NN` citation remains in any Phase 3-touched source file; each is replaced by its `refs/marmot/...` path per `refs/marmot/mip-coverage.md`. (WR-24, 21 sites)
 7. The remaining re-derived round-1 carry-forwards (WR-03..WR-05, WR-08..WR-13 and the infos) are each either fixed or explicitly recorded as accepted with a rationale in `deferred-items.md` — none silently dropped.
-   **Plans**: 7/11 plans executed
+   **Plans**: 8/11 plans executed
 
 Plans:
 **Wave 1**
@@ -178,7 +178,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 03.1-09-PLAN.md — result-union, byte, member, lifecycle, and disposition cleanup
+- [x] 03.1-09-PLAN.md — result-union, byte, member, lifecycle, and disposition cleanup
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

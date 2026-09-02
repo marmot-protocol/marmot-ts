@@ -28,6 +28,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { MemoryAuditSink } from "../../audit/index.js";
 import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../../core/components/ids.js";
 import { commitDigest } from "../../core/convergence.js";
 import { createCredential } from "../../core/credential.js";
@@ -38,7 +39,10 @@ import {
   decryptGroupMessages,
 } from "../../core/group-message.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { MarmotGroupEngine } from "../group-engine.js";
+import {
+  CommitLegalityError,
+  MarmotGroupEngine,
+} from "../group-engine.js";
 import type { GroupPeeler } from "../types.js";
 
 function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
@@ -231,15 +235,24 @@ const kinds = async (
   return out;
 };
 
+function rejectionReasons(sink: MemoryAuditSink): string[] {
+  return sink.events.flatMap((event) =>
+    event.kind.type === "rejection" ? [event.kind.reason] : [],
+  );
+}
+
 describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity", () => {
   it("rejects an inbound commit that drops a required app component (component-integrity)", async () => {
     const { impl, ctx, admin2Epoch1, adminEpoch1 } =
       await fourPartyEpoch1Group();
     const peeler = testPeeler(impl);
+    const audit = new MemoryAuditSink();
     const engine = new MarmotGroupEngine({
       state: adminEpoch1,
       ciphersuite: impl,
       peeler,
+      audit,
+      auditContext: { engineId: "test-engine" },
     });
 
     const violating = await buildComponentIntegrityViolation(ctx, admin2Epoch1);
@@ -257,6 +270,7 @@ describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity",
       kind: "rejected",
       reason: "component-integrity",
     });
+    expect(rejectionReasons(audit)).toEqual(["component_integrity"]);
     // Canonical state never advanced past the violation.
     expect(bytesToHex(engine.state.confirmationTag)).toBe(beforeTag);
     expect(Number(engine.state.groupContext.epoch)).toBe(beforeEpoch);
@@ -266,10 +280,13 @@ describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity",
     const { impl, ctx, admin2Epoch1, admin3Pubkey, adminEpoch1 } =
       await fourPartyEpoch1Group();
     const peeler = testPeeler(impl);
+    const audit = new MemoryAuditSink();
     const engine = new MarmotGroupEngine({
       state: adminEpoch1,
       ciphersuite: impl,
       peeler,
+      audit,
+      auditContext: { engineId: "test-engine" },
     });
 
     const [admin3LeafIndex] = getPubkeyLeafNodeIndexes(
@@ -307,6 +324,7 @@ describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity",
       kind: "rejected",
       reason: "admin-leaf-coupling",
     });
+    expect(rejectionReasons(audit)).toEqual(["admin_leaf_coupling"]);
     expect(bytesToHex(engine.state.confirmationTag)).toBe(beforeTag);
     expect(Number(engine.state.groupContext.epoch)).toBe(beforeEpoch);
   });
@@ -343,10 +361,13 @@ describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity",
     const { impl, ctx, memberEpoch1, adminEpoch1 } =
       await fourPartyEpoch1Group();
     const peeler = testPeeler(impl);
+    const audit = new MemoryAuditSink();
     const engine = new MarmotGroupEngine({
       state: adminEpoch1,
       ciphersuite: impl,
       peeler,
+      audit,
+      auditContext: { engineId: "test-engine" },
     });
 
     // A non-admin committing an Add proposal is neither self-update-only nor
@@ -381,7 +402,36 @@ describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity",
       kind: "rejected",
       reason: "admin-policy",
     });
+    expect(rejectionReasons(audit)).toEqual(["admin_policy"]);
     expect(bytesToHex(engine.state.confirmationTag)).toBe(beforeTag);
+  });
+
+  it("throws a typed send error carrying the structured legality violation", async () => {
+    const { impl, adminPubkey, adminEpoch1 } = await fourPartyEpoch1Group();
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    const send = engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [
+        {
+          proposalType: appDataUpdateProposalType,
+          appDataUpdate: {
+            componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+            operation: "remove",
+          },
+        },
+      ],
+    });
+
+    await expect(send).rejects.toMatchObject({
+      name: "CommitLegalityError",
+      violation: { reason: "component-integrity" },
+    } satisfies Partial<CommitLegalityError>);
   });
 
   it("drops the violating commit as a fork-recovery candidate edge — no branch adopted, no history-tree edge (replay parity)", async () => {

@@ -317,6 +317,25 @@ describe("validateAdminLeafCoupling", () => {
       resultingMemberAccounts: [],
     });
     expect(violation?.reason).toBe("admin-leaf-coupling");
+    expect(violation?.detail).toBe(
+      "resulting admin-policy component did not decode",
+    );
+  });
+
+  it("attributes a malformed carried-forward admin policy to the current epoch", () => {
+    const malformed = componentEntry(
+      GROUP_ADMIN_POLICY_COMPONENT_ID,
+      new BinaryWriter().opaque(new Uint8Array([1, 2, 3])).build(),
+    );
+    const violation = validateAdminLeafCoupling({
+      currentExtensions: dict(malformed),
+      resultingExtensions: [],
+      resultingMemberAccounts: [],
+    });
+    expect(violation).toEqual({
+      reason: "admin-leaf-coupling",
+      detail: "carried-forward admin-policy component did not decode",
+    });
   });
 });
 

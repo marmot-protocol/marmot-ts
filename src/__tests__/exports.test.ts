@@ -1,7 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  GroupHistoryTree,
+  groupWithdrawnNotificationsByCommit,
+  type AppliedNotificationsIngestResult,
+  type StateInvalidatedIngestResult,
+  type StateNotification,
+} from "../index.js";
 import * as exports from "../index.js";
 
+type RootSignatureTypes =
+  | StateNotification
+  | AppliedNotificationsIngestResult
+  | StateInvalidatedIngestResult;
+
 describe("exports", () => {
+  it("should name every root public-signature symbol from the root", () => {
+    expectTypeOf<RootSignatureTypes>().not.toBeNever();
+    expectTypeOf(GroupHistoryTree).toBeConstructibleWith();
+    expectTypeOf(groupWithdrawnNotificationsByCommit).toBeFunction();
+  });
+
   it("should export the expected members", () => {
     expect(Object.keys(exports).sort()).toMatchInlineSnapshot(`
       [

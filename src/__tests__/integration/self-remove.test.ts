@@ -182,6 +182,24 @@ describe("SelfRemove member departure (B6)", () => {
     // "d" still holds the self_remove as a pending proposal.
     expect(Object.keys(dGroup.state.unappliedProposals)).toHaveLength(1);
 
+    // Cancelling at the first consumer-visible result must not strand the
+    // elected committer's staged work at the cancellable generator boundary.
+    const cancelledPublished: NostrEvent[] = [];
+    const cancelledGroup = marmotGroup(
+      adminEpoch1,
+      adminPubkey,
+      impl,
+      cancelledPublished,
+    );
+    const iterator = cancelledGroup.ingest([selfRemoveEvent]);
+    let boundary = await iterator.next();
+    while (!boundary.done && boundary.value.kind !== "autoCommit")
+      boundary = await iterator.next();
+    expect(boundary.value?.kind).toBe("autoCommit");
+    await iterator.return(undefined);
+    expect(cancelledGroup.lifecycle).toBe("Stable");
+    expect(cancelledPublished).toHaveLength(1);
+
     // The elected committer (admin "a", leaf 0) ingests the same self_remove and
     // auto-commits it.
     const adminPublished: NostrEvent[] = [];

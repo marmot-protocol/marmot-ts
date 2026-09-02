@@ -573,7 +573,8 @@ export class MarmotGroup<
   /**
    * Performs a self-update commit (no proposals) to rotate this member's leaf key material.
    *
-   * This is required by MIP-02 for forward secrecy after joining from a Welcome.
+   * This is required by `refs/marmot/protocol-core/joining.md` for forward
+   * secrecy after joining from a Welcome.
    *
    * Unlike admin commits (see {@link GroupsManager.commit}), this operation is
    * allowed for non-admin members.
@@ -769,7 +770,8 @@ export class MarmotGroup<
    * Processing happens in two stages:
    * 1. Process all non-commit messages (proposals, application messages)
    *    - If a message fails to process, it's added to unreadable for retry
-   * 2. Process commits according to MIP-03 (sorted by epoch, timestamp, event id)
+   * 2. Process commits according to `refs/marmot/protocol-core/group-messaging.md`
+   *    (sorted by epoch, timestamp, event id)
    *    - Commits advance the epoch and update the group state
    *
    * After both stages, recursively retry unreadable messages until no more can be read.

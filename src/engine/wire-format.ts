@@ -102,7 +102,8 @@ export function framedCommitProposals(
  * `ProposalRef` carries the ORIGINAL proposer's leaf from
  * `parentState.unappliedProposals` (`ts-mls/src/clientState.ts`
  * `applyProposals`). Getting that attribution right is load-bearing — the
- * MIP-03 admin gate's self_remove rule and its non-admin self-update carve-out
+ * `refs/marmot/protocol-core/group-messaging.md` admin gate's self_remove rule
+ * and its non-admin self-update carve-out
  * both branch on per-proposal sender identity.
  *
  * Exists so `ForkRecovery`'s CONV-04 known-state short-circuit can run the same

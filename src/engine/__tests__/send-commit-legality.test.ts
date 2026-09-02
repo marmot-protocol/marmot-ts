@@ -735,7 +735,7 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
     expect(resultingAdmins).toEqual([adminPubkey]);
   });
 
-  it("a selfUpdate with no staged proposals is unaffected (MIP-02 post-Welcome path)", async () => {
+  it("a selfUpdate with no staged proposals is unaffected (post-Welcome joining path)", async () => {
     const { impl, epoch1 } = await twoAdminGroup();
     const engine = new MarmotGroupEngine({
       state: epoch1,
@@ -884,7 +884,8 @@ describe("CONV-04 short-circuit re-validates persisted own-path commits (CR-04)"
 
     // A commit that drops a required app component — the WIRE-03 Rule 2
     // violation every other seam refuses. Authored by admin2 (an admin, so
-    // the MIP-03 gate accepts it) and wired as a PublicMessage, exactly as
+    // the refs/marmot/protocol-core/group-messaging.md gate accepts it) and
+    // wired as a PublicMessage, exactly as
     // Marmot v2 wires handshake content.
     const violating = await createCommit({
       context: ctx,
@@ -967,7 +968,8 @@ describe("CONV-04 short-circuit re-validates persisted own-path commits (CR-04)"
   /**
    * CR-11 regression (the unresolved remainder of CR-04): the short-circuit
    * ran `validateCommitLegality` but still hardcoded `actionTaken: "accept"`,
-   * so the MIP-03 admin gate — `createAdminCommitPolicyCallback`, which
+   * so the `refs/marmot/protocol-core/group-messaging.md` admin gate —
+   * `createAdminCommitPolicyCallback`, which
    * enforces admin-only commits, the account-identity-proof check on `Add`
    * proposals, and the admin-cannot-self-remove rule — was never consulted.
    *
@@ -975,7 +977,8 @@ describe("CONV-04 short-circuit re-validates persisted own-path commits (CR-04)"
    * class: it replays each winner-chain link under
    * `withCapturedProposals(this.#createAdminVerificationCallback())` and
    * abandons the chain on `actionTaken === "reject"`. So a persisted edge
-   * written by a build whose admin set differed (or a pre-MIP-03 build) was
+   * written by a build whose admin set differed (or one predating the
+   * topic-organized spec) was
    * replayed into a WINNING candidate by ForkRecovery and refused by
    * `#treeResolution` — whichever seam ran first decided whether the group
    * converged, non-deterministically across peers.
@@ -987,7 +990,7 @@ describe("CONV-04 short-circuit re-validates persisted own-path commits (CR-04)"
    * (RFC 9420). An edge for it therefore proves the short-circuit fired and
    * accepted without asking the admin callback.
    */
-  it("runs the MIP-03 admin callback on the known-state short-circuit, not just commit legality", async () => {
+  it("runs the group-messaging admin callback on the known-state short-circuit, not just commit legality", async () => {
     const { impl, ctx, adminEpoch1, admin2Epoch1 } =
       await twoAdminGroupWithJoin();
     const rootTag = bytesToHex(adminEpoch1.confirmationTag);
@@ -1174,7 +1177,8 @@ describe("#treeResolution winner-chain validation on tree-fed re-convergence (D-
     // admin2: sib2 drops a required app component via an AppDataUpdate
     // "remove" — exactly the WIRE-03 violation
     // `validateAppComponentIntegrity`'s Rule 2 exists to catch. admin2 is an
-    // admin, so the MIP-03 admin gate accepts this commit on replay; only the
+    // admin, so the refs/marmot/protocol-core/group-messaging.md admin gate
+    // accepts this commit on replay; only the
     // WIRE-03/CONV-01 legality gate below it is meant to catch the violation.
     // Recorded directly into the tree via recordEdge (admin1-perspective
     // replay snapshots), simulating a persisted edge written by a

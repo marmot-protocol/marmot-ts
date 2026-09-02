@@ -187,7 +187,8 @@ async function fourPartyEpoch1Group() {
  * `AppDataUpdate` (which every Marmot group does), so this is the only wire
  * shape that reaches the WIRE-03/CONV-01 gate rather than being rejected
  * earlier by ts-mls itself. The committer (`state`) must be an admin so the
- * MIP-03 admin gate (`createAdminCommitPolicyCallback`) accepts the commit
+ * `refs/marmot/protocol-core/group-messaging.md` admin gate
+ * (`createAdminCommitPolicyCallback`) accepts the commit
  * and lets it reach the WIRE-03/CONV-01 legality gate at all.
  */
 async function buildComponentIntegrityViolation(
@@ -391,7 +392,8 @@ describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity",
     });
 
     // A non-admin committing an Add proposal is neither self-update-only nor
-    // self-remove-only — the pre-existing MIP-03 admin gate rejects this
+    // self-remove-only — the pre-existing
+    // refs/marmot/protocol-core/group-messaging.md admin gate rejects this
     // before the commit ever reaches the WIRE-03/CONV-01 legality gate.
     const extraKp = await generateKeyPackage({
       credential: createCredential("e".repeat(64)),

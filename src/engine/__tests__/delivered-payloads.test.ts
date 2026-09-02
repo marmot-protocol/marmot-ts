@@ -92,9 +92,9 @@ describe("DeliveredPayloadLedger", () => {
 
     expect(ledger.size).toBe(2);
     expect(
-      ledger.invalidatedByRewind(0, new Set(["tag-tip"])).map((item) =>
-        item.envelope.id,
-      ),
+      ledger
+        .invalidatedByRewind(0, new Set(["tag-tip"]))
+        .map((item) => item.envelope.id),
     ).toEqual(["old-fork"]);
   });
 });

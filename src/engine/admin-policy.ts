@@ -20,7 +20,8 @@ function toLeafIndex(index: number): LeafIndex {
 }
 
 /**
- * Build an incoming-message callback that enforces MIP-03 "admin-only commits".
+ * Build an incoming-message callback that enforces
+ * `refs/marmot/protocol-core/group-messaging.md` "admin-only commits".
  */
 export function createAdminCommitPolicyCallback(args: {
   ratchetTree: ClientState["ratchetTree"];
@@ -134,7 +135,8 @@ export function createAdminCommitPolicyCallback(args: {
  * `validate_app_component_integrity_for_staged_commit`.
  *
  * `callback` delegates every decision to `inner` unchanged — this is a
- * decorator, NOT a policy change. The MIP-03 admin gate, the
+ * decorator, NOT a policy change. The
+ * `refs/marmot/protocol-core/group-messaging.md` admin gate, the
  * account-identity-proof check, and the admin-self-remove guard in
  * `createAdminCommitPolicyCallback` all keep their exact current behavior.
  * Its only extra effect: when `incoming.kind === "commit"`, it appends

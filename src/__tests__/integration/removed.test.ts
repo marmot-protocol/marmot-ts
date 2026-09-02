@@ -162,8 +162,7 @@ async function buildRemovalFixture() {
 }
 
 async function buildPersistedRemovalForkFixture() {
-  const { impl, ePubkey, eEpoch1, adminEpoch1 } =
-    await buildRemovalFixture();
+  const { impl, ePubkey, eEpoch1, adminEpoch1 } = await buildRemovalFixture();
   const ctx = {
     cipherSuite: impl,
     authService: unsafeTestingAuthenticationService,
@@ -201,7 +200,10 @@ async function buildPersistedRemovalForkFixture() {
     state: deserializeClientState(memberSnapshot),
     message: competing.commit,
   });
-  if (canonicalMember.kind !== "newState" || competingMember.kind !== "newState")
+  if (
+    canonicalMember.kind !== "newState" ||
+    competingMember.kind !== "newState"
+  )
     throw new Error("expected fork states");
 
   const remove = await createCommit({
@@ -209,10 +211,12 @@ async function buildPersistedRemovalForkFixture() {
     state: canonical.newState,
     wireAsPublicMessage: true,
     ratchetTreeExtension: true,
-    extraProposals: [{
-      proposalType: defaultProposalTypes.remove,
-      remove: { removed: canonicalMember.newState.privatePath.leafIndex },
-    }],
+    extraProposals: [
+      {
+        proposalType: defaultProposalTypes.remove,
+        remove: { removed: canonicalMember.newState.privatePath.leafIndex },
+      },
+    ],
   });
   const removeEvent = await createGroupEvent({
     message: remove.commit,
@@ -241,9 +245,7 @@ describe("involuntary removal signal", () => {
   it("keeps removal markers in a group-scoped namespace on a shared backend (WR-19)", async () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();
-    const shared = new InMemoryKeyValueStore<
-      SerializedClientState | boolean
-    >();
+    const shared = new InMemoryKeyValueStore<SerializedClientState | boolean>();
     const stateStore = shared as GenericKeyValueStore<SerializedClientState>;
     const markerStore = shared as GenericKeyValueStore<boolean>;
     const group = marmotGroup(
@@ -278,7 +280,10 @@ describe("involuntary removal signal", () => {
     tree.recordCommit(rootTag, fixture.competingCommit, fixture.competingState);
     tree.bindStore(rewindStore);
     await tree.flush();
-    await stateStore.setItem(groupId, serializeClientState(fixture.removedState));
+    await stateStore.setItem(
+      groupId,
+      serializeClientState(fixture.removedState),
+    );
 
     const manager = new GroupsManager({
       store: stateStore,
@@ -304,7 +309,9 @@ describe("involuntary removal signal", () => {
   it("single-flights overlapping removal realization and emits once (WR-01)", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
     let releaseRead!: (value: boolean | null) => void;
-    const read = new Promise<boolean | null>((resolve) => (releaseRead = resolve));
+    const read = new Promise<boolean | null>(
+      (resolve) => (releaseRead = resolve),
+    );
     const getItem = vi.fn(async () => read);
     const setItem = vi.fn(async () => undefined);
     const removedMarkerStore: GenericKeyValueStore<boolean> = {
@@ -498,9 +505,9 @@ describe("involuntary removal signal", () => {
     await firstLoad.realizeRemovalIfNeeded();
 
     expect(firstRemoved).toHaveBeenCalledOnce();
-    expect(
-      await removedMarkerStore.getItem(`${liveGroup.idStr}/removed`),
-    ).toBe(true);
+    expect(await removedMarkerStore.getItem(`${liveGroup.idStr}/removed`)).toBe(
+      true,
+    );
 
     // Second load, same marker store: marker is already set, so explicit
     // realization is a no-op — zero `removed` emissions.

@@ -271,7 +271,8 @@ export class ForkRecovery<TEnvelope> {
         }
 
         if (known && knownFramed && knownProposals) {
-          // CR-11: the short-circuit must run the MIP-03 admin gate too, not
+          // CR-11: the short-circuit must run the
+          // refs/marmot/protocol-core/group-messaging.md admin gate too, not
           // just `validateCommitLegality`. `known` comes from
           // `RetainedHistoryStore`, which `GroupRegistry` rebuilds on load
           // straight from the persisted history tree — the SAME pre-upgrade
@@ -279,7 +280,7 @@ export class ForkRecovery<TEnvelope> {
           // `#createAdminVerificationCallback()` and abandons on
           // `actionTaken === "reject"`. Hardcoding `actionTaken: "accept"`
           // here meant a persisted edge written by a build whose admin set
-          // differed (or a pre-MIP-03 build) was replayed into a WINNING
+          // differed (or a build predating the topic-organized spec) was replayed into a WINNING
           // candidate by ForkRecovery and refused by `#treeResolution` — so
           // whichever seam ran first decided whether the group converged,
           // non-deterministically across peers.

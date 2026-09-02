@@ -705,18 +705,14 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
         { sourceEpoch: 1, commitDigest: localDigest },
         {
           sourceEpoch: 1,
-          commitDigest: commitDigest(
-            encode(mlsMessageEncoder, winner.commit),
-          ),
+          commitDigest: commitDigest(encode(mlsMessageEncoder, winner.commit)),
         },
       ) <= 0;
       attempt++
     ) {
       winner = await peerCommit(attempt);
     }
-    const winnerDigest = commitDigest(
-      encode(mlsMessageEncoder, winner.commit),
-    );
+    const winnerDigest = commitDigest(encode(mlsMessageEncoder, winner.commit));
     expect(
       compareCommitOrderingKeys(
         { sourceEpoch: 1, commitDigest: localDigest },
@@ -750,9 +746,9 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     expect(invalidatedIndex).toBeGreaterThanOrEqual(0);
     const invalidated = results[invalidatedIndex];
     expect(invalidated.commitDigest).toEqual(localDigest);
-    expect(invalidated.withdrawn?.map((notification) => notification.kind)).toEqual(
-      expect.arrayContaining(["epochAdvanced", "componentChanged"]),
-    );
+    expect(
+      invalidated.withdrawn?.map((notification) => notification.kind),
+    ).toEqual(expect.arrayContaining(["epochAdvanced", "componentChanged"]));
     for (const notification of invalidated.withdrawn ?? []) {
       expect(notification.commitDigest).toEqual(localDigest);
       expect(notification.commitDigest).not.toEqual(winnerDigest);
@@ -1044,17 +1040,18 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
       ReturnType<typeof engine.reconvergeFromHistory>
     > = [];
     for await (const result of engine.ingest([
-        await createGroupEvent({
-          message: sibA.commit,
-          state: memberEpoch1,
-          ciphersuite: impl,
-        }),
-        await createGroupEvent({
-          message: sibB.commit,
-          state: sibA.newState,
-          ciphersuite: impl,
-        }),
-      ])) ingestResults.push(result);
+      await createGroupEvent({
+        message: sibA.commit,
+        state: memberEpoch1,
+        ciphersuite: impl,
+      }),
+      await createGroupEvent({
+        message: sibB.commit,
+        state: sibA.newState,
+        ciphersuite: impl,
+      }),
+    ]))
+      ingestResults.push(result);
     const applied = ingestResults.filter(
       (result) => result.kind === "appliedNotifications",
     );
@@ -1076,7 +1073,8 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     const firstWithdrawal = ingestResults.findIndex(
       (result) => result.kind === "stateInvalidated",
     );
-    if (firstWithdrawal >= 0) expect(firstApplied).toBeLessThan(firstWithdrawal);
+    if (firstWithdrawal >= 0)
+      expect(firstApplied).toBeLessThan(firstWithdrawal);
 
     // The contract that CR-06 restores: a resolved array, never `undefined`.
     const results = await engine.reconvergeFromHistory();

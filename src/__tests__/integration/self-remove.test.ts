@@ -204,9 +204,13 @@ describe("SelfRemove member departure (B6)", () => {
     if (applied?.kind !== "appliedNotifications")
       throw new Error("expected appliedNotifications after autoCommit");
     expect(applied.notifications.length).toBeGreaterThan(0);
-    expect(applied.notifications.every((notification) =>
-      bytesToHex(notification.commitDigest) === bytesToHex(applied.commitDigest),
-    )).toBe(true);
+    expect(
+      applied.notifications.every(
+        (notification) =>
+          bytesToHex(notification.commitDigest) ===
+          bytesToHex(applied.commitDigest),
+      ),
+    ).toBe(true);
     const observed = new Set(
       applied.notifications.map(
         (notification) =>
@@ -214,9 +218,11 @@ describe("SelfRemove member departure (B6)", () => {
       ),
     );
     const withdrawn = applied.notifications.slice(0, 1);
-    (adminGroup.session as unknown as {
-      ingest: () => AsyncGenerator<unknown>;
-    }).ingest = async function* () {
+    (
+      adminGroup.session as unknown as {
+        ingest: () => AsyncGenerator<unknown>;
+      }
+    ).ingest = async function* () {
       yield {
         kind: "stateInvalidated",
         commitDigest: applied.commitDigest,

@@ -705,7 +705,8 @@ export class MarmotGroupEngine<TEnvelope> {
         // peer reject (the mdk#707 "guard on one seam only" bug class).
         //
         // `MarmotGroup.selfUpdate()` is public and non-admin-callable, and
-        // per MIP-02 it is called right after joining from a Welcome — a
+        // per refs/marmot/protocol-core/joining.md it is called right after
+        // joining from a Welcome — a
         // moment when staged proposals from other members are plausible.
         const groupData = getMarmotGroupView(parentState);
         if (!groupData) {
@@ -940,8 +941,9 @@ export class MarmotGroupEngine<TEnvelope> {
    * with no `stateAt(newEpoch)` (so `resolveFork` could never rebuild across a
    * selfUpdate) and the tree with no node for the new tip (so the next
    * `GroupRegistry.#loadHistory` discarded the entire persisted fork history).
-   * Since MIP-02 tells clients to selfUpdate immediately after joining from a
-   * Welcome, the normal join path destroyed its own convergence persistence.
+   * Since `refs/marmot/protocol-core/joining.md` tells clients to selfUpdate
+   * immediately after joining from a Welcome, the normal join path destroyed
+   * its own convergence persistence.
    */
   confirmPublished(pending: PendingState): StateNotification[] {
     if (pending.kind === "commit" || pending.kind === "selfUpdate") {

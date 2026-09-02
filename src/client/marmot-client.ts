@@ -422,10 +422,10 @@ export class MarmotClient<
 
     log("joined group %s", group.idStr);
 
-    // MIP-02 SHOULD: callers are responsible for calling group.selfUpdate() after
-    // joining to rotate leaf key material for forward secrecy. Doing it automatically
-    // here caused the joining member to fork off to a new epoch before other members
-    // could ingest the commit.
+    // refs/marmot/protocol-core/joining.md: callers are responsible for calling
+    // group.selfUpdate() after joining to rotate leaf key material for forward
+    // secrecy. Doing it automatically here caused the joining member to fork off
+    // to a new epoch before other members could ingest the commit.
 
     return { group };
   }

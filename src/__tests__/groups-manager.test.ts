@@ -314,7 +314,8 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
     const real = network.events[0];
 
     // Re-sign a modified draft carrying a second `h` tag — a genuinely valid
-    // signature (matches how 445 events are actually signed, MIP-03 ephemeral
+    // signature (matches how 445 events are actually signed per
+    // refs/marmot/protocol-core/group-messaging.md ephemeral
     // keys), but the routing tag itself violates #236 singleton cardinality.
     const draft = {
       kind: real.kind,

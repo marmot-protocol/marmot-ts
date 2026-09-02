@@ -130,7 +130,8 @@ describe("selfUpdate commit persistence (CR-09)", () => {
    * returns `undefined` — throwing away the entire persisted fork history and
    * the retained window rebuilt from it.
    *
-   * MIP-02 tells clients to selfUpdate right after joining from a Welcome, so
+   * `refs/marmot/protocol-core/joining.md` tells clients to selfUpdate right
+   * after joining from a Welcome, so
    * on the normal join path the very first thing a client does destroyed its
    * own convergence persistence.
    */

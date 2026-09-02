@@ -10,7 +10,7 @@ import {
   joinGroup,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { SerializedClientState } from "../../../core/client-state.js";
 import { createCredential } from "../../../core/credential.js";
@@ -19,9 +19,27 @@ import { serializeApplicationRumor } from "../../../core/group-message.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../../extra";
 import { GroupSession } from "../group-session.js";
+import type { UnreadableIngestResult } from "../group-session.js";
+import type { IngestResult as EngineIngestResult } from "../../../engine/types.js";
 
 const ADMIN = "a".repeat(64);
 const MEMBER = "d".repeat(64);
+
+type EngineUnreadableIngestResult = Extract<
+  EngineIngestResult<import("applesauce-core/helpers/event").NostrEvent>,
+  { kind: "unreadable" }
+>;
+
+// WR-12: public session variants must inherit every engine-only field while
+// replacing only the transport envelope name at the Nostr boundary.
+expectTypeOf<UnreadableIngestResult>().toEqualTypeOf<
+  Omit<EngineUnreadableIngestResult, "envelope"> & {
+    event: import("applesauce-core/helpers/event").NostrEvent;
+  }
+>();
+expectTypeOf<
+  UnreadableIngestResult["decryptFailure"]
+>().toEqualTypeOf<boolean | undefined>();
 
 /** Builds a kind-9 rumor authored by `pubkey` with a canonical NIP-01 id. */
 function rumorFrom(pubkey: string, content: string): Rumor {

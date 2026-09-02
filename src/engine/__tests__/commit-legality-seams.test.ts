@@ -39,10 +39,7 @@ import {
   decryptGroupMessages,
 } from "../../core/group-message.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import {
-  CommitLegalityError,
-  MarmotGroupEngine,
-} from "../group-engine.js";
+import { CommitLegalityError, MarmotGroupEngine } from "../group-engine.js";
 import type { GroupPeeler } from "../types.js";
 
 function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
@@ -242,6 +239,29 @@ function rejectionReasons(sink: MemoryAuditSink): string[] {
 }
 
 describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity", () => {
+  it("refuses auto-commit preparation after the group is removed", async () => {
+    const { impl, adminEpoch1 } = await fourPartyEpoch1Group();
+    const removedState = {
+      ...adminEpoch1,
+      groupActiveState: { kind: "removedFromGroup" as const },
+    };
+    const engine = new MarmotGroupEngine({
+      state: removedState,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+
+    await expect(
+      engine.send({
+        kind: "commit",
+        actorPubkey: "a".repeat(64),
+        extraProposals: [],
+      }),
+    ).rejects.toThrow(
+      "Cannot send: this client has been removed from the group.",
+    );
+  });
+
   it("rejects an inbound commit that drops a required app component (component-integrity)", async () => {
     const { impl, ctx, admin2Epoch1, adminEpoch1 } =
       await fourPartyEpoch1Group();

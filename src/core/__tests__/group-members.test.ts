@@ -11,8 +11,10 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { createCredential } from "../credential.js";
+import { bytesEqual } from "../components/bytes.js";
 import {
   getGroupMembers,
+  getGroupMemberPubkeys,
   getPubkeyLeafNodeIndexes,
   getPubkeyLeafNodes,
 } from "../group-members.js";
@@ -76,6 +78,31 @@ describe("getGroupMembers", () => {
   it("returns an empty list rather than throwing when every leaf is malformed", () => {
     const state = fakeClientState([malformedBasicCredential(16)]);
     expect(getGroupMembers(state)).toEqual([]);
+  });
+});
+
+describe("canonical member and byte helpers", () => {
+  it("exposes getGroupMemberPubkeys with a compatible legacy alias", () => {
+    const state = fakeClientState([
+      createCredential(VALID_A),
+      createCredential(VALID_D),
+    ]);
+
+    expect(getGroupMemberPubkeys(state).sort()).toEqual(
+      [VALID_A, VALID_D].sort(),
+    );
+    expect(getGroupMembers(state)).toEqual(getGroupMemberPubkeys(state));
+  });
+
+  it("compares optional byte arrays with exact shared semantics", () => {
+    expect(bytesEqual(undefined, undefined)).toBe(true);
+    expect(bytesEqual(undefined, new Uint8Array())).toBe(false);
+    expect(bytesEqual(new Uint8Array([1, 2]), new Uint8Array([1, 2]))).toBe(
+      true,
+    );
+    expect(bytesEqual(new Uint8Array([1, 2]), new Uint8Array([1, 2, 0]))).toBe(
+      false,
+    );
   });
 });
 

@@ -34,8 +34,9 @@ export function ingestResultDisposition<TEnvelope>(
       // A valid commit that legitimately removed us — accepted inbound; terminal
       // for our membership (member-departure.md).
       return disposition.accepted();
-    case "skipped":
-      switch (result.reason) {
+    case "skipped": {
+      const reason = result.reason;
+      switch (reason) {
         case "past-epoch":
           return disposition.stale(inputCategories.alreadyApplied);
         case "self-echo":
@@ -50,8 +51,12 @@ export function ingestResultDisposition<TEnvelope>(
           return disposition.stale(inputCategories.missingHistory);
         case "self-evicted":
           return disposition.stale(inputCategories.staleEpoch);
+        default: {
+          const exhaustive: never = reason;
+          return exhaustive;
+        }
       }
-    // eslint-disable-next-line no-fallthrough
+    }
     case "unreadable":
       return disposition.stale(inputCategories.invalidEncoding);
   }

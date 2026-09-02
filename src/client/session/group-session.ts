@@ -33,136 +33,53 @@ import type {
   GroupSessionSendIntent,
 } from "./group-effects.js";
 
-export type ProcessedIngestResult = {
-  kind: "processed";
-  result: import("ts-mls").ProcessMessageResult;
-  event: NostrEvent;
-  message: import("ts-mls").MlsMessage;
-  /**
-   * Commit-digest-attributed group-state notifications (D-10/D-11).
-   *
-   * ATTRIBUTION (WR-18): not necessarily derived from this `message`. When
-   * this result reports an applied fork resolution, the array concatenates the
-   * notifications of EVERY commit on the adopted winner chain, and `message`
-   * is only the representative fork-pool envelope the rewind was reported
-   * against. Group by each entry's `commitDigest`; never pair the array with
-   * `message` positionally.
-   */
-  notifications?: StateNotification[];
-};
-
-export type RejectedIngestResult = {
-  kind: "rejected";
-  result: import("ts-mls").ProcessMessageResult;
-  event: NostrEvent;
-  message: import("ts-mls").MlsMessage;
-  /**
-   * Additive, extensible rejection reason (D-03). The protocol-visible
-   * category stays `authorization_failed` regardless of which reason fires.
-   */
-  reason?: "admin-policy" | "component-integrity" | "admin-leaf-coupling";
-};
-
-export type SkippedIngestResult = {
-  kind: "skipped";
-  event: NostrEvent;
-  /**
-   * Absent for exactly one reason — `"self-evicted"` — because input for a
-   * group this client has been removed from is classified by its group
-   * before any peel or decrypt (D-13). Every other skip reason still
-   * populates this.
-   */
-  message?: import("ts-mls").MlsMessage;
-  reason:
-    | "past-epoch"
-    | "wrong-wireformat"
-    | "self-echo"
-    | "duplicate"
-    | "beyond-anchor"
-    | "missing-retained-anchor"
-    | "invalid-app-payload"
-    | "self-evicted";
-};
-
-export type UnreadableIngestResult = {
-  kind: "unreadable";
-  event: NostrEvent;
-  errors: unknown[];
-};
-
-export type DeferredIngestResult = {
-  kind: "deferred";
-  event: NostrEvent;
-  message: import("ts-mls").MlsMessage;
-  reason: import("../../core/inbound.js").DeferredReason;
-};
-
-export type InvalidatedIngestResult = {
-  kind: "invalidated";
-  event: NostrEvent;
-  message: import("ts-mls").MlsMessage;
-  /** The decrypted Marmot app payload bytes of the invalidated message. */
-  payload?: Uint8Array;
-  /** Hex confirmation tag of the losing fork-tree node it decrypted against. */
-  tag?: string;
-  /** MLS epoch of that fork node. */
-  epoch?: number;
-};
-
-export type AutoCommitIngestResult = {
-  kind: "autoCommit";
-  event: NostrEvent;
-  pending: PendingState;
-  actorPubkey: string;
-};
-
-export type RemovedIngestResult = {
-  kind: "removed";
-  result: import("ts-mls").ProcessMessageResult;
-  event: NostrEvent;
-  message: import("ts-mls").MlsMessage;
-  /**
-   * Commit-digest-attributed group-state notifications (D-10/D-11/D-12).
-   *
-   * ATTRIBUTION (WR-18): as with {@link ProcessedIngestResult.notifications},
-   * a result reporting an applied fork resolution carries the WHOLE adopted
-   * winner chain's notifications, not just this `message`'s. Attribute by
-   * `commitDigest`.
-   */
-  notifications?: StateNotification[];
-};
-
 /**
- * A rewind superseded a previously-accepted commit and withdrew the
- * notifications derived from it (D-11). Has no `event` field, for the same
- * reason the engine variant has no `envelope`: a rewind supersedes a commit,
- * and there is no triggering transport envelope to attribute the withdrawal
- * to.
+ * Public session results are the engine result union with the transport field
+ * renamed at the Nostr boundary. Keeping this transformation distributive
+ * makes new engine fields and variants flow through without a parallel union
+ * that can silently drift (WR-12).
  */
-export type StateInvalidatedIngestResult = {
-  kind: "stateInvalidated";
-  commitDigest: Uint8Array;
-  forkEpoch: number;
-  withdrawn: StateNotification[];
-};
+type SessionIngestResult<TResult extends EngineIngestResult<NostrEvent>> =
+  TResult extends { envelope: NostrEvent }
+    ? Omit<TResult, "envelope"> & { event: NostrEvent }
+    : TResult;
 
-export type AppliedNotificationsIngestResult = {
-  kind: "appliedNotifications";
-  commitDigest: Uint8Array;
-  notifications: StateNotification[];
-};
+type EngineIngestResultOfKind<
+  TKind extends EngineIngestResult<NostrEvent>["kind"],
+> = Extract<EngineIngestResult<NostrEvent>, { kind: TKind }>;
 
-export type IngestResult =
-  | ProcessedIngestResult
-  | RejectedIngestResult
-  | SkippedIngestResult
-  | DeferredIngestResult
-  | InvalidatedIngestResult
-  | AutoCommitIngestResult
-  | RemovedIngestResult
-  | UnreadableIngestResult
-  | AppliedNotificationsIngestResult
-  | StateInvalidatedIngestResult;
+export type ProcessedIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"processed">
+>;
+export type RejectedIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"rejected">
+>;
+export type SkippedIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"skipped">
+>;
+export type UnreadableIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"unreadable">
+>;
+export type DeferredIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"deferred">
+>;
+export type InvalidatedIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"invalidated">
+>;
+export type AutoCommitIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"autoCommit">
+>;
+export type RemovedIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"removed">
+>;
+export type StateInvalidatedIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"stateInvalidated">
+>;
+export type AppliedNotificationsIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"appliedNotifications">
+>;
+
+export type IngestResult = SessionIngestResult<EngineIngestResult<NostrEvent>>;
 
 export type DispositionedIngestResult = IngestResult & {
   disposition: Disposition;

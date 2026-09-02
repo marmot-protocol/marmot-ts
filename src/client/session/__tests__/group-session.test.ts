@@ -37,9 +37,9 @@ expectTypeOf<UnreadableIngestResult>().toEqualTypeOf<
     event: import("applesauce-core/helpers/event").NostrEvent;
   }
 >();
-expectTypeOf<
-  UnreadableIngestResult["decryptFailure"]
->().toEqualTypeOf<boolean | undefined>();
+expectTypeOf<UnreadableIngestResult["decryptFailure"]>().toEqualTypeOf<
+  boolean | undefined
+>();
 
 /** Builds a kind-9 rumor authored by `pubkey` with a canonical NIP-01 id. */
 function rumorFrom(pubkey: string, content: string): Rumor {

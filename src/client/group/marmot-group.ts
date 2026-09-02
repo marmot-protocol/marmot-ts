@@ -139,7 +139,8 @@ export type MarmotGroupOptions<
   /**
    * Persisted removed-inactive marker (D-12,
    * `protocol-core/member-departure.md` "Realizing removal"): a sibling
-   * store, keyed by the same group-id hex as {@link store}, that records
+   * store using a separate `${groupId}/removed` namespace on the same durable
+   * backend as {@link store}, that records
    * whether this group's involuntary removal has already been realized
    * (marker set) so realization survives a restart — without a full
    * `ClientState` deserialize just to check. Deliberately NOT a field grafted
@@ -307,6 +308,11 @@ export class MarmotGroup<
   /** Read the current group state */
   get state() {
     return this.session.state;
+  }
+
+  /** Group-scoped durable key for removal realization state. */
+  get #removedMarkerKey(): string {
+    return `${this.idStr}/removed`;
   }
 
   /**
@@ -718,10 +724,10 @@ export class MarmotGroup<
 
     if (this.#removedMarkerStore) {
       const alreadyRealized = await this.#removedMarkerStore.getItem(
-        this.idStr,
+        this.#removedMarkerKey,
       );
       if (alreadyRealized) return;
-      await this.#removedMarkerStore.setItem(this.idStr, true);
+      await this.#removedMarkerStore.setItem(this.#removedMarkerKey, true);
     } else {
       // No persisted marker configured: realization degrades to in-memory
       // only — still idempotent within this process, but not restart-durable
@@ -747,7 +753,7 @@ export class MarmotGroup<
       this.#removalRealizedInMemory = false;
       return;
     }
-    await this.#removedMarkerStore.removeItem(this.idStr);
+    await this.#removedMarkerStore.removeItem(this.#removedMarkerKey);
   }
 
   /**

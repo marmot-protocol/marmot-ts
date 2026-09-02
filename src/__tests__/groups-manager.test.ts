@@ -339,9 +339,14 @@ describe("GroupsManager session/runtime helpers", () => {
       await activationStarted.promise;
       const lateCacheHit = reader.get(created.id);
       let lateSettled = false;
-      void lateCacheHit.finally(() => {
-        lateSettled = true;
-      });
+      void lateCacheHit.then(
+        () => {
+          lateSettled = true;
+        },
+        () => {
+          lateSettled = true;
+        },
+      );
       await Promise.resolve();
 
       expect(lateSettled).toBe(false);

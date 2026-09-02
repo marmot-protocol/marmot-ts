@@ -110,6 +110,9 @@ export class GroupRegistry<
     Promise<MarmotGroup<THistory, TMedia>>
   >();
 
+  /** Group ids provisionally cached while their post-hydration activation runs. */
+  #activatingGroups = new Set<string>();
+
   constructor(options: GroupRegistryOptions<THistory, TMedia>) {
     super();
     this.store = options.store;
@@ -129,7 +132,9 @@ export class GroupRegistry<
 
   /** Returns the list of currently loaded (cached) group instances. */
   get loaded(): MarmotGroup<THistory, TMedia>[] {
-    return Array.from(this.#groups.values());
+    return Array.from(this.#groups.entries())
+      .filter(([id]) => !this.#activatingGroups.has(id))
+      .map(([, group]) => group);
   }
 
   /** Reads the cached instance for a group id, without loading from the store. */
@@ -256,6 +261,7 @@ export class GroupRegistry<
   /** Caches a group, attaches lifecycle forwarders, then activates its state. */
   async track(group: MarmotGroup<THistory, TMedia>): Promise<void> {
     const id = bytesToHex(group.id);
+    this.#activatingGroups.add(id);
     this.#groups.set(id, group);
 
     // If a group self-destroys, drop it from the cache so `loaded` stays accurate.
@@ -268,13 +274,14 @@ export class GroupRegistry<
     const listeners = { destroyed, removed };
     this.#groupListeners.set(id, listeners);
 
-    this.emit("updated", this.loaded);
     try {
       // Hydration is deliberately side-effect free. Persisted competing tips can
       // change canonical state (including landing on removal), so activate them
       // only after every public lifecycle forwarder is attached.
       if (group.forkTree.tips().length > 1) await group.reconverge();
       await group.realizeRemovalIfNeeded();
+      this.#activatingGroups.delete(id);
+      this.emit("updated", this.loaded);
     } catch (error) {
       // Activation is atomic from the registry's perspective. Always detach and
       // dispose this failed instance, but only remove cache entries that still
@@ -283,9 +290,9 @@ export class GroupRegistry<
       group.off("removed", removed);
       if (this.#groups.get(id) === group) {
         this.#groups.delete(id);
+        this.#activatingGroups.delete(id);
         if (this.#groupListeners.get(id) === listeners)
           this.#groupListeners.delete(id);
-        this.emit("updated", this.loaded);
       }
       group.dispose();
       throw error;
@@ -332,26 +339,24 @@ export class GroupRegistry<
     groupId: Uint8Array | string,
   ): Promise<MarmotGroup<THistory, TMedia>> {
     const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
+    const existingLoad = this.#groupLoadPromises.get(id);
+    if (existingLoad) return existingLoad;
+
     let group = this.#groups.get(id);
 
     if (!group) {
-      const existingLoad = this.#groupLoadPromises.get(id);
-      if (existingLoad) {
-        group = await existingLoad;
-      } else {
-        const loadPromise = this.load(groupId)
-          .then(async (loaded) => {
-            await this.track(loaded);
-            this.emit("loaded", loaded);
-            return loaded;
-          })
-          .finally(() => {
-            this.#groupLoadPromises.delete(id);
-          });
+      const loadPromise = this.load(groupId)
+        .then(async (loaded) => {
+          await this.track(loaded);
+          this.emit("loaded", loaded);
+          return loaded;
+        })
+        .finally(() => {
+          this.#groupLoadPromises.delete(id);
+        });
 
-        this.#groupLoadPromises.set(id, loadPromise);
-        group = await loadPromise;
-      }
+      this.#groupLoadPromises.set(id, loadPromise);
+      group = await loadPromise;
     }
 
     return group;

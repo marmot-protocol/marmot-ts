@@ -61,6 +61,36 @@ import {
   type VerifyEventMethod,
 } from "./verify.js";
 
+const SUBSCRIPTION_ID_CACHE_CAPACITY = 10_000;
+
+/** Deterministic bounded LRU used by long-lived group subscriptions. */
+export class BoundedIdCache {
+  readonly #ids = new Map<string, undefined>();
+
+  constructor(readonly capacity: number) {
+    if (!Number.isSafeInteger(capacity) || capacity < 1)
+      throw new Error("BoundedIdCache capacity must be a positive integer");
+  }
+
+  get size(): number {
+    return this.#ids.size;
+  }
+
+  has(id: string): boolean {
+    if (!this.#ids.delete(id)) return false;
+    this.#ids.set(id, undefined);
+    return true;
+  }
+
+  add(id: string): void {
+    this.#ids.delete(id);
+    this.#ids.set(id, undefined);
+    if (this.#ids.size <= this.capacity) return;
+    const oldest = this.#ids.keys().next().value;
+    if (oldest !== undefined) this.#ids.delete(oldest);
+  }
+}
+
 const log = logger.extend("GroupsManager");
 
 /** Options for {@link GroupsManager.connect} / {@link GroupsManager.connectAll}. */
@@ -494,18 +524,16 @@ export class GroupsManager<
     }
 
     const filter = { kinds: [GROUP_EVENT_KIND], "#h": [h] };
-    // Only ids of TRUSTED (verified + `h`-cardinal) events live here (SEC-01/
+    // Only ids of TRUSTED (verified + exact group-scoped `h`) events live here (SEC-01/
     // WR-01): an unverified or malformed event's id must never occupy this
     // dedup slot, or a corrupted same-id forgery could poison it and censor
     // the genuine, validly-signed event arriving later. `seen.add` MUST stay
     // strictly after both trust gates below — never add a rejected event's id
-    // here (T-03-24). Accepted consequence: a backfill-then-subscription
-    // redelivery of the exact same malformed event now re-emits `rejected` on
-    // every delivery, which is informational rather than a protocol-safety
-    // concern, and matches the sibling 1059 ingest boundary's shape
-    // (`invite-manager.ts`), which has no per-connection rejection-object
-    // cache either (T-03-23, the folded `groupsmanager-rejectedevents-dos` todo).
-    const seen = new Set<string>();
+    // here (T-03-24). Rejected ids have a separate bounded cache, consulted
+    // only after the current event fails validation, so a valid same-id event
+    // can never be censored by an earlier forgery.
+    const seen = new BoundedIdCache(SUBSCRIPTION_ID_CACHE_CAPACITY);
+    const rejected = new BoundedIdCache(SUBSCRIPTION_ID_CACHE_CAPACITY);
     const drain = async (events: NostrEvent[]): Promise<void> => {
       const fresh = events.filter((event) => !seen.has(event.id));
       if (!fresh.length) return;
@@ -517,10 +545,14 @@ export class GroupsManager<
       const trusted: NostrEvent[] = [];
       for (const event of fresh) {
         if (!safeVerifyEvent(this.#verifyEvent, event)) {
+          if (rejected.has(event.id)) continue;
+          rejected.add(event.id);
           this.emit("rejected", group.id, event, "invalid-signature");
           continue;
         }
-        if (getSingletonTagValue(event, "h") === undefined) {
+        if (getSingletonTagValue(event, "h") !== h) {
+          if (rejected.has(event.id)) continue;
+          rejected.add(event.id);
           this.emit("rejected", group.id, event, "tag-cardinality");
           continue;
         }

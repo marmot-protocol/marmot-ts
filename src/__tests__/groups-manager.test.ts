@@ -370,19 +370,26 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
       },
       generateSecretKey(),
     );
-    network.clear();
-    network.events.push(wrongGroup);
+    const unfilteredNetwork: NostrNetworkInterface = {
+      ...network,
+      request: async () => [wrongGroup],
+      subscription: () => ({
+        subscribe: () => ({ unsubscribe: () => {} }),
+      }),
+    };
+    const unfilteredManager = makeManager(unfilteredNetwork);
+    const unfilteredGroup = await unfilteredManager.adoptClientState(group.state);
 
     const rejections: Array<[Uint8Array, NostrEvent, string]> = [];
-    manager.on("rejected", (groupId, event, reason) =>
+    unfilteredManager.on("rejected", (groupId, event, reason) =>
       rejections.push([groupId, event, reason]),
     );
-    const ingestSpy = vi.spyOn(group, "ingest");
+    const ingestSpy = vi.spyOn(unfilteredGroup, "ingest");
 
-    await manager.connect(group.id);
+    await unfilteredManager.connect(unfilteredGroup.id);
 
     expect(rejections).toHaveLength(1);
-    expect(rejections[0]?.[2]).toBe("group-id-mismatch");
+    expect(rejections[0]?.[2]).toBe("tag-cardinality");
     expect(ingestSpy).not.toHaveBeenCalled();
   });
 

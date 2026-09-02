@@ -369,6 +369,51 @@ describe("involuntary removal signal", () => {
     expect(removed).toHaveBeenCalledOnce();
   });
 
+  it("completes durable removal when an application listener throws", async () => {
+    const fixture = await buildPersistedRemovalForkFixture();
+    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const setItem = vi.spyOn(removedMarkerStore, "setItem");
+    const group = marmotGroup(
+      fixture.removedState,
+      fixture.ePubkey,
+      fixture.impl,
+      [],
+      undefined,
+      removedMarkerStore,
+    );
+    Object.defineProperty(group.session, "convergenceStatus", {
+      configurable: true,
+      get: () => "Resolving",
+    });
+    const queued = group.submitIntent({
+      kind: "applicationMessage",
+      payload: new TextEncoder().encode("must be cancelled"),
+    });
+    const queuedRejection = queued.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const throwing = vi.fn(() => {
+      throw new Error("application callback failed");
+    });
+    const observer = vi.fn();
+    group.on("removed", throwing);
+    group.on("removed", observer);
+
+    await expect(group.realizeRemovalIfNeeded()).resolves.toBeUndefined();
+    await expect(queuedRejection).resolves.toThrow(/removed/i);
+    expect(await removedMarkerStore.getItem(`${group.idStr}/removed`)).toBe(
+      true,
+    );
+    expect(throwing).toHaveBeenCalledOnce();
+    expect(observer).toHaveBeenCalledOnce();
+
+    await expect(group.realizeRemovalIfNeeded()).resolves.toBeUndefined();
+    expect(setItem).toHaveBeenCalledOnce();
+    expect(throwing).toHaveBeenCalledOnce();
+    expect(observer).toHaveBeenCalledOnce();
+  });
+
   it("emits `removed` and keeps the tombstone when an admin's commit removes us", async () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();

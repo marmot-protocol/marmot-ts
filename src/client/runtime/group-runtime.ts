@@ -95,29 +95,33 @@ export class GroupRuntime {
           work,
           response: await this.publishApplication(work.envelope),
           notifications: [],
+          persistence: { kind: "notRequired" },
+          retryPublication: false,
         };
       case "proposal":
         return {
           work,
           response: await this.publishProposal(work.envelope, work.pending),
           notifications: [],
+          persistence: { kind: "succeeded" },
+          retryPublication: false,
         };
       case "selfUpdate": {
-        const { response, notifications } = await this.#publishSelfUpdateResult(
+        const result = await this.#publishSelfUpdateResult(
           work.envelope,
           work.pending,
         );
-        return { work, response, notifications };
+        return { work, ...result };
       }
       case "groupEvolution": {
-        const { response, notifications } = await this.#publishCommitResult({
+        const result = await this.#publishCommitResult({
           envelope: work.envelope,
           pending: work.pending,
           actorPubkey: work.actorPubkey,
           welcome: work.welcome,
           welcomeRecipients: work.welcomeRecipients,
         });
-        return { work, response, notifications };
+        return { work, ...result };
       }
     }
   }
@@ -178,6 +182,8 @@ export class GroupRuntime {
   ): Promise<{
     response: Record<string, PublishResponse>;
     notifications: StateNotification[];
+    persistence: GroupPublishResult["persistence"];
+    retryPublication: false;
   }> {
     // A selfUpdate is a commit and now stages through `PendingPublish`
     // (CR-09/WR-17), so a publish failure MUST roll the lifecycle back —
@@ -194,8 +200,8 @@ export class GroupRuntime {
     }
 
     const notifications = this.#confirmPublished(pending);
-    await this.#save();
-    return { response, notifications };
+    const persistence = await this.#persistConfirmedState();
+    return { response, notifications, persistence, retryPublication: false };
   }
 
   async publishCommit(
@@ -207,6 +213,8 @@ export class GroupRuntime {
   async #publishCommitResult(options: PublishCommitOptions): Promise<{
     response: Record<string, PublishResponse>;
     notifications: StateNotification[];
+    persistence: GroupPublishResult["persistence"];
+    retryPublication: false;
   }> {
     let response: Record<string, PublishResponse>;
     try {
@@ -220,7 +228,7 @@ export class GroupRuntime {
     }
 
     const notifications = this.#confirmPublished(options.pending);
-    await this.#save();
+    const persistence = await this.#persistConfirmedState();
 
     const innerWelcome = options.welcome?.welcome;
     if (innerWelcome && options.welcomeRecipients?.length) {
@@ -231,7 +239,16 @@ export class GroupRuntime {
       );
     }
 
-    return { response, notifications };
+    return { response, notifications, persistence, retryPublication: false };
+  }
+
+  async #persistConfirmedState(): Promise<GroupPublishResult["persistence"]> {
+    try {
+      await this.#save();
+      return { kind: "succeeded" };
+    } catch (error) {
+      return { kind: "failed", error: errorDetail(error) };
+    }
   }
 
   async #publishToGroupRelays(

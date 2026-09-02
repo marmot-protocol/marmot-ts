@@ -26,12 +26,22 @@ export type GroupEffects = {
   publish: GroupPublishWork[];
 };
 
+/** Outcome of fallible work performed around a confirmed publication. */
+export type AncillaryEffectOutcome =
+  | { kind: "notRequired" }
+  | { kind: "succeeded" }
+  | { kind: "failed"; error: string };
+
 /** Result of runtime publication for one work item. */
 export type GroupPublishResult = {
   work: GroupPublishWork;
   response: Record<string, PublishResponse>;
   /** State changes derived only after a commit publish is acknowledged. */
   notifications: StateNotification[];
+  /** Persistence performed after the publication became irreversible. */
+  persistence: AncillaryEffectOutcome;
+  /** Confirmed work must never be republished, even if ancillary work failed. */
+  retryPublication: boolean;
 };
 
 /** Local protocol intent accepted by {@link GroupSession}. */

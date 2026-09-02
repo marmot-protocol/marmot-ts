@@ -29,12 +29,17 @@ const selfRemoved = (label: string): StateNotification => ({
 });
 
 describe("StateNotificationLedger", () => {
-  it("record increments size; recording an empty notification array does not", () => {
+  it("record preserves an empty derivation as a rewind-reachable digest entry", () => {
     const ledger = new StateNotificationLedger();
     ledger.record(digest("a"), 1, [epochAdvanced("a", 0, 1)]);
     expect(ledger.size).toBe(1);
 
     ledger.record(digest("empty"), 1, []);
+    expect(ledger.size).toBe(2);
+    expect(ledger.has(digest("empty"), 1)).toBe(true);
+
+    ledger.invalidatedByRewind(0, new Set([bytesToHex(digest("a"))]));
+    expect(ledger.has(digest("empty"), 1)).toBe(false);
     expect(ledger.size).toBe(1);
   });
 

@@ -437,7 +437,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     );
   });
 
-  it("reports an app payload delivered on an abandoned branch as invalidated on rewind (M7)", async () => {
+  it("reports a locally sent app payload on an abandoned branch as invalidated on rewind (M7)", async () => {
     const adminPubkey = "a".repeat(64);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -509,31 +509,19 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
       ciphersuite: impl,
     });
 
-    // An admin application message on the HIGHER (losing) branch, epoch 2. It is
-    // encrypted under that branch's epoch-2 exporter secret, so the member can
-    // only decrypt it while it is sitting on that branch. The inner rumor is
-    // authored by the MLS sender (admin) with a canonical id, so it passes the
-    // M3 authorship check and is delivered as accepted.
+    // A local application message sent by the member while it follows the HIGHER
+    // (losing) branch. Local sends are delivered optimistically by the caller and
+    // therefore need the same branch accounting as accepted inbound payloads.
     const rumor: Rumor = {
       id: "",
       kind: 1,
-      content: "message on the losing branch",
+      content: "local message on the losing branch",
       tags: [],
       created_at: 1_700_000_000,
-      pubkey: adminPubkey,
+      pubkey: memberPubkey,
     };
     rumor.id = getEventHash(rumor);
     const losingPayload = new TextEncoder().encode(JSON.stringify(rumor));
-    const losingAppMessage = await createApplicationMessage({
-      context: ctx,
-      state: higher.newState,
-      message: losingPayload,
-    });
-    const losingAppEvent = await createGroupEvent({
-      message: losingAppMessage.message,
-      state: higher.newState,
-      ciphersuite: impl,
-    });
 
     // The canonical state = the member applying the lower commit directly.
     const expected = await processMessage({
@@ -578,18 +566,14 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     const losingTag = bytesToHex(group.state.confirmationTag);
     const losingEpoch = Number(group.state.groupContext.epoch);
 
-    // Deliver the app payload while on the losing branch — accepted (eager).
-    let deliveredAccepted = false;
-    for await (const res of group.ingest([losingAppEvent])) {
-      if (
-        res.kind === "processed" &&
-        res.result.kind === "applicationMessage"
-      ) {
-        deliveredAccepted = true;
-        expect(res.disposition).toEqual({ kind: "accepted" });
-      }
-    }
-    expect(deliveredAccepted).toBe(true);
+    // Send locally while on the losing branch. The session returns the exact
+    // transport envelope whose optimistic delivery must later be retracted.
+    const effects = await group.session.send({
+      kind: "applicationMessage",
+      payload: losingPayload,
+    });
+    const losingAppEvent = effects.publish[0]?.envelope;
+    expect(losingAppEvent).toBeDefined();
 
     // The canonical (lower) commit arrives late → rewind to it AND retract the
     // app payload that decrypted only on the now-abandoned higher branch.
@@ -620,7 +604,7 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     // decrypted payload so a consumer can identify the retracted rumor.
     expect(invalidated).toEqual([
       {
-        id: losingAppEvent.id,
+        id: losingAppEvent!.id,
         tag: losingTag,
         epoch: losingEpoch,
         payload: losingPayload,

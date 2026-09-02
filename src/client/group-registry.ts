@@ -265,14 +265,31 @@ export class GroupRegistry<
     // signal so the manager can re-emit it to the application.
     const removed = () => this.emit("removed", group);
     group.on("removed", removed);
-    this.#groupListeners.set(id, { destroyed, removed });
+    const listeners = { destroyed, removed };
+    this.#groupListeners.set(id, listeners);
 
     this.emit("updated", this.loaded);
-    // Hydration is deliberately side-effect free. Persisted competing tips can
-    // change canonical state (including landing on removal), so activate them
-    // only after every public lifecycle forwarder is attached.
-    if (group.forkTree.tips().length > 1) await group.reconverge();
-    await group.realizeRemovalIfNeeded();
+    try {
+      // Hydration is deliberately side-effect free. Persisted competing tips can
+      // change canonical state (including landing on removal), so activate them
+      // only after every public lifecycle forwarder is attached.
+      if (group.forkTree.tips().length > 1) await group.reconverge();
+      await group.realizeRemovalIfNeeded();
+    } catch (error) {
+      // Activation is atomic from the registry's perspective. Always detach and
+      // dispose this failed instance, but only remove cache entries that still
+      // point to it so a stale rejection cannot evict a newer activation.
+      group.off("destroyed", destroyed);
+      group.off("removed", removed);
+      if (this.#groups.get(id) === group) {
+        this.#groups.delete(id);
+        if (this.#groupListeners.get(id) === listeners)
+          this.#groupListeners.delete(id);
+        this.emit("updated", this.loaded);
+      }
+      group.dispose();
+      throw error;
+    }
   }
 
   /** Removes a group instance from the cache and detaches its listeners. */

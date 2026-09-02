@@ -431,12 +431,13 @@ describe("involuntary removal signal", () => {
     const onContext = { name: "on-context" };
     const onceContext = { name: "once-context" };
 
-    group.on("removed", function (received) {
+    const throwing = function (this: typeof onContext, received: MarmotGroup) {
       expect(this).toBe(onContext);
       expect(received).toBe(group);
       order.push("on");
       throw new Error("application callback failed");
-    }, onContext);
+    };
+    group.on("removed", throwing, onContext);
     group.once("removed", function (received) {
       expect(this).toBe(onceContext);
       expect(received).toBe(group);
@@ -455,8 +456,9 @@ describe("involuntary removal signal", () => {
     );
     expect(order).toEqual(["on", "once", "observer"]);
 
+    group.off("removed", throwing, onContext);
     group.emit("removed", group);
-    expect(order).toEqual(["on", "once", "observer", "on", "observer"]);
+    expect(order).toEqual(["on", "once", "observer", "observer"]);
   });
 
   it("emits `removed` and keeps the tombstone when an admin's commit removes us", async () => {

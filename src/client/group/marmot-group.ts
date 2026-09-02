@@ -246,6 +246,15 @@ export type MarmotGroupEvents<
   historyChanged: (group: MarmotGroup<THistory, TMedia>) => void;
 };
 
+type RemovedListener<
+  THistory extends BaseGroupHistory | undefined,
+  TMedia extends BaseGroupMedia | undefined,
+> = {
+  fn: (group: MarmotGroup<THistory, TMedia>) => void;
+  context: unknown;
+  once: boolean;
+};
+
 /**
  * The main class for interacting with a MLS group
  * @template THistory - The type of the history store to use for the group, must implement the {@link BaseGroupHistory} interface. (Default is no history store)
@@ -301,8 +310,87 @@ export class MarmotGroup<
   #removalRealizedInMemory = false;
   /** Same-instance serialization for the marker transaction and public event. */
   #removalRealizationInFlight?: Promise<void>;
+  /** Project-owned metadata for safe `removed` dispatch; never reads emitter internals. */
+  readonly #removedListeners: RemovedListener<THistory, TMedia>[] = [];
 
   private log: Debugger;
+
+  override on<T extends EventEmitter.EventNames<MarmotGroupEvents<THistory, TMedia>>>(
+    event: T,
+    fn: EventEmitter.EventListener<MarmotGroupEvents<THistory, TMedia>, T>,
+    context?: unknown,
+  ): this {
+    if (event === "removed") {
+      this.#removedListeners.push({
+        fn: fn as (group: MarmotGroup<THistory, TMedia>) => void,
+        context: context || this,
+        once: false,
+      });
+    }
+    return super.on(event, fn, context);
+  }
+
+  override once<T extends EventEmitter.EventNames<MarmotGroupEvents<THistory, TMedia>>>(
+    event: T,
+    fn: EventEmitter.EventListener<MarmotGroupEvents<THistory, TMedia>, T>,
+    context?: unknown,
+  ): this {
+    if (event === "removed") {
+      this.#removedListeners.push({
+        fn: fn as (group: MarmotGroup<THistory, TMedia>) => void,
+        context: context || this,
+        once: true,
+      });
+    }
+    return super.once(event, fn, context);
+  }
+
+  override removeListener<
+    T extends EventEmitter.EventNames<MarmotGroupEvents<THistory, TMedia>>,
+  >(
+    event: T,
+    fn?: EventEmitter.EventListener<MarmotGroupEvents<THistory, TMedia>, T>,
+    context?: unknown,
+    once?: boolean,
+  ): this {
+    if (event === "removed") {
+      if (!fn) {
+        this.#removedListeners.length = 0;
+      } else {
+        const removedFn = fn as (
+          group: MarmotGroup<THistory, TMedia>,
+        ) => void;
+        for (let i = this.#removedListeners.length - 1; i >= 0; i--) {
+          const listener = this.#removedListeners[i];
+          if (
+            listener.fn === removedFn &&
+            (!once || listener.once) &&
+            (!context || listener.context === context)
+          ) {
+            this.#removedListeners.splice(i, 1);
+          }
+        }
+      }
+    }
+    return super.removeListener(event, fn, context, once);
+  }
+
+  override off<T extends EventEmitter.EventNames<MarmotGroupEvents<THistory, TMedia>>>(
+    event: T,
+    fn?: EventEmitter.EventListener<MarmotGroupEvents<THistory, TMedia>, T>,
+    context?: unknown,
+    once?: boolean,
+  ): this {
+    return this.removeListener(event, fn, context, once);
+  }
+
+  override removeAllListeners(
+    event?: EventEmitter.EventNames<MarmotGroupEvents<THistory, TMedia>>,
+  ): this {
+    if (event === undefined || event === "removed")
+      this.#removedListeners.length = 0;
+    return super.removeAllListeners(event);
+  }
 
   get id() {
     return this.session.id;
@@ -751,11 +839,12 @@ export class MarmotGroup<
 
   /** Delivers the public removal signal without making callbacks transactional. */
   #emitRemovedSafely(): void {
-    for (const listener of this.listeners("removed")) {
-      // Preserve one-shot listener behavior when invoking from the snapshot.
-      this.off("removed", listener, undefined, true);
+    for (const listener of [...this.#removedListeners]) {
+      // EventEmitter3 removes one-shot listeners before invoking them.
+      if (listener.once)
+        this.off("removed", listener.fn, undefined, true);
       try {
-        listener(this);
+        listener.fn.call(listener.context, this);
       } catch (error) {
         this.log("removed listener failed: %o", error);
       }

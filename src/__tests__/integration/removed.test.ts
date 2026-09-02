@@ -238,6 +238,34 @@ async function buildPersistedRemovalForkFixture() {
 }
 
 describe("involuntary removal signal", () => {
+  it("keeps removal markers in a group-scoped namespace on a shared backend (WR-19)", async () => {
+    const { impl, ePubkey, eEpoch1, removeCommitEvent } =
+      await buildRemovalFixture();
+    const shared = new InMemoryKeyValueStore<
+      SerializedClientState | boolean
+    >();
+    const stateStore = shared as GenericKeyValueStore<SerializedClientState>;
+    const markerStore = shared as GenericKeyValueStore<boolean>;
+    const group = marmotGroup(
+      eEpoch1,
+      ePubkey,
+      impl,
+      [],
+      stateStore,
+      markerStore,
+    );
+    await group.save(true);
+
+    for await (const _ of group.ingest([removeCommitEvent])) void _;
+
+    const persisted = await stateStore.getItem(group.idStr);
+    expect(persisted).not.toBeNull();
+    expect(deserializeClientState(persisted!).groupActiveState.kind).toBe(
+      "removedFromGroup",
+    );
+    expect(await markerStore.getItem(`${group.idStr}/removed`)).toBe(true);
+  });
+
   it("forwards persisted multi-tip removal before the public loaded event (CR-01)", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
     const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
@@ -269,7 +297,7 @@ describe("involuntary removal signal", () => {
 
     expect(loaded.state.groupActiveState.kind).toBe("removedFromGroup");
     expect(removed).toHaveBeenCalledOnce();
-    expect(await removedMarkerStore.getItem(groupId)).toBe(true);
+    expect(await removedMarkerStore.getItem(`${groupId}/removed`)).toBe(true);
     expect(events).toEqual(["removed", "loaded"]);
   });
 
@@ -406,7 +434,7 @@ describe("involuntary removal signal", () => {
 
     for await (const _ of eGroup.ingest([removeCommitEvent])) void _;
 
-    expect(await inner.getItem(idHex)).toBe(true);
+    expect(await inner.getItem(`${idHex}/removed`)).toBe(true);
     expect(persistedAtMarkerWrite).toBeTruthy();
     expect(
       deserializeClientState(persistedAtMarkerWrite!).groupActiveState.kind,
@@ -452,7 +480,9 @@ describe("involuntary removal signal", () => {
     for await (const _ of liveGroup.ingest([removeCommitEvent])) void _;
     await liveGroup.save(true);
     expect(liveGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    expect(await removedMarkerStore.getItem(liveGroup.idStr)).toBeNull();
+    expect(
+      await removedMarkerStore.getItem(`${liveGroup.idStr}/removed`),
+    ).toBeNull();
 
     // Construction is deliberately side-effect free. The owning registry
     // attaches its forwarding listener first, then invokes this explicit
@@ -468,7 +498,9 @@ describe("involuntary removal signal", () => {
     await firstLoad.realizeRemovalIfNeeded();
 
     expect(firstRemoved).toHaveBeenCalledOnce();
-    expect(await removedMarkerStore.getItem(liveGroup.idStr)).toBe(true);
+    expect(
+      await removedMarkerStore.getItem(`${liveGroup.idStr}/removed`),
+    ).toBe(true);
 
     // Second load, same marker store: marker is already set, so explicit
     // realization is a no-op — zero `removed` emissions.
@@ -522,7 +554,7 @@ describe("involuntary removal signal", () => {
     // A genuine removal: tombstone persisted, marker written, `removed` once.
     for await (const _ of eGroup.ingest([removeCommitEvent])) void _;
     expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    expect(await removedMarkerStore.getItem(idHex)).toBe(true);
+    expect(await removedMarkerStore.getItem(`${idHex}/removed`)).toBe(true);
     expect(removedEmissions).toBe(1);
 
     // Now a rewind that withdraws that removal's `selfRemoved` notification
@@ -547,7 +579,7 @@ describe("involuntary removal signal", () => {
 
     // Membership was never restored, so the marker must survive...
     expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    expect(await removedMarkerStore.getItem(idHex)).toBe(true);
+    expect(await removedMarkerStore.getItem(`${idHex}/removed`)).toBe(true);
     // ...and no duplicate `removed` is emitted for what is one removal.
     expect(removedEmissions).toBe(1);
   });
@@ -588,7 +620,7 @@ describe("involuntary removal signal", () => {
     const idHex = group.idStr;
 
     // Sanity: the group is live and unmarked before the removing commit.
-    expect(await removedMarkerStore.getItem(idHex)).toBeNull();
+    expect(await removedMarkerStore.getItem(`${idHex}/removed`)).toBeNull();
 
     const kinds: string[] = [];
     for await (const r of manager1.ingest(group.id, [removeCommitEvent]))
@@ -598,7 +630,7 @@ describe("involuntary removal signal", () => {
 
     // The marker reached the durable store through the manager — this is the
     // plumbing CR-10 was about. Unplumbed, this is still `null`.
-    expect(await removedMarkerStore.getItem(idHex)).toBe(true);
+    expect(await removedMarkerStore.getItem(`${idHex}/removed`)).toBe(true);
 
     // --- process 2: a fresh manager over the same stores (a "restart").
     // `MarmotGroup.fromClientState` realizes internally before returning, so

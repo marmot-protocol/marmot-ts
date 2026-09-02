@@ -55,12 +55,13 @@ function marmotGroup(
   pubkey: string,
   impl: CiphersuiteImpl,
   published: NostrEvent[],
+  network: NostrNetworkInterface = recordingNetwork(published),
 ) {
   return new MarmotGroup(state, {
     store: new InMemoryKeyValueStore<SerializedClientState>(),
     signer: { getPublicKey: async () => pubkey } as EventSigner,
     ciphersuite: impl,
-    network: recordingNetwork(published),
+    network,
   });
 }
 
@@ -199,6 +200,54 @@ describe("SelfRemove member departure (B6)", () => {
     await iterator.return(undefined);
     expect(cancelledGroup.lifecycle).toBe("Stable");
     expect(cancelledPublished).toHaveLength(1);
+
+    // A rejected relay publication exposes the elected auto-commit result but
+    // no fabricated applied notifications, rolls back, and remains retryable.
+    const retriedPublished: NostrEvent[] = [];
+    let publicationAttempts = 0;
+    const retryNetwork = recordingNetwork(retriedPublished);
+    retryNetwork.publish = async (_relays, event) => {
+      publicationAttempts += 1;
+      if (publicationAttempts === 1) throw new Error("relay rejected commit");
+      retriedPublished.push(event);
+      return { [RELAY]: { ok: true } as PublishResponse };
+    };
+    const retryGroup = marmotGroup(
+      adminEpoch1,
+      adminPubkey,
+      impl,
+      retriedPublished,
+      retryNetwork,
+    );
+    const failedResults = [];
+    for await (const result of retryGroup.ingest([selfRemoveEvent]))
+      failedResults.push(result);
+    const failedAutoCommitIndex = failedResults.findIndex(
+      (result) => result.kind === "autoCommit",
+    );
+    expect(failedAutoCommitIndex).toBeGreaterThanOrEqual(0);
+    expect(failedResults[failedAutoCommitIndex + 1]?.kind).not.toBe(
+      "appliedNotifications",
+    );
+    expect(retryGroup.lifecycle).toBe("Stable");
+    expect(retryGroup.state.groupContext.epoch).toBe(
+      adminEpoch1.groupContext.epoch,
+    );
+
+    const retryResults = [];
+    for await (const result of retryGroup.ingest([])) retryResults.push(result);
+    const retriedAutoCommitIndex = retryResults.findIndex(
+      (result) => result.kind === "autoCommit",
+    );
+    expect(retriedAutoCommitIndex).toBeGreaterThanOrEqual(0);
+    expect(retryResults[retriedAutoCommitIndex + 1]?.kind).toBe(
+      "appliedNotifications",
+    );
+    expect(retryGroup.lifecycle).toBe("Stable");
+    expect(retryGroup.state.groupContext.epoch).toBe(
+      adminEpoch1.groupContext.epoch + 1n,
+    );
+    expect(retriedPublished).toHaveLength(1);
 
     // The elected committer (admin "a", leaf 0) ingests the same self_remove and
     // auto-commits it.

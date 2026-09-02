@@ -43,6 +43,7 @@ import type {
 import {
   GroupSession,
   ingestResultDisposition,
+  type AppliedNotificationsIngestResult,
   type DispositionedIngestResult,
   type GroupSessionHistory,
   type ProposalBuilder,
@@ -795,7 +796,7 @@ export class MarmotGroup<
       // pending, so a later ingest re-elects and retries — swallow the throw so
       // it does not abort delivery of the rest of the batch.
       if (result.kind === "autoCommit") {
-        yield result;
+        let applied: AppliedNotificationsIngestResult | undefined;
         try {
           const [confirmed] = await this.runtime.publishEffects({
             publish: [
@@ -809,20 +810,22 @@ export class MarmotGroup<
           });
           if (!result.pending.commitMessage)
             throw new Error("Auto-commit pending state has no commit message");
-          const applied = {
+          applied = {
             kind: "appliedNotifications" as const,
             commitDigest: commitDigest(
               encode(mlsMessageEncoder, result.pending.commitMessage),
             ),
             notifications: confirmed!.notifications,
           };
+        } catch {
+          /* rolled back; retried on a later ingest */
+        }
+        yield result;
+        if (applied)
           yield {
             ...applied,
             disposition: ingestResultDisposition(applied),
           };
-        } catch {
-          /* rolled back; retried on a later ingest */
-        }
         continue;
       }
 

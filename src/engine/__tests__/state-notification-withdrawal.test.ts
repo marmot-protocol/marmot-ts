@@ -1040,8 +1040,10 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
       ratchetTreeExtension: true,
       extraProposals: [],
     });
-    await drain(
-      engine.ingest([
+    const ingestResults: Awaited<
+      ReturnType<typeof engine.reconvergeFromHistory>
+    > = [];
+    for await (const result of engine.ingest([
         await createGroupEvent({
           message: sibA.commit,
           state: memberEpoch1,
@@ -1052,8 +1054,29 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
           state: sibA.newState,
           ciphersuite: impl,
         }),
-      ]),
+      ])) ingestResults.push(result);
+    const applied = ingestResults.filter(
+      (result) => result.kind === "appliedNotifications",
     );
+    expect(applied.length).toBeGreaterThan(0);
+    for (const result of applied) {
+      if (result.kind !== "appliedNotifications") continue;
+      expect(result.notifications.length).toBeGreaterThan(0);
+      expect(
+        result.notifications.every(
+          (notification) =>
+            bytesToHex(notification.commitDigest) ===
+            bytesToHex(result.commitDigest),
+        ),
+      ).toBe(true);
+    }
+    const firstApplied = ingestResults.findIndex(
+      (result) => result.kind === "appliedNotifications",
+    );
+    const firstWithdrawal = ingestResults.findIndex(
+      (result) => result.kind === "stateInvalidated",
+    );
+    if (firstWithdrawal >= 0) expect(firstApplied).toBeLessThan(firstWithdrawal);
 
     // The contract that CR-06 restores: a resolved array, never `undefined`.
     const results = await engine.reconvergeFromHistory();

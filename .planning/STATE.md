@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 03.1
 current_phase_name: Phase 3 Review Closure
 status: executing
-stopped_at: Completed 03.1-10-PLAN.md
-last_updated: "2026-09-02T15:27:36.558Z"
+stopped_at: Completed 03.1-08-PLAN.md
+last_updated: "2026-09-02T15:33:18.760Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 03.1 execution started
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 28
-  completed_plans: 26
+  completed_plans: 27
   percent: 43
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 03.1 (Phase 3 Review Closure) — EXECUTING
-Plan: 10 of 11
+Plan: 11 of 11
 Status: Ready to execute
 Last activity: 2026-09-01 — Phase 03.1 execution started
 
-Progress: [█████████░] 93% (7 phases)
+Progress: [██████████] 96% (7 phases)
 
 **Next recommended run:** `/gsd-plan-phase 03.1`
 
@@ -89,6 +89,7 @@ _Updated after each plan completion_
 | Phase 03.1 P07 | 4min | 1 tasks | 4 files |
 | Phase 03.1 P09 | 8min | 2 tasks | 10 files |
 | Phase 03.1 P10 | 7min | 2 tasks | 8 files |
+| Phase 03.1 P08 | 2min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -162,6 +163,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 03.1-10]: Project confirmation bookkeeping errors as typed persistence failures without republication.
 - [Phase ?]: [Phase 03.1-10]: Emit local historyChanged only after confirmation grows the tree.
 - [Phase ?]: [Phase 03.1-10]: Delete groupId/removed before shared serialized state and omit obsolete bare rewind deletion.
+- [Phase ?]: [Phase 03.1-08]: Expose only engine symbols named by root public signatures while keeping unrelated internals on ./engine.
+- [Phase ?]: [Phase 03.1-08]: Pin BoundedIdCache, decideCommitAuthorization, and getGroupMemberPubkeys as intended root runtime API.
 
 ### Pending Todos
 
@@ -196,7 +199,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-02T15:27:36.539Z
-Stopped at: Completed 03.1-10-PLAN.md
+Last session: 2026-09-02T15:33:18.741Z
+Stopped at: Completed 03.1-08-PLAN.md
 Resume file:
 None

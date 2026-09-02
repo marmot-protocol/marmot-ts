@@ -545,13 +545,11 @@ export class GroupsManager<
       const trusted: NostrEvent[] = [];
       for (const event of fresh) {
         if (!safeVerifyEvent(this.#verifyEvent, event)) {
-          if (rejected.has(event.id)) continue;
           rejected.add(event.id);
           this.emit("rejected", group.id, event, "invalid-signature");
           continue;
         }
         if (getSingletonTagValue(event, "h") !== h) {
-          if (rejected.has(event.id)) continue;
           rejected.add(event.id);
           this.emit("rejected", group.id, event, "tag-cardinality");
           continue;

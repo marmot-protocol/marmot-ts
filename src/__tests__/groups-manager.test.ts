@@ -175,7 +175,9 @@ describe("GroupsManager session/runtime helpers", () => {
     expect(first).toBe(second);
     expect(removed).toHaveLength(1);
     expect(removed[0]).toEqual(created.id);
-    expect(await removedMarkerStore.getItem(created.idStr)).toBe(true);
+    expect(
+      await removedMarkerStore.getItem(`${created.idStr}/removed`),
+    ).toBe(true);
 
     const restarted = new GroupsManager(options);
     const restartRemoved = vi.fn();
@@ -261,13 +263,8 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
 
     await manager.connect(group.id);
 
-    // T-03-23 (the folded `groupsmanager-rejectedevents-dos` todo): the drain
-    // no longer caches rejected event objects for the connection lifetime, so
-    // a redelivery of this exact malformed event (e.g. backfill + subscribe
-    // both surfacing it) may now emit `rejected` more than once — informational,
-    // not a protocol-safety regression. Assert at least one rejection fired,
-    // with every rejection carrying the expected reason.
-    expect(rejections).toHaveLength(1);
+    // Backfill and subscription replay each surface the malformed event once.
+    expect(rejections).toHaveLength(2);
     expect(
       rejections.every(([, , reason]) => reason === "invalid-signature"),
     ).toBe(true);
@@ -308,9 +305,8 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
 
     await manager.connect(group.id);
 
-    // Same T-03-23 relaxation as the invalid-signature test above: at least
-    // one rejection, every rejection carrying the expected reason.
-    expect(rejections).toHaveLength(1);
+    // Backfill and subscription replay each surface the malformed event once.
+    expect(rejections).toHaveLength(2);
     expect(
       rejections.every(([, , reason]) => reason === "tag-cardinality"),
     ).toBe(true);
@@ -429,7 +425,7 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
     // collapse that redelivery to one `rejected` emit, so two are now
     // expected (informational, not a protocol-safety regression; see the
     // `seen`/`rejectedEvents` comment in `#connectGroup`).
-    expect(rejections).toHaveLength(1);
+    expect(rejections).toHaveLength(2);
     expect(
       rejections.every(([, , reason]) => reason === "invalid-signature"),
     ).toBe(true);

@@ -746,7 +746,20 @@ export class MarmotGroup<
     }
 
     this.#rejectQueuedOutbound("Removed from group; outbound cancelled.");
-    this.emit("removed", this);
+    this.#emitRemovedSafely();
+  }
+
+  /** Delivers the public removal signal without making callbacks transactional. */
+  #emitRemovedSafely(): void {
+    for (const listener of this.listeners("removed")) {
+      // Preserve one-shot listener behavior when invoking from the snapshot.
+      this.off("removed", listener, undefined, true);
+      try {
+        listener(this);
+      } catch (error) {
+        this.log("removed listener failed: %o", error);
+      }
+    }
   }
 
   /**

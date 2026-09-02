@@ -401,7 +401,9 @@ describe("involuntary removal signal", () => {
     group.on("removed", observer);
 
     await expect(group.realizeRemovalIfNeeded()).resolves.toBeUndefined();
-    await expect(queuedRejection).resolves.toThrow(/removed/i);
+    const queuedError = await queuedRejection;
+    expect(queuedError).toBeInstanceOf(Error);
+    expect((queuedError as Error).message).toMatch(/removed/i);
     expect(await removedMarkerStore.getItem(`${group.idStr}/removed`)).toBe(
       true,
     );

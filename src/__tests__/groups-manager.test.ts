@@ -297,6 +297,78 @@ describe("GroupsManager session/runtime helpers", () => {
     expect(reader.loaded).toEqual([retried]);
     expect(removedMarkerStore.getItem).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["reconverge", "realizeRemovalIfNeeded"] as const)(
+    "keeps a late cache hit pending until %s activation rejects",
+    async (activationStep) => {
+      const network = new MockNetwork(["wss://relay.test"]);
+      const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
+      const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+      const writer = new GroupsManager({ store: stateStore, signer, network });
+      const created = await writer.create("Late Activation", {
+        relays: ["wss://relay.test"],
+      });
+      await created.save(true);
+
+      let rejectActivation!: (reason: Error) => void;
+      const activationStarted = Promise.withResolvers<void>();
+      const activation = new Promise<void>((_resolve, reject) => {
+        rejectActivation = reject;
+      });
+      const activationError = new Error(`${activationStep} unavailable`);
+      const tips = vi
+        .spyOn(created.forkTree.constructor.prototype, "tips")
+        .mockReturnValue(
+          activationStep === "reconverge" ? ["tip-a", "tip-b"] : ["tip-a"],
+        );
+      const activationSpy = vi
+        .spyOn(MarmotGroup.prototype, activationStep)
+        .mockImplementationOnce(async () => {
+          activationStarted.resolve();
+          await activation;
+        })
+        .mockResolvedValue(undefined);
+      const dispose = vi.spyOn(MarmotGroup.prototype, "dispose");
+      const reader = new GroupsManager({ store: stateStore, signer, network });
+      const updated = vi.fn();
+      const loaded = vi.fn();
+      reader.on("updated", updated);
+      reader.on("loaded", loaded);
+
+      const activatingGet = reader.get(created.id);
+      await activationStarted.promise;
+      const lateCacheHit = reader.get(created.id);
+      let lateSettled = false;
+      void lateCacheHit.finally(() => {
+        lateSettled = true;
+      });
+      await Promise.resolve();
+
+      expect(lateSettled).toBe(false);
+      expect(reader.loaded).toEqual([]);
+      expect(updated).not.toHaveBeenCalled();
+      expect(loaded).not.toHaveBeenCalled();
+
+      rejectActivation(activationError);
+      await expect(activatingGet).rejects.toBe(activationError);
+      await expect(lateCacheHit).rejects.toBe(activationError);
+      expect(reader.loaded).toEqual([]);
+      expect(updated).not.toHaveBeenCalled();
+      expect(loaded).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+
+      const retried = await reader.get(created.id);
+      expect(retried).not.toBe(created);
+      expect(reader.loaded).toEqual([retried]);
+      expect(updated).toHaveBeenCalledOnce();
+      expect(updated).toHaveBeenLastCalledWith([retried]);
+      expect(loaded).toHaveBeenCalledOnce();
+      expect(loaded).toHaveBeenLastCalledWith(retried);
+      expect(activationSpy).toHaveBeenCalledTimes(2);
+
+      tips.mockRestore();
+    },
+  );
 });
 
 describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)", () => {

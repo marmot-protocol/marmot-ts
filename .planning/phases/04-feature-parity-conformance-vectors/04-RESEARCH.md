@@ -417,12 +417,12 @@ return result; // deferred/resource-refused remains redeliverable
 | Dependency | Required By | Available | Version | Fallback |
 |------------|-------------|-----------|---------|----------|
 | Node.js | build/test | ✓ | 22.23.1 | CI Node 20/22/24 in Phase 5 |
-| pnpm | build/test | ✓, wrong major | 11.18.0; CI/workspace require 10 | run through the repository's pnpm 10/Corepack contract before verification |
+| pnpm | build/test | ✓ via version-pinned launcher | 10.18.3 | use `npx --yes pnpm@10.18.3`; run `npx --yes pnpm@10.18.3 install --frozen-lockfile` when dependency installation is required |
 | Git submodules | fixture/spec loading | ✓ | Marmot `4a2bc65`; MDK `93ecfbca` | no copied full corpus |
 | Vitest | smoke/extended tests | ✓ | 3.2.6 | none |
 | ts-mls workspace | real crypto/conformance projection | ✓ | 2.0.0-rc.14 | none |
 
-No dependency is missing, but the interactive pnpm major differs from CI and must be normalized before accepting lockfile/build evidence. [VERIFIED: environment probes and `AGENTS.md`]
+No dependency is missing. Use the live-verified `npx --yes pnpm@10.18.3` launcher for Phase 4 commands, and preserve CI's frozen lockfile contract with `npx --yes pnpm@10.18.3 install --frozen-lockfile` whenever installation is needed. [VERIFIED: live environment probe and `AGENTS.md`]
 
 ## Security Domain
 

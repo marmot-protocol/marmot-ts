@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 04
 current_phase_name: Feature Parity & Conformance Vectors
 status: executing
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-09-05T15:01:25.191Z"
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-09-05T15:13:00.062Z"
 last_activity: 2026-09-05
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 39
-  completed_plans: 34
+  completed_plans: 35
   percent: 57
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 04 (Feature Parity & Conformance Vectors) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Status: Ready to execute
 Last activity: 2026-09-05 — Phase 04 execution started
 
-Progress: [█████████░] 87% (7 phases)
+Progress: [█████████░] 90% (7 phases)
 
 **Next recommended run:** `/gsd-execute-phase 03.1`
 
@@ -97,6 +97,7 @@ _Updated after each plan completion_
 | Phase 03.1 P13 | 6min | 2 tasks | 4 files |
 | Phase 04 P01 | 15min | 3 tasks | 5 files |
 | Phase 04 P02 | 8min | 2 tasks | 9 files |
+| Phase 04 P03 | 10min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -185,6 +186,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 04-01]: Statically import pinned MDK JSON fixtures in test-only code for cross-runtime fixture reuse.
 - [Phase ?]: [Phase 04-02]: Keep own-commit record identity bound to exact MLS wire bytes; stamped metadata never changes identity.
 - [Phase ?]: [Phase 04-02]: Only confirmation-stamped own links receive prevalidated recovery; legacy records remain readable without inferred evidence.
+- [Phase ?]: [Phase 04-03]: Retain peeled deferred commits by their MLS-authenticated source epoch; opaque wrappers remain capacity-bounded without inventing an epoch.
+- [Phase ?]: [Phase 04-03]: Capacity pressure refuses new work without evicting accepted entries or creating a terminal dedup disposition.
+- [Phase ?]: [Phase 04-03]: Resolve parent authentication, authorization, and component legality through one discriminated result contract in both recovery seams.
 
 ### Pending Todos
 
@@ -219,7 +223,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-05T15:01:25.172Z
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-09-05T15:13:00.043Z
+Stopped at: Completed 04-03-PLAN.md
 Resume file:
 None

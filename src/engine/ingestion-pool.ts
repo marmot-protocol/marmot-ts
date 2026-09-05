@@ -24,8 +24,7 @@ export interface IngestionPoolOptions {
 }
 
 export type PoolAddResult =
-  | { kind: "accepted" }
-  | { kind: "refused"; reason: "capacity" };
+  { kind: "accepted" } | { kind: "refused"; reason: "capacity" };
 
 const DEFAULT_MAX_SIZE = 1000;
 
@@ -66,11 +65,7 @@ export class IngestionPool<TEnvelope> {
    * Pools an envelope (keyed by id). A peeled Commit supplies its authenticated
    * source epoch. Capacity refusal is retryable and never evicts accepted work.
    */
-  add(
-    id: string,
-    envelope: TEnvelope,
-    sourceEpoch?: number,
-  ): PoolAddResult {
+  add(id: string, envelope: TEnvelope, sourceEpoch?: number): PoolAddResult {
     const existing = this.#entries.get(id);
     if (existing) {
       if (existing.sourceEpoch === undefined && sourceEpoch !== undefined)

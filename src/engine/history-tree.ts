@@ -16,6 +16,11 @@ import {
 } from "../core/client-state.js";
 import { commitDigest } from "../core/convergence.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
+import {
+  decodeOwnCommitRecord,
+  encodeOwnCommitRecord,
+  type OwnCommitConvergenceStamp,
+} from "./own-commit-stamp.js";
 
 /** Wire-format version byte for a persisted node-edge / meta record. */
 const HISTORY_TREE_VERSION = 1;
@@ -331,14 +336,30 @@ export class GroupHistoryTree {
     const cached = this.#heavy.get(childTag);
     if (cached?.commit) {
       this.#touch(childTag);
-      return cached.commit;
+      return decodeOwnCommitRecord(cached.commit).wireBytes;
     }
     if (!this.#store || !this.#gid) return undefined;
     // Fetched on demand (rare — for replay/debug); not cached, to avoid
     // displacing a hot snapshot or polluting the LRU with commit-only entries.
-    return (
-      (await this.#store.getItem(commitKey(this.#gid, childTag))) ?? undefined
-    );
+    const record = await this.#store.getItem(commitKey(this.#gid, childTag));
+    return record ? decodeOwnCommitRecord(record).wireBytes : undefined;
+  }
+
+  /** Confirmation-time evidence for a locally-authored commit, if stamped. */
+  async ownCommitStampOf(
+    childTag: string,
+  ): Promise<OwnCommitConvergenceStamp | undefined> {
+    const node = this.#nodes.get(childTag);
+    if (!node || !node.parentTag) return undefined;
+    const cached = this.#heavy.get(childTag)?.commit;
+    const record =
+      cached ??
+      (this.#store && this.#gid
+        ? await this.#store.getItem(commitKey(this.#gid, childTag))
+        : null);
+    if (!record) return undefined;
+    const decoded = decodeOwnCommitRecord(record);
+    return decoded.kind === "stamped" ? decoded.stamp : undefined;
   }
 
   /** Decodes the commit `MlsMessage` that produced a node, or `undefined`. */
@@ -364,6 +385,7 @@ export class GroupHistoryTree {
     commitMessage: MlsMessage,
     childState: ClientState,
     senderLeafIndex?: number,
+    ownCommitStamp?: OwnCommitConvergenceStamp,
   ): string {
     const parent = this.#nodes.get(parentTag);
     if (!parent)
@@ -383,7 +405,9 @@ export class GroupHistoryTree {
       });
       this.#putHeavy(childTag, {
         snapshot: serializeClientState(childState),
-        commit: bytes,
+        commit: ownCommitStamp
+          ? encodeOwnCommitRecord({ wireBytes: bytes, stamp: ownCommitStamp })
+          : bytes,
       });
       this.#dirty.add(childTag);
     }

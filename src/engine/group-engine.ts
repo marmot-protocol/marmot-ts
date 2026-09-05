@@ -23,6 +23,7 @@ import {
   processMessage,
   type ProcessMessageResult,
   Proposal,
+  proposalOrRefTypes,
   type ProposalWithSender,
   wireformats,
 } from "ts-mls";
@@ -106,6 +107,10 @@ import {
 } from "./ingest.js";
 import { ingestResultDisposition } from "./ingest-disposition.js";
 import { RetainedHistoryStore } from "./retained-store.js";
+import type {
+  CommitOrderingPriority,
+  OwnCommitConvergenceStamp,
+} from "./own-commit-stamp.js";
 import type {
   AutoCommitIngestResult,
   DispositionedIngestResult,
@@ -386,12 +391,25 @@ export class MarmotGroupEngine<TEnvelope> {
     parentState: ClientState,
     message: Parameters<RetainedHistoryStore["record"]>[1],
     newState: ClientState,
+    ownCommitStamp?: OwnCommitConvergenceStamp,
   ): void {
-    this.#retained.record(parentState, message, newState, this.#pinnedEpochs());
+    this.#retained.record(
+      parentState,
+      message,
+      newState,
+      this.#pinnedEpochs(),
+      ownCommitStamp,
+    );
     try {
       const parentTag = bytesToHex(parentState.confirmationTag);
       if (!this.#tree.hasNode(parentTag)) this.#tree.setRoot(parentState);
-      this.#tree.recordCommit(parentTag, message, newState);
+      this.#tree.recordCommit(
+        parentTag,
+        message,
+        newState,
+        undefined,
+        ownCommitStamp,
+      );
     } catch (error) {
       this.#log()("history tree recordCommit failed: %o", error);
     }
@@ -674,6 +692,7 @@ export class MarmotGroupEngine<TEnvelope> {
             newState,
             parentState,
             commitMessage: commit,
+            ownCommitStamp: this.#ownCommitStamp(commit, prepared),
           },
         };
       }
@@ -765,6 +784,7 @@ export class MarmotGroupEngine<TEnvelope> {
             newState,
             parentState,
             commitMessage: commit,
+            ownCommitStamp: this.#ownCommitStamp(commit, prepared),
           },
         };
       }
@@ -788,6 +808,8 @@ export class MarmotGroupEngine<TEnvelope> {
   ): {
     extraProposals: Proposal[];
     committedProposals: Proposal[];
+    committer: string;
+    priority: CommitOrderingPriority;
   } {
     const actorLeaf = state.privatePath.leafIndex as LeafIndex;
     const actorPubkey = getCredentialPubkey(
@@ -830,7 +852,40 @@ export class MarmotGroupEngine<TEnvelope> {
       );
     }
 
-    return { extraProposals, committedProposals };
+    const nonAdminShape = decideCommitAuthorization({
+      actorPubkey,
+      actorLeafIndex: Number(actorLeaf),
+      adminPubkeys: [],
+      proposals: committedWithSenders,
+    });
+    return {
+      extraProposals,
+      committedProposals,
+      committer: actorPubkey,
+      priority: nonAdminShape.authorized ? "ordinary" : "privileged",
+    };
+  }
+
+  /** Captures recovery evidence from the exact staged public commit. */
+  #ownCommitStamp(
+    commit: MlsMessage,
+    prepared: { committer: string; priority: CommitOrderingPriority },
+  ): OwnCommitConvergenceStamp {
+    if (
+      commit.wireformat !== wireformats.mls_public_message ||
+      commit.publicMessage.content.contentType !== contentTypes.commit
+    )
+      throw new Error("Own commit stamp requires a public MLS commit");
+    const consumedProposalRefs = commit.publicMessage.content.commit.proposals
+      .filter(
+        (entry) => entry.proposalOrRefType === proposalOrRefTypes.reference,
+      )
+      .map((entry) => entry.reference.slice());
+    return {
+      committer: prepared.committer,
+      priority: prepared.priority,
+      consumedProposalRefs,
+    };
   }
 
   /**
@@ -966,6 +1021,7 @@ export class MarmotGroupEngine<TEnvelope> {
           pending.parentState,
           pending.commitMessage,
           pending.newState,
+          pending.ownCommitStamp,
         );
         const digest = commitDigest(
           encode(mlsMessageEncoder, pending.commitMessage),

@@ -5,7 +5,6 @@ import {
   type ClientState,
   encode,
   getCredentialFromLeafIndex,
-  type IncomingMessageAction,
   type IncomingMessageCallback,
   type LeafIndex,
   mlsMessageEncoder,
@@ -35,10 +34,7 @@ import { withCapturedProposals } from "./admin-policy.js";
 import type { EdgeSnapshot } from "./history-tree.js";
 import type { RetainedAppliedLink } from "./retained-store.js";
 import type { GroupPeeler } from "./types.js";
-import { framedCommitProposalsWithSender, framedEpoch } from "./wire-format.js";
-import { logger } from "../utils/debug.js";
-
-const log = logger.extend("ForkRecovery");
+import { framedEpoch } from "./wire-format.js";
 
 /** One applied step on a candidate branch: parent → message → child. */
 export interface ChainLink {
@@ -246,91 +242,11 @@ export class ForkRecovery<TEnvelope> {
         const knownAtThisParent =
           known !== undefined &&
           known.parentTag === bytesToHex(state.confirmationTag);
-        const knownFramed = knownAtThisParent
-          ? framedCommitProposalsWithSender(message, state)
-          : undefined;
-        const knownProposals = knownFramed?.proposals.map((p) => p.proposal);
-
-        // CR-08: make the fall-through observable. Reaching it for a commit we
-        // recorded against THIS parent means the proposal set could not be
-        // reconstructed, and replay is the only remaining route. For a commit
-        // this leaf authored, replay is guaranteed to throw (RFC 9420: an
-        // `UpdatePath` never encrypts a path secret to the committer's own
-        // leaf), so the candidate — potentially our own deeper canonical
-        // branch — is dropped entirely, letting a shallower competitor win the
-        // rewind. The root cause was own staged proposals never reaching the
-        // tree node snapshot; `MarmotGroupEngine.#recordProposalStaged` now
-        // runs for our own proposals too, so reconstruction succeeds. This log
-        // exists so any residual occurrence is diagnosable instead of silent.
-        if (knownAtThisParent && !knownProposals) {
-          log(
-            "known-state short-circuit unavailable at parent %s: could not reconstruct proposals for commit %s (private-message commit, or a ProposalRef absent from the parent's unappliedProposals) — falling back to replay, which drops the candidate if we authored it",
-            bytesToHex(state.confirmationTag),
-            bytesToHex(this.#commitDigestOf(message)),
-          );
-        }
-
-        if (known && knownFramed && knownProposals) {
-          // CR-11: the short-circuit must run the
-          // refs/marmot/protocol-core/group-messaging.md admin gate too, not
-          // just `validateCommitLegality`. `known` comes from
-          // `RetainedHistoryStore`, which `GroupRegistry` rebuilds on load
-          // straight from the persisted history tree — the SAME pre-upgrade
-          // edge class `#treeResolution` replays under
-          // `#createAdminVerificationCallback()` and abandons on
-          // `actionTaken === "reject"`. Hardcoding `actionTaken: "accept"`
-          // here meant a persisted edge written by a build whose admin set
-          // differed (or a build predating the topic-organized spec) was replayed into a WINNING
-          // candidate by ForkRecovery and refused by `#treeResolution` — so
-          // whichever seam ran first decided whether the group converged,
-          // non-deterministically across peers.
-          //
-          // The callback is invoked directly (not through `capture`, whose
-          // take()-around-processMessage contract does not apply here) on a
-          // synthesized `incoming` matching what ts-mls's `applyProposals`
-          // would have produced. A throw ("unverifiable commit sender") is
-          // treated as a refusal, consistent with this seam's fail-closed
-          // policy: no candidate edge.
-          let adminAction: IncomingMessageAction;
-          try {
-            adminAction = callback({
-              kind: "commit",
-              senderLeafIndex: knownFramed.senderLeafIndex,
-              proposals: knownFramed.proposals,
-            });
-          } catch {
-            continue;
-          }
-          if (adminAction === "reject") {
-            log(
-              "known-state short-circuit refused by admin policy at parent %s for commit %s",
-              bytesToHex(state.confirmationTag),
-              bytesToHex(this.#commitDigestOf(message)),
-            );
-            continue;
-          }
-
-          // A commit we already applied ourselves (own or previously-adopted
-          // inbound) cannot be replayed through `processMessage`: its
-          // `UpdatePath` never encrypted a path secret to the committer's own
-          // leaf (RFC 9420), so a receiver whose leaf IS the committer's leaf
-          // has nothing to decrypt and `processMessage` throws. We already
-          // recorded the real resulting state when this commit was first
-          // applied (`RetainedHistoryStore.record`), so reuse it instead of
-          // reprocessing (CONV-04) — but only after it passes the same shared
-          // adapter every other seam runs.
-          let knownViolation: ReturnType<typeof validateCommitLegality>;
-          try {
-            knownViolation = validateCommitLegality({
-              parentState: state,
-              resultingState: known.state,
-              proposals: knownProposals,
-            });
-          } catch {
-            continue;
-          }
-          if (knownViolation) continue;
-
+        if (knownAtThisParent && known) {
+          // A stamped own commit was fully authenticated and authorized while
+          // staged evidence still existed. MLS cannot replay that commit to its
+          // own sender after restart, so the durable stamp is the authority;
+          // never reconstruct proposals from the parent snapshot here.
           next = {
             kind: "newState",
             newState: known.state,
@@ -497,6 +413,7 @@ export class ForkRecovery<TEnvelope> {
     const knownNextStates = new Map<string, KnownNextState>();
     for (const [index, msg] of ours.entries()) {
       const structural = retainedLinks?.[index];
+      if (!structural?.ownCommitStamp) continue;
       const sourceEpoch = Number(
         structural
           ? Number(structural.parentState.groupContext.epoch)

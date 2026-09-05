@@ -11,6 +11,7 @@ import type {
 import type { MarmotGroupView } from "../core/client-state.js";
 import type { DeferredReason, Disposition } from "../core/inbound.js";
 import type { StateNotification } from "./state-notifications.js";
+import type { OwnCommitConvergenceStamp } from "./own-commit-stamp.js";
 
 /** A decrypted transport envelope paired with its MLS message. */
 export type PeeledMessagePair<TEnvelope> = {
@@ -50,6 +51,8 @@ export type PendingState = {
    * `"selfUpdate"`; absent only for `"proposal"`.
    */
   commitMessage?: MlsMessage;
+  /** Confirmation-time recovery evidence captured before proposals are cleared. */
+  ownCommitStamp?: OwnCommitConvergenceStamp;
 };
 
 export type ProposalContext = {

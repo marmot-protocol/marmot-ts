@@ -253,7 +253,8 @@ export class GroupRegistry<
     for (let i = 1; i < path.length; i++) {
       const commit = await tree.commitMessageOf(path[i]);
       if (!commit) return undefined;
-      retained.record(states[i - 1], commit, states[i]);
+      const ownCommitStamp = await tree.ownCommitStampOf(path[i]);
+      retained.record(states[i - 1], commit, states[i], [], ownCommitStamp);
     }
     return retained;
   }

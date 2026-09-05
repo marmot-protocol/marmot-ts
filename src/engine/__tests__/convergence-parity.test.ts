@@ -57,6 +57,7 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
   acceptAll,
+  bytesToBase64,
   type CiphersuiteImpl,
   type ClientState,
   createCommit,
@@ -92,6 +93,7 @@ import {
 import { generateKeyPackage } from "../../core/key-package.js";
 import { MarmotGroupEngine } from "../group-engine.js";
 import { GroupHistoryTree } from "../history-tree.js";
+import { RetainedHistoryStore } from "../retained-store.js";
 import type { GroupPeeler } from "../types.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 
@@ -335,6 +337,8 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
       ciphersuite: impl,
       peeler,
     });
+    const store = new InMemoryKeyValueStore<Uint8Array>();
+    engine.history.bindStore(store);
 
     const first = await engine.send({ kind: "selfUpdate" });
     engine.confirmPublished(first.pending);
@@ -356,9 +360,46 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
     expect(proposalRef).toBeDefined();
 
     const second = await engine.send({ kind: "selfUpdate" });
+    expect(second.pending.ownCommitStamp?.priority).toBe("privileged");
+    expect(
+      second.pending.ownCommitStamp?.consumedProposalRefs.map(bytesToBase64),
+    ).toEqual([proposalRef]);
     engine.confirmPublished(second.pending);
     const ownTipTag = bytesToHex(engine.state.confirmationTag);
     expect(Number(engine.state.groupContext.epoch)).toBe(3);
+    await engine.history.flush();
+
+    const loadedTree = await GroupHistoryTree.load(
+      store,
+      bytesToHex(engine.state.groupContext.groupId),
+    );
+    if (!loadedTree) throw new Error("expected persisted history tree");
+    const path = loadedTree.path(ownTipTag);
+    if (!path) throw new Error("expected persisted canonical path");
+    const states = await Promise.all(
+      path.map((tag) => loadedTree.stateAt(tag)),
+    );
+    if (states.some((state) => state === undefined))
+      throw new Error("expected every persisted state");
+    const retained = new RetainedHistoryStore(states[0]!);
+    for (let i = 1; i < path.length; i++) {
+      const commit = await loadedTree.commitMessageOf(path[i]);
+      if (!commit) throw new Error("expected persisted commit");
+      retained.record(
+        states[i - 1]!,
+        commit,
+        states[i]!,
+        [],
+        await loadedTree.ownCommitStampOf(path[i]),
+      );
+    }
+    const restarted = new MarmotGroupEngine({
+      state: deserializeClientState(serializeClientState(engine.state)),
+      ciphersuite: impl,
+      peeler,
+      retained,
+      historyTree: loadedTree,
+    });
 
     // MDK parity: `openmls_projection.rs::{own_commit_stamp,
     // stamp_processed_own_commit_record,already_applied_commit_prefix}` keeps
@@ -375,10 +416,10 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
       sibling.commit,
       memberEpoch1,
     );
-    for await (const _ of engine.ingest([siblingEnvelope])) void _;
+    for await (const _ of restarted.ingest([siblingEnvelope])) void _;
 
-    expect(Number(engine.state.groupContext.epoch)).toBe(3);
-    expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTipTag);
+    expect(Number(restarted.state.groupContext.epoch)).toBe(3);
+    expect(bytesToHex(restarted.state.confirmationTag)).toBe(ownTipTag);
   });
 
   // This is the property that first FAILED (see file header): before the
@@ -570,7 +611,7 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
    * parentage — can be asserted on.
    */
   it("does not graft our own canonical commit onto a competing same-epoch fork node (CR-01)", async () => {
-    const { impl, ctx, adminEpoch1, memberEpoch1 } =
+    const { impl, ctx, adminPubkey, adminEpoch1, memberEpoch1 } =
       await twoMemberEpoch1Group();
     const peeler = testPeeler(impl);
 
@@ -612,6 +653,28 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
     const retained: RetainedView = {
       stateAt: (epoch) => statesByEpoch.get(epoch),
       appliedCommitsBetween: () => [ourC1.commit, ourC2.commit],
+      appliedLinksBetween: () => [
+        {
+          parentState: rootState,
+          message: ourC1.commit,
+          resultingState: s2,
+          ownCommitStamp: {
+            committer: adminPubkey,
+            priority: "ordinary",
+            consumedProposalRefs: [],
+          },
+        },
+        {
+          parentState: s2,
+          message: ourC2.commit,
+          resultingState: s3,
+          ownCommitStamp: {
+            committer: adminPubkey,
+            priority: "ordinary",
+            consumedProposalRefs: [],
+          },
+        },
+      ],
     };
 
     const recovery = new ForkRecovery(impl, peeler);

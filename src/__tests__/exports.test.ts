@@ -116,6 +116,7 @@ describe("exports", () => {
         "NoMarmotGroupDataError",
         "NostrWelcomeDelivery",
         "Proposals",
+        "SAFE_AAD_COMPONENT_ID",
         "SUPPORTED_APP_COMPONENT_IDS",
         "SUPPORTED_LOCATOR_KINDS",
         "WELCOME_EVENT_KIND",

@@ -24,6 +24,7 @@ key-files:
     - src/core/components/ids.ts
     - src/core/components/dictionary.ts
     - src/core/components/__tests__/dictionary.test.ts
+    - src/__tests__/exports.test.ts
     - refs/mdk
 
 key-decisions:
@@ -63,7 +64,7 @@ coverage:
         status: pass
     human_judgment: false
 
-duration: 15min
+duration: 18min
 completed: 2026-09-05
 status: complete
 ---
@@ -74,11 +75,11 @@ status: complete
 
 ## Performance
 
-- **Duration:** 15 min
+- **Duration:** 18 min
 - **Started:** 2026-09-05T14:33:13Z
 - **Completed:** 2026-09-05T14:48:05Z
 - **Tasks:** 3
-- **Files modified:** 5
+- **Files modified:** 6
 
 ## Accomplishments
 
@@ -96,6 +97,7 @@ Each task was committed atomically:
 3. **Task 1 RED: Add failing SafeAAD production-path tests** - `d5abfb4` (test)
 4. **Task 1 GREEN: Generate the reference-compatible leaf dictionary** - `2fa3086` (feat)
 5. **Task 2: Run MDK nostr-routing byte fixtures** - `f414618` (test)
+6. **Integration fix: Add SafeAAD to the deliberate root export snapshot** - `19a3a1f` (fix)
 
 ## Files Created/Modified
 
@@ -103,6 +105,7 @@ Each task was committed atomically:
 - `src/core/components/dictionary.ts` - Builds the reference leaf dictionary and rejects SafeAAD group state.
 - `src/core/components/__tests__/dictionary.test.ts` - Pins real-KeyPackage extension bytes and leaf/group boundaries.
 - `src/core/components/__tests__/nostr-routing.test.ts` - Runs three immutable MDK fixtures through production codecs.
+- `src/__tests__/exports.test.ts` - Pins the newly public SafeAAD component identifier in the root API surface.
 - `refs/mdk` - Fast-forwarded the required reference submodule; no byte-fixture or SafeAAD contract changed.
 
 ## Decisions Made
@@ -124,10 +127,19 @@ Each task was committed atomically:
 - **Verification:** `git -C refs/mdk log HEAD..origin/HEAD` is empty after update.
 - **Committed in:** `acfead6`
 
+**2. [Rule 1 - Bug] Updated the deliberate root export snapshot for SafeAAD**
+
+- **Found during:** Post-wave integration verification
+- **Issue:** Exporting `SAFE_AAD_COMPONENT_ID` through the existing component barrel changed the root package surface, but the exact inline export snapshot still described the prior surface.
+- **Fix:** Added only `SAFE_AAD_COMPONENT_ID` at its sorted position in the expected root exports.
+- **Files modified:** `src/__tests__/exports.test.ts`
+- **Verification:** Focused export tests and the complete 786-test Vitest suite pass.
+- **Committed in:** `19a3a1f`
+
 ---
 
-**Total deviations:** 1 auto-fixed (1 missing critical)
-**Impact on plan:** The source-of-truth reference is current; planned fixture behavior remained unchanged.
+**Total deviations:** 2 auto-fixed (1 missing critical, 1 bug)
+**Impact on plan:** The source-of-truth reference is current and the root public API contract now reflects the planned export; no unrelated snapshots changed.
 
 ## Issues Encountered
 
@@ -149,6 +161,8 @@ None - no external service configuration required.
 ## Verification
 
 - `CI=true npx --yes pnpm@10.18.3 vitest run src/core/components/__tests__/dictionary.test.ts src/core/components/__tests__/nostr-routing.test.ts` — 11 tests passed.
+- `CI=true npx --yes pnpm@10.18.3 vitest run src/__tests__/exports.test.ts` — 2 tests passed.
+- `CI=true npx --yes pnpm@10.18.3 vitest run` — 81 files and 786 tests passed.
 - `CI=true npx --yes pnpm@10.18.3 compile` — passed.
 - `pnpm-lock.yaml` remained at SHA-256 `0f516945e45e257735c4c89a5e9e08b4bb2f839b7ce48121a71b4fb0b03a0932`.
 
@@ -161,7 +175,7 @@ None - no external service configuration required.
 ## Self-Check: PASSED
 
 - All created and modified files exist.
-- Commits `acfead6`, `1103ea9`, `d5abfb4`, `2fa3086`, and `f414618` exist in repository history.
+- Commits `acfead6`, `1103ea9`, `d5abfb4`, `2fa3086`, `f414618`, and `19a3a1f` exist in repository history.
 
 ---
 *Phase: 04-feature-parity-conformance-vectors*

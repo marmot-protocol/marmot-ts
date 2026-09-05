@@ -6,12 +6,15 @@ import {
   DEFAULT_CONVERGENCE_POLICY,
 } from "../core/convergence.js";
 import { prunableRetainedEpochs } from "../core/retained-history.js";
+import type { OwnCommitConvergenceStamp } from "./own-commit-stamp.js";
 
 /** Parent-bound evidence for one already-applied canonical commit. */
 export interface RetainedAppliedLink {
   parentState: ClientState;
   message: MlsMessage;
   resultingState: ClientState;
+  /** Present only for locally-authored commits confirmed by stamp-aware code. */
+  ownCommitStamp?: OwnCommitConvergenceStamp;
 }
 
 /**
@@ -117,6 +120,7 @@ export class RetainedHistoryStore {
     appliedMessage: MlsMessage,
     newState: ClientState,
     pinnedEpochs: Iterable<number> = [],
+    ownCommitStamp?: OwnCommitConvergenceStamp,
   ): void {
     const parentEpoch = Number(parentState.groupContext.epoch);
     const newEpoch = Number(newState.groupContext.epoch);
@@ -128,6 +132,7 @@ export class RetainedHistoryStore {
       parentState,
       message: appliedMessage,
       resultingState: newState,
+      ownCommitStamp,
     });
 
     const max = this.#policy.maxRewindCommits;

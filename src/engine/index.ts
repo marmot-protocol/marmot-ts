@@ -5,6 +5,7 @@ export * from "./history-tree.js";
 export * from "./admin-policy.js";
 export * from "./ingest-disposition.js";
 export * from "./retained-store.js";
+export * from "./own-commit-stamp.js";
 export * from "./ingestion-pool.js";
 export * from "./fork-recovery.js";
 export * from "./ingest.js";

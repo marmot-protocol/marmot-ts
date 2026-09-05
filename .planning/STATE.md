@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 04
 current_phase_name: Feature Parity & Conformance Vectors
 status: executing
-stopped_at: Completed 04-03-PLAN.md
-last_updated: "2026-09-05T15:13:00.062Z"
+stopped_at: Completed 04-04-PLAN.md
+last_updated: "2026-09-05T15:28:09.220Z"
 last_activity: 2026-09-05
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 39
-  completed_plans: 35
+  completed_plans: 36
   percent: 57
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 04 (Feature Parity & Conformance Vectors) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Status: Ready to execute
 Last activity: 2026-09-05 — Phase 04 execution started
 
-Progress: [█████████░] 90% (7 phases)
+Progress: [█████████░] 92% (7 phases)
 
 **Next recommended run:** `/gsd-execute-phase 03.1`
 
@@ -98,6 +98,7 @@ _Updated after each plan completion_
 | Phase 04 P01 | 15min | 3 tasks | 5 files |
 | Phase 04 P02 | 8min | 2 tasks | 9 files |
 | Phase 04 P03 | 10min | 2 tasks | 9 files |
+| Phase 04 P04 | 14min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -189,6 +190,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 04-03]: Retain peeled deferred commits by their MLS-authenticated source epoch; opaque wrappers remain capacity-bounded without inventing an epoch.
 - [Phase ?]: [Phase 04-03]: Capacity pressure refuses new work without evicting accepted entries or creating a terminal dedup disposition.
 - [Phase ?]: [Phase 04-03]: Resolve parent authentication, authorization, and component legality through one discriminated result contract in both recovery seams.
+- [Phase ?]: [Phase 04-04]: Resolve an omitted ingestStateStore once per MarmotClient and share that explicitly ephemeral store across every constructed group.
+- [Phase ?]: [Phase 04-04]: Use the producing commit digest as both revalidation identity and durable effect-ledger key.
 
 ### Pending Todos
 
@@ -223,7 +226,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-05T15:13:00.043Z
-Stopped at: Completed 04-03-PLAN.md
+Last session: 2026-09-05T15:28:09.200Z
+Stopped at: Completed 04-04-PLAN.md
 Resume file:
 None

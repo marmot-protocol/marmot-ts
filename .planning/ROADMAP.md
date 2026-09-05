@@ -220,7 +220,7 @@ the Phase 3 CR-08/CR-11 defect class structurally rather than by further increme
 7. `restart-delivery-faults.v1.json` runs as an automated test, closing the persist → reload → converge coverage gap that allowed CR-08 and CR-09 to ship green through two review rounds. `publish-fail.v1.json` and `invite-publish-fail.v1.json` likewise cover the publish-before-apply rollback path.
 8. Cross-impl comparison uses the canonical snapshot projection defined in `refs/marmot/foundation/conformance.md` (group id, epoch, `SHA256` of serialized `GroupContext`, exporter commitment `MLS-Exporter("marmot", "convergence-conformance-v1", 32)`, leaves in index order, `app_data_dictionary` entries, lifecycle, convergence status, per-input dispositions) rather than an ad-hoc field-by-field comparison.
 9. The convergence-policy deltas from the updated contract are implemented: `DEFAULT_CONVERGENCE_POLICY` carries `max_convergence_pass_ms` (v1 default `5000`) measured on the local monotonic clock and never extended by later input; the scheduler does not admit inbound input into a new pass while the lifecycle is `PendingPublish` or `Merging`; and after a bounded pass settles in `Stable`, one already-queued admin-authorized local intent gets one preparation attempt before another pass opens solely because more inbound input is queued.
-   **Plans**: 3/7 plans executed
+   **Plans**: 4/7 plans executed
 
 Plans:
 **Wave 1**
@@ -234,7 +234,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 04-03-PLAN.md — missing-parent deferral and intermediate anchors
-- [ ] 04-04-PLAN.md — durable wrapper dedup and re-adoption outcomes
+- [x] 04-04-PLAN.md — durable wrapper dedup and re-adoption outcomes
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -295,7 +295,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Proof v2                              | 2/2            | Complete    | 2026-07-21 |
 | 2. Inbound Trust & Wire Boundary         | 4/4            | Complete    | 2026-07-22 |
 | 3. Commit Integrity & Convergence Parity | 11/11 | Complete    | 2026-09-01 |
-| 4. Feature Parity & Conformance Vectors  | 3/7 | In Progress|  |
+| 4. Feature Parity & Conformance Vectors  | 4/7 | In Progress|  |
 | 5. Quality Gate                          | 0/TBD          | Not started | -          |
 
 ## Backlog

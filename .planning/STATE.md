@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 04
 current_phase_name: Feature Parity & Conformance Vectors
 status: executing
-stopped_at: Phase 4 UI-SPEC approved
-last_updated: "2026-09-05T14:31:03.706Z"
-last_activity: 2026-09-02
-last_activity_desc: Phase 03.1 complete, transitioned to Phase 04
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-09-05T14:49:04.039Z"
+last_activity: 2026-09-05
+last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 39
-  completed_plans: 32
+  completed_plans: 33
   percent: 57
 ---
 
@@ -24,16 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-21)
 
 **Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
-**Current focus:** Phase 03.1 — Phase 3 Review Closure
+**Current focus:** Phase 04 — Feature Parity & Conformance Vectors
 
 ## Current Position
 
-Phase: 04 — Feature Parity & Conformance Vectors
-Plan: Not started
+Phase: 04 (Feature Parity & Conformance Vectors) — EXECUTING
+Plan: 2 of 7
 Status: Ready to execute
-Last activity: 2026-09-02 — Phase 03.1 complete, transitioned to Phase 04
+Last activity: 2026-09-05 — Phase 04 execution started
 
-Progress: [██████████] 100% (7 phases)
+Progress: [█████████░] 85% (7 phases)
 
 **Next recommended run:** `/gsd-execute-phase 03.1`
 
@@ -95,6 +95,7 @@ _Updated after each plan completion_
 | Phase 03.1 P12 | 4min | 1 tasks | 2 files |
 | Phase 03.1 P14 | 3min | 1 tasks | 2 files |
 | Phase 03.1 P13 | 6min | 2 tasks | 4 files |
+| Phase 04 P01 | 15min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -178,6 +179,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 03.1-14]: Invoke publishFailed only before relay acknowledgement; confirmation and persistence failures remain inspectable and non-retryable afterward.
 - [Phase ?]: [Phase 03.1-13]: Failed activation cleanup is guarded by exact group and listener identity before cache eviction.
 - [Phase ?]: [Phase 03.1-13]: Durable removal completes internal cancellation before independently isolated application callbacks.
+- [Phase ?]: [Phase 04-01]: Encode SafeAAD's empty supported-component set as canonical 00, matching MDK.
+- [Phase ?]: [Phase 04-01]: Reject SafeAAD in the GroupContext dictionary builder while allowing it through the dedicated leaf builder.
+- [Phase ?]: [Phase 04-01]: Statically import pinned MDK JSON fixtures in test-only code for cross-runtime fixture reuse.
 
 ### Pending Todos
 
@@ -212,7 +216,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-04T14:00:05.182Z
-Stopped at: Phase 4 UI-SPEC approved
+Last session: 2026-09-05T14:49:04.020Z
+Stopped at: Completed 04-01-PLAN.md
 Resume file:
-.planning/phases/04-feature-parity-conformance-vectors/04-UI-SPEC.md
+None

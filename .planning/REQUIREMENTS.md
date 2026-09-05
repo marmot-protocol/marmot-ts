@@ -22,7 +22,7 @@ Requirements for catching marmot-ts up to feature parity + byte-for-byte interop
 - [x] **WIRE-01**: Published KeyPackages cap the MLS Lifetime to the 84-day maximum (≤ 7,261,200 s), and inbound KeyPackages with an over-long or expired Lifetime are rejected (interop-breaking; `src/utils/timestamp.ts`, `key-package-event-decode.ts`, `key-package-eligibility.ts`; `foundation/key-packages.md` #236)
 - [x] **WIRE-02**: Required-tag cardinality is enforced — events with repeated, empty, or duplicate required tags are rejected (445 `h`; 1059 `p`; 444 `e`/`relays`; 30443 `d`/`i`/`mls_protocol_version`) (interop-breaking; `src/utils/nostr.ts`, `key-package-event-decode.ts`, `welcome-event.ts`; `transports/nostr.md` #236)
 - [x] **WIRE-03**: App-component integrity is validated on staged commits — a commit that drops the `app_data_dictionary`, drops a required component, or rewrites a required component's bytes outside a validated `AppDataUpdate` is rejected pre-merge (interop-breaking; `src/engine/ingest.ts` + send + convergence; mdk cgka-engine #704)
-- [ ] **WIRE-04**: SafeAAD component (`0x0002`) is defined, `0x0001` is advertised in the leaf `app_components` list, and the empty safe_aad entry is emitted, so LeafNode/KeyPackage bytes match the reference (additive; `src/core/components/ids.ts`, `dictionary.ts`; mdk `b9ae3ce`)
+- [x] **WIRE-04**: SafeAAD component (`0x0002`) is defined, `0x0001` is advertised in the leaf `app_components` list, and the empty safe_aad entry is emitted, so LeafNode/KeyPackage bytes match the reference (additive; `src/core/components/ids.ts`, `dictionary.ts`; mdk `b9ae3ce`)
 
 ### Convergence / membership parity
 
@@ -33,7 +33,7 @@ Requirements for catching marmot-ts up to feature parity + byte-for-byte interop
 
 ### Conformance vectors
 
-- [ ] **CONF-01**: MDK reference vectors are wired up as cross-impl tests — `nostr-routing-v1` byte-fixtures against `src/core/components/nostr-routing.ts` (incl. duplicate-relay reject), the convergence/admin-policy/fork-recovery scenario vectors as a parity harness, and a proof-v2 Rust-signed→TS-verified round-trip fixture
+- [x] **CONF-01**: MDK reference vectors are wired up as cross-impl tests — `nostr-routing-v1` byte-fixtures against `src/core/components/nostr-routing.ts` (incl. duplicate-relay reject), the convergence/admin-policy/fork-recovery scenario vectors as a parity harness, and a proof-v2 Rust-signed→TS-verified round-trip fixture
 
 ### Quality gate
 
@@ -79,8 +79,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CONV-02     | Phase 3 — Commit Integrity & Convergence Parity | Gaps Found |
 | CONV-03     | Phase 3 — Commit Integrity & Convergence Parity | Gaps Found |
 | CONV-04     | Phase 3 — Commit Integrity & Convergence Parity | Complete |
-| WIRE-04     | Phase 4 — Feature Parity & Conformance Vectors  | Pending  |
-| CONF-01     | Phase 4 — Feature Parity & Conformance Vectors  | Pending  |
+| WIRE-04     | Phase 4 — Feature Parity & Conformance Vectors  | Complete |
+| CONF-01     | Phase 4 — Feature Parity & Conformance Vectors  | Complete |
 | QA-01       | Phase 5 — Quality Gate                          | Pending  |
 | QA-02       | Phase 5 — Quality Gate                          | Pending  |
 

@@ -19,6 +19,7 @@ import {
   GROUP_PROFILE_COMPONENT_ID,
   AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
   NOSTR_ROUTING_COMPONENT_ID,
+  SAFE_AAD_COMPONENT_ID,
   SUPPORTED_APP_COMPONENT_IDS,
 } from "./ids.js";
 import {
@@ -117,6 +118,11 @@ export function buildAppDataDictionary(
 export function makeAppComponentsExtension(
   entries: ComponentData[],
 ): CustomExtension {
+  if (entries.some((entry) => entry.componentId === SAFE_AAD_COMPONENT_ID)) {
+    throw new UsageError(
+      "SafeAAD is LeafNode-only advertisement data and is not supported as group-component state",
+    );
+  }
   return makeAppDataDictionaryExtension(buildAppDataDictionary(entries));
 }
 
@@ -129,7 +135,12 @@ export function makeAppComponentsExtension(
 export function makeLeafAppComponentsExtension(
   supportedIds: readonly AppComponentId[] = SUPPORTED_APP_COMPONENT_IDS,
 ): CustomExtension {
-  return makeAppComponentsExtension([appComponentsEntry([...supportedIds])]);
+  return makeAppDataDictionaryExtension(
+    buildAppDataDictionary([
+      appComponentsEntry([APP_COMPONENTS_COMPONENT_ID, ...supportedIds]),
+      componentEntry(SAFE_AAD_COMPONENT_ID, encodeComponentsList([])),
+    ]),
+  );
 }
 
 // ---------------------------------------------------------------------------

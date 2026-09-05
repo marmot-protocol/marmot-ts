@@ -22,6 +22,12 @@ export type AppComponentId = number;
  */
 export const APP_COMPONENTS_COMPONENT_ID: AppComponentId = 0x0001;
 
+/**
+ * Upstream MLS extensions-draft component that advertises SafeAAD support on
+ * LeafNodes. Marmot does not yet admit SafeAAD-framed group-component state.
+ */
+export const SAFE_AAD_COMPONENT_ID: AppComponentId = 0x0002;
+
 /** Marmot private component ids live in the `0x8000..0xffff` range. */
 export const GROUP_PROFILE_COMPONENT_ID: AppComponentId = 0x8001;
 export const GROUP_BLOSSOM_IMAGE_COMPONENT_ID: AppComponentId = 0x8002;

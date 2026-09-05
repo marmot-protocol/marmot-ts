@@ -223,13 +223,29 @@ the Phase 3 CR-08/CR-11 defect class structurally rather than by further increme
    **Plans**: 7 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 04-01-PLAN.md — SafeAAD and MDK routing-byte tracer
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 04-02-PLAN.md — confirm-time own-commit convergence stamp
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 04-03-PLAN.md — missing-parent deferral and intermediate anchors
 - [ ] 04-04-PLAN.md — durable wrapper dedup and re-adoption outcomes
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 04-05-PLAN.md — bounded convergence scheduling and intent fairness
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 04-06-PLAN.md — canonical snapshot and reusable MDK subject adapter
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 04-07-PLAN.md — portable smoke, offline pressure, and proof-v2 corpus
 
 ### Phase 04.1: Terminal Group Disbanding (INSERTED)

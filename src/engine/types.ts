@@ -180,6 +180,8 @@ export type DeferredIngestResult<TEnvelope> = {
   envelope: TEnvelope;
   message: MlsMessage;
   reason: DeferredReason;
+  /** MLS-authenticated source epoch used for horizon retention. */
+  sourceEpoch: number;
 };
 
 /**

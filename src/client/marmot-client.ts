@@ -131,7 +131,7 @@ export type MarmotClientOptions<
    * Ingestion-pool tuning applied to every group: max entries and max epoch-age
    * for undecryptable events held and retried as history grows. Defaults bound
    * it; a debugging tool that retains and processes everything can raise both
-   * (e.g. a large `maxSize` and a very large `maxEpochAge`).
+   * (e.g. a large `maxSize` and a very large `maxRewindCommits`).
    */
   ingestionPool?: IngestionPoolOptions;
   /** The backend for key package private material and publish tracking */

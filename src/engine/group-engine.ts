@@ -333,7 +333,10 @@ export class MarmotGroupEngine<TEnvelope> {
       options.peeler,
       this.#policy,
     );
-    this.#pool = new IngestionPool<TEnvelope>(options.ingestionPool);
+    this.#pool = new IngestionPool<TEnvelope>({
+      maxRewindCommits: this.#policy.maxRewindCommits,
+      ...options.ingestionPool,
+    });
     this.#audit = createAuditEmitter(
       options.audit && options.auditContext
         ? { ...options.auditContext, sink: options.audit }
@@ -450,9 +453,12 @@ export class MarmotGroupEngine<TEnvelope> {
    * synchronously and need no separate prune-time pin.
    */
   #pinnedEpochs(): number[] {
-    return this.#stagedCommitParentEpoch === undefined
-      ? []
-      : [this.#stagedCommitParentEpoch];
+    return [
+      ...this.#pool.sourceEpochs(),
+      ...(this.#stagedCommitParentEpoch === undefined
+        ? []
+        : [this.#stagedCommitParentEpoch]),
+    ];
   }
 
   /** Oldest epoch that retained history or the full-fork tree can still name. */
@@ -1204,11 +1210,19 @@ export class MarmotGroupEngine<TEnvelope> {
       )) {
         if (result.kind === "unreadable" && result.decryptFailure) {
           // Hold for retry rather than dropping; suppress the terminal yield.
-          this.#pool.add(
+          this.#pool.add(this.peeler.idOf(result.envelope), result.envelope);
+          continue;
+        }
+        if (result.kind === "deferred") {
+          const added = this.#pool.add(
             this.peeler.idOf(result.envelope),
             result.envelope,
-            Number(this.#state.groupContext.epoch),
+            result.sourceEpoch,
           );
+          if (added.kind === "accepted") continue;
+          // Capacity is temporary: surface a retryable disposition and do not
+          // remember the wrapper in terminal deduplication.
+          yield result;
           continue;
         }
         if (result.kind === "processed" || result.kind === "removed")

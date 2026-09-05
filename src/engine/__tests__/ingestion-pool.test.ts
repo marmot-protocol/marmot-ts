@@ -244,25 +244,29 @@ describe("MarmotGroupEngine ingestion pool", () => {
     expect(Number(engine.state.groupContext.epoch)).toBe(2);
   });
 
-  it("bounds the pool by size and epoch-age", () => {
+  it("bounds the pool by retryable capacity and authenticated source epoch", () => {
     const pool = new IngestionPool<{ id: string }>({
       maxSize: 2,
-      maxEpochAge: 5,
+      maxRewindCommits: 5,
     });
 
     pool.add("a", { id: "a" }, 0);
     pool.add("b", { id: "b" }, 0);
-    pool.add("a", { id: "a" }, 9); // re-add keeps original arrival epoch
+    pool.add("a", { id: "a" }, 9); // re-add preserves the authenticated epoch
     expect(pool.size).toBe(2);
 
-    // Overflow evicts the oldest entry.
-    pool.add("c", { id: "c" }, 1);
+    // Overflow refuses the new entry without consuming either wrapper.
+    expect(pool.add("c", { id: "c" }, 1)).toEqual({
+      kind: "refused",
+      reason: "capacity",
+    });
     expect(pool.size).toBe(2);
-    expect(pool.has("a")).toBe(false);
+    expect(pool.has("a")).toBe(true);
+    expect(pool.has("c")).toBe(false);
 
-    // Entries whose arrival the tip has aged past `maxEpochAge` are dropped.
+    // Entries beyond the strict authenticated epoch horizon are dropped.
     const evicted = pool.evictStale(10);
-    expect(evicted.map((e) => e.id).sort()).toEqual(["b", "c"]);
+    expect(evicted.map((e) => e.id).sort()).toEqual(["a", "b"]);
     expect(pool.size).toBe(0);
   });
 });

@@ -125,6 +125,7 @@ describe("ingestEnvelopes – deferred (future-epoch commit)", () => {
     });
     expect(pool.evictStale(10)).toEqual([]);
     expect(pool.has("boundary")).toBe(true);
+    expect(pool.sourceEpochs()).toEqual([5]);
 
     expect(pool.evictStale(11).map((entry) => entry.id)).toEqual(["boundary"]);
   });

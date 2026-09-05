@@ -238,6 +238,7 @@ function terminalResult<TEnvelope>(
       envelope,
       message: entry.message,
       reason: entry.reason,
+      sourceEpoch: Number(framedEpoch(entry.message) ?? 0n),
     };
   return {
     kind: "unreadable",

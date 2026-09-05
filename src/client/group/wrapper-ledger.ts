@@ -2,10 +2,7 @@ import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import type { StateNotification } from "../../engine/state-notifications.js";
 
-export type TerminalWrapperOutcome =
-  | "accepted"
-  | "stale"
-  | "invalidated";
+export type TerminalWrapperOutcome = "accepted" | "stale" | "invalidated";
 
 type StoredTerminalWrapperV1 = {
   version: 1;
@@ -30,7 +27,9 @@ export class TerminalWrapperLedger {
     const bytes = await this.store.getItem(this.#key(eventId));
     if (!bytes) return undefined;
     try {
-      const value = JSON.parse(decoder.decode(bytes)) as StoredTerminalWrapperV1;
+      const value = JSON.parse(
+        decoder.decode(bytes),
+      ) as StoredTerminalWrapperV1;
       if (
         value.version === 1 &&
         (value.outcome === "accepted" ||
@@ -44,9 +43,15 @@ export class TerminalWrapperLedger {
     return undefined;
   }
 
-  async record(eventId: string, outcome: TerminalWrapperOutcome): Promise<void> {
+  async record(
+    eventId: string,
+    outcome: TerminalWrapperOutcome,
+  ): Promise<void> {
     const value: StoredTerminalWrapperV1 = { version: 1, outcome };
-    await this.store.setItem(this.#key(eventId), encoder.encode(JSON.stringify(value)));
+    await this.store.setItem(
+      this.#key(eventId),
+      encoder.encode(JSON.stringify(value)),
+    );
   }
 }
 
@@ -68,7 +73,10 @@ export class ConvergenceEffectLedger {
     if (!bytes) return undefined;
     try {
       const value = JSON.parse(decoder.decode(bytes)) as StoredEffectVerdictV1;
-      if (value.version === 1 && (value.state === "withdrawn" || value.state === "active"))
+      if (
+        value.version === 1 &&
+        (value.state === "withdrawn" || value.state === "active")
+      )
         return value;
     } catch {
       // Corrupt local evidence cannot establish an observation boundary.

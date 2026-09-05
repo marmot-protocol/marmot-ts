@@ -193,11 +193,8 @@ describe("MarmotClient ingest-state persistence capability", () => {
   it("threads the supplied store through import and persisted load paths", async () => {
     const account = PrivateKeyAccount.generateNew();
     const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
-    const groupStateStore =
-      new InMemoryKeyValueStore<SerializedClientState>();
-    const makeClient = (
-      store: InMemoryKeyValueStore<SerializedClientState>,
-    ) =>
+    const groupStateStore = new InMemoryKeyValueStore<SerializedClientState>();
+    const makeClient = (store: InMemoryKeyValueStore<SerializedClientState>) =>
       new MarmotClient({
         groupStateStore: store,
         ingestStateStore,
@@ -237,6 +234,8 @@ describe("MarmotClient ingest-state persistence capability", () => {
     const second = await client.groups.create("Second", {
       relays: ["wss://relay.example.com"],
     });
-    expect(first.session.ingestStateStore).toBe(second.session.ingestStateStore);
+    expect(first.session.ingestStateStore).toBe(
+      second.session.ingestStateStore,
+    );
   });
 });

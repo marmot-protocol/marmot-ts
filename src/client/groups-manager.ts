@@ -28,6 +28,7 @@ import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { logger } from "../utils/debug.js";
 import { hasAck } from "../utils/index.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
+import type { IngestPersistenceCapability } from "./marmot-client.js";
 import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import {
   BaseGroupHistory,
@@ -110,6 +111,8 @@ export type GroupsManagerOptions<
 > = {
   /** The backend storing serialized group state bytes */
   store: GenericKeyValueStore<SerializedClientState>;
+  ingestStateStore: GenericKeyValueStore<Uint8Array>;
+  ingestPersistence: IngestPersistenceCapability;
   /**
    * Dedicated backend for the per-group rewind-history blob. When provided, the
    * convergence rewind window is persisted and survives a restart. Optional.
@@ -234,6 +237,7 @@ export class GroupsManager<
 
   /** Crypto provider for cryptographic operations */
   public cryptoProvider: CryptoProvider;
+  readonly ingestPersistence: IngestPersistenceCapability;
 
   /** Owns the in-memory cache + store hydration. */
   readonly #registry: GroupRegistry<THistory, TMedia>;
@@ -245,6 +249,7 @@ export class GroupsManager<
   constructor(options: GroupsManagerOptions<THistory, TMedia>) {
     super();
     this.store = options.store;
+    this.ingestPersistence = options.ingestPersistence;
     this.signer = options.signer;
     this.accountProofSigner = options.accountProofSigner;
     this.network = options.network;
@@ -253,6 +258,7 @@ export class GroupsManager<
 
     this.#registry = new GroupRegistry<THistory, TMedia>({
       store: options.store,
+      ingestStateStore: options.ingestStateStore,
       rewindStore: options.rewindStore,
       removedMarkerStore: options.removedMarkerStore,
       convergencePolicy: options.convergencePolicy,
@@ -268,6 +274,7 @@ export class GroupsManager<
 
     this.#factory = new GroupFactory<THistory, TMedia>({
       store: options.store,
+      ingestStateStore: options.ingestStateStore,
       rewindStore: options.rewindStore,
       removedMarkerStore: options.removedMarkerStore,
       convergencePolicy: options.convergencePolicy,

@@ -26,6 +26,7 @@ import type {
 import type { StateNotification } from "../../engine/state-notifications.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { NostrGroupPeeler } from "../group/nostr-peeler.js";
+import { TerminalWrapperLedger } from "../group/wrapper-ledger.js";
 import { proposeLeaveGroup } from "../group/proposals/leave-group.js";
 import type {
   GroupEffects,
@@ -96,6 +97,7 @@ export type GroupSessionOptions<
   state: ClientState;
   ciphersuite: CiphersuiteImpl;
   store: GenericKeyValueStore<SerializedClientState>;
+  ingestStateStore?: GenericKeyValueStore<Uint8Array>;
   /**
    * Dedicated store for the full-fork history tree (per-node keys under a hex
    * group-id prefix). When set, the tree is flushed on {@link GroupSession.save}
@@ -185,12 +187,14 @@ export class GroupSession<
   readonly ciphersuite: CiphersuiteImpl;
   readonly store: GenericKeyValueStore<SerializedClientState>;
   readonly rewindStore?: GenericKeyValueStore<Uint8Array>;
+  readonly ingestStateStore?: GenericKeyValueStore<Uint8Array>;
   readonly #removedMarkerStore?: GenericKeyValueStore<boolean>;
   readonly history: THistory;
 
   readonly #engine: MarmotGroupEngine<NostrEvent>;
   readonly #peeler: NostrGroupPeeler;
   readonly #sentEventIds = new Set<string>();
+  readonly #wrapperLedger?: TerminalWrapperLedger;
 
   #groupData: MarmotGroupView | null = null;
   #dirty = false;
@@ -205,6 +209,7 @@ export class GroupSession<
     this.ciphersuite = options.ciphersuite;
     this.store = options.store;
     this.rewindStore = options.rewindStore;
+    this.ingestStateStore = options.ingestStateStore;
     this.#removedMarkerStore = options.removedMarkerStore;
     this.history = options.history as THistory;
     this.#onStateChanged = options.onStateChanged;
@@ -214,6 +219,11 @@ export class GroupSession<
     this.#onHistoryChanged = options.onHistoryChanged;
 
     this.#peeler = new NostrGroupPeeler(this.ciphersuite);
+    if (this.ingestStateStore)
+      this.#wrapperLedger = new TerminalWrapperLedger(
+        this.ingestStateStore,
+        bytesToHex(options.state.groupContext.groupId),
+      );
     this.#engine = new MarmotGroupEngine({
       state: options.state,
       ciphersuite: this.ciphersuite,
@@ -493,6 +503,7 @@ export class GroupSession<
     const rest: NostrEvent[] = [];
 
     for (const event of events) {
+      if (await this.#wrapperLedger?.get(event.id)) continue;
       if (this.#sentEventIds.delete(event.id)) selfEcho.push(event);
       else rest.push(event);
     }
@@ -507,7 +518,9 @@ export class GroupSession<
           message,
           reason: "self-echo",
         };
-        yield { ...skipped, disposition: ingestResultDisposition(skipped) };
+        const disposition = ingestResultDisposition(skipped);
+        await this.#wrapperLedger?.record(event.id, "stale");
+        yield { ...skipped, disposition };
       }
     }
 
@@ -522,6 +535,22 @@ export class GroupSession<
         this.#onApplicationMessage?.(mapped.result.message);
       }
 
+      const retryableUnreadable =
+        mapped.kind === "unreadable" && mapped.decryptFailure === true;
+      if (
+        "event" in mapped &&
+        mapped.disposition.kind !== "deferred" &&
+        !retryableUnreadable
+      ) {
+        await this.#wrapperLedger?.record(
+          mapped.event.id,
+          mapped.disposition.kind === "accepted"
+            ? "accepted"
+            : mapped.disposition.kind === "invalidated"
+              ? "invalidated"
+              : "stale",
+        );
+      }
       yield mapped;
     }
 

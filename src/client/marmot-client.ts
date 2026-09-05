@@ -83,6 +83,10 @@ export interface AnnotatedInvite {
   joinable: boolean;
 }
 
+export type IngestPersistenceCapability =
+  | { kind: "durable" }
+  | { kind: "ephemeral"; reason: "ingest_state_store_omitted" };
+
 export type MarmotClientOptions<
   THistory extends BaseGroupHistory | undefined = undefined,
   TMedia extends BaseGroupMedia | undefined = undefined,
@@ -100,6 +104,8 @@ export type MarmotClientOptions<
   capabilities?: Capabilities;
   /** The backend to store and load the groups from */
   groupStateStore: GenericKeyValueStore<SerializedClientState>;
+  /** Durable terminal-wrapper and convergence-effect evidence. */
+  ingestStateStore?: GenericKeyValueStore<Uint8Array>;
   /**
    * Dedicated backend for the per-group full-fork history tree (the single
    * persisted source for fork recovery and the {@link MarmotGroup.forkTree}
@@ -193,6 +199,7 @@ export class MarmotClient<
   readonly groups: GroupsManager<THistory, TMedia>;
   /** Manages invite lifecycle: ingestion, decryption, and storage */
   readonly invites: InviteManager;
+  readonly ingestPersistence: IngestPersistenceCapability;
 
   /** Crypto provider for cryptographic operations */
   public cryptoProvider: CryptoProvider;
@@ -203,6 +210,11 @@ export class MarmotClient<
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     const verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
+    const ingestStateStore =
+      options.ingestStateStore ?? new InMemoryKeyValueStore<Uint8Array>();
+    this.ingestPersistence = options.ingestStateStore
+      ? { kind: "durable" }
+      : { kind: "ephemeral", reason: "ingest_state_store_omitted" };
     this.keyPackages = new KeyPackageManager({
       store: options.keyPackageStore,
       signer: options.signer,
@@ -221,6 +233,8 @@ export class MarmotClient<
 
     this.groups = new GroupsManager<THistory, TMedia>({
       store: options.groupStateStore,
+      ingestStateStore,
+      ingestPersistence: this.ingestPersistence,
       rewindStore: options.rewindStore,
       removedMarkerStore: options.removedMarkerStore,
       convergencePolicy: options.convergencePolicy,

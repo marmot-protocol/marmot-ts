@@ -178,6 +178,8 @@ export type MarmotGroupOptions<
    * undecryptable events held for retry). Defaults bound it.
    */
   ingestionPool?: IngestionPoolOptions;
+  /** Store for durable terminal transport-wrapper evidence. */
+  ingestStateStore?: GenericKeyValueStore<Uint8Array>;
   /** The storage interface for the groups application message history (optional) */
   history?: THistory | GroupHistoryFactory<THistory>;
   /**
@@ -531,6 +533,7 @@ export class MarmotGroup<
       state,
       ciphersuite: this.ciphersuite,
       store: this.store,
+      ingestStateStore: options.ingestStateStore,
       rewindStore: options.rewindStore,
       removedMarkerStore: options.removedMarkerStore,
       retained: options.retained,

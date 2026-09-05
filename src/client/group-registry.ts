@@ -35,6 +35,7 @@ export type GroupRegistryOptions<
   TMedia extends BaseGroupMedia | undefined = undefined,
 > = {
   store: GenericKeyValueStore<SerializedClientState>;
+  ingestStateStore: GenericKeyValueStore<Uint8Array>;
   /** Dedicated store for the per-group full-fork history tree (optional). */
   rewindStore?: GenericKeyValueStore<Uint8Array>;
   /**
@@ -83,6 +84,7 @@ export class GroupRegistry<
   TMedia extends BaseGroupMedia | undefined = any,
 > extends EventEmitter<GroupRegistryEvents<THistory, TMedia>> {
   readonly store: GenericKeyValueStore<SerializedClientState>;
+  readonly ingestStateStore: GenericKeyValueStore<Uint8Array>;
   readonly rewindStore?: GenericKeyValueStore<Uint8Array>;
   readonly removedMarkerStore?: GenericKeyValueStore<boolean>;
   readonly signer: EventSigner;
@@ -116,6 +118,7 @@ export class GroupRegistry<
   constructor(options: GroupRegistryOptions<THistory, TMedia>) {
     super();
     this.store = options.store;
+    this.ingestStateStore = options.ingestStateStore;
     this.rewindStore = options.rewindStore;
     this.removedMarkerStore = options.removedMarkerStore;
     this.signer = options.signer;
@@ -153,6 +156,7 @@ export class GroupRegistry<
   ): Promise<MarmotGroup<THistory, TMedia>> {
     return MarmotGroup.fromClientState<THistory, TMedia>(state, {
       store: this.store,
+      ingestStateStore: this.ingestStateStore,
       rewindStore: this.rewindStore,
       removedMarkerStore: this.removedMarkerStore,
       retained,

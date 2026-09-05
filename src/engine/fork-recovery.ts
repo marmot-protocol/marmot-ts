@@ -7,6 +7,7 @@ import {
   getCredentialFromLeafIndex,
   type IncomingMessageCallback,
   type LeafIndex,
+  type MlsFramedMessage,
   mlsMessageEncoder,
   MlsMessage,
   processMessage,
@@ -55,9 +56,79 @@ export interface ChainLink {
  * scores on) and, if it then won, corrupting `RetainedHistoryStore` with a
  * parent→child edge that never happened.
  */
-interface KnownNextState {
+export interface KnownNextState {
   parentTag: string;
   state: ClientState;
+}
+
+/** Shared parent-relative candidate resolution used by live and tree recovery. */
+export type ParentResolution =
+  | {
+      kind: "resolved";
+      result: ProcessMessageResult & { kind: "newState" };
+    }
+  | { kind: "authentication_mismatch" }
+  | { kind: "rejected"; reason: "authorization_or_components" }
+  | { kind: "deferred"; reason: "temporary_refusal" };
+
+/**
+ * Authenticates a Commit against one exact parent, then applies the shared
+ * parent-relative authorization/component gate. A stamped own Commit is
+ * already authenticated and authorized and therefore uses its recorded child.
+ */
+export async function resolveCandidateParent(params: {
+  ciphersuite: CiphersuiteImpl;
+  parent: ClientState;
+  message: MlsFramedMessage;
+  callback: IncomingMessageCallback;
+  known?: KnownNextState;
+}): Promise<ParentResolution> {
+  const { ciphersuite, parent, message, callback, known } = params;
+  if (known?.parentTag === bytesToHex(parent.confirmationTag))
+    return {
+      kind: "resolved",
+      result: {
+        kind: "newState",
+        newState: known.state,
+        actionTaken: "accept",
+        consumed: [],
+        aad: new Uint8Array(),
+      },
+    };
+
+  const capture = withCapturedProposals(callback);
+  capture.take();
+  let result: ProcessMessageResult;
+  try {
+    result = await processMessage({
+      context: {
+        cipherSuite: ciphersuite,
+        authService: marmotAuthService,
+        externalPsks: {},
+      },
+      state: parent,
+      message,
+      callback: capture.callback,
+    });
+  } catch {
+    return { kind: "authentication_mismatch" };
+  }
+  const proposals = capture.take();
+  if (result.kind !== "newState" || result.actionTaken === "reject")
+    return { kind: "rejected", reason: "authorization_or_components" };
+  try {
+    if (
+      validateCommitLegality({
+        parentState: parent,
+        resultingState: result.newState,
+        proposals,
+      })
+    )
+      return { kind: "rejected", reason: "authorization_or_components" };
+  } catch {
+    return { kind: "deferred", reason: "temporary_refusal" };
+  }
+  return { kind: "resolved", result };
 }
 
 /** Candidate branches plus their reached tip states and applied chains. */
@@ -161,15 +232,13 @@ export class ForkRecovery<TEnvelope> {
     // proposals are captured for validateCommitLegality at the point a
     // candidate edge would be created — the same shared adapter the inbound
     // seam (ingest.ts) uses, so neither seam can drift from the other.
-    const capture = withCapturedProposals(callback);
-
     const witnessesAt = (state: ClientState): Promise<AppWitness[]> =>
       collectWitnessesAt({
         peeler: this.#peeler,
         ciphersuite: this.#ciphersuite,
         state,
         witnessEnvelopes,
-        callback: capture.callback,
+        callback,
       });
 
     const candidatesAt = async (state: ClientState): Promise<MlsMessage[]> => {
@@ -208,6 +277,7 @@ export class ForkRecovery<TEnvelope> {
     ): Promise<void> => {
       const accumulated = [...witnesses, ...(await witnessesAt(state))];
       let extended = false;
+      let branchDeferred = false;
       for (const message of await candidatesAt(state)) {
         // Candidate commits are framed (private or public); skip anything else.
         if (
@@ -215,7 +285,6 @@ export class ForkRecovery<TEnvelope> {
           message.wireformat !== wireformats.mls_public_message
         )
           continue;
-        let next: ProcessMessageResult;
         const known = knownNextStates.get(
           bytesToHex(this.#commitDigestOf(message)),
         );
@@ -242,67 +311,19 @@ export class ForkRecovery<TEnvelope> {
         const knownAtThisParent =
           known !== undefined &&
           known.parentTag === bytesToHex(state.confirmationTag);
-        if (knownAtThisParent && known) {
-          // A stamped own commit was fully authenticated and authorized while
-          // staged evidence still existed. MLS cannot replay that commit to its
-          // own sender after restart, so the durable stamp is the authority;
-          // never reconstruct proposals from the parent snapshot here.
-          next = {
-            kind: "newState",
-            newState: known.state,
-            actionTaken: "accept",
-            consumed: [],
-            aad: new Uint8Array(),
-          };
-        } else {
-          // withCapturedProposals contract: clear any proposals left buffered
-          // from a prior candidate before this processMessage call, then read
-          // this commit's own proposals immediately after it resolves.
-          capture.take();
-          try {
-            next = await processMessage({
-              context: {
-                cipherSuite: this.#ciphersuite,
-                authService: marmotAuthService,
-                externalPsks: {},
-              },
-              state,
-              message,
-              callback: capture.callback,
-            });
-          } catch {
-            continue;
-          }
-          const capturedProposals = capture.take();
-          if (next.kind !== "newState" || next.actionTaken === "reject")
-            continue;
-
-          // WIRE-03/CONV-01 (D-04/D-09): a candidate commit that fails commit
-          // legality creates no branch edge at all — no grandfathering for
-          // edges replayed out of persisted retained history. The accepted
-          // consequence (D-04/D-09) is that a stored branch containing a
-          // previously-accepted violating commit becomes unselectable after
-          // upgrade (worst case the group reaches Unrecoverable); such a group
-          // is already forked from any conformant peer.
-          // Defence in depth: `validateCommitLegality` is documented
-          // non-throwing (D-01/D-02) and converts a malformed-component decode
-          // into a typed violation, but this seam sits inside an async
-          // generator whose caller (`ingest.ts` → `GroupSession.ingest`) only
-          // reaches `save()` after a clean drain. A throw escaping here would
-          // abandon state already advanced in the batch, so treat any
-          // unexpected throw exactly like a violation: no candidate edge.
-          let violation: ReturnType<typeof validateCommitLegality>;
-          try {
-            violation = validateCommitLegality({
-              parentState: state,
-              resultingState: next.newState,
-              proposals: capturedProposals,
-            });
-          } catch {
-            continue;
-          }
-          if (violation) continue;
+        const resolution = await resolveCandidateParent({
+          ciphersuite: this.#ciphersuite,
+          parent: state,
+          message,
+          callback,
+          known: knownAtThisParent ? known : undefined,
+        });
+        if (resolution.kind === "deferred") {
+          branchDeferred = true;
+          continue;
         }
+        if (resolution.kind !== "resolved") continue;
+        const next = resolution.result;
         const tag = bytesToHex(next.newState.confirmationTag);
         if (seen.has(tag)) continue;
         extended = true;
@@ -326,7 +347,7 @@ export class ForkRecovery<TEnvelope> {
           accumulated,
         );
       }
-      if (!extended && tipMessage !== undefined) {
+      if (!extended && !branchDeferred && tipMessage !== undefined) {
         const tipEpoch = Number(state.groupContext.epoch);
         const branch: BranchCandidate = {
           id: `branch-${counter++}`,

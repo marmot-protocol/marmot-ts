@@ -17,6 +17,7 @@ import {
   isSelfRemoveProposal,
   acceptAll,
   type LeafIndex,
+  type MlsFramedMessage,
   type MlsMessage,
   mlsMessageEncoder,
   nodeTypes,
@@ -78,15 +79,13 @@ import {
 } from "../audit/index.js";
 import { framedContentType } from "./wire-format.js";
 import { logger } from "../utils/debug.js";
-import {
-  createAdminCommitPolicyCallback,
-  withCapturedProposals,
-} from "./admin-policy.js";
+import { createAdminCommitPolicyCallback } from "./admin-policy.js";
 import { DeliveredPayloadLedger } from "./delivered-payloads.js";
 import {
   type ChainLink,
   collectWitnessesAt,
   ForkRecovery,
+  resolveCandidateParent,
   type ForkResolution,
 } from "./fork-recovery.js";
 import { GroupHistoryTree } from "./history-tree.js";
@@ -1214,14 +1213,13 @@ export class MarmotGroupEngine<TEnvelope> {
           continue;
         }
         if (result.kind === "deferred") {
-          const added = this.#pool.add(
+          this.#pool.add(
             this.peeler.idOf(result.envelope),
             result.envelope,
             result.sourceEpoch,
           );
-          if (added.kind === "accepted") continue;
-          // Capacity is temporary: surface a retryable disposition and do not
-          // remember the wrapper in terminal deduplication.
+          // Both retained and capacity-refused work remains visibly retryable;
+          // neither path enters terminal wrapper deduplication.
           yield result;
           continue;
         }
@@ -2195,9 +2193,6 @@ export class MarmotGroupEngine<TEnvelope> {
     // before adopting this winner chain, so a persisted tree edge written by
     // a pre-upgrade build (before this gate existed) is never grandfathered
     // in. Fail closed on any link.
-    const capture = withCapturedProposals(
-      this.#createAdminVerificationCallback(),
-    );
     for (const link of winnerChain) {
       const childTag = bytesToHex(link.child.confirmationTag);
       // Commit messages are framed (private or public); anything else stored
@@ -2212,36 +2207,28 @@ export class MarmotGroupEngine<TEnvelope> {
         );
         return undefined;
       }
-      capture.take();
-      let replayed: ProcessMessageResult;
-      try {
-        replayed = await processMessage({
-          context: {
-            cipherSuite: this.ciphersuite,
-            authService: marmotAuthService,
-            externalPsks: {},
-          },
-          state: link.parent,
-          message: link.message,
-          callback: capture.callback,
-        });
-      } catch (error) {
+      const stamp = await this.#tree.ownCommitStampOf(childTag);
+      const parentResolution = await resolveCandidateParent({
+        ciphersuite: this.ciphersuite,
+        parent: link.parent,
+        message: link.message as MlsFramedMessage,
+        callback: this.#createAdminVerificationCallback(link.parent),
+        known: stamp
+          ? {
+              parentTag: bytesToHex(link.parent.confirmationTag),
+              state: link.child,
+            }
+          : undefined,
+      });
+      if (parentResolution.kind !== "resolved") {
         this.#log()(
-          "tree-fed re-convergence: abandoning winner chain — link %s failed to replay: %o",
+          "tree-fed re-convergence: deferring winner chain — link %s parent resolution:%s",
           childTag,
-          error,
+          parentResolution.kind,
         );
         return undefined;
       }
-      const capturedProposals = capture.take();
-
-      if (replayed.kind !== "newState" || replayed.actionTaken === "reject") {
-        this.#log()(
-          "tree-fed re-convergence: abandoning winner chain — link %s was rejected on replay",
-          childTag,
-        );
-        return undefined;
-      }
+      const replayed = parentResolution.result;
 
       if (
         bytesToHex(replayed.newState.confirmationTag) !==
@@ -2250,37 +2237,6 @@ export class MarmotGroupEngine<TEnvelope> {
         this.#log()(
           "tree-fed re-convergence: abandoning winner chain — link %s replayed to a different confirmationTag than the stored snapshot",
           childTag,
-        );
-        return undefined;
-      }
-
-      // Defence in depth (see the matching guard in `fork-recovery.ts`):
-      // `validateCommitLegality` is documented non-throwing, but this seam runs
-      // inside the ingest generator, and a throw escaping here would abandon
-      // state already advanced in the batch before `GroupSession.ingest` can
-      // persist it. Fail closed on an unexpected throw, matching this method's
-      // no-grandfathering policy for every other unverifiable link.
-      let violation: ReturnType<typeof validateCommitLegality>;
-      try {
-        violation = validateCommitLegality({
-          parentState: link.parent,
-          resultingState: link.child,
-          proposals: capturedProposals,
-        });
-      } catch (error) {
-        this.#log()(
-          "tree-fed re-convergence: abandoning winner chain — link %s threw during commit legality: %o",
-          childTag,
-          error,
-        );
-        return undefined;
-      }
-      if (violation) {
-        this.#log()(
-          "tree-fed re-convergence: abandoning winner chain — link %s failed commit legality reason:%s detail:%s",
-          childTag,
-          violation.reason,
-          violation.detail,
         );
         return undefined;
       }

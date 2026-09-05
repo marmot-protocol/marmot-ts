@@ -91,7 +91,9 @@ import {
 } from "../../core/group-message.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { MarmotGroupEngine } from "../group-engine.js";
+import { GroupHistoryTree } from "../history-tree.js";
 import type { GroupPeeler } from "../types.js";
+import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 
 function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
   return {
@@ -276,6 +278,55 @@ async function selfUpdateCommit(
 const MAX_DIGEST_SEARCH_ATTEMPTS = 25;
 
 describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ordering", () => {
+  it("persists confirmation-time own evidence and abandons it on publish failure", async () => {
+    const { impl, adminPubkey, adminEpoch1 } = await twoMemberEpoch1Group();
+    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const peeler = testPeeler(impl);
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler,
+    });
+    engine.history.bindStore(store);
+
+    const failed = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (failed.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    expect(failed.pending.ownCommitStamp).toMatchObject({
+      committer: adminPubkey,
+      priority: "ordinary",
+      consumedProposalRefs: [],
+    });
+    engine.publishFailed(failed.pending);
+    await engine.history.flush();
+    expect(engine.history.size).toBe(1);
+
+    const confirmed = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (confirmed.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    engine.confirmPublished(confirmed.pending);
+    await engine.history.flush();
+
+    const gid = bytesToHex(adminEpoch1.groupContext.groupId);
+    const loaded = await GroupHistoryTree.load(store, gid);
+    expect(loaded).toBeDefined();
+    const tipTag = bytesToHex(confirmed.pending.newState.confirmationTag);
+    expect(await loaded!.ownCommitStampOf(tipTag)).toEqual(
+      confirmed.pending.ownCommitStamp,
+    );
+    expect(await loaded!.commitBytesOf(tipTag)).toEqual(
+      encode(mlsMessageEncoder, confirmed.pending.commitMessage!),
+    );
+  });
+
   it("preserves a two-link own branch whose tip consumes an exact-parent proposal reference", async () => {
     const { impl, adminEpoch1, memberEpoch1 } = await twoMemberEpoch1Group();
     const peeler = testPeeler(impl);

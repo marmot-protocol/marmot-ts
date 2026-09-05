@@ -50,19 +50,11 @@ async function collectKinds(gen: AsyncIterable<{ kind: string }>) {
 }
 
 /**
- * Documents the actual durability boundary for the m6 content-derived dedup.
- *
- * The dedup `seen`/`sent` sets are in-memory only and reset to empty on restart,
- * but they are NOT what prevents a duplicate across a restart: the persisted MLS
- * `ClientState` is. For an application message, processing advances the sender's
- * ratchet generation; that advance is persisted on save, and MLS forward secrecy
- * then deletes the consumed generation's secret. A relay replaying the same event
- * after a restart therefore cannot be decrypted (`unreadable`) and is never
- * delivered twice — even though the in-memory dedup that would have tagged it
- * `duplicate` is gone.
+ * Pins the durable outer transport boundary: a terminally accepted verified
+ * wrapper is persisted independently of MLS state and suppressed on restart.
  */
-describe("application message replay across restart (forward secrecy is the boundary)", () => {
-  it("does not re-deliver a replayed application message after restart, with the in-memory dedup reset", async () => {
+describe("application message replay across restart", () => {
+  it("does not re-process a terminal wrapper when the ingest ledger is reloaded", async () => {
     const impl: CiphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -126,12 +118,14 @@ describe("application message replay across restart (forward secrecy is the boun
     });
 
     const store = new InMemoryKeyValueStore<SerializedClientState>();
+    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
     const signer = { getPublicKey: async () => adminPubkey } as EventSigner;
 
     // Session 1: the admin delivers the message exactly once. Ingest persists the
     // advanced ratchet state to `store`.
     const first = new MarmotGroup(adminEpoch1, {
       store,
+      ingestStateStore,
       signer,
       ciphersuite: impl,
       network: NETWORK,
@@ -140,23 +134,21 @@ describe("application message replay across restart (forward secrecy is the boun
     expect(firstKinds.filter((k) => k === "processed")).toHaveLength(1);
     first.dispose();
 
-    // "Restart": rehydrate from the persisted state only. The new engine starts
-    // with empty dedup sets — so anything preventing a second delivery now comes
-    // purely from the persisted MLS state, not from content dedup.
+    // "Restart": rehydrate canonical state and reuse terminal wrapper evidence.
     const persisted = await store.getItem(groupId);
     expect(persisted).toBeDefined();
     const reloaded = new MarmotGroup(deserializeClientState(persisted!), {
       store,
+      ingestStateStore,
       signer,
       ciphersuite: impl,
       network: NETWORK,
     });
 
-    // Replay the exact same event. Forward secrecy (the consumed generation's
-    // secret was persisted-away) makes it unreadable; it is never delivered again.
+    // Replay the exact same event. The durable outer-wrapper ledger suppresses
+    // it before MLS work, including after reconstructing the group.
     const replayKinds = await collectKinds(reloaded.ingest([event]));
-    expect(replayKinds).not.toContain("processed");
-    expect(replayKinds).toContain("unreadable");
+    expect(replayKinds).toEqual([]);
     // The replay did not advance or corrupt canonical state.
     expect(reloaded.state.groupContext.epoch).toBe(
       adminEpoch1.groupContext.epoch,

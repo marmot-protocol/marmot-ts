@@ -83,7 +83,11 @@ import {
   commitDigest,
   compareCommitOrderingKeys,
 } from "../../core/convergence.js";
-import { ForkRecovery, type RetainedView } from "../fork-recovery.js";
+import {
+  ForkRecovery,
+  resolveCandidateParent,
+  type RetainedView,
+} from "../fork-recovery.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import {
@@ -280,6 +284,31 @@ async function selfUpdateCommit(
 const MAX_DIGEST_SEARCH_ATTEMPTS = 25;
 
 describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ordering", () => {
+  it("uses one parent-resolution vocabulary for stamped and mismatched parents", async () => {
+    const { impl, ctx, adminEpoch1 } = await twoMemberEpoch1Group();
+    const own = await selfUpdateCommit(ctx, adminEpoch1);
+
+    const resolved = await resolveCandidateParent({
+      ciphersuite: impl,
+      parent: adminEpoch1,
+      message: own.commit,
+      callback: acceptAll,
+      known: {
+        parentTag: bytesToHex(adminEpoch1.confirmationTag),
+        state: own.newState,
+      },
+    });
+    expect(resolved.kind).toBe("resolved");
+
+    const mismatch = await resolveCandidateParent({
+      ciphersuite: impl,
+      parent: adminEpoch1,
+      message: own.commit,
+      callback: acceptAll,
+      known: { parentTag: "00", state: own.newState },
+    });
+    expect(mismatch.kind).toBe("authentication_mismatch");
+  });
   it("persists confirmation-time own evidence and abandons it on publish failure", async () => {
     const { impl, adminPubkey, adminEpoch1 } = await twoMemberEpoch1Group();
     const store = new InMemoryKeyValueStore<Uint8Array>();

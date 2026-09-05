@@ -67,8 +67,11 @@ export function encodeOwnCommitRecord(input: {
  * Decodes a stamped record, or explicitly reports an old bare-wire record.
  * Bytes carrying the stamp magic always fail closed on malformed content.
  */
-export function decodeOwnCommitRecord(bytes: Uint8Array): DecodedOwnCommitRecord {
-  if (!startsWithMagic(bytes)) return { kind: "legacy", wireBytes: bytes.slice() };
+export function decodeOwnCommitRecord(
+  bytes: Uint8Array,
+): DecodedOwnCommitRecord {
+  if (!startsWithMagic(bytes))
+    return { kind: "legacy", wireBytes: bytes.slice() };
 
   const reader = new BinaryReader(bytes);
   reader.bytes(OWN_COMMIT_RECORD_MAGIC.length);

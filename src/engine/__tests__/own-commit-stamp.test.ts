@@ -30,7 +30,10 @@ describe("own commit convergence stamp", () => {
     expect(
       encodeOwnCommitRecord({
         wireBytes: WIRE,
-        stamp: { ...STAMP, consumedProposalRefs: [...STAMP.consumedProposalRefs].reverse() },
+        stamp: {
+          ...STAMP,
+          consumedProposalRefs: [...STAMP.consumedProposalRefs].reverse(),
+        },
       }),
     ).toEqual(encoded);
   });

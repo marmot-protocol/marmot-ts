@@ -3,7 +3,10 @@ import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
 import { MarmotClient } from "../marmot-client.js";
-import { getMarmotGroupView } from "../../core/client-state.js";
+import {
+  getMarmotGroupView,
+  type SerializedClientState,
+} from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
@@ -185,6 +188,34 @@ describe("MarmotClient ingest-state persistence capability", () => {
       relays: ["wss://relay.example.com"],
     });
     expect(group.session.ingestStateStore).toBe(ingestStateStore);
+  });
+
+  it("threads the supplied store through import and persisted load paths", async () => {
+    const account = PrivateKeyAccount.generateNew();
+    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
+    const groupStateStore =
+      new InMemoryKeyValueStore<SerializedClientState>();
+    const makeClient = (
+      store: InMemoryKeyValueStore<SerializedClientState>,
+    ) =>
+      new MarmotClient({
+        groupStateStore: store,
+        ingestStateStore,
+        keyPackageStore: new InMemoryKeyValueStore(),
+        signer: account.signer,
+        network: new MockNetwork(),
+      });
+
+    const source = await makeClient(groupStateStore).groups.create("Source", {
+      relays: ["wss://relay.example.com"],
+    });
+    const loaded = await makeClient(groupStateStore).groups.get(source.id);
+    expect(loaded.session.ingestStateStore).toBe(ingestStateStore);
+
+    const imported = await makeClient(
+      new InMemoryKeyValueStore(),
+    ).groups.import(source.state);
+    expect(imported.session.ingestStateStore).toBe(ingestStateStore);
   });
 
   it("shares one explicitly ephemeral fallback across groups", async () => {

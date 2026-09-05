@@ -166,3 +166,46 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     ).toBe(1);
   });
 });
+
+describe("MarmotClient ingest-state persistence capability", () => {
+  it("threads a supplied durable store into created groups", async () => {
+    const account = PrivateKeyAccount.generateNew();
+    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
+    const client = new MarmotClient({
+      groupStateStore: new InMemoryKeyValueStore(),
+      ingestStateStore,
+      keyPackageStore: new InMemoryKeyValueStore(),
+      signer: account.signer,
+      network: new MockNetwork(),
+    });
+
+    expect(client.ingestPersistence).toEqual({ kind: "durable" });
+    expect(client.groups.ingestPersistence).toEqual({ kind: "durable" });
+    const group = await client.groups.create("Durable ingest", {
+      relays: ["wss://relay.example.com"],
+    });
+    expect(group.session.ingestStateStore).toBe(ingestStateStore);
+  });
+
+  it("shares one explicitly ephemeral fallback across groups", async () => {
+    const account = PrivateKeyAccount.generateNew();
+    const client = new MarmotClient({
+      groupStateStore: new InMemoryKeyValueStore(),
+      keyPackageStore: new InMemoryKeyValueStore(),
+      signer: account.signer,
+      network: new MockNetwork(),
+    });
+
+    expect(client.ingestPersistence).toEqual({
+      kind: "ephemeral",
+      reason: "ingest_state_store_omitted",
+    });
+    const first = await client.groups.create("First", {
+      relays: ["wss://relay.example.com"],
+    });
+    const second = await client.groups.create("Second", {
+      relays: ["wss://relay.example.com"],
+    });
+    expect(first.session.ingestStateStore).toBe(second.session.ingestStateStore);
+  });
+});

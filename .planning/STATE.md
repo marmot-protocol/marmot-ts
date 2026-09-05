@@ -5,15 +5,15 @@ milestone_name: Phase 1)
 current_phase: 04
 current_phase_name: Feature Parity & Conformance Vectors
 status: executing
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-09-05T14:49:04.039Z"
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-09-05T15:01:25.191Z"
 last_activity: 2026-09-05
 last_activity_desc: Phase 04 execution started
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 39
-  completed_plans: 33
+  completed_plans: 34
   percent: 57
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-21)
 ## Current Position
 
 Phase: 04 (Feature Parity & Conformance Vectors) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Status: Ready to execute
 Last activity: 2026-09-05 — Phase 04 execution started
 
-Progress: [█████████░] 85% (7 phases)
+Progress: [█████████░] 87% (7 phases)
 
 **Next recommended run:** `/gsd-execute-phase 03.1`
 
@@ -96,6 +96,7 @@ _Updated after each plan completion_
 | Phase 03.1 P14 | 3min | 1 tasks | 2 files |
 | Phase 03.1 P13 | 6min | 2 tasks | 4 files |
 | Phase 04 P01 | 15min | 3 tasks | 5 files |
+| Phase 04 P02 | 8min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -182,6 +183,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 04-01]: Encode SafeAAD's empty supported-component set as canonical 00, matching MDK.
 - [Phase ?]: [Phase 04-01]: Reject SafeAAD in the GroupContext dictionary builder while allowing it through the dedicated leaf builder.
 - [Phase ?]: [Phase 04-01]: Statically import pinned MDK JSON fixtures in test-only code for cross-runtime fixture reuse.
+- [Phase ?]: [Phase 04-02]: Keep own-commit record identity bound to exact MLS wire bytes; stamped metadata never changes identity.
+- [Phase ?]: [Phase 04-02]: Only confirmation-stamped own links receive prevalidated recovery; legacy records remain readable without inferred evidence.
 
 ### Pending Todos
 
@@ -216,7 +219,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-05T14:49:04.020Z
-Stopped at: Completed 04-01-PLAN.md
+Last session: 2026-09-05T15:01:25.172Z
+Stopped at: Completed 04-02-PLAN.md
 Resume file:
 None

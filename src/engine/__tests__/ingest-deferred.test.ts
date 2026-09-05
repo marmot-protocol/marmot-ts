@@ -20,6 +20,7 @@ import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { ingestResultDisposition } from "../ingest-disposition.js";
 import { type IngestContext, ingestEnvelopes } from "../ingest.js";
+import { IngestionPool } from "../ingestion-pool.js";
 import { RetainedHistoryStore } from "../retained-store.js";
 import type { GroupPeeler, IngestResult } from "../types.js";
 
@@ -111,5 +112,49 @@ describe("ingestEnvelopes – deferred (future-epoch commit)", () => {
       kind: "deferred",
       reason: "missing_parent",
     });
+  });
+
+  it("expires authenticated deferred commits only beyond the rewind boundary", () => {
+    const pool = new IngestionPool<Envelope>({
+      maxSize: 4,
+      maxRewindCommits: 5,
+    });
+
+    expect(pool.add("boundary", { id: "boundary" }, 5)).toEqual({
+      kind: "accepted",
+    });
+    expect(pool.evictStale(10)).toEqual([]);
+    expect(pool.has("boundary")).toBe(true);
+
+    expect(pool.evictStale(11).map((entry) => entry.id)).toEqual(["boundary"]);
+  });
+
+  it("never expires authenticated deferred commits under an infinite horizon", () => {
+    const pool = new IngestionPool<Envelope>({
+      maxSize: 4,
+      maxRewindCommits: Number.POSITIVE_INFINITY,
+    });
+    pool.add("future", { id: "future" }, 2);
+
+    expect(pool.evictStale(Number.MAX_SAFE_INTEGER)).toEqual([]);
+    expect(pool.has("future")).toBe(true);
+  });
+
+  it("refuses capacity without consuming an entry and accepts redelivery later", () => {
+    const pool = new IngestionPool<Envelope>({ maxSize: 1 });
+
+    expect(pool.add("held", { id: "held" }, 1)).toEqual({ kind: "accepted" });
+    expect(pool.add("refused", { id: "refused" }, 2)).toEqual({
+      kind: "refused",
+      reason: "capacity",
+    });
+    expect(pool.has("held")).toBe(true);
+    expect(pool.has("refused")).toBe(false);
+
+    pool.remove("held");
+    expect(pool.add("refused", { id: "refused" }, 2)).toEqual({
+      kind: "accepted",
+    });
+    expect(pool.has("refused")).toBe(true);
   });
 });

@@ -25,6 +25,7 @@ export function ingestResultDisposition<TEnvelope>(
       // counterpart of app-payload invalidation).
       return disposition.invalidated();
     case "appliedNotifications":
+    case "stateRevalidated":
       return disposition.accepted();
     case "autoCommit":
       // A locally-staged self_remove-only commit (B6) — an accepted local action,

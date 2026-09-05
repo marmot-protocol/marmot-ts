@@ -26,7 +26,10 @@ import type {
 import type { StateNotification } from "../../engine/state-notifications.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { NostrGroupPeeler } from "../group/nostr-peeler.js";
-import { TerminalWrapperLedger } from "../group/wrapper-ledger.js";
+import {
+  ConvergenceEffectLedger,
+  TerminalWrapperLedger,
+} from "../group/wrapper-ledger.js";
 import { proposeLeaveGroup } from "../group/proposals/leave-group.js";
 import type {
   GroupEffects,
@@ -78,6 +81,9 @@ export type StateInvalidatedIngestResult = SessionIngestResult<
 >;
 export type AppliedNotificationsIngestResult = SessionIngestResult<
   EngineIngestResultOfKind<"appliedNotifications">
+>;
+export type StateRevalidatedIngestResult = SessionIngestResult<
+  EngineIngestResultOfKind<"stateRevalidated">
 >;
 
 export type IngestResult = SessionIngestResult<EngineIngestResult<NostrEvent>>;
@@ -155,7 +161,8 @@ export type GroupSessionOptions<
 export function ingestResultDisposition(result: IngestResult): Disposition {
   if (
     result.kind === "stateInvalidated" ||
-    result.kind === "appliedNotifications"
+    result.kind === "appliedNotifications" ||
+    result.kind === "stateRevalidated"
   )
     return engineIngestResultDisposition(
       result as EngineIngestResult<NostrEvent>,
@@ -174,7 +181,8 @@ function mapEngineIngestResult(
   // unchanged (D-11).
   if (
     result.kind === "stateInvalidated" ||
-    result.kind === "appliedNotifications"
+    result.kind === "appliedNotifications" ||
+    result.kind === "stateRevalidated"
   )
     return result;
   const { envelope, disposition, ...rest } = result;
@@ -195,6 +203,7 @@ export class GroupSession<
   readonly #peeler: NostrGroupPeeler;
   readonly #sentEventIds = new Set<string>();
   readonly #wrapperLedger?: TerminalWrapperLedger;
+  readonly #effectLedger?: ConvergenceEffectLedger;
 
   #groupData: MarmotGroupView | null = null;
   #dirty = false;
@@ -219,11 +228,17 @@ export class GroupSession<
     this.#onHistoryChanged = options.onHistoryChanged;
 
     this.#peeler = new NostrGroupPeeler(this.ciphersuite);
-    if (this.ingestStateStore)
+    if (this.ingestStateStore) {
+      const groupId = bytesToHex(options.state.groupContext.groupId);
       this.#wrapperLedger = new TerminalWrapperLedger(
         this.ingestStateStore,
-        bytesToHex(options.state.groupContext.groupId),
+        groupId,
       );
+      this.#effectLedger = new ConvergenceEffectLedger(
+        this.ingestStateStore,
+        groupId,
+      );
+    }
     this.#engine = new MarmotGroupEngine({
       state: options.state,
       ciphersuite: this.ciphersuite,
@@ -344,9 +359,9 @@ export class GroupSession<
    * (CONV-03, D-12). This layer used to swallow them (CR-06).
    */
   async reconverge(): Promise<DispositionedIngestResult[]> {
-    const results = (await this.#engine.reconvergeFromHistory()).map(
-      mapEngineIngestResult,
-    );
+    const results: DispositionedIngestResult[] = [];
+    for (const result of await this.#engine.reconvergeFromHistory())
+      results.push(...(await this.#reconcile(mapEngineIngestResult(result))));
     await this.save();
     return results;
   }
@@ -551,10 +566,48 @@ export class GroupSession<
               : "stale",
         );
       }
-      yield mapped;
+      for (const reconciled of await this.#reconcile(mapped)) yield reconciled;
     }
 
     await this.save();
+  }
+
+  async #reconcile(
+    result: DispositionedIngestResult,
+  ): Promise<DispositionedIngestResult[]> {
+    if (!this.#effectLedger) return [result];
+    if (result.kind === "stateInvalidated") {
+      return (await this.#effectLedger.recordWithdrawal(
+        result.commitDigest,
+        result.withdrawn,
+      ))
+        ? [result]
+        : [];
+    }
+
+    const notifications =
+      "notifications" in result ? result.notifications : undefined;
+    if (!notifications?.length) return [result];
+    const groups = new Map<string, StateNotification[]>();
+    for (const notification of notifications) {
+      const key = bytesToHex(notification.commitDigest);
+      const group = groups.get(key) ?? [];
+      group.push(notification);
+      groups.set(key, group);
+    }
+    const output: DispositionedIngestResult[] = [result];
+    for (const group of groups.values()) {
+      const digest = group[0]!.commitDigest;
+      if (await this.#effectLedger.recordAdoption(digest))
+        output.push({
+          kind: "stateRevalidated",
+          commitDigest: digest,
+          effectId: digest,
+          notifications: group,
+          disposition: { kind: "accepted" },
+        });
+    }
+    return output;
   }
 
   async #saveHistory(message: Uint8Array): Promise<void> {

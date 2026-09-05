@@ -283,6 +283,14 @@ export type AppliedNotificationsIngestResult = {
   notifications: StateNotification[];
 };
 
+/** A previously withdrawn branch commit has become canonical again. */
+export type StateRevalidatedIngestResult = {
+  kind: "stateRevalidated";
+  commitDigest: Uint8Array;
+  effectId: Uint8Array;
+  notifications: StateNotification[];
+};
+
 /** Result from ingesting group transport envelopes. */
 export type IngestResult<TEnvelope> =
   | ProcessedIngestResult<TEnvelope>
@@ -294,6 +302,7 @@ export type IngestResult<TEnvelope> =
   | RemovedIngestResult<TEnvelope>
   | UnreadableIngestResult<TEnvelope>
   | AppliedNotificationsIngestResult
+  | StateRevalidatedIngestResult
   | StateInvalidatedIngestResult;
 
 /** An {@link IngestResult} carrying its protocol-visible {@link Disposition}. */

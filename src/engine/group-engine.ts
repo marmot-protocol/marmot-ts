@@ -1448,6 +1448,8 @@ export class MarmotGroupEngine<TEnvelope> {
       case "stateInvalidated":
         // A rewind retraction is convergence-relevant, matching "invalidated".
         return true;
+      case "stateRevalidated":
+        return true;
       case "skipped":
         return (
           result.reason === "past-epoch" ||
@@ -2381,6 +2383,7 @@ function auditStaleReason<TEnvelope>(
     case "invalidated":
     case "autoCommit":
     case "appliedNotifications":
+    case "stateRevalidated":
     case "stateInvalidated":
       return undefined;
   }
@@ -2395,6 +2398,7 @@ function auditResultEpoch<TEnvelope>(
     case "stateInvalidated":
       return result.forkEpoch;
     case "appliedNotifications":
+    case "stateRevalidated":
       return undefined;
     case "deferred":
     case "processed":

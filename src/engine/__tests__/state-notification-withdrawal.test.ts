@@ -32,6 +32,7 @@ import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
+import { ConvergenceEffectLedger } from "../../client/group/wrapper-ledger.js";
 import type { SerializedClientState } from "../../core/client-state.js";
 import type { EventSigner } from "applesauce-core";
 import { deriveStateNotifications } from "../state-notifications.js";
@@ -163,6 +164,24 @@ function noNetwork(): NostrNetworkInterface {
 }
 
 describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () => {
+  it("persists exactly-once withdrawal and revalidation verdicts", async () => {
+    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const digest = new Uint8Array(32).fill(7);
+    const notification = {
+      kind: "epochAdvanced" as const,
+      commitDigest: digest,
+      from: 1,
+      to: 2,
+    };
+    const first = new ConvergenceEffectLedger(store, "group");
+
+    expect(await first.recordWithdrawal(digest, [notification])).toBe(true);
+    expect(await first.recordWithdrawal(digest, [notification])).toBe(false);
+
+    const restarted = new ConvergenceEffectLedger(store, "group");
+    expect(await restarted.recordAdoption(digest)).toBe(true);
+    expect(await restarted.recordAdoption(digest)).toBe(false);
+  });
   it("attributes notifications for locally confirmed commit and selfUpdate", async () => {
     const { impl, adminPubkey, adminEpoch1 } = await twoMemberEpoch1Group();
     const engine = new MarmotGroupEngine<NostrEvent>({

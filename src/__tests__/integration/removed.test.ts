@@ -438,16 +438,24 @@ describe("involuntary removal signal", () => {
       throw new Error("application callback failed");
     };
     group.on("removed", throwing, onContext);
-    group.once("removed", function (received) {
-      expect(this).toBe(onceContext);
-      expect(received).toBe(group);
-      order.push("once");
-    }, onceContext);
-    group.on("removed", function (received) {
-      expect(this).toBe(onContext);
-      expect(received).toBe(group);
-      order.push("observer");
-    }, onContext);
+    group.once(
+      "removed",
+      function (received) {
+        expect(this).toBe(onceContext);
+        expect(received).toBe(group);
+        order.push("once");
+      },
+      onceContext,
+    );
+    group.on(
+      "removed",
+      function (received) {
+        expect(this).toBe(onContext);
+        expect(received).toBe(group);
+        order.push("observer");
+      },
+      onContext,
+    );
 
     await expect(group.realizeRemovalIfNeeded()).resolves.toBeUndefined();
 

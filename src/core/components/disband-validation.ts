@@ -260,10 +260,9 @@ export function classifyDisbandCommit(args: {
       "disband must remove every parent leaf except the exact committer leaf",
     );
   try {
-    const resultingAdmins =
-      receiverRemoved
-        ? [actorPubkey]
-        : (getAdminPolicy(args.resultingState.groupContext.extensions) ?? []);
+    const resultingAdmins = receiverRemoved
+      ? [actorPubkey]
+      : (getAdminPolicy(args.resultingState.groupContext.extensions) ?? []);
     if (
       resultingAdmins.length !== 1 ||
       resultingAdmins[0] !== actorPubkey ||

@@ -30,37 +30,11 @@
     }
   },
   "capabilities": {
-    "advertised_app_components": [
-      1,
-      32769,
-      32771,
-      32777,
-      32780
-    ],
-    "advertised_extensions": [
-      6
-    ],
-    "advertised_proposals": [
-      8
-    ],
-    "effective_extensions": [
-      1,
-      2,
-      3,
-      4,
-      5,
-      6
-    ],
-    "effective_proposals": [
-      1,
-      2,
-      3,
-      4,
-      5,
-      6,
-      7,
-      8
-    ],
+    "advertised_app_components": [1, 32769, 32771, 32777, 32780],
+    "advertised_extensions": [6],
+    "advertised_proposals": [8],
+    "effective_extensions": [1, 2, 3, 4, 5, 6],
+    "effective_proposals": [1, 2, 3, 4, 5, 6, 7, 8],
     "not_after": 1795976400,
     "not_before": 1788715200,
     "serialized_hex": "000000006a9da0c0000000006b0c6cd0"

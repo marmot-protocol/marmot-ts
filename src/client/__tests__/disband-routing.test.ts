@@ -44,10 +44,12 @@ describe("disbanded inbound routing", () => {
     for await (const result of group.ingest(late)) results.push(result);
 
     expect(results).toHaveLength(2);
-    expect(results.map((result) => result.kind)).toEqual(["skipped", "skipped"]);
-    expect(results.map((result) => result.kind === "skipped" && result.reason)).toEqual([
-      "group-disbanded",
-      "group-disbanded",
+    expect(results.map((result) => result.kind)).toEqual([
+      "skipped",
+      "skipped",
     ]);
+    expect(
+      results.map((result) => result.kind === "skipped" && result.reason),
+    ).toEqual(["group-disbanded", "group-disbanded"]);
   });
 });

@@ -1,36 +1,10 @@
 {
-  "advertised_app_components": [
-    1,
-    32769,
-    32771,
-    32777,
-    32780
-  ],
+  "advertised_app_components": [1, 32769, 32771, 32777, 32780],
   "capabilities": {
-    "advertised_extensions": [
-      6
-    ],
-    "advertised_proposals": [
-      8
-    ],
-    "effective_extensions": [
-      1,
-      2,
-      3,
-      4,
-      5,
-      6
-    ],
-    "effective_proposals": [
-      1,
-      2,
-      3,
-      4,
-      5,
-      6,
-      7,
-      8
-    ]
+    "advertised_extensions": [6],
+    "advertised_proposals": [8],
+    "effective_extensions": [1, 2, 3, 4, 5, 6],
+    "effective_proposals": [1, 2, 3, 4, 5, 6, 7, 8]
   },
   "dictionary_hex": "0400020100",
   "dictionary_projection": "exact extracted SafeAAD entry only; current account-proof bytes are intentionally excluded as nondeterministic",

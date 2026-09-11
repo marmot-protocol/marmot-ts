@@ -415,7 +415,8 @@ export class GroupHistoryTree {
       if (
         existing.parentTag !== parentTag ||
         !existing.edge ||
-        bytesToHex(existing.edge.commitDigest) !== bytesToHex(commitDigest(bytes))
+        bytesToHex(existing.edge.commitDigest) !==
+          bytesToHex(commitDigest(bytes))
       )
         throw new Error(
           "GroupHistoryTree: existing child has conflicting parent or commit",
@@ -431,7 +432,10 @@ export class GroupHistoryTree {
       if (ownCommitStamp && decoded?.kind === "legacy") {
         this.#putHeavy(childTag, {
           snapshot: cached!.snapshot,
-          commit: encodeOwnCommitRecord({ wireBytes: bytes, stamp: ownCommitStamp }),
+          commit: encodeOwnCommitRecord({
+            wireBytes: bytes,
+            stamp: ownCommitStamp,
+          }),
         });
         this.#dirty.add(childTag);
       }

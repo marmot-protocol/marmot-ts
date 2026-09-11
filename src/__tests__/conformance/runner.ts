@@ -1,4 +1,8 @@
-import type { ConformanceAction, ConformanceActionResult, MarmotConformanceSubject } from "./subject.js";
+import type {
+  ConformanceAction,
+  ConformanceActionResult,
+  MarmotConformanceSubject,
+} from "./subject.js";
 
 export interface ConformanceScenario {
   id: string;
@@ -21,5 +25,9 @@ export async function runConformanceScenario(
     results.push(result);
     if (result.kind === "unsupported") break;
   }
-  return { scenarioId: scenario.id, results, supported: results.every((result) => result.kind === "supported") };
+  return {
+    scenarioId: scenario.id,
+    results,
+    supported: results.every((result) => result.kind === "supported"),
+  };
 }

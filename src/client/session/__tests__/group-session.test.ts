@@ -150,10 +150,12 @@ describe("GroupSession send intent effects", () => {
       }),
     );
     await ingestStateStore.setItem(`${id}/effect/work`, new Uint8Array([1]));
-    vi.spyOn(lifecycleStore, "setItem").mockImplementation(async (key, value) => {
-      operations.push(`set:${key}`);
-      return value;
-    });
+    vi.spyOn(lifecycleStore, "setItem").mockImplementation(
+      async (key, value) => {
+        operations.push(`set:${key}`);
+        return value;
+      },
+    );
     vi.spyOn(stateStore, "removeItem").mockImplementation(async (key) => {
       operations.push(`remove-state:${key}`);
     });

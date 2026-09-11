@@ -199,7 +199,12 @@ export class GroupRuntime {
       };
     }
     const persistence = await this.#persistConfirmedState();
-    return { response, notifications: [], persistence, retryPublication: false };
+    return {
+      response,
+      notifications: [],
+      persistence,
+      retryPublication: false,
+    };
   }
 
   async publishSelfUpdate(

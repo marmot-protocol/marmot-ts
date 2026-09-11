@@ -90,7 +90,10 @@ export class MockNetwork implements NostrNetworkInterface {
   }
 
   reorderQueued(order: number[]): void {
-    if (order.length !== this.queuedEvents.length || new Set(order).size !== order.length)
+    if (
+      order.length !== this.queuedEvents.length ||
+      new Set(order).size !== order.length
+    )
       throw new Error("queue order must be a complete permutation");
     const current = [...this.queuedEvents];
     this.queuedEvents = order.map((index) => {

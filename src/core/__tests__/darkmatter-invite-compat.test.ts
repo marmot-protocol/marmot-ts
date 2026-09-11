@@ -177,18 +177,14 @@ describe("Rust MDK proof-v2 round-trip fixture (generated once, pinned)", () => 
     expect(proofV2Rust.version).toBe(2);
   });
   // Fixed inputs used to generate the fixture (see comment above).
-  const RUST_FIXTURE_ACCOUNT_IDENTITY_HEX =
-    proofV2Rust.account_identity_hex;
-  const RUST_FIXTURE_MLS_SIGNATURE_KEY_HEX =
-    proofV2Rust.mls_signature_key_hex;
+  const RUST_FIXTURE_ACCOUNT_IDENTITY_HEX = proofV2Rust.account_identity_hex;
+  const RUST_FIXTURE_MLS_SIGNATURE_KEY_HEX = proofV2Rust.mls_signature_key_hex;
   const RUST_FIXTURE_CIPHERSUITE = proofV2Rust.ciphersuite;
   const RUST_FIXTURE_SIGNATURE_SCHEME = proofV2Rust.signature_scheme;
 
   // Rust-produced outputs to reproduce/verify.
-  const RUST_FIXTURE_EVENT_ID_HEX =
-    proofV2Rust.event_id_hex;
-  const RUST_FIXTURE_SIGNATURE_HEX =
-    proofV2Rust.signature_hex;
+  const RUST_FIXTURE_EVENT_ID_HEX = proofV2Rust.event_id_hex;
+  const RUST_FIXTURE_SIGNATURE_HEX = proofV2Rust.signature_hex;
 
   function fixtureRequest(): AccountIdentityProofRequest {
     return {

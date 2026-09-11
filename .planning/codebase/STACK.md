@@ -34,7 +34,6 @@
 - TypeScript compiler (`tsc`) - `tsconfig.build.json` for library emit; `tsconfig.json` (`noEmit`, includes tests) for type-checking
 - rimraf `~6.0.1` - Cleans `dist/` before build (`pnpm clean`)
 - Prettier `^3.9.3` - Formatting; config `.prettierrc` (2-space indent, no tabs). `pnpm lint` is prettier-only (`prettier --check .`)
-- Husky `^9.1.7` + lint-staged `^17.0.8` - Pre-commit hook formats staged files only
 - @changesets/cli `^2.31.0` - Changelog/versioning; config `.changeset/config.json`; publishes with npm provenance (`changeset publish --provenance`)
 - VitePress `2.0.0-alpha.17` - Docs site; `docs/` source built to `.vitepress/dist`
 - TypeDoc `^0.28.19` - API reference generated from `src/index.ts` into `.vitepress/dist/reference` (config `typedoc.json`)

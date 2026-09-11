@@ -35,7 +35,7 @@
 - Tool: Prettier 3.9.3
 - Config: `.prettierrc` — `tabWidth: 2`, `useTabs: false` (all other options default)
 - `pnpm lint` is `prettier --check .`; `pnpm format` is `prettier --write .`
-- Pre-commit hook (Husky 9 + lint-staged 17) formats staged files only
+- No pre-commit hook; format manually with `pnpm format` before committing
 
 **Linting:**
 - No root ESLint config — the library relies on Prettier plus the strict TypeScript compiler

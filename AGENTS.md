@@ -13,7 +13,7 @@
 
 - Test CI runs Vitest on Node 20/22/24, Deno 2 via `deno run -A --node-modules-dir=auto npm:vitest run`, and Bun latest/1.1 via `bun run vitest run`.
 - Build CI runs `pnpm build`.
-- Pre-commit is Husky + lint-staged and only formats staged files with Prettier.
+- There is no pre-commit hook; format manually with `pnpm format` (Prettier) before committing.
 
 ## Package Shape
 
@@ -132,7 +132,6 @@ correctly, across every supported runtime.
 - TypeScript compiler (`tsc`) — `tsconfig.build.json` for library emit; `tsconfig.json` for type-checking (includes tests, `noEmit`)
 - rimraf ~6.0.1 — cleans `dist/` before build
 - Prettier 3.9.3 — formatting; config at `.prettierrc` (2-space indent, spaces not tabs)
-- Husky 9.1.7 + lint-staged 17.0.8 — pre-commit hook formats staged files only
 - @changesets/cli 2.31.0 — changelog management; config at `.changeset/config.json`; publishes with npm provenance (`changeset publish --provenance`)
 
 ## Key Dependencies
@@ -221,7 +220,6 @@ correctly, across every supported runtime.
 
 - Tool: Prettier
 - Config: `/home/user/Projects/marmot-ts/.prettierrc` — `tabWidth: 2`, `useTabs: false`
-- Pre-commit hook (Husky + lint-staged) formats staged files only
 - No root ESLint config; `ts-mls` subpackage has its own `eslint.config.mjs`
 - TypeScript strict mode with `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns` (build fails on violations)
 

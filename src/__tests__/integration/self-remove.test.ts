@@ -13,7 +13,6 @@ import {
 } from "ts-mls";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
 
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import type { IngestResult } from "../../client/session/group-session.js";
@@ -87,14 +86,6 @@ describe("SelfRemove member departure (B6)", () => {
     });
     expect(consumed?.notifications).not.toBeNull();
     expect(consumed?.notifications).toBeDefined();
-
-    const plan = readFileSync(
-      ".planning/phases/03.1-phase-3-review-closure/03.1-03-PLAN.md",
-      "utf8",
-    );
-    expect(plan).toContain(
-      "Do not claim a descriptor-dependent or spec-derived behavior when no descriptor/spec exists",
-    );
   });
 
   it("the elected committer auto-commits a peer's self_remove on ingest, removing them", async () => {

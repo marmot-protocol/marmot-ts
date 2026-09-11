@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 Phase: Milestone v1.0 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-09-11 — Milestone v1.0 completed and archived
+Last activity: 2026-09-11 - Completed quick task 260911-dqr: Delete Phase 5 quality-gate scripts and remove test dependencies on .planning docs
 
 ## Performance Metrics
 
@@ -260,6 +260,7 @@ None yet.
 | Date       | Slug                       | Summary                                                                                          |
 | ---------- | -------------------------- | ------------------------------------------------------------------------------------------------ |
 | 2026-08-06 | reference-findings-phase-4 | Rolled marmot/mdk submodule findings into Phase 4; added standing per-phase reference-check rule |
+| 2026-09-11 | [260911-dqr](./quick/260911-dqr-delete-phase-5-quality-gate-scripts-and-/) | Deleted dead Phase 5 quality-gate scripts; removed self-remove.test.ts dependency on archived planning doc (0f5df0a, c8a77ce) |
 
 ## Deferred Items
 

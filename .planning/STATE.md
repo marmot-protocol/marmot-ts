@@ -1,41 +1,37 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: Phase 1)
-current_phase: 999.1
-current_phase_name: BACKLOG
-status: planning
-stopped_at: Completed 05-08-PLAN.md
-last_updated: "2026-09-06T20:42:20.009Z"
-last_activity: 2026-09-06
-last_activity_desc: Phase 05 complete, transitioned to Phase 999.1
+milestone_name: Catchup
+current_phase: 0
+status: Awaiting next milestone
+stopped_at: Milestone v1.0 archived
+last_updated: "2026-09-11T14:46:18.074Z"
+last_activity: 2026-09-11
+last_activity_desc: Milestone v1.0 completed and archived
 progress:
   total_phases: 7
   completed_phases: 7
   total_plans: 53
   completed_plans: 53
   percent: 100
+current_phase_name: BACKLOG
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-21)
+See: .planning/PROJECT.md (updated 2026-09-11)
 
 **Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
-**Current focus:** Phase 5 — Quality Gate
+**Current focus:** Planning next milestone (`/gsd-new-milestone`)
 
 ## Current Position
 
-Phase: 999.1 — Group image support — check and add so downstream apps can show and update the group image (BACKLOG)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-09-06 — Phase 05 complete, transitioned to Phase 999.1
-
-Progress: [██████████] 100% (7 phases)
-
-**Next recommended run:** `/gsd-execute-phase 05`
+Phase: Milestone v1.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-09-11 — Milestone v1.0 completed and archived
 
 ## Performance Metrics
 
@@ -282,3 +278,7 @@ Last session: 2026-09-06T19:24:56.735Z
 Stopped at: Completed 05-08-PLAN.md
 Resume file:
 None
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone

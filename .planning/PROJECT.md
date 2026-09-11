@@ -14,28 +14,37 @@ the protocol.
 ## Core Value
 
 A downstream client can join a Marmot group and exchange messages that interoperate,
-byte-for-byte, with any spec-conformant peer (including the Rust `darkmatter` reference) —
+byte-for-byte, with any spec-conformant peer (including the Rust MDK reference) —
 correctly, across every supported runtime.
 
-## Milestone
+## Current State
 
-**v1.0 — catchup: resync marmot-ts to the post-split marmot spec + MDK Rust reference.**
+**v1.0 Catchup — shipped 2026-09-11** (last phase completed 2026-09-06). See
+`.planning/MILESTONES.md` and `.planning/milestones/v1.0-ROADMAP.md`.
 
-The old "darkmatter" repo was split back into two upstream repos: **`marmot-protocol/marmot`**
-(the spec — vendored at `refs/marmot/`) and **`marmot-protocol/mdk`** (the "Marmot Development
-Kit" Rust reference — vendored at `refs/mdk/`, now at `marmotkit-v0.9.4`, well ahead of the
-`v0.2.0`-era baseline marmot-ts was last audited against). This milestone (1) **reviews what
-changed** in both repos since the split, then (2) **catches marmot-ts up** to feature parity
-and byte-for-byte interoperability with the MDK Rust code, closing interop-breaking gaps first.
-**Proof v2** (the account-identity-proof v1→v2 change) is the headline known breaker. Scope stays
-single-device: multi-device (MIP-06), push notifications (MIP-05), the QUIC data-plane/agent-stream
-runtime, and app/tooling crates are cataloged during the review but deliberately deferred.
+marmot-ts is resynced to the post-split marmot spec (`refs/marmot`) and the MDK Rust reference
+(`refs/mdk`): account-identity-proof v2, verify-before-trust inbound boundary, #236 KeyPackage
+lifetime cap and tag cardinality, commit-integrity and admin/leaf coupling on every legality
+seam, SelfEvicted and digest-attributed rewind-withdrawable notifications, a confirm-time
+own-commit convergence stamp (ported from MDK), SafeAAD leaf advertisement, the
+`marmot.group.lifecycle.v1` disbanded terminal state, MDK conformance vectors wired as automated
+tests, and a six-runtime CI matrix with byte-exact Rust parity dossiers.
+
+## Next Milestone Goals
+
+Not yet defined — start with `/gsd-new-milestone`. Candidates:
+
+- Re-check `refs/marmot` + `refs/mdk` for drift (mdk was bumped after Phase 5 in `2dd92b3`, now `7102d66f`)
+- Backlog 999.1 — group image support end-to-end
+- Backlog 999.2 — documentation review/update ahead of the next release
+- Backlog 999.3–999.6 — shelved pre-catchup audit/closure phases; re-scope against the current code before promoting
+- v2 tracks still deferred: multi-device (MDEV-01), push notifications (PUSH-01)
 
 ## Requirements
 
 ### Validated
 
-<!-- Inferred from existing code — the completed migration baseline (SPEC_GAP_REVIEW "Completed baseline") and shipped architecture. -->
+<!-- Inferred from existing code — the completed migration baseline and shipped architecture. -->
 
 - ✓ Layered architecture (ts-mls → core → engine → client) — existing
 - ✓ Cross-platform build/test (browser, Deno 2, Bun, Node 20/22/24) — existing
@@ -44,73 +53,86 @@ runtime, and app/tooling crates are cataloged during the review but deliberately
 - ✓ B5 convergence status/quiescence-settlement (Syncing/Resolving/Settled/Blocked + settle timer + outbound gating) — existing
 - ✓ B6 member departure via MLS self_remove (0x000a) + deterministic auto-committer — existing
 - ✓ B7 deferred disposition for future-epoch / missing-parent commits — existing
-- ✓ M1–M8 validation & convergence hardening (welcome/KeyPackage validation, authorship binding, x-only curve check, relay-URL profile, convergence-policy + witness window, invalidated-on-rewind, non-admin self-update carve-out) — existing
+- ✓ M1–M8 validation & convergence hardening — existing
 - ✓ Fork-aware engine with tree-fed re-convergence (switch forks live and on restart) — existing
-- ✓ Commit-integrity and convergence parity (exact proposal-union authorization, listener-safe durable removal, rewind-aware notifications, and structurally complete own-commit convergence) — validated in Phase 03
-- ✓ encrypted-media-v1 wire format (locators, ciphertext/plaintext sha256, key derivation/AAD, strict imeta validation) — existing
-- ✓ m1/m4/m5/m6 cleanup & retention hardening (legacy fallback retired, pruning pin rule, eligibility split verified, content-derived cross-source dedup) — existing
+- ✓ encrypted-media-v1 wire format — existing
+- ✓ m1/m4/m5/m6 cleanup & retention hardening — existing
+- ✓ PROOF-01 account-identity-proof v2 (kind-450 event-id signing, Rust-signed → TS-verified fixture) — v1.0
+- ✓ SEC-01 verify event id + signature before trusting routing tags or decrypting — v1.0
+- ✓ WIRE-01 KeyPackage Lifetime cap (≤ 84 days) on publish and inbound — v1.0
+- ✓ WIRE-02 required-tag cardinality enforcement (445/1059/444/30443) — v1.0
+- ✓ WIRE-03 app-component integrity on send, inbound, and convergence seams — v1.0
+- ✓ WIRE-04 SafeAAD component advertisement matching MDK leaf bytes — v1.0
+- ✓ CONV-01 admin ⊆ member-leaves resulting-epoch invariant — v1.0
+- ✓ CONV-02 SelfEvicted / durable removed-inactive realization — v1.0
+- ✓ CONV-03 commit-digest-attributed notifications withdrawn on rewind — v1.0
+- ✓ CONV-04 own-confirmed-commit protection (closed structurally via confirm-time convergence stamp) — v1.0
+- ✓ CONV-05 disband commits always enter a bounded convergence pass — v1.0
+- ✓ LIFE-01 / LIFE-02 `marmot.group.lifecycle.v1` codec and absorbing durable disbanded state — v1.0
+- ✓ CONF-01 MDK reference vectors as automated cross-impl tests — v1.0
+- ✓ QA-01 green suite on Node 20/22/24, Deno 2, Bun latest/1.1 — v1.0
+- ✓ QA-02 byte-exact MDK cross-checks recorded as parity dossiers — v1.0
 
 ### Active
 
-<!-- This milestone's (catchup) scope. Hypotheses until shipped and validated; the review step
-     (refs/marmot + refs/mdk) and REQUIREMENTS.md refine these into scoped REQ-IDs. -->
+<!-- Hypotheses for the next milestone; refined by /gsd-new-milestone. -->
 
-- [ ] Review the post-split changes in `refs/marmot` (spec) + `refs/mdk` (Rust), classifying each as interop-breaking / additive / defer, producing the catch-up backlog
-- [ ] **Proof v2** — migrate account-identity-proof v1 → v2 to match MDK Rust (known interop-breaker)
-- [ ] Conform to post-split spec tightening: wire-boundary validation (#236), admin-policy / membership / role-change invariants (#171), adopted-spec framing (#170)
-- [ ] Reach feature parity + byte-for-byte interop with MDK library-scope crates (cgka-engine/session, marmot-account, transport-nostr-*, marmot-markdown)
-- [ ] Wire up MDK conformance vectors (`cgka-conformance-simulator`) as cross-impl tests where available
-- [ ] Green test suite across all supported runtimes (Node 20/22/24, Deno 2, Bun latest/1.1) at milestone end
+- [ ] Resync to upstream changes landed in `refs/marmot` / `refs/mdk` since Phase 5
+- [ ] Group image support end-to-end (backlog 999.1)
+- [ ] Documentation reflects the current library surface (backlog 999.2)
 
 ### Out of Scope
 
-- Multi-device (MIP-06) — audited & catalogued but deferred; orthogonal to single-device wire interop, sizable feature
-- Push notifications (MIP-05) — deferred; optional, groups must work with zero push
-- Implementing the blossom-image (0x8002) codec — Rust reference omits it; documenting as unsupported instead (see m3)
-- QUIC transport runtime / broker (agent text streams) — experimental live-preview-only; the 0x8006 durable policy codec is done, the data plane is deliberately absent
-- App / tooling crates (marmot-app, cli, marmot-markdown, forensics, uniffi, concrete storage backends) — not library scope
+- Multi-device (MIP-06) — catalogued, deferred to v2 (MDEV-01); orthogonal to single-device wire interop
+- Push notifications (MIP-05) — deferred to v2 (PUSH-01); groups must work with zero push
+- Implementing the blossom-image (0x8002) codec — Rust reference omits it; documented as unsupported instead
+- QUIC transport runtime / broker (agent text streams) — experimental; the 0x8006 durable policy codec is done, the data plane is deliberately absent
+- App / tooling crates (marmot-app, cli, forensics, uniffi, concrete storage backends) — not library scope
+- App-message NIP-40 expiry semantics — cataloged as deferred by the catchup review
 
 ## Context
 
-- The old `darkmatter` repo was split into two upstream repos, both vendored under `refs/`:
-  - **`refs/marmot/`** — the spec (`marmot-protocol/marmot`), at `archive/marmot-pre-darkmatter-spec-import-64-g7f2f5fa`.
-    Post-split spec work of note: #170 (adopted, drop draft/v2 framing), #171 (admin-policy/membership/role-change
-    invariants), #236 (wire-boundary validation tightening).
-  - **`refs/mdk/`** — the Rust reference ("Marmot Development Kit", `marmot-protocol/mdk`), at `marmotkit-v0.9.4-14-g3628ccc`,
-    ahead of the `v0.2.0`-era baseline marmot-ts was last audited against. 21 crates; library-scope ones are
-    `cgka-engine`, `cgka-session`, `marmot-account`, `traits`, `transport-nostr-adapter/-peeler`, `marmot-markdown`,
-    `storage-sqlite`, and `cgka-conformance-simulator` (test vectors).
-- `ts-mls` is a submodule (at `v2.0.0-rc.14-11-g2ca5c43`) and is the MLS engine the library builds on.
-- Spec surface to review: `refs/marmot/{foundation,protocol-core,app-components,transports,features}` plus the
-  Rust `refs/mdk/crates/`.
-- A codebase map already exists at `.planning/codebase/` (ARCHITECTURE, STACK, STRUCTURE,
-  CONVENTIONS, CONCERNS, INTEGRATIONS, TESTING).
-- `SPEC_GAP_REVIEW.md` (repo root) is the prior backlog snapshot (2026-06-19); Phase 1's
-  audit supersedes it. It is referenced by example READMEs, so keep the path.
+- Both upstreams are vendored under `refs/` and are the source of truth for wire format:
+  **`refs/marmot/`** (spec, topic-organized; MIP numbering deprecated) and **`refs/mdk/`**
+  (Rust "Marmot Development Kit", currently `7102d66f`). A standing rule checks both for upstream
+  changes at the start of every phase.
+- `ts-mls` is a local workspace package and the MLS engine the library builds on.
+- Codebase: ~54k lines of TypeScript under `src/`. The v1.0 catchup touched 124 `src/` files
+  (+20.7k / −0.75k) across 53 plans in 7 phases.
+- Known technical debt carried out of v1.0:
+  - `maxRewindCommits: Infinity` remains memory-unbounded until `GroupHistoryTree` pruning lands
+  - Stale `MIP-NN` citations remain in `src/` files outside the Phase-3 citation manifest
+  - Accepted/deferred review items are recorded in the phase `deferred-items.md` files
+- `SPEC_GAP_REVIEW.md` (repo root) is an older backlog snapshot referenced by example READMEs; keep the path.
 
 ## Constraints
 
 - **Tech stack**: ESM TypeScript, `module`/`moduleResolution: NodeNext` — all relative
   imports in `src` need emitted `.js` extensions; named exports only; `Uint8Array` for
   binary/protocol data.
-- **Compatibility**: Must interoperate byte-for-byte with the Rust darkmatter reference; the
+- **Compatibility**: Must interoperate byte-for-byte with the MDK Rust reference; the
   Rust code + spec are the source of truth for wire format.
 - **Cross-platform**: Vitest on Node 20/22/24, Deno 2, and Bun (latest/1.1) must all pass;
   no runtime-specific APIs that break the others.
 - **Build**: strict TS config fails on unused locals/params and missing returns; `pnpm` with
   `--frozen-lockfile`; `pnpm lint` is prettier-only.
-- **Scope discipline**: single-device wire interop is the finish line; do not build
-  multi-device or push in this milestone.
+- **Scope discipline**: single-device wire interop; multi-device and push stay deferred until a
+  milestone explicitly takes them on.
 
 ## Key Decisions
 
-| Decision                                                                            | Rationale                                                                                                                                                                                                                   | Outcome   |
-| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| v1.0 repurposed as "catchup" (not shipped)                                          | The prior v1.0 (single-device wire-complete) never shipped; the darkmatter repo split into marmot + mdk and moved far ahead (v0.2→v0.9), so its phases were shelved to backlog (999.3–999.6) and v1.0 reused for the resync | — Pending |
-| Milestone = resync to post-split marmot spec + MDK Rust                             | Feature parity + byte-for-byte interop with the current Rust reference is the verifiable finish line; the refs moved enough that a fresh review is required                                                                 | — Pending |
-| Review refs first, then close interop-breakers first                                | Proof v2 and other breakers must be identified and closed before additive parity work; the review grounds the roadmap                                                                                                       | — Pending |
-| Proof v2 is the headline known breaker                                              | account-identity-proof v1→v2 changed the wire format; v1 peers cannot interop with current MDK                                                                                                                              | — Pending |
-| Multi-device (MIP-06), push (MIP-05), QUIC data-plane & app/tooling crates deferred | Orthogonal to single-device wire interop; cataloged during review but out of scope this milestone                                                                                                                           | — Pending |
+| Decision | Rationale | Outcome |
+| --- | --- | --- |
+| v1.0 repurposed as "catchup" | The prior v1.0 never shipped and the upstream split moved far ahead, so its phases were shelved to backlog (999.3–999.6) | ✓ Good — shipped a verifiable resync |
+| Milestone = resync to post-split marmot spec + MDK Rust | Byte-for-byte parity with the current Rust reference is a verifiable finish line | ✓ Good |
+| Review refs first, then close interop-breakers first | Breakers (proof v2, inbound trust, wire boundary) had to land before additive parity | ✓ Good |
+| Proof v2 isolated as Phase 1 | Touches identity/credential machinery; headline breaker | ✓ Good — closed in 2 plans |
+| Multi-device, push, QUIC data plane, app/tooling deferred | Orthogonal to single-device wire interop | ✓ Good — still valid |
+| Insert Phase 03.1 instead of a fourth self-graded review-fix pass | Three review rounds each found blockers in the previous fixes | ✓ Good — 15 planned closures verified |
+| Port MDK `OwnCommitConvergenceStamp` rather than patch CR-08/CR-11 incrementally | The Rust reference already had a structural solution to the defect class | ✓ Good — closed in Phase 4 |
+| Standing per-phase `refs/` upstream check | 2026-08-06 sweep found submodules 4 and 193 commits behind | ✓ Good — surfaced lifecycle-v1 scope (Phase 04.1) |
+| Implement `marmot.group.lifecycle.v1` disbanding in v1.0 (Phase 04.1) | New spec scope sharing the convergence-pass machinery | ✓ Good |
+| QA-02 evidence as immutable dossiers bound to one tested source SHA | Byte-exact claims must be reproducible and machine-validated | ✓ Good |
 
 ## Evolution
 
@@ -124,7 +146,7 @@ This document evolves at phase transitions and milestone boundaries.
 4. Decisions to log? → Add to Key Decisions
 5. "What This Is" still accurate? → Update if drifted
 
-**After each milestone** (via `/gsd:complete-milestone`):
+**After each milestone** (via `/gsd-complete-milestone`):
 
 1. Full review of all sections
 2. Core Value check — still the right priority?
@@ -133,4 +155,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-_Last updated: 2026-09-01 — Phase 03 commit-integrity and convergence parity validated_
+_Last updated: 2026-09-11 after v1.0 milestone_

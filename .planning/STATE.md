@@ -2,9 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Account identity proof v2
+current_phase: 6
+current_phase_name: Shared Authorization-Proof Envelope Primitive
 status: planning
-last_updated: "2026-09-12T19:23:21.682Z"
+stopped_at: Phase 6 context gathered
+last_updated: "2026-09-12T21:21:48.693Z"
 last_activity: 2026-09-12
+last_activity_desc: "ROADMAP.md created for v2.0 (Phases 6-11: envelope → proof-class/clean-cut → GroupContext seam → self-update → founding-create → QA gate)"
 progress:
   total_phases: 6
   completed_phases: 0
@@ -282,10 +286,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-06T19:24:56.735Z
-Stopped at: Completed 05-08-PLAN.md
+Last session: 2026-09-12T21:21:48.683Z
+Stopped at: Phase 6 context gathered
 Resume file:
-None
+.planning/phases/06-shared-authorization-proof-envelope-primitive/06-CONTEXT.md
 
 ## Operator Next Steps
 

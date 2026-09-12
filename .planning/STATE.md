@@ -1,20 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: Catchup
-current_phase: 0
-status: Awaiting next milestone
-stopped_at: Milestone v1.0 archived
-last_updated: "2026-09-12T09:55:48-05:00"
+milestone: v2.0
+milestone_name: Account identity proof v2
+status: planning
+last_updated: "2026-09-12T19:23:21.682Z"
 last_activity: 2026-09-12
-last_activity_desc: Added NIP-05 resolution to the OpenTUI group invite flow
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 53
-  completed_plans: 53
-  percent: 100
-current_phase_name: BACKLOG
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -28,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 
 ## Current Position
 
-Phase: Milestone v1.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-09-12 - Completed quick task 260912-dph: Add NIP-05 resolution to the OpenTUI group invite flow
+Status: Defining requirements
+Last activity: 2026-09-12 — Milestone v2.0 started
 
 ## Performance Metrics
 

@@ -30,6 +30,10 @@ own-commit convergence stamp (ported from MDK), SafeAAD leaf advertisement, the
 `marmot.group.lifecycle.v1` disbanded terminal state, MDK conformance vectors wired as automated
 tests, and a six-runtime CI matrix with byte-exact Rust parity dossiers.
 
+**v2.0 in progress:** Phase 6 complete (2026-09-12) — `src/core/authorization-proof.ts` provides the shared,
+proof-class-agnostic 104-byte `MarmotAuthorizationProof` primitive, reproducing the spec signing vector byte-for-byte.
+Next: Phase 7 (`0x8009` proof class + legacy `0xf2f1` clean cut).
+
 ## Current Milestone: v2.0 Account identity proof v2
 
 **Goal:** Replace the legacy `0xf2f1` proof extension with the adopted `marmot.member.account-identity-proof.v2`
@@ -91,6 +95,7 @@ shelved audit/closure phases, 999.7 invite-only client mode; multi-device (MDEV-
 - ✓ CONF-01 MDK reference vectors as automated cross-impl tests — v1.0
 - ✓ QA-01 green suite on Node 20/22/24, Deno 2, Bun latest/1.1 — v1.0
 - ✓ QA-02 byte-exact MDK cross-checks recorded as parity dossiers — v1.0
+- ✓ AUTHZ-01..05 shared `MarmotAuthorizationProof` envelope primitive in `src/core` (104-byte codec, `created_at` range, x-only signer check, NIP-01 + BIP-340 verify, strict external-signer produce) — v2.0 _(Validated in Phase 6: Shared Authorization-Proof Envelope Primitive)_
 
 ### Active
 
@@ -98,7 +103,6 @@ shelved audit/closure phases, 999.7 invite-only client mode; multi-device (MDEV-
 
 <!-- v2.0 Account identity proof v2 — REQ-IDs are defined in REQUIREMENTS.md. -->
 
-- [ ] Shared `MarmotAuthorizationProof` envelope primitive in `src/core`
 - [ ] Account identity proof as app component `0x8009`, byte-exact with the spec vector and MDK Current profile
 - [ ] Legacy `0xf2f1` proof profile removed and rejected everywhere (clean cut)
 - [ ] GroupContext requires `0x8009`; profile enforced on every legality seam
@@ -183,4 +187,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-_Last updated: 2026-09-12 — started milestone v2.0 Account identity proof v2_
+_Last updated: 2026-09-12 — Phase 6 (Shared Authorization-Proof Envelope Primitive) complete_

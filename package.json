@@ -7,11 +7,12 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "prepare": "pnpm --filter ts-mls build",
-    "build": "pnpm run clean && pnpm run compile",
+    "build": "pnpm run clean && pnpm --filter ts-mls build && pnpm run compile && pnpm run vendor",
     "clean": "rimraf ./dist",
     "compile": "tsc -b tsconfig.build.json",
+    "vendor": "node scripts/vendor-ts-mls.mjs",
     "prepublishOnly": "pnpm run build",
-    "release": "pnpm build && changeset publish --provenance",
+    "release": "pnpm build && node scripts/verify-package-tarball.mjs --check-fork-unpublished && changeset publish --provenance",
     "release-next": "./scripts/release-next.sh",
     "lint": "prettier --check .",
     "format": "prettier --write .",
@@ -109,7 +110,7 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@hpke/core": "^1.9.0",
+    "@hpke/core": "1.9.0",
     "@noble/ciphers": "^2.2.0",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
@@ -117,8 +118,31 @@
     "applesauce-common": "^6.2.0",
     "applesauce-core": "^6.2.0",
     "debug": "^4.4.3",
-    "eventemitter3": "^5.0.4",
-    "ts-mls": "./ts-mls"
+    "eventemitter3": "^5.0.4"
+  },
+  "peerDependencies": {
+    "@hpke/chacha20poly1305": "1.8.0",
+    "@hpke/dhkem-x448": "1.8.0",
+    "@hpke/hybridkem-x-wing": "0.7.0",
+    "@hpke/ml-kem": "0.3.0",
+    "@noble/post-quantum": "0.6.1"
+  },
+  "peerDependenciesMeta": {
+    "@hpke/chacha20poly1305": {
+      "optional": true
+    },
+    "@hpke/dhkem-x448": {
+      "optional": true
+    },
+    "@hpke/hybridkem-x-wing": {
+      "optional": true
+    },
+    "@hpke/ml-kem": {
+      "optional": true
+    },
+    "@noble/post-quantum": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
@@ -127,6 +151,7 @@
     "applesauce-accounts": "^6.2.0",
     "prettier": "^3.9.3",
     "rimraf": "~6.0.1",
+    "ts-mls": "workspace:*",
     "typedoc": "^0.28.19",
     "typescript": "~6.0.3",
     "vitepress": "2.0.0-alpha.17",

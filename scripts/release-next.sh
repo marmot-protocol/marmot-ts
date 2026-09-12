@@ -84,6 +84,7 @@ fi
 
 pnpm version "$next_version" --no-git-tag-version
 pnpm build
+node scripts/verify-package-tarball.mjs --check-fork-unpublished
 pnpm publish --tag next --access public --no-git-checks
 
 echo "Published ${package_name}@${next_version} with dist-tag next."

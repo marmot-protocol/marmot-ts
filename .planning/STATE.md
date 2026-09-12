@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-09-12T19:23:21.682Z"
 last_activity: 2026-09-12
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,14 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-11)
 
 **Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
-**Current focus:** Planning next milestone (`/gsd-new-milestone`)
+**Current focus:** Phase 6: Shared Authorization-Proof Envelope Primitive (v2.0)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-09-12 — Milestone v2.0 started
+Phase: 6 of 11 (Shared Authorization-Proof Envelope Primitive)
+Plan: — (not yet planned)
+Status: Ready to plan
+Last activity: 2026-09-12 — ROADMAP.md created for v2.0 (Phases 6-11: envelope → proof-class/clean-cut → GroupContext seam → self-update → founding-create → QA gate)
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -48,6 +50,12 @@ Last activity: 2026-09-12 — Milestone v2.0 started
 | 04 | 7 | - | - |
 | 04.1 | 6 | - | - |
 | 05 | 8 | - | - |
+| 06 | 0 | - | - |
+| 07 | 0 | - | - |
+| 08 | 0 | - | - |
+| 09 | 0 | - | - |
+| 10 | 0 | - | - |
+| 11 | 0 | - | - |
 
 **Recent Trend:**
 
@@ -250,11 +258,12 @@ None yet.
 
 - Phase 03.1 inserted after Phase 3: Phase 3 Review Closure - close round-3 findings as planned work (URGENT)
 - Phase 04.1 inserted after Phase 4: Terminal Group Disbanding - new marmot.group.lifecycle.v1 spec scope
+- v2.0 roadmap created 2026-09-12: Phases 6-11 derived from research SUMMARY.md's converged dependency order (envelope primitive → 0x8009 proof-class + 0xf2f1 clean cut → GroupContext + legality-seam extension → self-update binding → founding-create-via-Welcome → interop/QA gate); continues sequential phase numbering from v1.0's Phase 5; 28/28 v2.0 requirements mapped, no orphans
 
 ## Quick Tasks Completed
 
 | Date       | Slug                       | Summary                                                                                          |
-| ---------- | -------------------------- | ------------------------------------------------------------------------------------------------ |
+| ---------- | --------------------------- | ------------------------------------------------------------------------------------------------ |
 | 2026-08-06 | reference-findings-phase-4 | Rolled marmot/mdk submodule findings into Phase 4; added standing per-phase reference-check rule |
 | 2026-09-11 | [260911-dqr](./quick/260911-dqr-delete-phase-5-quality-gate-scripts-and-/) | Deleted dead Phase 5 quality-gate scripts; removed self-remove.test.ts dependency on archived planning doc (0f5df0a, c8a77ce) |
 | 2026-09-12 | [260912-dph](./quick/260912-dph-add-nip-05-resolution-to-the-opentui-gro/) | Added NIP-05 invite resolution with DNS relay hints and focused OpenTUI tests |
@@ -262,7 +271,7 @@ None yet.
 ## Deferred Items
 
 | Category        | Item                                                                | Status       | Deferred At     |
-| --------------- | ------------------------------------------------------------------- | ------------ | --------------- |
+| --------------- | --------------------------------------------------------------------- | ------------ | --------------- |
 | Multi-device    | MIP-06 (ext 0xf2f0, External-Commit, join-PSK, pairing payload)     | Catalog only | Milestone scope |
 | Push            | MIP-05 (push-token gossip, #725)                                    | Catalog only | Milestone scope |
 | QUIC data plane | Agent text-stream data plane, transport-quic-*                      | Not in scope | Milestone scope |
@@ -279,4 +288,4 @@ None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Roadmap is ready. Plan the first v2.0 phase with `/gsd-plan-phase 6` (research-phase not recommended for Phase 6 — pure codec work against an already-verified spec vector).

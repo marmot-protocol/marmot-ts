@@ -103,12 +103,40 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| AUTHZ-01 | Phase 6 | Pending |
+| AUTHZ-02 | Phase 6 | Pending |
+| AUTHZ-03 | Phase 6 | Pending |
+| AUTHZ-04 | Phase 6 | Pending |
+| AUTHZ-05 | Phase 6 | Pending |
+| PROOF-02 | Phase 7 | Pending |
+| PROOF-03 | Phase 7 | Pending |
+| PROOF-04 | Phase 7 | Pending |
+| PROOF-05 | Phase 7 | Pending |
+| PROOF-06 | Phase 7 | Pending |
+| CUT-01 | Phase 7 | Pending |
+| CUT-02 | Phase 7 | Pending |
+| GRP-01 | Phase 8 | Pending |
+| GRP-02 | Phase 8 | Pending |
+| GRP-03 | Phase 8 | Pending |
+| GRP-04 | Phase 8 | Pending |
+| UPD-01 | Phase 9 | Pending |
+| UPD-02 | Phase 9 | Pending |
+| UPD-03 | Phase 9 | Pending |
+| UPD-04 | Phase 9 | Pending |
+| FOUND-01 | Phase 10 | Pending |
+| FOUND-02 | Phase 10 | Pending |
+| FOUND-03 | Phase 10 | Pending |
+| FOUND-04 | Phase 10 | Pending |
+| FOUND-05 | Phase 10 | Pending |
+| QA-03 | Phase 11 | Pending |
+| QA-04 | Phase 11 | Pending |
+| QA-05 | Phase 11 | Pending |
 
 **Coverage:**
 - v2.0 requirements: 28 total
-- Mapped to phases: 0
-- Unmapped: 28 ⚠️
+- Mapped to phases: 28
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-12*
-*Last updated: 2026-09-12 after initial definition*
+*Last updated: 2026-09-12 after roadmap creation (Phases 6-11)*

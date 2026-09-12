@@ -20,11 +20,11 @@ REQ-ID numbering continues from v1.0 (`PROOF-01`, `QA-01`, `QA-02` are archived 
 
 Shared `src/core` primitive per `foundation/authorization-proofs.md`; the account identity proof is its first proof class.
 
-- [ ] **AUTHZ-01**: Developer can encode and decode a `MarmotAuthorizationProof` as exactly 104 bytes; truncated or trailing input is rejected
-- [ ] **AUTHZ-02**: A proof whose `created_at` is 0 or greater than 2^53−1 is rejected on decode and refused on produce
-- [ ] **AUTHZ-03**: A proof whose `signer_pubkey` is not a valid x-only secp256k1 public key is rejected
-- [ ] **AUTHZ-04**: Verifier reconstructs the NIP-01 event id from the envelope plus the proof-class context and accepts only a valid BIP-340 signature over it
-- [ ] **AUTHZ-05**: An external signer's returned event is accepted only if its pubkey, `created_at`, kind, tags, and content exactly equal the request, its id recomputes, and its signature verifies
+- [x] **AUTHZ-01**: Developer can encode and decode a `MarmotAuthorizationProof` as exactly 104 bytes; truncated or trailing input is rejected
+- [x] **AUTHZ-02**: A proof whose `created_at` is 0 or greater than 2^53−1 is rejected on decode and refused on produce
+- [x] **AUTHZ-03**: A proof whose `signer_pubkey` is not a valid x-only secp256k1 public key is rejected
+- [x] **AUTHZ-04**: Verifier reconstructs the NIP-01 event id from the envelope plus the proof-class context and accepts only a valid BIP-340 signature over it
+- [x] **AUTHZ-05**: An external signer's returned event is accepted only if its pubkey, `created_at`, kind, tags, and content exactly equal the request, its id recomputes, and its signature verifies
 
 ### Account identity proof component (PROOF)
 
@@ -103,11 +103,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AUTHZ-01 | Phase 6 | Pending |
-| AUTHZ-02 | Phase 6 | Pending |
-| AUTHZ-03 | Phase 6 | Pending |
-| AUTHZ-04 | Phase 6 | Pending |
-| AUTHZ-05 | Phase 6 | Pending |
+| AUTHZ-01 | Phase 6 | Complete |
+| AUTHZ-02 | Phase 6 | Complete |
+| AUTHZ-03 | Phase 6 | Complete |
+| AUTHZ-04 | Phase 6 | Complete |
+| AUTHZ-05 | Phase 6 | Complete |
 | PROOF-02 | Phase 7 | Pending |
 | PROOF-03 | Phase 7 | Pending |
 | PROOF-04 | Phase 7 | Pending |
@@ -133,6 +133,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QA-05 | Phase 11 | Pending |
 
 **Coverage:**
+
 - v2.0 requirements: 28 total
 - Mapped to phases: 28
 - Unmapped: 0 ✓

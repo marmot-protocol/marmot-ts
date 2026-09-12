@@ -29,7 +29,7 @@ so marmot-ts interoperates with MDK's default Current-profile groups.
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 6: Shared Authorization-Proof Envelope Primitive** - Pure 104-byte `MarmotAuthorizationProof` codec, `created_at` range check, and BIP-340/external-signer verification, independent of any proof class
+- [x] **Phase 6: Shared Authorization-Proof Envelope Primitive** - Pure 104-byte `MarmotAuthorizationProof` codec, `created_at` range check, and BIP-340/external-signer verification, independent of any proof class (completed 2026-09-12)
 - [ ] **Phase 7: Account Identity Proof Component (0x8009) + Legacy Clean Cut** - Kind-450 proof-class module, KeyPackage/leaf negotiation, and full removal of the legacy `0xf2f1` extension with no fallback
 - [ ] **Phase 8: GroupContext Profile Requirement & Legality-Seam Extension** - `0x8009` required on every group and enforced identically across create, invite, join, inbound, and convergence seams
 - [ ] **Phase 9: Self-Update / Replacement-Leaf Identity Binding** - Leaf replacement preserves account identity and keeps the proof bound to the new signature key
@@ -54,11 +54,11 @@ other phase in this milestone.
 4. Verification reconstructs the exact NIP-01 event id from the envelope plus proof-class context and accepts only a valid BIP-340 signature over it.
 5. An external signer's returned event is accepted only when its pubkey, `created_at`, kind, tags, and content exactly equal the request, its id recomputes, and its signature verifies — any mismatch is rejected.
 
-**Plans**: 1 plan
+**Plans**: 1/1 plans complete
 
 Plans:
 
-- [ ] 06-01-PLAN.md — 104-byte `MarmotAuthorizationProof` codec, BIP-340 verify, strict external-signer produce, spec-vector test, core barrel + exports snapshot
+- [x] 06-01-PLAN.md — 104-byte `MarmotAuthorizationProof` codec, BIP-340 verify, strict external-signer produce, spec-vector test, core barrel + exports snapshot
 
 ### Phase 7: Account Identity Proof Component (0x8009) + Legacy Clean Cut
 
@@ -181,7 +181,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 3.1 → 4 → 4.1 → 5 → 6
 | 4. Feature Parity & Conformance Vectors                    | v1.0      | 7/7             | Complete    | 2026-09-05 |
 | 4.1. Terminal Group Disbanding                             | v1.0      | 6/6             | Complete    | 2026-09-06 |
 | 5. Quality Gate                                            | v1.0      | 8/8             | Complete    | 2026-09-06 |
-| 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 0/1             | Not started | -          |
+| 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 1/1 | Complete   | 2026-09-12 |
 | 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 0/TBD           | Not started | -          |
 | 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 0/TBD           | Not started | -          |
 | 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 0/TBD           | Not started | -          |

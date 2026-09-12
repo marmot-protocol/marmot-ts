@@ -8,6 +8,7 @@
     "start": "bun run src/index.tsx",
     "dev": "bun --hot src/index.tsx --debug --logs debug.log --audit --audit-upload",
     "compile": "bun run scripts/compile.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

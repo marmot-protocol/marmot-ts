@@ -130,7 +130,7 @@ export function ModalHost(props: {
       return (
         <TextPrompt
           title="invite to the active group"
-          placeholder="npub or hex pubkey"
+          placeholder="npub, hex pubkey, or name@domain"
           onSubmit={(value) => {
             setModal(null);
             const target = value.trim();

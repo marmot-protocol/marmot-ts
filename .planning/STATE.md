@@ -5,9 +5,9 @@ milestone_name: Catchup
 current_phase: 0
 status: Awaiting next milestone
 stopped_at: Milestone v1.0 archived
-last_updated: "2026-09-11T14:46:18.074Z"
-last_activity: 2026-09-11
-last_activity_desc: Milestone v1.0 completed and archived
+last_updated: "2026-09-12T09:55:48-05:00"
+last_activity: 2026-09-12
+last_activity_desc: Added NIP-05 resolution to the OpenTUI group invite flow
 progress:
   total_phases: 7
   completed_phases: 7
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 Phase: Milestone v1.0 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-09-11 - Completed quick task 260911-dqr: Delete Phase 5 quality-gate scripts and remove test dependencies on .planning docs
+Last activity: 2026-09-12 - Completed quick task 260912-dph: Add NIP-05 resolution to the OpenTUI group invite flow
 
 ## Performance Metrics
 
@@ -261,6 +261,7 @@ None yet.
 | ---------- | -------------------------- | ------------------------------------------------------------------------------------------------ |
 | 2026-08-06 | reference-findings-phase-4 | Rolled marmot/mdk submodule findings into Phase 4; added standing per-phase reference-check rule |
 | 2026-09-11 | [260911-dqr](./quick/260911-dqr-delete-phase-5-quality-gate-scripts-and-/) | Deleted dead Phase 5 quality-gate scripts; removed self-remove.test.ts dependency on archived planning doc (0f5df0a, c8a77ce) |
+| 2026-09-12 | [260912-dph](./quick/260912-dph-add-nip-05-resolution-to-the-opentui-gro/) | Added NIP-05 invite resolution with DNS relay hints and focused OpenTUI tests |
 
 ## Deferred Items
 

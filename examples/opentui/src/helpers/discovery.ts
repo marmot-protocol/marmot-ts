@@ -6,6 +6,8 @@ import {
   type ProfileContent,
 } from "applesauce-core/helpers/profile";
 import type { EventStore } from "applesauce-core/event-store";
+import { IdentityStatus } from "applesauce-loaders/helpers";
+import { DnsIdentityLoader } from "applesauce-loaders/loaders";
 
 import {
   getInboxRelays,
@@ -30,6 +32,11 @@ export const LOOKUP_RELAYS = [
   "wss://index.hzrd149.com",
 ];
 
+export interface ResolvedNip05Identity {
+  pubkey: string;
+  relays: string[];
+}
+
 /**
  * Imperative accessors for other accounts' relay lists and profiles, reading
  * straight from the shared {@link EventStore}. Subscribing to a replaceable the
@@ -45,10 +52,12 @@ export const LOOKUP_RELAYS = [
  */
 export class Directory {
   readonly #store: EventStore;
+  readonly #dnsIdentities: DnsIdentityLoader;
   #closed = false;
 
-  constructor(store: EventStore) {
+  constructor(store: EventStore, dnsIdentities = new DnsIdentityLoader()) {
     this.#store = store;
+    this.#dnsIdentities = dnsIdentities;
   }
 
   close(): void {
@@ -81,6 +90,33 @@ export class Directory {
   async outboxes(pubkey: string, hints?: string[]): Promise<string[]> {
     const event = await this.#latest(NIP65_RELAY_LIST_KIND, pubkey, hints);
     return event ? getOutboxes(event) : [];
+  }
+
+  /** Resolves a NIP-05 internet identifier and returns its advertised relay hints. */
+  async resolveNip05(identifier: string): Promise<ResolvedNip05Identity> {
+    const match = /^([a-z0-9._-]+)@([^@\s/]+)$/i.exec(identifier.trim());
+    if (!match) throw new Error(`invalid NIP-05 identifier: ${identifier}`);
+
+    const name = match[1]!.toLowerCase();
+    const domain = match[2]!.toLowerCase();
+    const normalized = `${name}@${domain}`;
+    const identity = await this.#dnsIdentities.requestIdentity(name, domain);
+
+    if (identity.status === IdentityStatus.Error) {
+      throw new Error(
+        `failed to resolve NIP-05 identifier ${normalized}: ${identity.error}`,
+      );
+    }
+    if (identity.status === IdentityStatus.Missing) {
+      throw new Error(`NIP-05 identifier not found: ${normalized}`);
+    }
+    if (!/^[0-9a-f]{64}$/.test(identity.pubkey)) {
+      throw new Error(
+        `NIP-05 identifier returned an invalid pubkey: ${normalized}`,
+      );
+    }
+
+    return { pubkey: identity.pubkey, relays: identity.relays ?? [] };
   }
 
   /** The account's NIP-65 (kind 10002) inbox/read relays. */

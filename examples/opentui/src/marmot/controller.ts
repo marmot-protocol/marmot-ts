@@ -789,8 +789,19 @@ export class MarmotController {
     this.#publish();
     try {
       const group = this.#requireActive();
-      const pubkeyHex = normalizeToPubkey(input);
-      if (!pubkeyHex) throw new Error(`invalid pubkey or npub: ${input}`);
+      let pubkeyHex = normalizeToPubkey(input);
+      let nip05Relays: string[] = [];
+      if (!pubkeyHex) {
+        if (!input.includes("@")) {
+          throw new Error(
+            `invalid pubkey, npub, or NIP-05 identifier: ${input}`,
+          );
+        }
+        const identity = await this.#directory.resolveNip05(input);
+        pubkeyHex = identity.pubkey;
+        nip05Relays = normalizeRelays(identity.relays);
+        this.log(`resolved ${input} to ${npubShort(pubkeyHex)}`);
+      }
 
       // Discover the invitee's NIP-65 (kind 10002) outbox relays — where they
       // publish their KeyPackages. The Directory's address loader also falls
@@ -799,14 +810,14 @@ export class MarmotController {
       this.log(`discovering KeyPackages for ${npubShort(pubkeyHex)}…`);
       const discovered = await this.#directory.outboxes(
         pubkeyHex,
-        this.#relays,
+        relaySet(nip05Relays, this.#relays),
       );
       this.log(
         discovered.length
           ? `NIP-65 outbox: ${discovered.join(", ")}`
-          : `no NIP-65 outbox relays found; using session relays`,
+          : `no NIP-65 outbox relays found; using NIP-05/session relays`,
       );
-      const searchRelays = relaySet(discovered, this.#relays);
+      const searchRelays = relaySet(nip05Relays, discovered, this.#relays);
       this.log(`fetching KeyPackages from ${searchRelays.join(", ")}`);
       const kps = await this.#pool.request(searchRelays, {
         kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],

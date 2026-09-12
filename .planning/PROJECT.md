@@ -30,15 +30,34 @@ own-commit convergence stamp (ported from MDK), SafeAAD leaf advertisement, the
 `marmot.group.lifecycle.v1` disbanded terminal state, MDK conformance vectors wired as automated
 tests, and a six-runtime CI matrix with byte-exact Rust parity dossiers.
 
-## Next Milestone Goals
+## Current Milestone: v2.0 Account identity proof v2
 
-Not yet defined — start with `/gsd-new-milestone`. Candidates:
+**Goal:** Replace the legacy `0xf2f1` proof extension with the adopted `marmot.member.account-identity-proof.v2`
+app component `0x8009` (104-byte `MarmotAuthorizationProof`) so marmot-ts interoperates with MDK's default
+Current-profile groups.
 
-- Re-check `refs/marmot` + `refs/mdk` for drift (mdk was bumped after Phase 5 in `2dd92b3`, now `7102d66f`)
-- Backlog 999.1 — group image support end-to-end
-- Backlog 999.2 — documentation review/update ahead of the next release
-- Backlog 999.3–999.6 — shelved pre-catchup audit/closure phases; re-scope against the current code before promoting
-- v2 tracks still deferred: multi-device (MDEV-01), push notifications (PUSH-01)
+**Why:** v1.0's PROOF-01 shipped the pre-adoption proof shape (custom LeafNode extension `0xf2f1`, version byte `2`,
+`created_at = 0`, decimal tags). The adopted spec (`refs/marmot/app-components/account-identity-proof-v2.md`,
+`refs/marmot/foundation/authorization-proofs.md`) and MDK's default `ProtocolProfile::Current` use component `0x8009`
+instead, so MDK-default groups are not joinable by marmot-ts today.
+
+**Target features:**
+
+- Shared `MarmotAuthorizationProof` core primitive — 104-byte envelope codec, `created_at` range (1..2⁵³−1), NIP-01
+  event-id + BIP-340 verification, strict external-signer return validation; account proof is its first proof class
+- `0x8009` proof class — exact kind-450 event (ordered tags, `0x`-hex ciphersuite/scheme, fixed content, real
+  `created_at`), carried in the LeafNode `app_data_dictionary`, advertised in leaf `app_components`, spec test vector
+- Clean cut — `0xf2f1` removed from publish, verify, capabilities, and admin policy; legacy KeyPackages, leaves, and
+  groups rejected with no fallback
+- Group profile requirement — GroupContext `app_components` requires `0x8009`; `0x8009` data in GroupContext is
+  rejected; enforced on invite, join, inbound, send, and convergence seams
+- Self-update binding — a replacement leaf keeps the same account identity with a fresh valid proof; `0x8009` is never
+  removable from a non-blank leaf
+- Founding create via Welcome — Current-profile group creation publishes no founding commit; invitees join via
+  Welcome only (MDK `FoundingGroupCreated`)
+
+**Deferred candidates (not this milestone):** backlog 999.1 group image support, 999.2 docs review, 999.3–999.6
+shelved audit/closure phases, 999.7 invite-only client mode; multi-device (MDEV-01) and push (PUSH-01).
 
 ## Requirements
 
@@ -57,7 +76,7 @@ Not yet defined — start with `/gsd-new-milestone`. Candidates:
 - ✓ Fork-aware engine with tree-fed re-convergence (switch forks live and on restart) — existing
 - ✓ encrypted-media-v1 wire format — existing
 - ✓ m1/m4/m5/m6 cleanup & retention hardening — existing
-- ✓ PROOF-01 account-identity-proof v2 (kind-450 event-id signing, Rust-signed → TS-verified fixture) — v1.0
+- ✓ PROOF-01 account-identity-proof v2 (kind-450 event-id signing, Rust-signed → TS-verified fixture) — v1.0 _(legacy `0xf2f1` profile; superseded by the adopted `0x8009` component in v2.0)_
 - ✓ SEC-01 verify event id + signature before trusting routing tags or decrypting — v1.0
 - ✓ WIRE-01 KeyPackage Lifetime cap (≤ 84 days) on publish and inbound — v1.0
 - ✓ WIRE-02 required-tag cardinality enforcement (445/1059/444/30443) — v1.0
@@ -77,9 +96,14 @@ Not yet defined — start with `/gsd-new-milestone`. Candidates:
 
 <!-- Hypotheses for the next milestone; refined by /gsd-new-milestone. -->
 
-- [ ] Resync to upstream changes landed in `refs/marmot` / `refs/mdk` since Phase 5
-- [ ] Group image support end-to-end (backlog 999.1)
-- [ ] Documentation reflects the current library surface (backlog 999.2)
+<!-- v2.0 Account identity proof v2 — REQ-IDs are defined in REQUIREMENTS.md. -->
+
+- [ ] Shared `MarmotAuthorizationProof` envelope primitive in `src/core`
+- [ ] Account identity proof as app component `0x8009`, byte-exact with the spec vector and MDK Current profile
+- [ ] Legacy `0xf2f1` proof profile removed and rejected everywhere (clean cut)
+- [ ] GroupContext requires `0x8009`; profile enforced on every legality seam
+- [ ] Self-update / replacement-leaf identity and proof binding rules
+- [ ] Current-profile founding group creation via Welcome only
 
 ### Out of Scope
 
@@ -89,12 +113,14 @@ Not yet defined — start with `/gsd-new-milestone`. Candidates:
 - QUIC transport runtime / broker (agent text streams) — experimental; the 0x8006 durable policy codec is done, the data plane is deliberately absent
 - App / tooling crates (marmot-app, cli, forensics, uniffi, concrete storage backends) — not library scope
 - App-message NIP-40 expiry semantics — cataloged as deferred by the catchup review
+- Legacy `0xf2f1` proof compatibility (reading or joining existing Legacy-profile groups) — v2.0 is a clean cut to the adopted spec, which forbids a v1/legacy fallback
+- Published KeyPackage rotation/refresh to retire legacy KeyPackages — not taken on in v2.0; apps republish
 
 ## Context
 
 - Both upstreams are vendored under `refs/` and are the source of truth for wire format:
   **`refs/marmot/`** (spec, topic-organized; MIP numbering deprecated) and **`refs/mdk/`**
-  (Rust "Marmot Development Kit", currently `7102d66f`). A standing rule checks both for upstream
+  (Rust "Marmot Development Kit", currently `accda242`). A standing rule checks both for upstream
   changes at the start of every phase.
 - `ts-mls` is a local workspace package and the MLS engine the library builds on.
 - Codebase: ~54k lines of TypeScript under `src/`. The v1.0 catchup touched 124 `src/` files
@@ -133,6 +159,8 @@ Not yet defined — start with `/gsd-new-milestone`. Candidates:
 | Standing per-phase `refs/` upstream check | 2026-08-06 sweep found submodules 4 and 193 commits behind | ✓ Good — surfaced lifecycle-v1 scope (Phase 04.1) |
 | Implement `marmot.group.lifecycle.v1` disbanding in v1.0 (Phase 04.1) | New spec scope sharing the convergence-pass machinery | ✓ Good |
 | QA-02 evidence as immutable dossiers bound to one tested source SHA | Byte-exact claims must be reproducible and machine-validated | ✓ Good |
+| v2.0 clean cut to proof component `0x8009` (no legacy `0xf2f1` profile) | Adopted spec forbids a v1/legacy fallback; diverges deliberately from MDK's temporary explicit-legacy path | — Pending |
+| `MarmotAuthorizationProof` as a shared `src/core` primitive | Multi-device join authorization and push owner proofs reuse the same 104-byte envelope | — Pending |
 
 ## Evolution
 
@@ -155,4 +183,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-_Last updated: 2026-09-11 after v1.0 milestone_
+_Last updated: 2026-09-12 — started milestone v2.0 Account identity proof v2_

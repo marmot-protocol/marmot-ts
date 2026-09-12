@@ -54,11 +54,11 @@ other phase in this milestone.
 4. Verification reconstructs the exact NIP-01 event id from the envelope plus proof-class context and accepts only a valid BIP-340 signature over it.
 5. An external signer's returned event is accepted only when its pubkey, `created_at`, kind, tags, and content exactly equal the request, its id recomputes, and its signature verifies — any mismatch is rejected.
 
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
 
-- [ ] TBD
+- [ ] 06-01-PLAN.md — 104-byte `MarmotAuthorizationProof` codec, BIP-340 verify, strict external-signer produce, spec-vector test, core barrel + exports snapshot
 
 ### Phase 7: Account Identity Proof Component (0x8009) + Legacy Clean Cut
 
@@ -181,7 +181,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 3.1 → 4 → 4.1 → 5 → 6
 | 4. Feature Parity & Conformance Vectors                    | v1.0      | 7/7             | Complete    | 2026-09-05 |
 | 4.1. Terminal Group Disbanding                             | v1.0      | 6/6             | Complete    | 2026-09-06 |
 | 5. Quality Gate                                            | v1.0      | 8/8             | Complete    | 2026-09-06 |
-| 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 0/TBD           | Not started | -          |
+| 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 0/1             | Not started | -          |
 | 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 0/TBD           | Not started | -          |
 | 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 0/TBD           | Not started | -          |
 | 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 0/TBD           | Not started | -          |

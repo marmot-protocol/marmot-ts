@@ -1,4 +1,5 @@
 export * from "./account-identity-proof.js";
+export * from "./authorization-proof.js";
 export * from "./binary.js";
 export * from "./components/index.js";
 export * from "./capabilities.js";

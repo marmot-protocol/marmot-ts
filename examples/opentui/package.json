@@ -1,9 +1,9 @@
 {
   "name": "marmot-opentui",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "OpenTUI + React terminal chat for marmot-ts. Same darkmatter Marmot v2 lifecycle as the tui-chat example, but rendered with the @opentui/react reconciler so it can exercise the library's React / async-generator integration (groups.watch, invites.watchUnread, group.ingest).",
+  "description": "OpenTUI + React terminal chat for marmot-ts",
   "scripts": {
     "start": "bun run src/index.tsx",
     "dev": "bun --hot src/index.tsx --debug --logs debug.log --audit --audit-upload",
@@ -12,27 +12,27 @@
   },
   "dependencies": {
     "@internet-privacy/marmot-ts": "workspace:*",
-    "@libs/qrcode": "npm:@jsr/libs__qrcode@^3.0.1",
-    "@opentui/core": "^0.4.2",
-    "@opentui/react": "^0.4.2",
+    "@libs/qrcode": "npm:@jsr/libs__qrcode@^3.1.0",
+    "@opentui/core": "^0.5",
+    "@opentui/react": "^0.5",
     "applesauce-accounts": "^6.2.0",
     "applesauce-common": "^6.2.0",
     "applesauce-core": "^6.2.0",
     "applesauce-loaders": "^6.2.0",
     "applesauce-react": "^6.0.0",
-    "applesauce-relay": "^6.2.0",
-    "blossom-client-sdk": "^5.0.0",
+    "applesauce-relay": "^6.2.1",
+    "blossom-client-sdk": "^5.1.0",
     "debug": "^4.4.3",
     "jpeg-js": "^0.4.4",
     "pngjs": "^7.0.0",
-    "react": "^19.2.7"
+    "react": "^19.3.0"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.14",
+    "@types/bun": "^1.4.2",
     "@types/debug": "^4.1.13",
-    "@types/node": "^24.13.2",
+    "@types/node": "^24.13.4",
     "@types/pngjs": "^6.0.5",
-    "@types/react": "^19.2.17",
+    "@types/react": "^19.3.0",
     "typescript": "~6.0.3"
   }
 }

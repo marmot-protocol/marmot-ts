@@ -19,7 +19,7 @@ The Core module is responsible for:
 
 ## Key Dependencies
 
-- **ts-mls** - RFC 9420 compliant MLS implementation
+- **ts-mls** - RFC 9420 compliant MLS implementation; a fork bundled with the package and exposed through `@internet-privacy/marmot-ts/mls`
 - **applesauce-core / applesauce-common** - Nostr event handling, NIP-44, and gift-wrap helpers
 - **@noble/hashes, @noble/curves, @noble/ciphers** - Cryptographic primitives
 - **@hpke/core** - HPKE for MLS key encapsulation

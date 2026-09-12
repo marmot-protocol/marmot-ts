@@ -3,8 +3,10 @@
 ## Commands
 
 - Use `pnpm` in this workspace; CI installs with pnpm 10 and `--frozen-lockfile`.
-- `pnpm build` runs `rimraf ./dist` then `tsc -b tsconfig.build.json` for the library only.
+- `pnpm build` runs `rimraf ./dist`, builds the ts-mls fork (`pnpm --filter ts-mls build`), runs `tsc -b tsconfig.build.json`, then runs `scripts/vendor-ts-mls.mjs`.
+- `scripts/vendor-ts-mls.mjs` copies the fork's `dist/src` into `dist/vendor/ts-mls` and rewrites emitted `ts-mls` specifiers to point at that vendored copy. It fails the build on a leftover bare/subpath `ts-mls` specifier outside vendor, or on a vendored import that is not a declared dependency or peerDependency.
 - `pnpm compile` is the focused library typecheck/build step; `pnpm lint` is only `prettier --check .`.
+- After `pnpm build`, `bash scripts/package-smoke/run.sh` runs the packed-tarball consumer smoke: npm install of the packed tarball, Node/Bun/Deno runtime import, and nodenext + bundler `tsc` typechecking.
 - `pnpm test` starts Vitest watch mode. Use `pnpm vitest run` for a one-shot test run.
 - Run one test file with `pnpm vitest run src/path/to/file.test.ts`; tests match only `src/**/*.test.ts`.
 - Docs are VitePress: `pnpm docs:dev`, `pnpm docs:build`; `docs:build` also runs TypeDoc via `postdocs:build`.
@@ -12,7 +14,7 @@
 ## CI Expectations
 
 - Test CI runs Vitest on Node 20/22/24, Deno 2 via `deno run -A --node-modules-dir=auto npm:vitest run`, and Bun latest/1.1 via `bun run vitest run`.
-- Build CI runs `pnpm build`.
+- Build CI runs `pnpm build`. It also runs the `package-smoke` job on Node 20.x and 24.x, with Bun and Deno required on the 24.x leg.
 - There is no pre-commit hook; format manually with `pnpm format` (Prettier) before committing.
 
 ## Package Shape
@@ -20,7 +22,7 @@
 - This is an ESM TypeScript library for Marmot (MLS over Nostr). Library source is under `src/`.
 - Public entrypoints are controlled by `package.json` `exports`: `.`, `./client`, `./core`, `./extra`, `./utils`, and `./mls`.
 - `src/index.ts` re-exports client/core/utils only. Extra utilities are exposed through `@internet-privacy/marmot-ts/extra`.
-- `src/mls.ts` intentionally re-exports `ts-mls` for downstream apps through the `./mls` subpath.
+- `src/mls.ts` intentionally re-exports `ts-mls` for downstream apps through the `./mls` subpath. In published output, that re-export resolves to the vendored fork copied into `dist/vendor/ts-mls`.
 - Main architecture split: `src/core` is protocol/crypto/state logic with no app I/O; `src/client` adds storage, network, lifecycle, groups, invites, and event-oriented APIs; `src/extra` contains optional store implementations.
 
 ## TypeScript Gotchas
@@ -136,7 +138,7 @@ correctly, across every supported runtime.
 
 ## Key Dependencies
 
-- `ts-mls` (workspace `./ts-mls`, v2.0.0-rc.14) — MLS RFC 9420 implementation; the foundational cryptographic group protocol engine
+- `ts-mls` — the fork hzrd149/ts-mls, a submodule at `./ts-mls`, v2.0.0-rc.14 — MLS RFC 9420 implementation; the foundational cryptographic group protocol engine. It is a root devDependency (`workspace:*`), not a published dependency, and is vendored into `dist/vendor/ts-mls` at build time. Its optional HPKE and post-quantum backends (`@hpke/chacha20poly1305`, `@hpke/dhkem-x448`, `@hpke/hybridkem-x-wing`, `@hpke/ml-kem`, `@noble/post-quantum`) are optional peerDependencies.
 - `@hpke/core` ^1.9.0 — Hybrid Public Key Encryption (HPKE); used by ts-mls and directly for key encapsulation
 - `@noble/ciphers` ^2.2.0 — ChaCha20-Poly1305 (`src/utils/nip44-binary.ts`), AES (`src/core/`)
 - `@noble/curves` ^2.2.0 — secp256k1 ECDH and signing (`src/utils/nip44-binary.ts`, credential derivation)
@@ -376,7 +378,7 @@ correctly, across every supported runtime.
 - **Circular imports:** None observed. Dependency direction is strict: `utils ← core ← engine ← client`.
 - **`.js` extensions:** All relative imports in `src/` require the emitted `.js` extension (NodeNext module resolution). Violating this breaks the build.
 - **Named exports only:** No default exports in the library source.
-- **`ts-mls` local workspace:** `ts-mls` is a local workspace package at `./ts-mls`, not from npm. It must be built (`pnpm --filter ts-mls build`) before the library.
+- **`ts-mls` local workspace:** `ts-mls` is a local workspace package at `./ts-mls`, not from npm. It must be built (`pnpm --filter ts-mls build`) before the library. Source and tests import only the bare `ts-mls` specifier; subpath imports fail the vendor guard. Every package the fork imports must be a marmot-ts dependency or peerDependency. The fork build is part of `pnpm build`. `release` and `release-next` verify the tarball and refuse to proceed unless the fork cannot be published. Open follow-up: mark the fork `private`.
 
 ## Anti-Patterns
 

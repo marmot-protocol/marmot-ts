@@ -53,7 +53,7 @@ To remove a member, you need their leaf node indexes:
 
 ```typescript
 import { getPubkeyLeafNodeIndexes } from "@internet-privacy/marmot-ts";
-import { createRemove } from "ts-mls";
+import { createRemove } from "@internet-privacy/marmot-ts/mls";
 
 // Get all leaf nodes for the user
 const indexes = getPubkeyLeafNodeIndexes(clientState, targetPubkey);

@@ -22,7 +22,10 @@ import {
   adminPolicyEntry,
   nostrRoutingEntry,
 } from "@internet-privacy/marmot-ts";
-import { ciphersuites, defaultCryptoProvider } from "ts-mls";
+import {
+  ciphersuites,
+  defaultCryptoProvider,
+} from "@internet-privacy/marmot-ts/mls";
 
 const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
   ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
@@ -108,7 +111,10 @@ import {
   createCredential,
   getNostrGroupIdHex,
 } from "@internet-privacy/marmot-ts";
-import { ciphersuites, defaultCryptoProvider } from "ts-mls";
+import {
+  ciphersuites,
+  defaultCryptoProvider,
+} from "@internet-privacy/marmot-ts/mls";
 
 const credential = createCredential(myPubkey);
 const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(

@@ -31,7 +31,10 @@ type CompleteKeyPackage = {
 ```typescript
 import { generateKeyPackage } from "@internet-privacy/marmot-ts";
 import { createCredential } from "@internet-privacy/marmot-ts";
-import { ciphersuites, defaultCryptoProvider } from "ts-mls";
+import {
+  ciphersuites,
+  defaultCryptoProvider,
+} from "@internet-privacy/marmot-ts/mls";
 
 const credential = createCredential(nostrPubkey);
 const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
@@ -137,7 +140,10 @@ import {
   createCredential,
   createKeyPackageEvent,
 } from "@internet-privacy/marmot-ts";
-import { ciphersuites, defaultCryptoProvider } from "ts-mls";
+import {
+  ciphersuites,
+  defaultCryptoProvider,
+} from "@internet-privacy/marmot-ts/mls";
 
 const credential = createCredential(myPubkey);
 const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(

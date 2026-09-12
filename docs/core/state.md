@@ -90,7 +90,7 @@ console.log(defaultMarmotClientConfig);
 ClientState is immutable - operations return a new state:
 
 ```typescript
-import { processMessage } from "ts-mls";
+import { processMessage } from "@internet-privacy/marmot-ts/mls";
 
 // Process a message (commit, proposal)
 const result = await processMessage({

@@ -190,7 +190,7 @@ import {
   serializeApplicationRumor,
   createGroupEvent,
 } from "@internet-privacy/marmot-ts";
-import { createApplicationMessage } from "ts-mls";
+import { createApplicationMessage } from "@internet-privacy/marmot-ts/mls";
 
 // 1. Create rumor
 const rumor = {
@@ -238,7 +238,7 @@ import {
   isApplicationMessage,
   isCommitMessage,
 } from "@internet-privacy/marmot-ts";
-import { processMessage } from "ts-mls";
+import { processMessage } from "@internet-privacy/marmot-ts/mls";
 
 // 1. Fetch events from relays
 const events = await fetchGroupEvents(relays, groupId);

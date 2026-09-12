@@ -226,15 +226,22 @@ subscription.subscribe({
 
 The `exports` map exposes the library as focused subpaths:
 
-| Import path                          | Contents                                                                    |
-| ------------------------------------ | --------------------------------------------------------------------------- |
-| `@internet-privacy/marmot-ts`        | The common surface — re-exports `./client`, `./core`, and `./utils`         |
-| `@internet-privacy/marmot-ts/client` | `MarmotClient`, `MarmotGroup`, managers, intents, history, network          |
-| `@internet-privacy/marmot-ts/core`   | Protocol/crypto/state primitives with no app I/O                            |
-| `@internet-privacy/marmot-ts/engine` | `MarmotGroupEngine` and the convergence/ingest state machine                |
-| `@internet-privacy/marmot-ts/extra`  | Optional stores — `InMemoryKeyValueStore`, encrypted store, history backend |
-| `@internet-privacy/marmot-ts/utils`  | Encoding, key-value, Nostr, relay-url, and timestamp helpers                |
-| `@internet-privacy/marmot-ts/mls`    | Re-export of [`ts-mls`](https://github.com/LukaJCB/ts-mls)                  |
+| Import path                          | Contents                                                                                        |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `@internet-privacy/marmot-ts`        | The common surface — re-exports `./client`, `./core`, and `./utils`                             |
+| `@internet-privacy/marmot-ts/client` | `MarmotClient`, `MarmotGroup`, managers, intents, history, network                              |
+| `@internet-privacy/marmot-ts/core`   | Protocol/crypto/state primitives with no app I/O                                                |
+| `@internet-privacy/marmot-ts/engine` | `MarmotGroupEngine` and the convergence/ingest state machine                                    |
+| `@internet-privacy/marmot-ts/extra`  | Optional stores — `InMemoryKeyValueStore`, encrypted store, history backend                     |
+| `@internet-privacy/marmot-ts/utils`  | Encoding, key-value, Nostr, relay-url, and timestamp helpers                                    |
+| `@internet-privacy/marmot-ts/mls`    | The forked [`ts-mls`](https://github.com/hzrd149/ts-mls) MLS engine, bundled inside the package |
+
+Import MLS primitives (ciphersuites, `ClientState`, `processMessage`, and so on) from
+`@internet-privacy/marmot-ts/mls`, not from a separately installed `ts-mls`. npm `ts-mls`
+is the upstream build; it lacks the fork's additions (`app_data_dictionary`, self-remove,
+`senderLeafIndex`, the `GroupContext` encoder), and its classes and types are distinct
+from the copy marmot-ts uses. The X448, ChaCha20-Poly1305, ML-KEM, X-Wing and ML-DSA
+backends are optional peer dependencies, needed only for those ciphersuites.
 
 ## Documentation
 
@@ -249,7 +256,7 @@ Full documentation is in `docs/` and served via VitePress. Run `pnpm docs:dev` t
 
 ```bash
 pnpm install    # Install dependencies
-pnpm build      # Compile TypeScript
+pnpm build      # Compile TypeScript and bundle the ts-mls fork
 pnpm test       # Run tests (watch mode)
 pnpm format     # Format code with Prettier
 pnpm docs:dev   # Serve documentation locally

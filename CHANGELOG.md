@@ -1,5 +1,17 @@
 # @internet-privacy/marmot-ts
 
+## 0.7.0
+
+### Minor Changes
+
+- 668d53f: Add `GroupSession` as the protocol state owner for group send, ingest, and persistence effects.
+- be60778: Add `GroupsManager` session and runtime helpers for effect-driven group workflows.
+- cbf4438: Add opt-in Marmot forensic audit log recording support
+- 6ab60af: Expose `MarmotGroup.session` and `MarmotGroup.runtime` for direct effect-driven group workflows.
+- a746255: Extract MarmotGroupEngine from MarmotGroup as a transport-agnostic CGKA state machine with publish-before-apply lifecycle, exposed from the core package.
+- 6c4583d: Add `GroupMediaService` for group encrypted media helpers and decrypted media caching.
+- c9b157c: Add group runtime and Nostr Welcome delivery seams for publishing group session effects.
+
 ## 0.5.1
 
 ### Patch Changes

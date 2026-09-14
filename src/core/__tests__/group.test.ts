@@ -9,6 +9,7 @@ import {
 import { createCredential } from "../credential.js";
 import { generateKeyPackage } from "../key-package.js";
 import { createGroup } from "../group.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { marmotRequiredCapabilitiesExtension } from "../capabilities.js";
 import { getMarmotGroupView } from "../client-state.js";
 import {
@@ -24,7 +25,8 @@ import {
 
 describe("group construction", () => {
   it("createGroup seeds a decodable app_data_dictionary from components", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const nostrGroupId = new Uint8Array(32).fill(7);
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -32,7 +34,11 @@ describe("group construction", () => {
     );
 
     const credential = createCredential(adminPubkey);
-    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const kp = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl: impl,
+      signer: adminAccount.signer,
+    });
 
     const { clientState } = await createGroup({
       creatorKeyPackage: kp,
@@ -76,7 +82,8 @@ describe("group construction", () => {
   });
 
   it("surfaces avatar, encrypted-media policy, and retention through the group view", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -84,6 +91,7 @@ describe("group construction", () => {
     const kp = await generateKeyPackage({
       credential: createCredential(adminPubkey),
       ciphersuiteImpl: impl,
+      signer: adminAccount.signer,
     });
 
     const policy = encryptedMediaBlossomDefault([

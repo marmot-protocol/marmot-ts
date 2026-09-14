@@ -21,6 +21,7 @@ import {
   makeAppComponentsExtension,
 } from "../dictionary.js";
 import { SAFE_AAD_COMPONENT_ID } from "../ids.js";
+import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 
 type SafeAadFixture = {
   mdk_sha: string;
@@ -51,11 +52,11 @@ describe("MDK SafeAAD parity", () => {
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
+    const account = testAccount(5);
     const keyPackage = await generateKeyPackage({
-      credential: createCredential(
-        "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6",
-      ),
+      credential: createCredential(account.pubkey),
       ciphersuiteImpl,
+      signer: account.signer,
     });
     const extension = keyPackage.publicPackage.leafNode.extensions.find(
       (candidate) => candidate.extensionType === appDataDictionaryExtensionType,

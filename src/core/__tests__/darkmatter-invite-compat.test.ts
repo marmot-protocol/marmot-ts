@@ -10,6 +10,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 
 import { createCredential } from "../credential.js";
 import { generateKeyPackage } from "../key-package.js";
@@ -21,7 +22,6 @@ import {
   accountIdentityProofSigningDigest,
   decodeAccountIdentityProof,
   encodeAccountIdentityProof,
-  signAccountIdentityProof,
   verifyLeafAccountIdentityProof,
 } from "../account-identity-proof.js";
 import { AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE } from "../components/agent-text-stream.js";
@@ -83,7 +83,8 @@ describe("darkmatter invite compatibility", () => {
     // account proof signer so the leaf carries the 0xf2f1 proof.
     const secretKey = new Uint8Array(32).fill(3);
     secretKey[31] = 9;
-    const accountPubkey = bytesToHex(schnorr.getPublicKey(secretKey));
+    const account = PrivateKeyAccount.fromKey(secretKey);
+    const accountPubkey = account.pubkey;
     const credential = createCredential(accountPubkey);
     const ciphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -92,8 +93,7 @@ describe("darkmatter invite compatibility", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
-      accountProofSigner: (request) =>
-        signAccountIdentityProof(request, secretKey),
+      signer: account.signer,
     });
     return { keyPackage, ciphersuiteImpl };
   }

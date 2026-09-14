@@ -47,6 +47,7 @@ import { createCredential } from "../../credential.js";
 import { generateKeyPackage } from "../../key-package.js";
 import { createGroup } from "../../group.js";
 import { getMarmotGroupInfo, getMarmotGroupView } from "../../client-state.js";
+import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 
 const gid = new Uint8Array(32);
 for (let i = 0; i < 32; i++) gid[i] = i;
@@ -148,11 +149,11 @@ describe("makeLeafAppComponentsExtension", () => {
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
+    const account = testAccount(5);
     const keyPackage = await generateKeyPackage({
-      credential: createCredential(
-        "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6",
-      ),
+      credential: createCredential(account.pubkey),
       ciphersuiteImpl,
+      signer: account.signer,
     });
     const extension = keyPackage.publicPackage.leafNode.extensions.find(
       (candidate) => candidate.extensionType === appDataDictionaryExtensionType,
@@ -182,8 +183,8 @@ describe("makeLeafAppComponentsExtension", () => {
 
 describe("group lifecycle defaults", () => {
   it("carries active lifecycle state from new-group bytes to the public view", async () => {
-    const creatorPubkey =
-      "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+    const creatorAccount = testAccount(5);
+    const creatorPubkey = creatorAccount.pubkey;
     const ciphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -191,6 +192,7 @@ describe("group lifecycle defaults", () => {
     const creatorKeyPackage = await generateKeyPackage({
       credential: createCredential(creatorPubkey),
       ciphersuiteImpl,
+      signer: creatorAccount.signer,
     });
     const { clientState } = await createGroup({
       creatorKeyPackage,

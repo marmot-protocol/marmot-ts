@@ -12,27 +12,27 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
-import { schnorr } from "@noble/curves/secp256k1.js";
-import { bytesToHex } from "@noble/hashes/utils.js";
+import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 
 import { createCredential } from "../credential.js";
 import { calculateKeyPackageRef, generateKeyPackage } from "../key-package.js";
 import { appDataDictionaryExtensionType } from "ts-mls";
 import {
   ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-  signAccountIdentityProof,
   verifyLeafAccountIdentityProof,
 } from "../account-identity-proof.js";
 import { LAST_RESORT_EXTENSION_TYPE } from "../protocol.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 
 describe("generateKeyPackage", () => {
-  const validPubkey =
-    "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+  const VALID_ACCOUNT = testAccount(5);
+  const validPubkey = VALID_ACCOUNT.pubkey;
 
   it("carries a verifiable account identity proof when given an account signer", async () => {
     const secretKey = new Uint8Array(32).fill(3);
     secretKey[31] = 9;
-    const accountPubkey = bytesToHex(schnorr.getPublicKey(secretKey));
+    const account = PrivateKeyAccount.fromKey(secretKey);
+    const accountPubkey = account.pubkey;
     const credential = createCredential(accountPubkey);
     const ciphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -42,8 +42,7 @@ describe("generateKeyPackage", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
-      accountProofSigner: (request) =>
-        signAccountIdentityProof(request, secretKey),
+      signer: account.signer,
     });
 
     const leaf = keyPackage.publicPackage.leafNode;
@@ -69,6 +68,7 @@ describe("generateKeyPackage", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     expect(keyPackage).toBeDefined();
@@ -76,8 +76,10 @@ describe("generateKeyPackage", () => {
     expect(keyPackage.privatePackage).toBeDefined();
     expect(keyPackage.publicPackage.leafNode.credential).toEqual(credential);
     expect(keyPackage.publicPackage.extensions).toHaveLength(1);
-    // The LeafNode advertises supported app components (app_data_dictionary, 0x0006).
-    expect(keyPackage.publicPackage.leafNode.extensions).toHaveLength(1);
+    // The LeafNode advertises supported app components (app_data_dictionary,
+    // 0x0006) plus the account identity proof, since every call in this suite
+    // now passes a real signer (D-02).
+    expect(keyPackage.publicPackage.leafNode.extensions).toHaveLength(2);
     expect(keyPackage.publicPackage.leafNode.extensions[0].extensionType).toBe(
       appDataDictionaryExtensionType,
     );
@@ -93,6 +95,7 @@ describe("generateKeyPackage", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const capabilities =
@@ -111,6 +114,7 @@ describe("generateKeyPackage", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const hasLastResort = keyPackage.publicPackage.extensions.some(
@@ -133,6 +137,7 @@ describe("generateKeyPackage", () => {
       credential,
       ciphersuiteImpl,
       isLastResort: false,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const hasLastResort = keyPackage.publicPackage.extensions.some(
@@ -163,6 +168,7 @@ describe("generateKeyPackage", () => {
       credential,
       capabilities: customCapabilities,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const capabilities =
@@ -192,6 +198,7 @@ describe("generateKeyPackage", () => {
       credential,
       extensions: customExtensions,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const extensions = keyPackage.publicPackage.extensions;
@@ -230,6 +237,7 @@ describe("generateKeyPackage", () => {
       extensions: customExtensions,
       isLastResort: false,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const extensions = keyPackage.publicPackage.extensions;
@@ -264,6 +272,7 @@ describe("generateKeyPackage", () => {
       credential,
       lifetime: customLifetime,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     expect(keyPackage.publicPackage.leafNode.lifetime).toEqual(customLifetime);
@@ -282,6 +291,7 @@ describe("generateKeyPackage", () => {
         credential,
         ciphersuiteImpl,
         lifetime: { notBefore: now, notAfter: now + 7261201n },
+        signer: VALID_ACCOUNT.signer,
       }),
     ).rejects.toThrow();
   });
@@ -299,6 +309,7 @@ describe("generateKeyPackage", () => {
       credential,
       ciphersuiteImpl,
       lifetime,
+      signer: VALID_ACCOUNT.signer,
     });
 
     expect(keyPackage.publicPackage.leafNode.lifetime).toEqual(lifetime);
@@ -319,6 +330,7 @@ describe("generateKeyPackage", () => {
       generateKeyPackage({
         credential: invalidCredential,
         ciphersuiteImpl,
+        signer: VALID_ACCOUNT.signer,
       }),
     ).rejects.toThrow("Marmot key packages must use a basic credential");
   });
@@ -333,6 +345,7 @@ describe("generateKeyPackage", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     await expect(

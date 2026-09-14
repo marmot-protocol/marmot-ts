@@ -8,6 +8,8 @@ import {
   unsafeTestingAuthenticationService,
 } from "ts-mls";
 
+import { PrivateKeyAccount } from "applesauce-accounts/accounts";
+
 import {
   createEncryptedGroupEventContent,
   decryptGroupMessageEvent,
@@ -15,17 +17,20 @@ import {
 import { createCredential } from "../credential.js";
 import { createSimpleGroup } from "../group.js";
 import { generateKeyPackage } from "../key-package.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 
-async function createTestState(pubkey: string) {
+async function createTestState(account: PrivateKeyAccount<any>) {
   const ciphersuite = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
   );
 
+  const pubkey = account.pubkey;
   const credential = createCredential(pubkey);
   const keyPackage = await generateKeyPackage({
     credential,
     ciphersuiteImpl: ciphersuite,
+    signer: account.signer,
   });
 
   const { clientState } = await createSimpleGroup(
@@ -40,7 +45,7 @@ async function createTestState(pubkey: string) {
 
 describe("group message encryption (MIP-03)", () => {
   it("encrypts and decrypts with MIP-03 ChaCha20-Poly1305 envelope", async () => {
-    const { clientState, ciphersuite } = await createTestState("a".repeat(64));
+    const { clientState, ciphersuite } = await createTestState(testAccount(6));
 
     const { message } = await createApplicationMessage({
       context: {
@@ -82,7 +87,7 @@ describe("group message encryption (MIP-03)", () => {
   });
 
   it("rejects invalid base64 group-event content", async () => {
-    const { clientState, ciphersuite } = await createTestState("3".repeat(64));
+    const { clientState, ciphersuite } = await createTestState(testAccount(1));
 
     const event = {
       id: "a".repeat(64),
@@ -100,7 +105,7 @@ describe("group message encryption (MIP-03)", () => {
   });
 
   it("rejects payloads shorter than 12-byte nonce", async () => {
-    const { clientState, ciphersuite } = await createTestState("d".repeat(64));
+    const { clientState, ciphersuite } = await createTestState(testAccount(9));
 
     const shortPayload = new Uint8Array(11);
     const content = btoa(String.fromCharCode(...shortPayload));
@@ -121,7 +126,7 @@ describe("group message encryption (MIP-03)", () => {
   });
 
   it("rejects tampered ciphertext/auth tag", async () => {
-    const { clientState, ciphersuite } = await createTestState("e".repeat(64));
+    const { clientState, ciphersuite } = await createTestState(testAccount(11));
 
     const { message } = await createApplicationMessage({
       context: {
@@ -158,7 +163,7 @@ describe("group message encryption (MIP-03)", () => {
   });
 
   it("rejects payload with 12-byte nonce and empty ciphertext", async () => {
-    const { clientState, ciphersuite } = await createTestState("4".repeat(64));
+    const { clientState, ciphersuite } = await createTestState(testAccount(2));
 
     const nonceOnly = new Uint8Array(12);
     const content = btoa(String.fromCharCode(...nonceOnly));

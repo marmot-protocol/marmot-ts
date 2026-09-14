@@ -28,6 +28,7 @@ import {
   getKeyPackageNostrPubkey,
 } from "../key-package-event.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../protocol.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 
 const mockPubkey =
   "02a1633cafe37eeebe2b39b4ec5f3d74c35e61fa7e7e6b7b8c5f7c4f3b2a1b2c3d";
@@ -172,8 +173,8 @@ describe("createDeleteKeyPackageEvent", () => {
 });
 
 describe("createKeyPackageEvent", () => {
-  const validPubkey =
-    "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+  const VALID_ACCOUNT = testAccount(5);
+  const validPubkey = VALID_ACCOUNT.pubkey;
   const testD =
     "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
@@ -186,6 +187,7 @@ describe("createKeyPackageEvent", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -206,6 +208,7 @@ describe("createKeyPackageEvent", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -227,6 +230,7 @@ describe("createKeyPackageEvent", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -273,6 +277,7 @@ describe("createKeyPackageEvent", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -300,6 +305,7 @@ describe("createKeyPackageEvent", () => {
           extensionData: new Uint8Array([1]),
         }),
       ],
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -324,6 +330,7 @@ describe("createKeyPackageEvent", () => {
     const originalKeyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -356,6 +363,7 @@ describe("createKeyPackageEvent", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     // Build a kind 30443 event from the canonical (base64) content with no
@@ -387,6 +395,7 @@ describe("createKeyPackageEvent", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -422,6 +431,7 @@ describe("createKeyPackageEvent", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     // A bare RFC 9420 KeyPackage (no MLSMessage frame) is not spec conformant
@@ -457,6 +467,7 @@ describe("createKeyPackageEvent", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     // Simulate a peer (White Noise / darkmatter reference engine) that wraps the
@@ -495,6 +506,7 @@ describe("createKeyPackageEvent", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     // Legacy hex body is no longer interpreted as hex; it is decoded as base64
@@ -605,8 +617,8 @@ describe("getKeyPackageIdentifier", () => {
 });
 
 describe("spec compliance (MIP-00)", () => {
-  const validPubkey =
-    "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+  const VALID_ACCOUNT = testAccount(5);
+  const validPubkey = VALID_ACCOUNT.pubkey;
   const testD =
     "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
@@ -620,6 +632,7 @@ describe("spec compliance (MIP-00)", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -642,6 +655,7 @@ describe("spec compliance (MIP-00)", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -668,6 +682,7 @@ describe("spec compliance (MIP-00)", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -680,8 +695,8 @@ describe("spec compliance (MIP-00)", () => {
 });
 
 describe("getKeyPackageLifetime (WIRE-01 inbound read)", () => {
-  const validPubkey =
-    "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+  const VALID_ACCOUNT = testAccount(5);
+  const validPubkey = VALID_ACCOUNT.pubkey;
   const testD =
     "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
@@ -694,6 +709,7 @@ describe("getKeyPackageLifetime (WIRE-01 inbound read)", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
 
     const event = await createKeyPackageEvent({
@@ -730,8 +746,8 @@ describe("getKeyPackageLifetime (WIRE-01 inbound read)", () => {
 });
 
 describe("evaluateKeyPackageForGroup — Lifetime check (WIRE-01)", () => {
-  const validPubkey =
-    "884704bd421671e01c13f854d2ce23ce2a5bfe9562f4f297ad2bc921ba30c3a6";
+  const VALID_ACCOUNT = testAccount(5);
+  const validPubkey = VALID_ACCOUNT.pubkey;
 
   async function buildEvent(lifetime: { notBefore: bigint; notAfter: bigint }) {
     const credential = createCredential(validPubkey);
@@ -742,6 +758,7 @@ describe("evaluateKeyPackageForGroup — Lifetime check (WIRE-01)", () => {
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
+      signer: VALID_ACCOUNT.signer,
     });
     const tamperedPublicPackage = {
       ...keyPackage.publicPackage,

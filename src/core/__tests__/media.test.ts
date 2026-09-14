@@ -15,6 +15,7 @@ import {
 import { createCredential } from "../credential.js";
 import { createSimpleGroup } from "../group.js";
 import { generateKeyPackage } from "../key-package.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import {
   buildFallbackFetchUrls,
   canonicalizeMimeType,
@@ -35,13 +36,18 @@ import {
 // ---------------------------------------------------------------------------
 
 async function makeClientState() {
-  const adminPubkey = "a".repeat(64);
+  const adminAccount = testAccount(6);
+  const adminPubkey = adminAccount.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
   );
   const credential = createCredential(adminPubkey);
-  const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+  const kp = await generateKeyPackage({
+    credential,
+    ciphersuiteImpl: impl,
+    signer: adminAccount.signer,
+  });
   const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
     adminPubkeys: [adminPubkey],
     relays: [],

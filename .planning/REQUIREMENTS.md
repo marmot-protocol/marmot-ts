@@ -36,7 +36,7 @@ Shared `src/core` primitive per `foundation/authorization-proofs.md`; the accoun
 
 ### Legacy clean cut (CUT)
 
-- [ ] **CUT-01**: marmot-ts never emits `0xf2f1` — not in KeyPackage leaves, `Capabilities.extensions`, or required capabilities — and the legacy proof exports are removed
+- [x] **CUT-01**: marmot-ts never emits `0xf2f1` — not in KeyPackage leaves, `Capabilities.extensions`, or required capabilities — and the legacy proof exports are removed
 - [x] **CUT-02**: A KeyPackage or leaf carrying `0xf2f1` (alone or together with `0x8009`) is rejected, and a group requiring `0xf2f1` is rejected as outside the profile
 
 ### Group profile requirement (GRP)
@@ -113,7 +113,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PROOF-04 | Phase 7 | Complete |
 | PROOF-05 | Phase 7 | Complete |
 | PROOF-06 | Phase 7 | Complete |
-| CUT-01 | Phase 7 | Pending |
+| CUT-01 | Phase 7 | Complete |
 | CUT-02 | Phase 7 | Complete |
 | GRP-01 | Phase 8 | Pending |
 | GRP-02 | Phase 8 | Pending |

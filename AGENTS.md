@@ -203,7 +203,7 @@ correctly, across every supported runtime.
 
 - kebab-case throughout: `group-engine.ts`, `key-package-event-decode.ts`, `in-memory-key-value-store.ts`
 - Test files: same name with `.test.ts` suffix, placed under `__tests__/` sibling directories
-- Helper/utility files: descriptive nouns or verb-noun pairs: `mock-network.ts`, `account-proof.ts`
+- Helper/utility files: descriptive nouns or verb-noun pairs: `mock-network.ts`, `test-accounts.ts`
 - camelCase for all functions: `createGroup`, `generateKeyPackage`, `encodeVarint`, `decodeContent`
 - Async generator functions (ingest pipelines): prefixed with action verb, e.g., `ingestEnvelopes` in `src/engine/ingest.ts`
 - camelCase everywhere: `clientState`, `adminPubkey`, `ciphersuiteImpl`

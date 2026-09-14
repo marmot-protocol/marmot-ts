@@ -10,6 +10,7 @@ import {
 import { UsageError } from "ts-mls";
 
 import {
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
   AppComponentId,
   APP_COMPONENTS_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
@@ -120,6 +121,12 @@ export function buildAppDataDictionary(
 /**
  * Builds the `app_data_dictionary` GroupContext extension from component
  * entries (sorting them first). Use at group creation to seed initial state.
+ *
+ * Also refuses a `0x8009` data entry (`ACCOUNT_IDENTITY_PROOF_COMPONENT_ID`):
+ * the account identity proof is LeafNode-only data and MUST NOT be created as
+ * GroupContext state (PROOF-06, D-08). A `0x0001` required-component-id list
+ * that merely names `0x8009` is unaffected by this guard — only a keyed data
+ * entry is rejected.
  */
 export function makeAppComponentsExtension(
   entries: ComponentData[],
@@ -127,6 +134,15 @@ export function makeAppComponentsExtension(
   if (entries.some((entry) => entry.componentId === SAFE_AAD_COMPONENT_ID)) {
     throw new UsageError(
       "SafeAAD is LeafNode-only advertisement data and is not supported as group-component state",
+    );
+  }
+  if (
+    entries.some(
+      (entry) => entry.componentId === ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+    )
+  ) {
+    throw new UsageError(
+      "account identity proof (0x8009) is LeafNode-only data and is not supported as group-component state",
     );
   }
   return makeAppDataDictionaryExtension(buildAppDataDictionary(entries));

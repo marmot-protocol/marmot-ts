@@ -11,6 +11,7 @@ import {
   ClientState,
   defaultProposalTypes,
   GroupContextExtension,
+  makeAppDataDictionaryExtension,
   nodeTypes,
   type Proposal,
   type ProposalAppDataUpdate,
@@ -23,10 +24,12 @@ import { encodeComponentsList } from "../app-components-list.js";
 import {
   adminPolicyEntry,
   appComponentsEntry,
+  buildAppDataDictionary,
   componentEntry,
   makeAppComponentsExtension,
 } from "../dictionary.js";
 import {
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
   APP_COMPONENTS_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
   GROUP_MESSAGE_RETENTION_COMPONENT_ID,
@@ -222,6 +225,58 @@ describe("validateAppComponentIntegrity", () => {
       requiredIds: [],
     });
     expect(violation).toBeUndefined();
+  });
+
+  it("returns a violation for an AppDataUpdate op (update) targeting leaf-only 0x8009 (account-identity-proof-v2.md Lifecycle)", () => {
+    const violation = validateAppComponentIntegrity({
+      currentExtensions: [],
+      resultingExtensions: [],
+      appDataUpdateOps: [
+        {
+          componentId: ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+          data: new Uint8Array(104),
+        },
+      ],
+      requiredIds: [],
+    });
+    expect(violation?.reason).toBe("component-integrity");
+    expect(violation?.detail).toContain("0x8009");
+  });
+
+  it("returns a violation for an AppDataUpdate op (remove) targeting leaf-only 0x8009", () => {
+    const violation = validateAppComponentIntegrity({
+      currentExtensions: [],
+      resultingExtensions: [],
+      appDataUpdateOps: [
+        { componentId: ACCOUNT_IDENTITY_PROOF_COMPONENT_ID, data: undefined },
+      ],
+      requiredIds: [],
+    });
+    expect(violation?.reason).toBe("component-integrity");
+  });
+
+  it("returns a violation when the resulting extensions carry a 0x8009 entry with no backing op (leaf-only, mirrors MDK CURRENT_PROFILE_LEAF_ONLY_APP_COMPONENTS)", () => {
+    // makeAppComponentsExtension now refuses a 0x8009 data entry (dictionary.ts
+    // guard, this same plan), so this fixture is built directly with ts-mls's
+    // own builder to bypass it and exercise the integrity-layer guard.
+    const resulting = [
+      makeAppDataDictionaryExtension(
+        buildAppDataDictionary([
+          componentEntry(
+            ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+            new Uint8Array(104),
+          ),
+        ]),
+      ),
+    ] as GroupContextExtension[];
+    const violation = validateAppComponentIntegrity({
+      currentExtensions: [],
+      resultingExtensions: resulting,
+      appDataUpdateOps: [],
+      requiredIds: [],
+    });
+    expect(violation?.reason).toBe("component-integrity");
+    expect(violation?.detail).toContain("leaf-only");
   });
 });
 

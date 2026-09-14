@@ -1023,3 +1023,28 @@ describe("assertNoAccountIdentityProofComponent (PROOF-06, D-08)", () => {
     ).not.toThrow();
   });
 });
+
+describe("GroupContext builder guard (PROOF-06)", () => {
+  it("makeAppComponentsExtension rejects a 0x8009 data entry", () => {
+    expect(() =>
+      makeAppComponentsExtension([
+        componentEntry(
+          ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+          new Uint8Array(104),
+        ),
+      ]),
+    ).toThrow(/0x8009.*LeafNode/i);
+  });
+
+  it("makeAppComponentsExtension accepts a required-id list that merely names 0x8009", () => {
+    expect(() =>
+      makeAppComponentsExtension([
+        appComponentsEntry([
+          0x0001,
+          0x8003,
+          ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+        ]),
+      ]),
+    ).not.toThrow();
+  });
+});

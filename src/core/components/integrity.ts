@@ -10,7 +10,11 @@ import {
 
 import { getAdminPolicy, getAppComponents } from "./dictionary.js";
 import { getGroupMemberPubkeys } from "../group-members.js";
-import { APP_COMPONENTS_COMPONENT_ID, AppComponentId } from "./ids.js";
+import {
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+  APP_COMPONENTS_COMPONENT_ID,
+  AppComponentId,
+} from "./ids.js";
 import { bytesEqual } from "./bytes.js";
 import {
   classifyDisbandCommit,
@@ -109,6 +113,13 @@ export function collectAppDataUpdateOps(
  * from `resultingExtensions` would let a commit add an id to `app_components`
  * and thereby protect that same id in the same commit, which is the exact bug
  * class this validator exists to close.
+ *
+ * Additionally, per account-identity-proof-v2.md "Lifecycle, authorization, and
+ * removal" ("It is not GroupContext state and MUST NOT be created, replaced, or
+ * removed with `AppDataUpdate`"), this rejects any commit whose `AppDataUpdate`
+ * ops target the leaf-only account identity proof component (`0x8009`), or
+ * whose resulting GroupContext dictionary carries a `0x8009` entry at all —
+ * mirroring MDK's `CURRENT_PROFILE_LEAF_ONLY_APP_COMPONENTS`.
  * @see refs/mdk/crates/cgka-engine/src/app_components.rs `validate_app_component_integrity_for_staged_commit`
  * @see Marmot v2 spec: app-components/README.md "Update Processing", "Unknown Data"
  */
@@ -128,6 +139,32 @@ export function validateAppComponentIntegrity(args: {
     return {
       reason: "component-integrity",
       detail: "resulting GroupContext drops the app_data_dictionary",
+    };
+  }
+
+  // Leaf-only guard: 0x8009 (account identity proof) is never valid
+  // GroupContext state, so no AppDataUpdate op may target it and no resulting
+  // dictionary entry may carry it, regardless of any AppDataUpdate op backing
+  // the change (account-identity-proof-v2.md "Lifecycle, authorization, and
+  // removal"; mirrors MDK CURRENT_PROFILE_LEAF_ONLY_APP_COMPONENTS).
+  if (
+    args.appDataUpdateOps.some(
+      (op) => op.componentId === ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+    )
+  ) {
+    return {
+      reason: "component-integrity",
+      detail: "AppDataUpdate targets leaf-only app component 0x8009",
+    };
+  }
+  if (
+    resulting?.some(
+      (entry) => entry.componentId === ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+    )
+  ) {
+    return {
+      reason: "component-integrity",
+      detail: "resulting GroupContext carries leaf-only app component 0x8009",
     };
   }
 

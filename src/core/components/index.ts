@@ -1,5 +1,6 @@
 /** @module @category Core - App Components */
 export * from "./ids.js";
+export * from "./account-identity-proof.js";
 export * from "./app-components-list.js";
 export * from "./group-profile.js";
 export * from "./admin-policy.js";

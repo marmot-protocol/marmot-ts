@@ -201,3 +201,12 @@ None - no external service configuration required.
 ---
 *Phase: 07-account-identity-proof-component-0x8009-legacy-clean-cut*
 *Completed: 2026-09-14*
+
+## Self-Check: PASSED
+
+- FOUND: src/__tests__/helpers/test-accounts.ts
+- FOUND: src/__tests__/helpers/test-accounts.test.ts
+- CONFIRMED DELETED: src/__tests__/helpers/account-proof.ts
+- CONFIRMED DELETED: examples/opentui/src/helpers/account-proof.ts
+- FOUND: 1f6cdac (feat commit)
+- FOUND: cb4efda (docs commit)

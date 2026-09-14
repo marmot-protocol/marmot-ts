@@ -78,13 +78,23 @@ removed from publish, verify, capabilities, and admin policy with no fallback pa
 **Plans**: 8 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 07-01-PLAN.md — `0x8009` proof-class module: kind-450 template/producer (spec vector), leaf/KeyPackage/tree validators, GroupContext profile classifier, container guards (wave 1)
 - [ ] 07-02-PLAN.md — Remove the separate proof-signer option from the client; core `signer` option; delete raw-key helpers; ordered test-account helper (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 07-03-PLAN.md — Engine tests pass real signers (wave 2)
 - [ ] 07-04-PLAN.md — Core and client unit tests pass real signers (wave 2)
 - [ ] 07-05-PLAN.md — Integration and conformance tests pass real signers (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 07-06-PLAN.md — Atomic wire cut: required signer + `0x8009` leaf, groups require `0x8009`, `0xf2f1` dropped, invite/admin/join seams validate (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 07-07-PLAN.md — Delete legacy module, tests, fixture, and proof-v2-probe; exports snapshot; grep audit (wave 4)
 - [ ] 07-08-PLAN.md — Skip non-current stored KeyPackages (D-09); major changeset and docs migration (wave 4)
 

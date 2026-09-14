@@ -6,6 +6,7 @@ import {
   type MlsMessage,
 } from "ts-mls";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import {
   DEFAULT_CONVERGENCE_POLICY,
   normalizeConvergencePolicy,
@@ -34,13 +35,15 @@ async function fixture(
     onSettleCheck: () => void | Promise<void>;
   },
 ) {
-  const admin = "a".repeat(64);
+  const adminAccount = testAccount(6);
+  const admin = adminAccount.pubkey;
   const ciphersuite = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
   );
   const keyPackage = await generateKeyPackage({
     credential: createCredential(admin),
+    signer: adminAccount.signer,
     ciphersuiteImpl: ciphersuite,
   });
   const { clientState: state } = await createSimpleGroup(

@@ -7,6 +7,7 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { DEFAULT_CONVERGENCE_POLICY } from "../../core/convergence.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
@@ -21,7 +22,8 @@ const HORIZON_1 = { ...DEFAULT_CONVERGENCE_POLICY, maxRewindCommits: 1 };
  * applied commits {0,1}).
  */
 async function buildStoreWithHistory() {
-  const adminPubkey = "a".repeat(64);
+  const adminAccount = testAccount(6);
+  const adminPubkey = adminAccount.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -33,6 +35,7 @@ async function buildStoreWithHistory() {
 
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: epoch0 } = await createSimpleGroup(
@@ -42,8 +45,10 @@ async function buildStoreWithHistory() {
     { adminPubkeys: [adminPubkey], relays: [] },
   );
 
+  const memberAccount = testAccount(11);
   const memberKp = await generateKeyPackage({
-    credential: createCredential("e".repeat(64)),
+    credential: createCredential(memberAccount.pubkey),
+    signer: memberAccount.signer,
     ciphersuiteImpl: impl,
   });
   const add = await createCommit({

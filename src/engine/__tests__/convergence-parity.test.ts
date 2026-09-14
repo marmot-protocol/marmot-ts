@@ -74,6 +74,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import {
   deserializeClientState,
   serializeClientState,
@@ -145,9 +146,12 @@ function orderingKeyOf(
  * confound this property with that one.
  */
 async function threeMemberEpoch1Group() {
-  const adminPubkey = "a".repeat(64);
-  const member1Pubkey = "d".repeat(64);
-  const member2Pubkey = "e".repeat(64);
+  const adminAccount = testAccount(6);
+  const member1Account = testAccount(9);
+  const member2Account = testAccount(11);
+  const adminPubkey = adminAccount.pubkey;
+  const member1Pubkey = member1Account.pubkey;
+  const member2Pubkey = member2Account.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -158,6 +162,7 @@ async function threeMemberEpoch1Group() {
   };
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: adminEpoch0 } = await createSimpleGroup(
@@ -168,10 +173,12 @@ async function threeMemberEpoch1Group() {
   );
   const member1Kp = await generateKeyPackage({
     credential: createCredential(member1Pubkey),
+    signer: member1Account.signer,
     ciphersuiteImpl: impl,
   });
   const member2Kp = await generateKeyPackage({
     credential: createCredential(member2Pubkey),
+    signer: member2Account.signer,
     ciphersuiteImpl: impl,
   });
   const add = await createCommit({
@@ -215,8 +222,10 @@ async function threeMemberEpoch1Group() {
  * `ClientState` copy, not merely a second call against the same object.
  */
 async function twoMemberEpoch1Group() {
-  const adminPubkey = "a".repeat(64);
-  const memberPubkey = "d".repeat(64);
+  const adminAccount = testAccount(6);
+  const memberAccount = testAccount(9);
+  const adminPubkey = adminAccount.pubkey;
+  const memberPubkey = memberAccount.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -227,6 +236,7 @@ async function twoMemberEpoch1Group() {
   };
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: adminEpoch0 } = await createSimpleGroup(
@@ -237,6 +247,7 @@ async function twoMemberEpoch1Group() {
   );
   const memberKp = await generateKeyPackage({
     credential: createCredential(memberPubkey),
+    signer: memberAccount.signer,
     ciphersuiteImpl: impl,
   });
   const add = await createCommit({
@@ -373,8 +384,10 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
     engine.confirmPublished(first.pending);
     expect(Number(engine.state.groupContext.epoch)).toBe(2);
 
+    const joiningAccount = testAccount(11);
     const joiningKp = await generateKeyPackage({
-      credential: createCredential("e".repeat(64)),
+      credential: createCredential(joiningAccount.pubkey),
+      signer: joiningAccount.signer,
       ciphersuiteImpl: impl,
     });
     const proposal = await engine.send({

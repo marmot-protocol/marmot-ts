@@ -11,6 +11,7 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import {
   deserializeClientState,
   serializeClientState,
@@ -26,6 +27,10 @@ import { MarmotGroupEngine } from "../group-engine.js";
 import type { GroupPeeler } from "../types.js";
 
 const RELAY = "wss://relay.test";
+
+const ADMIN_ACCOUNT = testAccount(6);
+const D_ACCOUNT = testAccount(9);
+const E_ACCOUNT = testAccount(11);
 
 /** Same shape as group-engine.test.ts's local `testPeeler` helper. */
 function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
@@ -78,9 +83,9 @@ function countingPeeler(inner: GroupPeeler<NostrEvent>): {
  * caller constructs the engine under test with whichever peeler it needs.
  */
 async function buildRemovalFixture() {
-  const adminPubkey = "a".repeat(64);
-  const dPubkey = "d".repeat(64);
-  const ePubkey = "e".repeat(64);
+  const adminPubkey = ADMIN_ACCOUNT.pubkey;
+  const dPubkey = D_ACCOUNT.pubkey;
+  const ePubkey = E_ACCOUNT.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -92,6 +97,7 @@ async function buildRemovalFixture() {
 
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: ADMIN_ACCOUNT.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: created } = await createSimpleGroup(
@@ -102,10 +108,12 @@ async function buildRemovalFixture() {
   );
   const dKp = await generateKeyPackage({
     credential: createCredential(dPubkey),
+    signer: D_ACCOUNT.signer,
     ciphersuiteImpl: impl,
   });
   const eKp = await generateKeyPackage({
     credential: createCredential(ePubkey),
+    signer: E_ACCOUNT.signer,
     ciphersuiteImpl: impl,
   });
   const { newState: adminEpoch1, welcome } = await createCommit({
@@ -182,7 +190,7 @@ async function buildRemovedEngine() {
 function arbitraryEnvelope(id: string): NostrEvent {
   return {
     id,
-    pubkey: "a".repeat(64),
+    pubkey: ADMIN_ACCOUNT.pubkey,
     created_at: 0,
     kind: 445,
     tags: [],
@@ -252,7 +260,7 @@ describe("self-eviction (CONV-02, D-13/D-14)", () => {
     await expect(
       engine.send({
         kind: "commit",
-        actorPubkey: "e".repeat(64),
+        actorPubkey: E_ACCOUNT.pubkey,
         extraProposals: [],
       }),
     ).rejects.toThrow(/removed/i);

@@ -17,6 +17,7 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import {
   commitDigest,
   compareCommitOrderingKeys,
@@ -34,7 +35,6 @@ import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { ConvergenceEffectLedger } from "../../client/group/wrapper-ledger.js";
 import type { SerializedClientState } from "../../core/client-state.js";
-import type { EventSigner } from "applesauce-core";
 import { deriveStateNotifications } from "../state-notifications.js";
 import { MarmotGroupEngine } from "../group-engine.js";
 import type { GroupPeeler } from "../types.js";
@@ -70,8 +70,10 @@ async function drain(gen: AsyncIterable<unknown>): Promise<void> {
 
 /** A 2-member group (admin + one member), both at epoch 1. */
 async function twoMemberEpoch1Group() {
-  const adminPubkey = "a".repeat(64);
-  const memberPubkey = "e".repeat(64);
+  const adminAccount = testAccount(6);
+  const memberAccount = testAccount(11);
+  const adminPubkey = adminAccount.pubkey;
+  const memberPubkey = memberAccount.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -82,6 +84,7 @@ async function twoMemberEpoch1Group() {
   };
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: created } = await createSimpleGroup(
@@ -92,6 +95,7 @@ async function twoMemberEpoch1Group() {
   );
   const memberKp = await generateKeyPackage({
     credential: createCredential(memberPubkey),
+    signer: memberAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { newState: adminEpoch1, welcome } = await createCommit({
@@ -243,9 +247,12 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
       expect(notification.commitDigest).toEqual(selfUpdateDigest);
   });
   it("derives epochAdvanced and memberAdded, both carrying the same commitDigest, for a commit that adds a member", async () => {
-    const adminPubkey = "a".repeat(64);
-    const member1Pubkey = "d".repeat(64);
-    const member2Pubkey = "e".repeat(64);
+    const adminAccount = testAccount(6);
+    const member1Account = testAccount(9);
+    const member2Account = testAccount(11);
+    const adminPubkey = adminAccount.pubkey;
+    const member1Pubkey = member1Account.pubkey;
+    const member2Pubkey = member2Account.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -256,6 +263,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     };
     const adminKp = await generateKeyPackage({
       credential: createCredential(adminPubkey),
+      signer: adminAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: created } = await createSimpleGroup(
@@ -266,6 +274,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     );
     const member1Kp = await generateKeyPackage({
       credential: createCredential(member1Pubkey),
+      signer: member1Account.signer,
       ciphersuiteImpl: impl,
     });
     const { newState: adminEpoch1, welcome: welcome1 } = await createCommit({
@@ -293,6 +302,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     // commit branch that derives + records notifications.
     const member2Kp = await generateKeyPackage({
       credential: createCredential(member2Pubkey),
+      signer: member2Account.signer,
       ciphersuiteImpl: impl,
     });
     const { commit: addCommit } = await createCommit({
@@ -349,9 +359,12 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
   });
 
   it("derives a memberRemoved notification (no actor) for a commit that removes a different member", async () => {
-    const adminPubkey = "a".repeat(64);
-    const member1Pubkey = "d".repeat(64);
-    const member2Pubkey = "e".repeat(64);
+    const adminAccount = testAccount(6);
+    const member1Account = testAccount(9);
+    const member2Account = testAccount(11);
+    const adminPubkey = adminAccount.pubkey;
+    const member1Pubkey = member1Account.pubkey;
+    const member2Pubkey = member2Account.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -362,6 +375,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     };
     const adminKp = await generateKeyPackage({
       credential: createCredential(adminPubkey),
+      signer: adminAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: adminEpoch0 } = await createSimpleGroup(
@@ -372,10 +386,12 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     );
     const member1Kp = await generateKeyPackage({
       credential: createCredential(member1Pubkey),
+      signer: member1Account.signer,
       ciphersuiteImpl: impl,
     });
     const member2Kp = await generateKeyPackage({
       credential: createCredential(member2Pubkey),
+      signer: member2Account.signer,
       ciphersuiteImpl: impl,
     });
     const add = await createCommit({
@@ -921,7 +937,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     const group = new MarmotGroup(memberEpoch1, {
       store,
       removedMarkerStore,
-      signer: { getPublicKey: async () => memberPubkey } as EventSigner,
+      signer: testAccount(11).signer,
       ciphersuite: impl,
       network: noNetwork(),
     });
@@ -996,7 +1012,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     const group = new MarmotGroup(memberEpoch1, {
       store,
       removedMarkerStore,
-      signer: { getPublicKey: async () => memberPubkey } as EventSigner,
+      signer: testAccount(11).signer,
       ciphersuite: impl,
       network: noNetwork(),
     });

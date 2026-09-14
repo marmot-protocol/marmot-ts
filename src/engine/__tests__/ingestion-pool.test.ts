@@ -11,6 +11,7 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { createCredential } from "../../core/credential.js";
 import {
   createGroupEvent,
@@ -22,8 +23,10 @@ import { MarmotGroupEngine } from "../group-engine.js";
 import { IngestionPool } from "../ingestion-pool.js";
 import type { GroupPeeler } from "../types.js";
 
-const ADMIN = "a".repeat(64);
-const MEMBER = "e".repeat(64);
+const ADMIN_ACCOUNT = testAccount(6);
+const MEMBER_ACCOUNT = testAccount(11);
+const ADMIN = ADMIN_ACCOUNT.pubkey;
+const MEMBER = MEMBER_ACCOUNT.pubkey;
 
 function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
   return {
@@ -67,6 +70,7 @@ describe("MarmotGroupEngine ingestion pool", () => {
     // Admin creates a group and adds a member → both reach epoch 1.
     const adminKp = await generateKeyPackage({
       credential: createCredential(ADMIN),
+      signer: ADMIN_ACCOUNT.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: created } = await createSimpleGroup(
@@ -77,6 +81,7 @@ describe("MarmotGroupEngine ingestion pool", () => {
     );
     const memberKp = await generateKeyPackage({
       credential: createCredential(MEMBER),
+      signer: MEMBER_ACCOUNT.signer,
       ciphersuiteImpl: impl,
     });
     const { newState: adminE1, welcome } = await createCommit({
@@ -179,6 +184,7 @@ describe("MarmotGroupEngine ingestion pool", () => {
 
     const adminKp = await generateKeyPackage({
       credential: createCredential(ADMIN),
+      signer: ADMIN_ACCOUNT.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: created } = await createSimpleGroup(
@@ -189,6 +195,7 @@ describe("MarmotGroupEngine ingestion pool", () => {
     );
     const memberKp = await generateKeyPackage({
       credential: createCredential(MEMBER),
+      signer: MEMBER_ACCOUNT.signer,
       ciphersuiteImpl: impl,
     });
     const { newState: adminE1, welcome } = await createCommit({

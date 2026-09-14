@@ -75,11 +75,18 @@ removed from publish, verify, capabilities, and admin policy with no fallback pa
 4. marmot-ts never emits `0xf2f1` anywhere — not in leaves, `Capabilities.extensions`, or required capabilities — and the legacy proof exports no longer exist in the package.
 5. Any KeyPackage, leaf, or group still carrying or requiring `0xf2f1` is rejected outright.
 
-**Plans**: TBD
+**Plans**: 8 plans
 
 Plans:
 
-- [ ] TBD
+- [ ] 07-01-PLAN.md — `0x8009` proof-class module: kind-450 template/producer (spec vector), leaf/KeyPackage/tree validators, GroupContext profile classifier, container guards (wave 1)
+- [ ] 07-02-PLAN.md — Remove the separate proof-signer option from the client; core `signer` option; delete raw-key helpers; ordered test-account helper (wave 1)
+- [ ] 07-03-PLAN.md — Engine tests pass real signers (wave 2)
+- [ ] 07-04-PLAN.md — Core and client unit tests pass real signers (wave 2)
+- [ ] 07-05-PLAN.md — Integration and conformance tests pass real signers (wave 2)
+- [ ] 07-06-PLAN.md — Atomic wire cut: required signer + `0x8009` leaf, groups require `0x8009`, `0xf2f1` dropped, invite/admin/join seams validate (wave 3)
+- [ ] 07-07-PLAN.md — Delete legacy module, tests, fixture, and proof-v2-probe; exports snapshot; grep audit (wave 4)
+- [ ] 07-08-PLAN.md — Skip non-current stored KeyPackages (D-09); major changeset and docs migration (wave 4)
 
 ### Phase 8: GroupContext Profile Requirement & Legality-Seam Extension
 

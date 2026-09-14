@@ -10,7 +10,6 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 import {
-  ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
   AGENT_TEXT_STREAM_QUIC_FANOUT_EXTENSION_TYPE,
   AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
   AGENT_TEXT_STREAM_QUIC_SEND_EXTENSION_TYPE,
@@ -18,6 +17,12 @@ import {
   LAST_RESORT_EXTENSION_TYPE,
   marmotRequiredCapabilitiesExtension,
 } from "../index.js";
+
+// The legacy `marmot.account-identity-proof.v2` custom LeafNode extension
+// (`0xf2f1`, `../account-identity-proof.js`). Referenced here only as a
+// literal to assert its absence (CUT-01) -- this test file imports nothing
+// from the legacy module.
+const LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE = 0xf2f1;
 
 describe("ensureMarmotCapabilities", () => {
   it("should advertise the app_data_dictionary extension and last_resort", () => {
@@ -117,7 +122,7 @@ describe("ensureMarmotCapabilities", () => {
     expect(result.credentials).toEqual(capabilities.credentials);
   });
 
-  it("should work with empty extensions array", () => {
+  it("should work with empty extensions array and never advertise the legacy 0xf2f1 extension", () => {
     const capabilities: Capabilities = {
       versions: [protocolVersions.mls10],
       ciphersuites: [ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519],
@@ -131,9 +136,11 @@ describe("ensureMarmotCapabilities", () => {
     expect(result.extensions).toEqual([
       appDataDictionaryExtensionType,
       LAST_RESORT_EXTENSION_TYPE,
-      ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
       AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
     ]);
+    expect(result.extensions).not.toContain(
+      LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+    );
     expect(result.proposals).toEqual([
       appDataUpdateProposalType,
       selfRemoveProposalType,
@@ -142,15 +149,16 @@ describe("ensureMarmotCapabilities", () => {
 });
 
 describe("marmotRequiredCapabilitiesExtension", () => {
-  it("declares the fixed Marmot baseline, sorted ascending to match the Rust BTreeSet", () => {
+  it("declares the fixed Marmot baseline (0x0006 only), sorted ascending to match the Rust BTreeSet, and never requires the legacy 0xf2f1 extension", () => {
     const ext = marmotRequiredCapabilitiesExtension();
 
     expect(ext.extensionType).toBe(defaultExtensionTypes.required_capabilities);
-    // app_data_dictionary (0x0006) before account-identity-proof (0xF2F1).
     expect(ext.extensionData.extensionTypes).toEqual([
       appDataDictionaryExtensionType,
-      ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
     ]);
+    expect(ext.extensionData.extensionTypes).not.toContain(
+      LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+    );
     // app_data_update (0x0008) before self_remove (0x000a).
     expect(ext.extensionData.proposalTypes).toEqual([
       appDataUpdateProposalType,

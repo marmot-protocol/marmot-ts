@@ -4,30 +4,18 @@ import {
   defaultCredentialTypes,
   defaultCryptoProvider,
   getCiphersuiteImpl,
-  type LeafNode,
   selfRemoveProposalType,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
-import { schnorr } from "@noble/curves/secp256k1.js";
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 
 import { createCredential } from "../credential.js";
 import { generateKeyPackage } from "../key-package.js";
-import {
-  type AccountIdentityProofRequest,
-  ACCOUNT_IDENTITY_PROOF_EVENT_KIND,
-  ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-  accountIdentityProofEventId,
-  accountIdentityProofSigningDigest,
-  decodeAccountIdentityProof,
-  encodeAccountIdentityProof,
-  verifyLeafAccountIdentityProof,
-} from "../account-identity-proof.js";
+import { validateKeyPackageAccountIdentityProof } from "../components/account-identity-proof.js";
 import { AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE } from "../components/agent-text-stream.js";
-import proofV2Rust from "../../__tests__/fixtures/proof-v2-rust.json";
 import { getAppComponents } from "../components/dictionary.js";
 import {
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
   AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
   GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
@@ -37,21 +25,24 @@ import {
 
 /**
  * Interop contract: a KeyPackage marmot-ts publishes (as the examples/opentui
- * app does — with an account proof signer) MUST satisfy every capability the
- * darkmatter Rust engine requires of an invitee when adding it to a default
- * marmot-app group, or `do_send_invite` rejects it with
- * `MissingRequiredCapabilities` / `InvalidAccountIdentityProof`.
+ * app does) MUST satisfy every capability the darkmatter Rust engine requires
+ * of an invitee when adding it to a default marmot-app (current-profile)
+ * group, or `do_send_invite` rejects it with `MissingRequiredCapabilities` /
+ * `InvalidAccountIdentityProof`.
  *
- * The required set below mirrors the Rust side:
- * - baseline ext/prop: crates/cgka-engine/src/capabilities.rs
- *   (`required_capabilities_extension`): app_data_dictionary (0x0006) +
- *   account-identity-proof (0xf2f1); app_data_update (0x0008) + self_remove
- *   (0x000a, the Required `self-remove` feature).
- * - required app components: crates/marmot-app/src/client/mod.rs:167-176 plus
- *   `default_group_components()` → {0x8001, 0x8003, 0x8004, 0x8006, 0x8008}.
- * - required role capability: crates/traits/src/agent_text_stream.rs
- *   `user_to_agent_default()` sets `required_member_roles = receive`, folded in
- *   at crates/cgka-engine/src/message_processor/send.rs:89-107 → ext 0xf2d1.
+ * The required set below mirrors the Rust side (current profile,
+ * `refs/mdk/crates/cgka-engine/src/app_components.rs`):
+ * - `CURRENT_PROFILE_REQUIRED_GROUP_CONTEXT_EXTENSIONS` = `[0x0006]` (no
+ *   `0xf2f1` requirement) plus the agent-text-stream-QUIC `receive` role
+ *   capability (`0xf2d1`, `crates/traits/src/agent_text_stream.rs`
+ *   `user_to_agent_default()`, folded in at
+ *   `crates/cgka-engine/src/message_processor/send.rs:89-107`).
+ * - `CURRENT_PROFILE_REQUIRED_PROPOSALS` = `[0x0008]` plus `self_remove`
+ *   (`0x000a`, the Required `self-remove` feature,
+ *   `crates/cgka-engine/src/capabilities.rs`).
+ * - `CURRENT_PROFILE_REQUIRED_APP_COMPONENTS` = `{0x8003, 0x8009}`, folded
+ *   into `default_group_components()` → `{0x8001, 0x8003, 0x8004, 0x8006,
+ *   0x8008, 0x8009}` (`crates/marmot-app/src/client/mod.rs:167-176`).
  *
  * If darkmatter fixes the over-requiring tracked in
  * marmot-protocol/darkmatter#481 (it forces 0x8006 onto every group), the
@@ -60,7 +51,6 @@ import {
  */
 const DARKMATTER_REQUIRED_LEAF_EXTENSIONS = [
   appDataDictionaryExtensionType, // 0x0006
-  ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE, // 0xf2f1
   AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE, // 0xf2d1 (required_member_roles = receive)
 ];
 
@@ -75,12 +65,19 @@ const DARKMATTER_REQUIRED_APP_COMPONENTS = [
   NOSTR_ROUTING_COMPONENT_ID, // 0x8004
   AGENT_TEXT_STREAM_QUIC_COMPONENT_ID, // 0x8006
   GROUP_ENCRYPTED_MEDIA_COMPONENT_ID, // 0x8008
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID, // 0x8009
 ];
+
+// The legacy `marmot.account-identity-proof.v2` custom LeafNode extension
+// (`0xf2f1`, `../account-identity-proof.js`). Referenced here only as a
+// literal to assert its absence (CUT-01) -- this test file imports nothing
+// from the legacy module.
+const LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE = 0xf2f1;
 
 describe("darkmatter invite compatibility", () => {
   async function generateOpenTuiStyleKeyPackage() {
-    // Mirror the examples/opentui flow: default ciphersuite/capabilities plus an
-    // account proof signer so the leaf carries the 0xf2f1 proof.
+    // Mirror the examples/opentui flow: default ciphersuite/capabilities and a
+    // real Nostr account signer, so the leaf carries the 0x8009 proof.
     const secretKey = new Uint8Array(32).fill(3);
     secretKey[31] = 9;
     const account = PrivateKeyAccount.fromKey(secretKey);
@@ -98,7 +95,7 @@ describe("darkmatter invite compatibility", () => {
     return { keyPackage, ciphersuiteImpl };
   }
 
-  it("advertises every leaf capability darkmatter requires of an invitee", async () => {
+  it("advertises every leaf capability darkmatter requires of an invitee, and never the legacy 0xf2f1 extension", async () => {
     const { keyPackage } = await generateOpenTuiStyleKeyPackage();
     const capabilities = keyPackage.publicPackage.leafNode.capabilities;
 
@@ -106,6 +103,9 @@ describe("darkmatter invite compatibility", () => {
       expect(capabilities?.extensions).toContain(ext);
     for (const prop of DARKMATTER_REQUIRED_PROPOSALS)
       expect(capabilities?.proposals).toContain(prop);
+    expect(capabilities?.extensions).not.toContain(
+      LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+    );
   });
 
   it("advertises every app component darkmatter's default group requires", async () => {
@@ -122,161 +122,30 @@ describe("darkmatter invite compatibility", () => {
       expect(advertised).toContain(component);
   });
 
-  it("carries a verifiable account identity proof bound to the leaf", async () => {
+  it("carries a verifiable 0x8009 account identity proof bound to the leaf", async () => {
     const { keyPackage, ciphersuiteImpl } =
       await generateOpenTuiStyleKeyPackage();
     const leaf = keyPackage.publicPackage.leafNode;
 
-    // Proof extension present on the leaf (darkmatter rejects its absence).
+    // No legacy 0xf2f1 extension present on the leaf (darkmatter's current
+    // profile does not require it, and CUT-01 forbids emitting it).
     expect(
       leaf.extensions.some(
-        (e) => e.extensionType === ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+        (e) => e.extensionType === LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
       ),
-    ).toBe(true);
-    // And it verifies against the leaf signature key (BIP-340 over the same
-    // digest the Rust verifier reconstructs).
+    ).toBe(false);
+    // And the KeyPackage's 0x8009 proof validates end to end (structure,
+    // support-list membership, SafeAAD placement, and BIP-340 signature).
     expect(() =>
-      verifyLeafAccountIdentityProof(leaf, ciphersuiteImpl.id),
+      validateKeyPackageAccountIdentityProof(
+        keyPackage.publicPackage,
+        ciphersuiteImpl.id,
+      ),
     ).not.toThrow();
 
     // Basic credential with a 32-byte x-only identity, as darkmatter requires.
     // The leaf stores the numeric MLS credential-type code (basic = 1).
     expect(leaf.credential.credentialType).toBe(defaultCredentialTypes.basic);
     expect(leaf.credential.identity).toHaveLength(32);
-  });
-});
-
-/**
- * Rust-signed account-identity-proof v2 round-trip fixture (PROOF-01,
- * ROADMAP criterion 2 / plan 01-02 Task 3).
- *
- * These values were generated once, fresh, from the vendored MDK reference
- * (`refs/mdk`, `marmotkit-v0.9.4-14-g3628ccc`) via a throwaway
- * `#[test] fn print_ts_proof_v2_fixture_vector` added temporarily to
- * `crates/cgka-engine/src/account_identity_proof.rs`'s `#[cfg(test)] mod
- * tests`, then reverted (no permanent change to the `refs/mdk` submodule).
- *
- * Generation command:
- *   cd refs/mdk && cargo test -p cgka-engine --lib \
- *     print_ts_proof_v2_fixture_vector -- --nocapture
- *
- * The test function built an `AccountIdentityProofRequest` for a fixed
- * account secret key (`sha256("marmot-ts proof-v2 fixture account secret
- * key")`) and a fixed MLS signature key
- * (`sha256("marmot-ts proof-v2 fixture mls signature key")`), ciphersuite 1
- * (Ed25519, signature_scheme 2055), called `.proof_event_id()` for the event
- * id, `.sign_with_keys(&keys)` + `.signature_from_signed_event()` for the
- * 64-byte Schnorr signature, and printed the hex values below.
- *
- * Promoting this into a permanent cross-impl parity harness (rather than a
- * one-shot pinned fixture) is deferred to CONF-01 / Phase 4 per
- * `01-CONTEXT.md` Deferred Ideas.
- */
-describe("Rust MDK proof-v2 round-trip fixture (generated once, pinned)", () => {
-  it("loads the repository-local immutable Rust fixture", () => {
-    expect(proofV2Rust.version).toBe(2);
-  });
-  // Fixed inputs used to generate the fixture (see comment above).
-  const RUST_FIXTURE_ACCOUNT_IDENTITY_HEX = proofV2Rust.account_identity_hex;
-  const RUST_FIXTURE_MLS_SIGNATURE_KEY_HEX = proofV2Rust.mls_signature_key_hex;
-  const RUST_FIXTURE_CIPHERSUITE = proofV2Rust.ciphersuite;
-  const RUST_FIXTURE_SIGNATURE_SCHEME = proofV2Rust.signature_scheme;
-
-  // Rust-produced outputs to reproduce/verify.
-  const RUST_FIXTURE_EVENT_ID_HEX = proofV2Rust.event_id_hex;
-  const RUST_FIXTURE_SIGNATURE_HEX = proofV2Rust.signature_hex;
-
-  function fixtureRequest(): AccountIdentityProofRequest {
-    return {
-      accountIdentity: hexToBytes(RUST_FIXTURE_ACCOUNT_IDENTITY_HEX),
-      mlsSignaturePublicKey: hexToBytes(RUST_FIXTURE_MLS_SIGNATURE_KEY_HEX),
-      ciphersuite: RUST_FIXTURE_CIPHERSUITE,
-      signatureScheme: RUST_FIXTURE_SIGNATURE_SCHEME,
-    };
-  }
-
-  it("reproduces the identical kind-450 event id Rust computed from the same inputs", () => {
-    const req = fixtureRequest();
-    expect(accountIdentityProofEventId(req)).toBe(RUST_FIXTURE_EVENT_ID_HEX);
-    expect(bytesToHex(accountIdentityProofSigningDigest(req))).toBe(
-      RUST_FIXTURE_EVENT_ID_HEX,
-    );
-  });
-
-  it("accepts (verifies) the pinned Rust-produced 64-byte Schnorr signature", () => {
-    const req = fixtureRequest();
-    const digest = accountIdentityProofSigningDigest(req);
-    const signature = hexToBytes(RUST_FIXTURE_SIGNATURE_HEX);
-
-    expect(schnorr.verify(signature, digest, req.accountIdentity)).toBe(true);
-
-    // Also verify via the full leaf-proof path (encode -> decode -> verify),
-    // exercising the exact code path a real KeyPackage/leaf would use.
-    // Only credential/signaturePublicKey/extensions are read by
-    // verifyLeafAccountIdentityProof, so a minimal LeafNode stand-in (cast
-    // for the fields that type does not need for this check) is sufficient.
-    const leaf = {
-      credential: {
-        credentialType: defaultCredentialTypes.basic,
-        identity: req.accountIdentity,
-      },
-      signaturePublicKey: req.mlsSignaturePublicKey,
-      extensions: [
-        {
-          extensionType: ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-          extensionData: encodeAccountIdentityProof({
-            request: req,
-            signature,
-          }),
-        },
-      ],
-    } as unknown as LeafNode;
-    expect(() =>
-      verifyLeafAccountIdentityProof(leaf, RUST_FIXTURE_CIPHERSUITE),
-    ).not.toThrow();
-  });
-
-  it("rejects the Rust signature after canonical signed-event mutation", () => {
-    const req = fixtureRequest();
-    const mutated = {
-      ...req,
-      mlsSignaturePublicKey: Uint8Array.from(req.mlsSignaturePublicKey),
-    };
-    mutated.mlsSignaturePublicKey[0] ^= 1;
-    expect(
-      schnorr.verify(
-        hexToBytes(RUST_FIXTURE_SIGNATURE_HEX),
-        accountIdentityProofSigningDigest(mutated),
-        mutated.accountIdentity,
-      ),
-    ).toBe(false);
-  });
-
-  it("round-trips the pinned account-identity/mls-key/version fields through encode/decode", () => {
-    const req = fixtureRequest();
-    const signature = hexToBytes(RUST_FIXTURE_SIGNATURE_HEX);
-    const encoded = encodeAccountIdentityProof({ request: req, signature });
-
-    // version byte is always 2 (position 0 of the wire encoding).
-    expect(encoded[0]).toBe(2);
-
-    const decoded = decodeAccountIdentityProof(encoded);
-    expect(bytesToHex(decoded.request.accountIdentity)).toBe(
-      RUST_FIXTURE_ACCOUNT_IDENTITY_HEX,
-    );
-    expect(bytesToHex(decoded.request.mlsSignaturePublicKey)).toBe(
-      RUST_FIXTURE_MLS_SIGNATURE_KEY_HEX,
-    );
-    expect(decoded.request.ciphersuite).toBe(RUST_FIXTURE_CIPHERSUITE);
-    expect(decoded.request.signatureScheme).toBe(RUST_FIXTURE_SIGNATURE_SCHEME);
-    expect(bytesToHex(decoded.signature)).toBe(RUST_FIXTURE_SIGNATURE_HEX);
-  });
-
-  it("never publishes or relays the kind-450 proof event (local signing template only)", () => {
-    // ACCOUNT_IDENTITY_PROOF_EVENT_KIND (450) must never appear on a
-    // publish/relay/network path. This is a structural, not behavioral,
-    // check: `grep`-based rather than asserting on runtime network calls,
-    // because there is no network path that accepts this kind at all.
-    expect(ACCOUNT_IDENTITY_PROOF_EVENT_KIND).toBe(450);
   });
 });

@@ -10,9 +10,9 @@ import {
 } from "ts-mls";
 
 import {
-  ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-  verifyLeafAccountIdentityProof,
-} from "../core/account-identity-proof.js";
+  hasAccountIdentityProofMaterial,
+  validateKeyPackageAccountIdentityProof,
+} from "../core/components/account-identity-proof.js";
 import { getCredentialPubkey } from "../core/credential.js";
 
 function toLeafIndex(index: number): LeafIndex {
@@ -42,13 +42,11 @@ export function createAdminCommitPolicyCallback(args: {
     for (const { proposal } of incoming.proposals) {
       if (proposal.proposalType !== defaultProposalTypes.add) continue;
       if (!("add" in proposal)) continue;
-      const leaf = proposal.add.keyPackage.leafNode;
-      const hasProof = leaf.extensions.some(
-        (e) => e.extensionType === ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-      );
-      if (!hasProof) continue;
+      const keyPackage = proposal.add.keyPackage;
+      // KNOWN GAP (D-06): Adds without proof material are skipped here; Phase 8 (GRP-02/GRP-04) closes it.
+      if (!hasAccountIdentityProofMaterial(keyPackage.leafNode)) continue;
       try {
-        verifyLeafAccountIdentityProof(leaf, ciphersuiteId);
+        validateKeyPackageAccountIdentityProof(keyPackage, ciphersuiteId);
       } catch {
         return "reject";
       }

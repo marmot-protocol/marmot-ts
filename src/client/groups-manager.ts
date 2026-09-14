@@ -17,7 +17,10 @@ import {
 } from "../core/client-state.js";
 import type { MarmotGroupInfo } from "../core/client-state.js";
 import { GROUP_EVENT_KIND } from "../core/protocol.js";
-import { verifyAllLeafAccountIdentityProofs } from "../core/account-identity-proof.js";
+import {
+  assertCurrentGroupAccountIdentityProofProfile,
+  validateGroupMemberAccountIdentityProofs,
+} from "../core/components/account-identity-proof.js";
 import { marmotAuthService } from "../core/auth-service.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
 import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
@@ -651,9 +654,12 @@ export class GroupsManager<
    *
    * Mirrors the darkmatter engine `do_join_welcome`: the KeyPackageRef→private
    * bundle match and the MLS join happen here, in the group layer, not in the
-   * composition root. Tries candidates in priority order, validates every leaf
-   * carries a valid account identity proof, then adopts the resulting state and
-   * emits `joined`.
+   * composition root. Tries candidates in priority order, then requires the
+   * joined GroupContext to classify as the current `0x8009` profile
+   * (rejecting legacy, mixed, and neither) and every member leaf's proof to
+   * validate against the group ciphersuite — both before adopting state, per
+   * `refs/marmot/app-components/account-identity-proof-v2.md` "Migration from
+   * v1" — then adopts the resulting state and emits `joined`.
    *
    * @returns The joined group and the KeyPackageRef that was consumed (so the
    *   caller can mark it used), or `consumedKeyPackageRef: null` if none matched.
@@ -705,10 +711,19 @@ export class GroupsManager<
       );
     }
 
-    // The spec requires every member leaf to carry a valid account identity
-    // proof, with no legacy fallback; reject joining a group that contains any
-    // proof-less or invalid leaf (foundation/account-identity-proof-v1.md).
-    verifyAllLeafAccountIdentityProofs(clientState, ciphersuiteImpl.id);
+    // The joined GroupContext must classify as the current 0x8009 profile
+    // (not legacy, mixed, or neither), and every member leaf's proof must
+    // validate against the group ciphersuite — both checked before
+    // adoptClientState, so a rejecting group persists nothing
+    // (refs/marmot/app-components/account-identity-proof-v2.md "Migration
+    // from v1").
+    assertCurrentGroupAccountIdentityProofProfile(
+      clientState.groupContext.extensions,
+    );
+    validateGroupMemberAccountIdentityProofs(
+      clientState,
+      clientState.groupContext.cipherSuite,
+    );
 
     const group = await this.adoptClientState(clientState, { emit: "joined" });
     return { group, consumedKeyPackageRef };

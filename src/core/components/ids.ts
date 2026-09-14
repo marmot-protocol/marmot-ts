@@ -64,11 +64,17 @@ export const GROUP_LIFECYCLE_COMPONENT = "marmot.group.lifecycle.v1";
 /**
  * Default group component ids provisioned for a new Marmot group, matching the
  * darkmatter `default_group_components()` set (profile + admin-policy only;
- * nostr routing is added by the transport layer, not the default group state).
+ * nostr routing is added by the transport layer, not the default group state),
+ * plus `0x8009`: every Marmot GroupContext must require the account identity
+ * proof component in its `app_components` required list — there is no
+ * GroupContext *state* for `0x8009` itself (it is LeafNode-only data), only a
+ * requirement entry (`refs/marmot/app-components/account-identity-proof-v2.md`
+ * "Negotiation and presence"; MDK `CURRENT_PROFILE_REQUIRED_APP_COMPONENTS`).
  */
 export const DEFAULT_GROUP_COMPONENT_IDS: readonly AppComponentId[] = [
   GROUP_PROFILE_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
   GROUP_LIFECYCLE_COMPONENT_ID,
 ];
 
@@ -82,6 +88,10 @@ export const DEFAULT_GROUP_COMPONENT_IDS: readonly AppComponentId[] = [
  * any group is the intersection across members, so advertising extra supported
  * components is safe. Excludes `group.blossom.image` (`0x8002`), which has no
  * wire codec, and the `app_components` list id (`0x0001`) itself.
+ *
+ * Includes `0x8009`: every KeyPackage leaf advertises and carries the account
+ * identity proof, and the kind-30443 `app_components` tag must include it
+ * (`refs/marmot/transports/nostr.md`).
  */
 export const SUPPORTED_APP_COMPONENT_IDS: readonly AppComponentId[] = [
   GROUP_PROFILE_COMPONENT_ID,
@@ -91,5 +101,6 @@ export const SUPPORTED_APP_COMPONENT_IDS: readonly AppComponentId[] = [
   AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
   GROUP_AVATAR_URL_COMPONENT_ID,
   GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
   GROUP_LIFECYCLE_COMPONENT_ID,
 ];

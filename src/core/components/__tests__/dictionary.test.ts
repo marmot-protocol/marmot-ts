@@ -8,6 +8,8 @@ import {
   defaultCryptoProvider,
   getCiphersuiteImpl,
   GroupContextExtension,
+  makeAppDataDictionaryExtension,
+  UsageError,
 } from "ts-mls";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { describe, expect, it } from "vitest";
@@ -33,6 +35,7 @@ import {
   nostrRoutingEntry,
 } from "../dictionary.js";
 import {
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
   APP_COMPONENTS_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
   GROUP_LIFECYCLE_COMPONENT_ID,
@@ -43,6 +46,7 @@ import {
 } from "../ids.js";
 import { groupProtocolLifecycleValues } from "../group-lifecycle.js";
 import { makeLeafAppComponentsExtension } from "../dictionary.js";
+import { encodeComponentsList } from "../app-components-list.js";
 import { createCredential } from "../../credential.js";
 import { generateKeyPackage } from "../../key-package.js";
 import { createGroup } from "../../group.js";
@@ -132,19 +136,48 @@ describe("typed read facade round-trips through the extension", () => {
 });
 
 describe("makeLeafAppComponentsExtension", () => {
-  it("advertises app_components and carries the reference SafeAAD entry", () => {
-    const extension = makeLeafAppComponentsExtension();
+  it("advertises app_components (including 0x8009 exactly once), carries the reference SafeAAD entry, and the given proof bytes", () => {
+    const proof = new Uint8Array(104).fill(0xab);
+    const extension = makeLeafAppComponentsExtension(proof);
     const extensions = [extension] as GroupContextExtension[];
-    expect(getAppComponents(extensions)).toEqual([
+    const advertised = getAppComponents(extensions);
+    expect(advertised).toEqual([
       APP_COMPONENTS_COMPONENT_ID,
       ...SUPPORTED_APP_COMPONENT_IDS,
     ]);
+    expect(
+      advertised!.filter((id) => id === ACCOUNT_IDENTITY_PROOF_COMPONENT_ID),
+    ).toHaveLength(1);
     expect(getComponentData(extensions, SAFE_AAD_COMPONENT_ID)).toEqual(
       new Uint8Array([0]),
     );
+    expect(
+      getComponentData(extensions, ACCOUNT_IDENTITY_PROOF_COMPONENT_ID),
+    ).toEqual(proof);
   });
 
-  it("matches the MDK leaf dictionary bytes through a real KeyPackage", async () => {
+  it("de-duplicates and sorts a supportedIds override that already names 0x8009", () => {
+    const proof = new Uint8Array(104);
+    const extension = makeLeafAppComponentsExtension(proof, [
+      GROUP_PROFILE_COMPONENT_ID,
+      ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+      ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+    ]);
+    const extensions = [extension] as GroupContextExtension[];
+    expect(getAppComponents(extensions)).toEqual([
+      APP_COMPONENTS_COMPONENT_ID,
+      GROUP_PROFILE_COMPONENT_ID,
+      ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+    ]);
+  });
+
+  it("throws UsageError for a proof that is not exactly 104 bytes", () => {
+    expect(() => makeLeafAppComponentsExtension(new Uint8Array(103))).toThrow(
+      UsageError,
+    );
+  });
+
+  it("matches the MDK leaf dictionary bytes through a real KeyPackage: 3 entries, a 104-byte 0x8009 entry, and the 0x0001/0x0002 projection", async () => {
     const ciphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -155,21 +188,50 @@ describe("makeLeafAppComponentsExtension", () => {
       ciphersuiteImpl,
       signer: account.signer,
     });
+    const leafExtensions = keyPackage.publicPackage.leafNode
+      .extensions as GroupContextExtension[];
     const extension = keyPackage.publicPackage.leafNode.extensions.find(
       (candidate) => candidate.extensionType === appDataDictionaryExtensionType,
     );
-
     expect(extension).toBeDefined();
+
+    const proofBytes = getComponentData(
+      leafExtensions,
+      ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+    );
+    expect(proofBytes).toHaveLength(104);
+
+    // Proof bytes are nondeterministic (created_at, BIP-340 aux randomness),
+    // so pin only a projection of the 0x0001 (app_components) and 0x0002
+    // (SafeAAD) entries, reconstructed from the same builder the production
+    // leaf dictionary uses (PITFALLS 14).
+    const projectionExtension = makeAppDataDictionaryExtensionForProjection();
     expect(
       bytesToHex(
         new Uint8Array([
           0x00,
-          extension!.extensionType,
-          extension!.extensionData.length,
-          ...extension!.extensionData,
+          projectionExtension.extensionType,
+          projectionExtension.extensionData.length,
+          ...projectionExtension.extensionData,
         ]),
       ),
-    ).toBe("00061b1a0001131200018001800380048005800680078008800c00020100");
+    ).toBe("00061d1c00011514000180018003800480058006800780088009800c00020100");
+
+    function makeAppDataDictionaryExtensionForProjection() {
+      // Bypasses makeAppComponentsExtension's SafeAAD guard (that guard is a
+      // GroupContext-level rule; the LeafNode dictionary legitimately carries
+      // SafeAAD) to rebuild exactly the 0x0001 + 0x0002 entries a real leaf
+      // dictionary carries, without its nondeterministic 0x8009 proof bytes.
+      return makeAppDataDictionaryExtension(
+        buildAppDataDictionary([
+          appComponentsEntry([
+            APP_COMPONENTS_COMPONENT_ID,
+            ...SUPPORTED_APP_COMPONENT_IDS,
+          ]),
+          componentEntry(SAFE_AAD_COMPONENT_ID, encodeComponentsList([])),
+        ]),
+      );
+    }
   });
 
   it("rejects SafeAAD as group-component state", () => {

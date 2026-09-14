@@ -24,6 +24,7 @@ import {
   SAFE_AAD_COMPONENT_ID,
   SUPPORTED_APP_COMPONENT_IDS,
 } from "./ids.js";
+import { AUTHORIZATION_PROOF_LENGTH } from "../authorization-proof.js";
 import {
   decodeComponentsList,
   encodeComponentsList,
@@ -150,17 +151,38 @@ export function makeAppComponentsExtension(
 
 /**
  * Builds the `app_data_dictionary` extension carried on a key package's LeafNode
- * to advertise the component ids this member supports. The dictionary holds a
- * single `app_components` (`0x0001`) entry listing {@link SUPPORTED_APP_COMPONENT_IDS}
- * (or the given override). Mirrors darkmatter's `leaf_app_components_extension`.
+ * to advertise the component ids this member supports and carry its `0x8009`
+ * account identity proof. Mirrors MDK's `leaf_app_components_extension`
+ * (`refs/mdk/crates/cgka-engine/src/app_components.rs`): the dictionary holds
+ * exactly three entries — the `app_components` (`0x0001`) advertising list
+ * (sorted, de-duplicated, always including `0x8009` regardless of whether
+ * `supportedIds` names it), an empty SafeAAD (`0x0002`) list, and the `0x8009`
+ * proof data itself. This structure is correct by construction: one advertising
+ * list, an empty SafeAAD, and exactly one proof entry.
+ *
+ * @param proof The 104-byte encoded `0x8009` account identity proof
+ *   (see `produceAccountIdentityProof`). Throws `UsageError` if not exactly
+ *   {@link AUTHORIZATION_PROOF_LENGTH} bytes.
+ * @param supportedIds Component ids advertised in the `app_components` list,
+ *   defaulting to {@link SUPPORTED_APP_COMPONENT_IDS}.
  */
 export function makeLeafAppComponentsExtension(
+  proof: Uint8Array,
   supportedIds: readonly AppComponentId[] = SUPPORTED_APP_COMPONENT_IDS,
 ): CustomExtension {
+  if (proof.length !== AUTHORIZATION_PROOF_LENGTH)
+    throw new UsageError(
+      `account identity proof component data must be exactly ${AUTHORIZATION_PROOF_LENGTH} bytes`,
+    );
   return makeAppDataDictionaryExtension(
     buildAppDataDictionary([
-      appComponentsEntry([APP_COMPONENTS_COMPONENT_ID, ...supportedIds]),
+      appComponentsEntry([
+        APP_COMPONENTS_COMPONENT_ID,
+        ...supportedIds,
+        ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+      ]),
       componentEntry(SAFE_AAD_COMPONENT_ID, encodeComponentsList([])),
+      componentEntry(ACCOUNT_IDENTITY_PROOF_COMPONENT_ID, proof),
     ]),
   );
 }

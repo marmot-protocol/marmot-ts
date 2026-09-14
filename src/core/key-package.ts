@@ -9,7 +9,6 @@ import {
   defaultCryptoProvider,
   CustomExtension,
   KeyPackage,
-  generateKeyPackage as MLSGenerateKeyPackage,
   generateKeyPackageWithKey as MLSGenerateKeyPackageWithKey,
   Lifetime,
   makeKeyPackageRef,
@@ -21,13 +20,12 @@ import {
   createDefaultKeyPackageLifetime,
   isLifetimeWithinCap,
 } from "../utils/timestamp.js";
-import {
-  type AccountIdentityProofSigner,
-  buildAccountIdentityProofExtension,
-} from "./account-identity-proof.js";
 import type { AuthorizationProofSigner } from "./authorization-proof.js";
 import { ensureMarmotCapabilities } from "./capabilities.js";
-import { makeLeafAppComponentsExtension } from "./components/index.js";
+import {
+  makeLeafAppComponentsExtension,
+  produceAccountIdentityProof,
+} from "./components/index.js";
 import { getCredentialPubkey } from "./credential.js";
 import { defaultCapabilities } from "./default-capabilities.js";
 import { ensureLastResortExtension } from "./extensions.js";
@@ -78,33 +76,38 @@ export type GenerateKeyPackageOptions = {
    */
   isLastResort?: boolean;
   /**
-   * Optional Nostr-account signer. When provided, the generated key package
-   * carries a `marmot.account-identity-proof.v1` LeafNode extension binding the
-   * credential's Nostr account to the leaf signature key — required for wire
-   * interop with darkmatter, which validates this proof on every leaf.
+   * The Nostr account signer that proves this KeyPackage's leaf by signing the
+   * kind-450 account identity proof through `signEvent`; its public key MUST
+   * equal the credential identity. Any signEvent-capable signer works (a local
+   * key signer, NIP-07, NIP-46).
    */
-  accountProofSigner?: AccountIdentityProofSigner;
+  signer: AuthorizationProofSigner;
   /**
-   * The Nostr account signer whose signEvent proves this KeyPackage's leaf;
-   * its public key MUST equal the credential identity. Any signEvent-capable
-   * signer works (a local key signer, NIP-07, NIP-46).
+   * Injected `created_at` (Unix seconds) for the account identity proof.
+   * Defaults to the current time. Core-only: meant for byte-stable tests and
+   * fixtures; the client layer does not expose this option.
    */
-  signer?: AuthorizationProofSigner;
+  createdAt?: number;
   ciphersuiteImpl: CiphersuiteImpl;
 };
 
-/** Generate a marmot key package that is compliant with MIP-00 */
+/**
+ * Generates a Marmot KeyPackage carrying a `0x8009` account identity proof on
+ * its LeafNode.
+ *
+ * @see refs/marmot/foundation/key-packages.md
+ * @see refs/marmot/app-components/account-identity-proof-v2.md
+ */
 export async function generateKeyPackage({
   credential,
   capabilities,
   lifetime,
   extensions,
   isLastResort = true,
-  accountProofSigner,
   signer,
+  createdAt,
   ciphersuiteImpl,
 }: GenerateKeyPackageOptions): Promise<CompleteKeyPackage> {
-  const effectiveProofSigner = signer ?? accountProofSigner;
   if (credential.credentialType !== defaultCredentialTypes.basic)
     throw new Error("Marmot key packages must use a basic credential");
 
@@ -128,42 +131,29 @@ export async function generateKeyPackage({
   const resolvedExtensions = isLastResort
     ? ensureLastResortExtension(extensions ?? [])
     : (extensions ?? []);
-  // Advertise the supported app components on the LeafNode so this member can
-  // be added to groups that require them (matches darkmatter's leaf state).
+
+  // Every leaf carries exactly one 0x8009 account identity proof binding the
+  // leaf signature key to the Nostr account (refs/marmot/app-components/
+  // account-identity-proof-v2.md; refs/marmot/foundation/key-packages.md).
+  // The leaf signature keypair is generated first so the proof can bind it.
+  const signatureKeyPair = await ciphersuiteImpl.signature.keygen();
+  const proof = await produceAccountIdentityProof({
+    signer,
+    accountIdentity: hexToBytes(accountPubkey),
+    mlsSignatureKey: signatureKeyPair.publicKey,
+    ciphersuite: ciphersuiteImpl.id,
+    createdAt,
+  });
   const leafNodeExtensions: CustomExtension[] = [
-    makeLeafAppComponentsExtension(),
+    makeLeafAppComponentsExtension(proof),
   ];
 
-  // When an account signer is supplied, generate the leaf signature keypair
-  // first, bind it to the Nostr account with an identity proof, and carry the
-  // proof on the LeafNode (darkmatter validates this on every leaf).
-  if (effectiveProofSigner) {
-    const signatureKeyPair = await ciphersuiteImpl.signature.keygen();
-    leafNodeExtensions.push(
-      await buildAccountIdentityProofExtension({
-        accountIdentity: hexToBytes(accountPubkey),
-        mlsSignaturePublicKey: signatureKeyPair.publicKey,
-        ciphersuite: ciphersuiteImpl.id,
-        signer: effectiveProofSigner,
-      }),
-    );
-    return await MLSGenerateKeyPackageWithKey({
-      credential,
-      capabilities: resolvedCapabilities,
-      lifetime: resolvedLifetime,
-      extensions: resolvedExtensions,
-      signatureKeyPair,
-      leafNodeExtensions,
-      cipherSuite: ciphersuiteImpl,
-    });
-  }
-
-  // In v2, generateKeyPackage takes a single params object
-  return await MLSGenerateKeyPackage({
+  return await MLSGenerateKeyPackageWithKey({
     credential,
     capabilities: resolvedCapabilities,
     lifetime: resolvedLifetime,
     extensions: resolvedExtensions,
+    signatureKeyPair,
     leafNodeExtensions,
     cipherSuite: ciphersuiteImpl,
   });

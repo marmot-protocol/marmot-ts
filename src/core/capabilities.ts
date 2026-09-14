@@ -7,7 +7,6 @@ import {
   type ExtensionRequiredCapabilities,
   selfRemoveProposalType,
 } from "ts-mls";
-import { ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE } from "./account-identity-proof.js";
 import { LAST_RESORT_EXTENSION_TYPE } from "./protocol.js";
 import { AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE } from "./components/agent-text-stream.js";
 
@@ -22,7 +21,9 @@ import { AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE } from "./components/agen
  * Every member MUST advertise support for the extension and the proposal type.
  * `last_resort` (`0x000a` extension) is also advertised for key-package reuse,
  * and the `self_remove` proposal (`0x000a` proposal type) for member departure
- * (`protocol-core/member-departure.md`).
+ * (`protocol-core/member-departure.md`). The account identity proof (`0x8009`)
+ * is a required app component (see `DEFAULT_GROUP_COMPONENT_IDS`), not an MLS
+ * required capability, so it is not advertised here.
  *
  * The agent-text-stream-QUIC `receive` role capability (`0xf2d1`) is advertised
  * so a member can be invited into a group whose
@@ -54,10 +55,6 @@ export function ensureMarmotCapabilities(
   if (!extensions.includes(LAST_RESORT_EXTENSION_TYPE))
     extensions.push(LAST_RESORT_EXTENSION_TYPE);
 
-  // account identity proof carried on the LeafNode binding the Nostr account.
-  if (!extensions.includes(ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE))
-    extensions.push(ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE);
-
   // agent-text-stream-QUIC `receive` role capability so a group that requires it
   // (e.g. darkmatter's default group) can invite this member. `receive` is an
   // honest marker for a non-QUIC client (it reads the final MLS message); `send`
@@ -87,19 +84,20 @@ export function ensureMarmotCapabilities(
  * member whose LeafNode does not cover them (capability-negotiation.md §5.2
  * "enforce on add").
  *
- * The baseline is fixed, not member-derived: the `app_data_dictionary`
- * extension (`0x0006`) and account-identity-proof extension (`0xF2F1`) plus the
- * `app_data_update` (`0x0008`) and `self_remove` (`0x000a`) proposals. The
- * `self_remove` requirement matches a darkmatter MIP-03 client (which registers
- * the self-remove feature as Required, advertising proposal type 10 in both leaf
- * and required capabilities). Lists are sorted ascending to mirror the Rust
- * `BTreeSet` ordering; `credentialTypes` is empty.
+ * The required GroupContext extension baseline is `0x0006`
+ * (`app_data_dictionary`) only, matching MDK's
+ * `CURRENT_PROFILE_REQUIRED_GROUP_CONTEXT_EXTENSIONS`. The account identity
+ * proof (`0x8009`) is a required app component (see
+ * `DEFAULT_GROUP_COMPONENT_IDS`), not an MLS required capability — it is
+ * never listed here. Required proposals are `app_data_update` (`0x0008`) and
+ * `self_remove` (`0x000a`); the `self_remove` requirement matches a
+ * darkmatter MIP-03 client (which registers the self-remove feature as
+ * Required, advertising proposal type 10 in both leaf and required
+ * capabilities). Lists are sorted ascending to mirror the Rust `BTreeSet`
+ * ordering; `credentialTypes` is empty.
  */
 export function marmotRequiredCapabilitiesExtension(): ExtensionRequiredCapabilities {
-  const extensionTypes = [
-    appDataDictionaryExtensionType,
-    ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-  ].sort((a, b) => a - b);
+  const extensionTypes = [appDataDictionaryExtensionType].sort((a, b) => a - b);
 
   const proposalTypes = [
     appDataUpdateProposalType,

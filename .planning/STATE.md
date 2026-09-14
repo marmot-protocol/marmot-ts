@@ -6,14 +6,14 @@ current_phase: 07
 current_phase_name: account-identity-proof-component-0x8009-legacy-clean-cut
 status: executing
 stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-09-14T19:18:01.029Z"
+last_updated: "2026-09-14T19:33:51.787Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 07 execution started
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 9
-  completed_plans: 4
+  completed_plans: 5
   percent: 17
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 ## Current Position
 
 Phase: 07 (account-identity-proof-component-0x8009-legacy-clean-cut) — EXECUTING
-Plan: 4 of 8
+Plan: 5 of 8
 Status: Ready to execute
 Last activity: 2026-09-14 — Phase 07 execution started
 
@@ -127,6 +127,7 @@ _Updated after each plan completion_
 | Phase 07 P01 | 25min | 3 tasks | 8 files |
 | Phase 07 P02 | 10min | 2 tasks | 22 files |
 | Phase 07 P03 | 25min | 2 tasks | 17 files |
+| Phase 07 P04 | 35min | 2 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -261,6 +262,7 @@ Recent decisions affecting current work:
 - [Phase 07]: [Phase 07-03]: Used the plan's default order-preserving slot mapping throughout all 17 engine test files (a->6, d->9, e->11, 2->0, 3->1), needing no new slot choices
 - [Phase 07]: [Phase 07-03]: createTestGroupState (group-engine.test.ts) retyped to take a PrivateKeyAccount directly rather than a bare pubkey string, per migration rule 6
 - [Phase 07]: [Phase 07-03]: Replaced two getPublicKey-only EventSigner stubs with the matching testAccount's real signer, since they stood for an identity already migrated elsewhere in the same fixture
+- [Phase ?]: [Phase 07-04]: Updated key-package.test.ts's default-capabilities test to expect 2 leaf extensions (was 1) since every call now carries a real signer (D-02), always emitting the account-identity-proof extension alongside app_data_dictionary
 
 ### Pending Todos
 
@@ -299,7 +301,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-14T19:17:41.604Z
+Last session: 2026-09-14T19:31:04.273Z
 Stopped at: Completed 07-02-PLAN.md
 Resume file:
 None

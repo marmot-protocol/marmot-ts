@@ -76,7 +76,7 @@ describe("MDK SafeAAD parity", () => {
     const typescriptComponents = getAppComponents(
       keyPackage.publicPackage.leafNode.extensions as GroupContextExtension[],
     )!;
-    for (const commonComponent of [0x0001, 0x8001, 0x8003, 0x800c]) {
+    for (const commonComponent of [0x0001, 0x8001, 0x8003, 0x8009, 0x800c]) {
       expect(fixture.advertised_app_components).toContain(commonComponent);
       expect(typescriptComponents).toContain(commonComponent);
     }

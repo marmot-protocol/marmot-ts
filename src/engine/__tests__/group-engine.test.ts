@@ -7,19 +7,17 @@ import {
   defaultProposalTypes,
   getCiphersuiteImpl,
   joinGroup,
+  makeCustomExtension,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
-import { bytesToHex } from "@noble/hashes/utils.js";
-import { schnorr } from "@noble/curves/secp256k1.js";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import type { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import {
-  type AccountIdentityProofRequest,
-  makeAccountIdentityProofExtension,
-  mlsSignatureScheme,
-  signAccountIdentityProof,
-} from "../../core/account-identity-proof.js";
+  makeLeafAppComponentsExtension,
+  produceAccountIdentityProof,
+} from "../../core/components/index.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { createChatRumor } from "../../client/group/application-message.js";
 import { createCredential } from "../../core/credential.js";
@@ -349,30 +347,15 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
     expect(engine.lifecycle).toBe("PendingPublish");
   });
 
-  it("rejects a commit that adds a leaf with a forged account identity proof", () => {
-    const impl = { id: 1 } as CiphersuiteImpl;
-    const secretKey = new Uint8Array(32).fill(3);
-    secretKey[31] = 9;
-    const accountId = schnorr.getPublicKey(secretKey);
+  describe("admin commit policy account identity proof gate", () => {
+    const ciphersuiteId = 1;
     const mlsKey = new Uint8Array(32).fill(0xcd);
-    const request: AccountIdentityProofRequest = {
-      accountIdentity: accountId,
-      mlsSignaturePublicKey: mlsKey,
-      ciphersuite: impl.id,
-      signatureScheme: mlsSignatureScheme(impl.id),
-    };
-    const signature = signAccountIdentityProof(request, secretKey);
-    signature[0] ^= 0xff;
 
-    const callback = createAdminCommitPolicyCallback({
-      ratchetTree: [] as never,
-      adminPubkeys: [bytesToHex(accountId)],
-      ciphersuiteId: impl.id,
-      onUnverifiableCommit: "reject",
-    });
-
-    expect(
-      callback({
+    function buildIncomingAdd(
+      account: PrivateKeyAccount<any>,
+      extensions: readonly { extensionType: number }[],
+    ) {
+      return {
         kind: "commit",
         senderLeafIndex: 0,
         proposals: [
@@ -381,21 +364,78 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
               proposalType: defaultProposalTypes.add,
               add: {
                 keyPackage: {
+                  cipherSuite: ciphersuiteId,
                   leafNode: {
-                    credential: createCredential(bytesToHex(accountId)),
+                    credential: createCredential(account.pubkey),
                     signaturePublicKey: mlsKey,
-                    extensions: [
-                      makeAccountIdentityProofExtension({ request, signature }),
-                    ],
+                    extensions,
                   },
+                  extensions: [],
                 },
               },
             },
             senderLeafIndex: 0,
           },
         ],
-      } as never),
-    ).toBe("reject");
+      };
+    }
+
+    function buildCallback(account: PrivateKeyAccount<any>) {
+      return createAdminCommitPolicyCallback({
+        ratchetTree: [] as never,
+        adminPubkeys: [account.pubkey],
+        ciphersuiteId,
+        onUnverifiableCommit: "retry",
+      });
+    }
+
+    it("rejects an Add whose 0x8009 proof signature is tampered", async () => {
+      const account = testAccount(6);
+      const proof = await produceAccountIdentityProof({
+        signer: account.signer,
+        accountIdentity: hexToBytes(account.pubkey),
+        mlsSignatureKey: mlsKey,
+        ciphersuite: ciphersuiteId,
+        createdAt: 1700000000,
+      });
+      const tampered = proof.slice();
+      tampered[tampered.length - 1] ^= 0xff;
+
+      const callback = buildCallback(account);
+      const incoming = buildIncomingAdd(account, [
+        makeLeafAppComponentsExtension(tampered),
+      ]);
+
+      expect(callback(incoming as never)).toBe("reject");
+    });
+
+    it("rejects an Add whose leaf carries only legacy 0xf2f1 material", () => {
+      const account = testAccount(6);
+      const callback = buildCallback(account);
+      const incoming = buildIncomingAdd(account, [
+        makeCustomExtension({
+          extensionType: 0xf2f1,
+          extensionData: new Uint8Array(8),
+        }),
+      ]);
+
+      expect(callback(incoming as never)).toBe("reject");
+    });
+
+    it("D-06 known gap (Phase 8 GRP-02/GRP-04): an Add with no proof material skips the proof gate", () => {
+      const account = testAccount(6);
+      const callback = buildCallback(account);
+      const incoming = buildIncomingAdd(account, []);
+
+      // hasAccountIdentityProofMaterial is false, so the proof loop never
+      // rejects this Add -- it falls through to the sender lookup, which
+      // throws because ratchetTree is empty. This proves the proof-less Add
+      // skipped the proof gate rather than being rejected by it. Phase 8
+      // (GRP-02/GRP-04) must flip this to an explicit "reject".
+      expect(() => callback(incoming as never)).toThrow(
+        "unverifiable commit sender",
+      );
+    });
   });
 });
 

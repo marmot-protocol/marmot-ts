@@ -14,19 +14,16 @@ import {
 } from "ts-mls";
 import { describe, expect, it, vi } from "vitest";
 
-import { bytesToHex } from "@noble/hashes/utils.js";
-import { schnorr } from "@noble/curves/secp256k1.js";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import {
   deserializeClientState,
   serializeClientState,
   SerializedClientState,
 } from "../../../core/client-state.js";
 import {
-  type AccountIdentityProofRequest,
-  makeAccountIdentityProofExtension,
-  mlsSignatureScheme,
-  signAccountIdentityProof,
-} from "../../../core/account-identity-proof.js";
+  makeLeafAppComponentsExtension,
+  produceAccountIdentityProof,
+} from "../../../core/components/index.js";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import {
@@ -626,25 +623,24 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
       defaultCryptoProvider,
     );
 
-    // A leaf whose account-identity-proof signature does not verify for the
-    // credential identity it claims (one tampered signature byte).
-    const secretKey = new Uint8Array(32).fill(3);
-    secretKey[31] = 9;
-    const accountId = schnorr.getPublicKey(secretKey);
+    // A leaf whose 0x8009 account-identity-proof signature does not verify
+    // for the credential identity it claims (one tampered signature byte).
+    const account = testAccount(6);
     const mlsKey = new Uint8Array(32).fill(0xcd);
-    const request: AccountIdentityProofRequest = {
-      accountIdentity: accountId,
-      mlsSignaturePublicKey: mlsKey,
+    const proof = await produceAccountIdentityProof({
+      signer: account.signer,
+      accountIdentity: hexToBytes(account.pubkey),
+      mlsSignatureKey: mlsKey,
       ciphersuite: impl.id,
-      signatureScheme: mlsSignatureScheme(impl.id),
-    };
-    const signature = signAccountIdentityProof(request, secretKey);
-    signature[0] ^= 0xff; // forge
+      createdAt: 1700000000,
+    });
+    const tampered = proof.slice();
+    tampered[tampered.length - 1] ^= 0xff; // forge
 
     const forgedLeaf = {
-      credential: createCredential(bytesToHex(accountId)),
+      credential: createCredential(account.pubkey),
       signaturePublicKey: mlsKey,
-      extensions: [makeAccountIdentityProofExtension({ request, signature })],
+      extensions: [makeLeafAppComponentsExtension(tampered)],
     };
     const incoming = {
       kind: "commit" as const,
@@ -653,7 +649,13 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
         {
           proposal: {
             proposalType: defaultProposalTypes.add,
-            add: { keyPackage: { leafNode: forgedLeaf } },
+            add: {
+              keyPackage: {
+                cipherSuite: impl.id,
+                leafNode: forgedLeaf,
+                extensions: [],
+              },
+            },
           },
           senderLeafIndex: 0,
         },
@@ -664,7 +666,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     // is rejected regardless, before the admin short-circuit.
     const callback = createAdminCommitPolicyCallback({
       ratchetTree: [] as never,
-      adminPubkeys: [bytesToHex(accountId)],
+      adminPubkeys: [account.pubkey],
       ciphersuiteId: impl.id,
       onUnverifiableCommit: "reject",
     });

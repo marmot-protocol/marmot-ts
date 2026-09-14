@@ -1,3 +1,4 @@
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import {
   finalizeEvent,
@@ -22,13 +23,18 @@ import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { createCredential } from "../../core/credential.js";
+import { createDefaultKeyPackageLifetime } from "../../utils/timestamp.js";
 import {
   bytesToBase64,
+  defaultCapabilities,
   defaultCryptoProvider,
   encode,
+  generateKeyPackage as mlsGenerateKeyPackage,
   getCiphersuiteImpl,
+  makeCustomExtension,
   mlsMessageEncoder,
   wireformats,
+  type CiphersuiteImpl,
 } from "ts-mls";
 
 // ---------------------------------------------------------------------------
@@ -57,6 +63,33 @@ async function getPublished(
   ref: Uint8Array | string,
 ) {
   return (await manager.get(ref))?.published ?? [];
+}
+
+/**
+ * Builds a legacy-shaped KeyPackage without importing the deleted legacy proof
+ * module: calls ts-mls's own `generateKeyPackage` directly with a leaf that
+ * carries only the legacy `0xf2f1` custom extension and no `0x8009` proof
+ * (D-09). `validateKeyPackageAccountIdentityProof` rejects it, which is
+ * exactly what makes `KeyPackageStore.list()` classify it `nonCurrent`.
+ */
+async function buildLegacyKeyPackage(
+  account: PrivateKeyAccount<any>,
+  ciphersuiteImpl: CiphersuiteImpl,
+) {
+  const pubkey = await account.signer.getPublicKey();
+  return mlsGenerateKeyPackage({
+    credential: createCredential(pubkey),
+    capabilities: defaultCapabilities(),
+    lifetime: createDefaultKeyPackageLifetime(),
+    extensions: [],
+    cipherSuite: ciphersuiteImpl,
+    leafNodeExtensions: [
+      makeCustomExtension({
+        extensionType: 0xf2f1,
+        extensionData: new Uint8Array(4),
+      }),
+    ],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1291,6 +1324,103 @@ describe("KeyPackageManager", () => {
       await gen.return(undefined);
 
       expect(value).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // non-current stored KeyPackages (D-09)
+  // -------------------------------------------------------------------------
+
+  describe("non-current stored KeyPackages (D-09)", () => {
+    it("a KeyPackage created through manager.create() lists without a nonCurrent property (current)", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      await manager.create({ relays: ["wss://relay.test"] });
+
+      const [listed] = await manager.list();
+      expect(listed.nonCurrent).toBeUndefined();
+    });
+
+    it("a legacy-shaped KeyPackage added through manager.add() lists with nonCurrent === true, including watchKeyPackages snapshots", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const ciphersuiteImpl = await getCiphersuiteImpl(
+        "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        defaultCryptoProvider,
+      );
+      const legacy = await buildLegacyKeyPackage(account, ciphersuiteImpl);
+      await manager.add(legacy);
+
+      const [listed] = await manager.list();
+      expect(listed.nonCurrent).toBe(true);
+
+      const gen = manager.watchKeyPackages();
+      const { value } = await gen.next();
+      await gen.return(undefined);
+      expect(value[0]?.nonCurrent).toBe(true);
+    });
+
+    it("ensurePublished ignores a non-current unused package, publishes exactly one fresh current package, and sends no kind-5", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const ciphersuiteImpl = await getCiphersuiteImpl(
+        "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        defaultCryptoProvider,
+      );
+      const legacy = await buildLegacyKeyPackage(account, ciphersuiteImpl);
+      const legacyRefHex = await manager.add(legacy);
+
+      const fresh = await manager.ensurePublished({
+        relays: ["wss://relay.test"],
+      });
+
+      expect(bytesToHex(fresh.keyPackageRef)).not.toBe(legacyRefHex);
+      const published = network.events.filter(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      );
+      expect(published).toHaveLength(1);
+
+      const all = await manager.list();
+      expect(all).toHaveLength(2);
+      const legacyListed = all.find(
+        (p) => bytesToHex(p.keyPackageRef) === legacyRefHex,
+      );
+      expect(legacyListed?.nonCurrent).toBe(true);
+
+      const deleteEvents = network.events.filter((e) => e.kind === 5);
+      expect(deleteEvents).toHaveLength(0);
+    });
+
+    it("ensurePublished returns the existing current unused package and publishes nothing when one is already stored", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const created = await manager.create({ relays: ["wss://relay.test"] });
+
+      const result = await manager.ensurePublished({
+        relays: ["wss://relay.test"],
+      });
+
+      expect(result.keyPackageRef).toEqual(created.keyPackageRef);
+      const published = network.events.filter(
+        (e) => e.kind === ADDRESSABLE_KEY_PACKAGE_KIND,
+      );
+      expect(published).toHaveLength(1);
+    });
+
+    it("purge(legacyRef) removes a non-current entry explicitly — nothing is auto-deleted", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const ciphersuiteImpl = await getCiphersuiteImpl(
+        "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        defaultCryptoProvider,
+      );
+      const legacy = await buildLegacyKeyPackage(account, ciphersuiteImpl);
+      const legacyRefHex = await manager.add(legacy);
+
+      // Confirmed present and non-current before purge.
+      expect((await manager.list())[0]?.nonCurrent).toBe(true);
+
+      await manager.purge(legacyRefHex);
+
+      const all = await manager.list();
+      expect(
+        all.find((p) => bytesToHex(p.keyPackageRef) === legacyRefHex),
+      ).toBeUndefined();
     });
   });
 });

@@ -9,6 +9,7 @@ import {
   PrivateKeyPackage,
 } from "ts-mls";
 
+import { validateKeyPackageAccountIdentityProof } from "../core/components/account-identity-proof.js";
 import {
   getKeyPackage,
   getKeyPackageIdentifier,
@@ -85,8 +86,17 @@ export type TrackedKeyPackage = {
  */
 export type StoredKeyPackage = LocalKeyPackage | TrackedKeyPackage;
 
-/** A {@link LocalKeyPackage} without the private material, safe to expose in listings */
-export type ListedKeyPackage = Omit<StoredKeyPackage, "privatePackage">;
+/**
+ * A {@link LocalKeyPackage} without the private material, safe to expose in listings.
+ *
+ * `nonCurrent` is `true` when the stored KeyPackage lacks a valid current account identity
+ * proof (`0x8009`) — for example a package built by a pre-v2 release with the legacy proof
+ * extension. Such packages are never reused by {@link KeyPackageManager.ensurePublished} and
+ * are removed only by an explicit `purge()`.
+ */
+export type ListedKeyPackage = Omit<StoredKeyPackage, "privatePackage"> & {
+  nonCurrent?: boolean;
+};
 
 /**
  * A locally-held key package selected as a candidate for joining from a
@@ -286,6 +296,10 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   /**
    * Lists all {@link LocalKeyPackage} entries (those with private material),
    * without the private package itself.
+   *
+   * Classifies each entry's `nonCurrent` flag by running
+   * `validateKeyPackageAccountIdentityProof` against its `publicPackage` — one BIP-340
+   * verify per stored package.
    */
   async list(): Promise<ListedKeyPackage[]> {
     const allKeys = await this.#store.keys();
@@ -299,13 +313,23 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         (pkg): pkg is LocalKeyPackage =>
           pkg !== null && pkg.privatePackage !== undefined,
       )
-      .map(({ keyPackageRef, publicPackage, identifier, published, used }) => ({
-        keyPackageRef,
-        publicPackage,
-        ...(identifier !== undefined ? { identifier } : {}),
-        ...(published !== undefined ? { published } : {}),
-        ...(used !== undefined ? { used } : {}),
-      }));
+      .map(({ keyPackageRef, publicPackage, identifier, published, used }) => {
+        let nonCurrent = false;
+        try {
+          validateKeyPackageAccountIdentityProof(publicPackage);
+        } catch {
+          nonCurrent = true;
+        }
+
+        return {
+          keyPackageRef,
+          publicPackage,
+          ...(identifier !== undefined ? { identifier } : {}),
+          ...(published !== undefined ? { published } : {}),
+          ...(used !== undefined ? { used } : {}),
+          ...(nonCurrent ? { nonCurrent: true as const } : {}),
+        };
+      });
   }
 
   /**

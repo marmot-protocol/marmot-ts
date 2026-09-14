@@ -32,7 +32,10 @@ tests, and a six-runtime CI matrix with byte-exact Rust parity dossiers.
 
 **v2.0 in progress:** Phase 6 complete (2026-09-12) — `src/core/authorization-proof.ts` provides the shared,
 proof-class-agnostic 104-byte `MarmotAuthorizationProof` primitive, reproducing the spec signing vector byte-for-byte.
-Next: Phase 7 (`0x8009` proof class + legacy `0xf2f1` clean cut).
+Phase 7 complete (2026-09-14) — KeyPackage leaves carry the `0x8009` account identity proof (spec vector byte-exact),
+signed with the client's own `EventSigner`; invite, admin Add, and join-via-Welcome seams validate it; the legacy
+`0xf2f1` module and exports are deleted with no fallback; stored legacy KeyPackages are flagged `nonCurrent`.
+Next: Phase 8 (GroupContext profile requirement + legality-seam extension).
 
 ## Current Milestone: v2.0 Account identity proof v2
 
@@ -96,6 +99,8 @@ shelved audit/closure phases, 999.7 invite-only client mode; multi-device (MDEV-
 - ✓ QA-01 green suite on Node 20/22/24, Deno 2, Bun latest/1.1 — v1.0
 - ✓ QA-02 byte-exact MDK cross-checks recorded as parity dossiers — v1.0
 - ✓ AUTHZ-01..05 shared `MarmotAuthorizationProof` envelope primitive in `src/core` (104-byte codec, `created_at` range, x-only signer check, NIP-01 + BIP-340 verify, strict external-signer produce) — v2.0 _(Validated in Phase 6: Shared Authorization-Proof Envelope Primitive)_
+- ✓ PROOF-02..06 `0x8009` account identity proof component (kind-450 template/producer on the spec vector, leaf advertisement + single dictionary entry, leaf/KeyPackage/tree validators, wrong-container rejection) — v2.0 _(Validated in Phase 7: Account Identity Proof Component (0x8009) + Legacy Clean Cut)_
+- ✓ CUT-01 / CUT-02 legacy `0xf2f1` never emitted, exports removed, and any `0xf2f1`-carrying/requiring KeyPackage, leaf, or group rejected — v2.0 _(Validated in Phase 7: Account Identity Proof Component (0x8009) + Legacy Clean Cut)_
 
 ### Active
 
@@ -103,8 +108,8 @@ shelved audit/closure phases, 999.7 invite-only client mode; multi-device (MDEV-
 
 <!-- v2.0 Account identity proof v2 — REQ-IDs are defined in REQUIREMENTS.md. -->
 
-- [ ] Account identity proof as app component `0x8009`, byte-exact with the spec vector and MDK Current profile
-- [ ] Legacy `0xf2f1` proof profile removed and rejected everywhere (clean cut)
+- [x] Account identity proof as app component `0x8009`, byte-exact with the spec vector and MDK Current profile _(Phase 7)_
+- [x] Legacy `0xf2f1` proof profile removed and rejected everywhere (clean cut) _(Phase 7)_
 - [ ] GroupContext requires `0x8009`; profile enforced on every legality seam
 - [ ] Self-update / replacement-leaf identity and proof binding rules
 - [ ] Current-profile founding group creation via Welcome only
@@ -187,4 +192,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-_Last updated: 2026-09-12 — Phase 6 (Shared Authorization-Proof Envelope Primitive) complete_
+_Last updated: 2026-09-14 — Phase 7 (Account Identity Proof Component (0x8009) + Legacy Clean Cut) complete_

@@ -75,7 +75,7 @@ removed from publish, verify, capabilities, and admin policy with no fallback pa
 4. marmot-ts never emits `0xf2f1` anywhere — not in leaves, `Capabilities.extensions`, or required capabilities — and the legacy proof exports no longer exist in the package.
 5. Any KeyPackage, leaf, or group still carrying or requiring `0xf2f1` is rejected outright.
 
-**Plans**: 2/8 plans executed
+**Plans**: 3/8 plans executed
 
 Plans:
 **Wave 1**
@@ -85,7 +85,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 07-03-PLAN.md — Engine tests pass real signers (wave 2)
+- [x] 07-03-PLAN.md — Engine tests pass real signers (wave 2)
 - [ ] 07-04-PLAN.md — Core and client unit tests pass real signers (wave 2)
 - [ ] 07-05-PLAN.md — Integration and conformance tests pass real signers (wave 2)
 
@@ -199,7 +199,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 3.1 → 4 → 4.1 → 5 → 6
 | 4.1. Terminal Group Disbanding                             | v1.0      | 6/6             | Complete    | 2026-09-06 |
 | 5. Quality Gate                                            | v1.0      | 8/8             | Complete    | 2026-09-06 |
 | 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 1/1 | Complete    | 2026-09-12 |
-| 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 2/8 | In Progress|  |
+| 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 3/8 | In Progress|  |
 | 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 0/TBD           | Not started | -          |
 | 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 0/TBD           | Not started | -          |
 | 10. Founding Group Creation via Welcome                    | v2.0      | 0/TBD           | Not started | -          |

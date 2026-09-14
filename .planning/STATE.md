@@ -6,14 +6,14 @@ current_phase: 07
 current_phase_name: account-identity-proof-component-0x8009-legacy-clean-cut
 status: executing
 stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-09-14T19:05:36.472Z"
+last_updated: "2026-09-14T19:18:01.029Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 07 execution started
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 9
-  completed_plans: 3
+  completed_plans: 4
   percent: 17
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 ## Current Position
 
 Phase: 07 (account-identity-proof-component-0x8009-legacy-clean-cut) — EXECUTING
-Plan: 3 of 8
+Plan: 4 of 8
 Status: Ready to execute
 Last activity: 2026-09-14 — Phase 07 execution started
 
@@ -126,6 +126,7 @@ _Updated after each plan completion_
 | Phase 06 P01 | 15min | 3 tasks | 5 files |
 | Phase 07 P01 | 25min | 3 tasks | 8 files |
 | Phase 07 P02 | 10min | 2 tasks | 22 files |
+| Phase 07 P03 | 25min | 2 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -257,6 +258,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 07-01]: Attached only PROOF-02 to requirements.mark-complete -- PROOF-04/05/06 and CUT-02 are also declared on 07-06 frontmatter (seam-wiring plan) and stay Pending in REQUIREMENTS.md until that plan wires the validators into send/inbound/join seams
 - [Phase 07]: [Phase 07-02]: Kept the legacy accountProofSigner option/import in core/key-package.ts (effectiveProofSigner = signer ?? accountProofSigner) until 07-06 removes it and switches the leaf format atomically with the verifier seams
 - [Phase 07]: [Phase 07-02]: Fixed src/__tests__/groups-manager.test.ts's ADMIN fixture (getPublicKey-only signer stub -> testAccount(0)) because GroupsManager.create() now always threads the identity signer into generateKeyPackage, requiring a real signEvent
+- [Phase 07]: [Phase 07-03]: Used the plan's default order-preserving slot mapping throughout all 17 engine test files (a->6, d->9, e->11, 2->0, 3->1), needing no new slot choices
+- [Phase 07]: [Phase 07-03]: createTestGroupState (group-engine.test.ts) retyped to take a PrivateKeyAccount directly rather than a bare pubkey string, per migration rule 6
+- [Phase 07]: [Phase 07-03]: Replaced two getPublicKey-only EventSigner stubs with the matching testAccount's real signer, since they stood for an identity already migrated elsewhere in the same fixture
 
 ### Pending Todos
 
@@ -295,7 +299,7 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-14T19:05:36.463Z
+Last session: 2026-09-14T19:17:41.604Z
 Stopped at: Completed 07-02-PLAN.md
 Resume file:
 None

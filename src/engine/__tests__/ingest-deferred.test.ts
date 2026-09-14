@@ -14,6 +14,7 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { marmotAuthService } from "../../core/auth-service.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
@@ -28,13 +29,18 @@ type Envelope = { id: string };
 
 describe("ingestEnvelopes – deferred (future-epoch commit)", () => {
   it("defers a commit more than one epoch ahead as missing_parent, not stale", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl: CiphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const credential = createCredential(adminPubkey);
-    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const kp = await generateKeyPackage({
+      credential,
+      signer: adminAccount.signer,
+      ciphersuiteImpl: impl,
+    });
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
       adminPubkeys: [adminPubkey],
       relays: [],

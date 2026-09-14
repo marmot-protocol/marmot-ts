@@ -15,6 +15,7 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { marmotAuthService } from "../../core/auth-service.js";
 import { convergenceStatuses } from "../../core/convergence-status.js";
 import { createCredential } from "../../core/credential.js";
@@ -29,13 +30,15 @@ const QUIESCENCE_MS = 1_000;
 
 describe("MarmotGroupEngine convergence status (B5)", () => {
   it("reports Resolving after the window when a deferred commit is outstanding", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl: CiphersuiteImpl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const kp = await generateKeyPackage({
       credential: createCredential(adminPubkey),
+      signer: adminAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {

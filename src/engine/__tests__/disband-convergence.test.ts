@@ -10,6 +10,7 @@ import {
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { describe, expect, it } from "vitest";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
@@ -18,18 +19,19 @@ import { MarmotGroupEngine } from "../group-engine.js";
 import { GroupHistoryTree } from "../history-tree.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import type { EventSigner } from "applesauce-core/factories";
 import type { GroupPeeler } from "../types.js";
 
 describe("bounded disband convergence", () => {
   it("holds its locally acknowledged disband at the parent until cutoff", async () => {
-    const admin = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const admin = adminAccount.pubkey;
     const ciphersuite = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const adminPackage = await generateKeyPackage({
       credential: createCredential(admin),
+      signer: adminAccount.signer,
       ciphersuiteImpl: ciphersuite,
     });
     const { clientState } = await createSimpleGroup(
@@ -82,13 +84,15 @@ describe("bounded disband convergence", () => {
   });
 
   it("restores terminal candidate and immutable pass evidence after a crash", async () => {
-    const admin = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const admin = adminAccount.pubkey;
     const ciphersuite = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const adminPackage = await generateKeyPackage({
       credential: createCredential(admin),
+      signer: adminAccount.signer,
       ciphersuiteImpl: ciphersuite,
     });
     const { clientState } = await createSimpleGroup(
@@ -152,13 +156,15 @@ describe("bounded disband convergence", () => {
   });
 
   it("recovers when history persistence crashes after write-ahead terminal evidence", async () => {
-    const admin = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const admin = adminAccount.pubkey;
     const ciphersuite = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const adminPackage = await generateKeyPackage({
       credential: createCredential(admin),
+      signer: adminAccount.signer,
       ciphersuiteImpl: ciphersuite,
     });
     const { clientState } = await createSimpleGroup(
@@ -187,7 +193,7 @@ describe("bounded disband convergence", () => {
       store: new InMemoryKeyValueStore<Uint8Array>(),
       lifecycleStore,
       rewindStore,
-      signer: { getPublicKey: async () => admin } as EventSigner,
+      signer: adminAccount.signer,
       ciphersuite,
       network: new MockNetwork(["wss://relay.test"]),
     };
@@ -211,8 +217,10 @@ describe("bounded disband convergence", () => {
     );
   });
   it("holds a valid linear disband until cutoff and terminalizes only its selected branch", async () => {
-    const admin = "a".repeat(64);
-    const member = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const admin = adminAccount.pubkey;
+    const memberAccount = testAccount(9);
+    const member = memberAccount.pubkey;
     const ciphersuite = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -223,10 +231,12 @@ describe("bounded disband convergence", () => {
     };
     const adminPackage = await generateKeyPackage({
       credential: createCredential(admin),
+      signer: adminAccount.signer,
       ciphersuiteImpl: ciphersuite,
     });
     const memberPackage = await generateKeyPackage({
       credential: createCredential(member),
+      signer: memberAccount.signer,
       ciphersuiteImpl: ciphersuite,
     });
     const { clientState: adminEpoch0 } = await createSimpleGroup(

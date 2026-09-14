@@ -8,6 +8,7 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { encodeAdminPolicyV1 } from "../../core/components/admin-policy.js";
@@ -76,12 +77,14 @@ describe("durable disband request codec", () => {
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
+    const admin = testAccount(6);
     const kp = await generateKeyPackage({
-      credential: createCredential("a".repeat(64)),
+      credential: createCredential(admin.pubkey),
+      signer: admin.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState } = await createSimpleGroup(kp, impl, "Disband", {
-      adminPubkeys: ["a".repeat(64)],
+      adminPubkeys: [admin.pubkey],
       relays: [],
     });
     const peeler: GroupPeeler<NostrEvent> = {
@@ -94,7 +97,7 @@ describe("durable disband request codec", () => {
         void state;
         return Promise.resolve({
           id: "candidate",
-          pubkey: "a".repeat(64),
+          pubkey: admin.pubkey,
           created_at: 1,
           kind: 445,
           tags: [],
@@ -187,7 +190,7 @@ describe("durable disband request codec", () => {
     const dictionary = getAppDataDictionary(state.groupContext.extensions)!;
     dictionary.find(
       (entry) => entry.componentId === GROUP_ADMIN_POLICY_COMPONENT_ID,
-    )!.data = encodeAdminPolicyV1(["e".repeat(64)]);
+    )!.data = encodeAdminPolicyV1([testAccount(11).pubkey]);
     state.groupContext.extensions = state.groupContext.extensions.map(
       (extension) =>
         getAppDataDictionary([extension])

@@ -13,12 +13,14 @@ import { describe, expect, it } from "vitest";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { schnorr } from "@noble/curves/secp256k1.js";
+import type { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import {
   type AccountIdentityProofRequest,
   makeAccountIdentityProofExtension,
   mlsSignatureScheme,
   signAccountIdentityProof,
 } from "../../core/account-identity-proof.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { createChatRumor } from "../../client/group/application-message.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
@@ -57,29 +59,38 @@ function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
 }
 
 async function createTestGroupState(
-  adminPubkey: string,
+  account: PrivateKeyAccount<any>,
   ciphersuiteImpl: CiphersuiteImpl,
 ) {
-  const credential = createCredential(adminPubkey);
-  const kp = await generateKeyPackage({ credential, ciphersuiteImpl });
+  const credential = createCredential(account.pubkey);
+  const kp = await generateKeyPackage({
+    credential,
+    signer: account.signer,
+    ciphersuiteImpl,
+  });
   const { clientState } = await createSimpleGroup(
     kp,
     ciphersuiteImpl,
     "Test Group",
-    { adminPubkeys: [adminPubkey], relays: [] },
+    { adminPubkeys: [account.pubkey], relays: [] },
   );
   return { clientState, kp };
 }
 
 describe("MarmotGroupEngine lifecycle (group-state.md)", () => {
   it("starts Stable, confirmPublished advances epoch, publishFailed resets to Stable", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const credential = createCredential(adminPubkey);
-    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const kp = await generateKeyPackage({
+      credential,
+      signer: adminAccount.signer,
+      ciphersuiteImpl: impl,
+    });
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
       adminPubkeys: [adminPubkey],
       relays: ["wss://relay.test"],
@@ -127,13 +138,18 @@ describe("MarmotGroupEngine lifecycle (group-state.md)", () => {
 
 describe("MarmotGroupEngine ingest – own-echo dedup", () => {
   it("classifies an own application-message echo as self-echo via content dedup, without retrying", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const credential = createCredential(adminPubkey);
-    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const kp = await generateKeyPackage({
+      credential,
+      signer: adminAccount.signer,
+      ciphersuiteImpl: impl,
+    });
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
       adminPubkeys: [adminPubkey],
       relays: ["wss://relay.test"],
@@ -184,21 +200,24 @@ describe("MarmotGroupEngine ingest – own-echo dedup", () => {
 
 describe("MarmotGroupEngine admin verification (MIP-03)", () => {
   it("rejects commit send from non-admin members", async () => {
-    const adminPubkey = "a".repeat(64);
-    const nonAdminPubkey = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const nonAdminAccount = testAccount(9);
+    const adminPubkey = adminAccount.pubkey;
+    const nonAdminPubkey = nonAdminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
 
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
 
     const nonAdminCredential = createCredential(nonAdminPubkey);
     const nonAdminKeyPackage = await generateKeyPackage({
       credential: nonAdminCredential,
+      signer: nonAdminAccount.signer,
       ciphersuiteImpl: impl,
     });
 
@@ -229,8 +248,10 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
       ratchetTree: undefined,
     });
 
+    const thirdAccount = testAccount(11);
     const thirdKeyPackage = await generateKeyPackage({
-      credential: createCredential("e".repeat(64)),
+      credential: createCredential(thirdAccount.pubkey),
+      signer: thirdAccount.signer,
       ciphersuiteImpl: impl,
     });
 
@@ -255,8 +276,10 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
   });
 
   it("allows a non-admin to commit a self-update-only commit (no proposals)", async () => {
-    const adminPubkey = "a".repeat(64);
-    const nonAdminPubkey = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const nonAdminAccount = testAccount(9);
+    const adminPubkey = adminAccount.pubkey;
+    const nonAdminPubkey = nonAdminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -266,6 +289,7 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
     // component; wrapping the resulting commit into a kind-445 event needs it.
     const adminKp = await generateKeyPackage({
       credential: createCredential(adminPubkey),
+      signer: adminAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: createdState } = await createSimpleGroup(
@@ -277,6 +301,7 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
 
     const nonAdminKeyPackage = await generateKeyPackage({
       credential: createCredential(nonAdminPubkey),
+      signer: nonAdminAccount.signer,
       ciphersuiteImpl: impl,
     });
 
@@ -376,8 +401,10 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
 
 describe("MarmotGroupEngine retained-history pruning (retained-history.md)", () => {
   it("pins a staged commit's source epoch against horizon pruning, then prunes once published-failed", async () => {
-    const adminPubkey = "a".repeat(64);
-    const memberPubkey = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const memberAccount = testAccount(9);
+    const adminPubkey = adminAccount.pubkey;
+    const memberPubkey = memberAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -392,6 +419,7 @@ describe("MarmotGroupEngine retained-history pruning (retained-history.md)", () 
     // commits that advance the canonical tip.
     const adminKp = await generateKeyPackage({
       credential: createCredential(adminPubkey),
+      signer: adminAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: adminEpoch0 } = await createSimpleGroup(
@@ -403,6 +431,7 @@ describe("MarmotGroupEngine retained-history pruning (retained-history.md)", () 
 
     const memberKp = await generateKeyPackage({
       credential: createCredential(memberPubkey),
+      signer: memberAccount.signer,
       ciphersuiteImpl: impl,
     });
     const add = await createCommit({
@@ -495,8 +524,10 @@ describe("MarmotGroupEngine content-derived dedup (inbound-processing.md)", () =
   // Build a 2-member group: admin (the engine under test) at epoch 1 with a
   // non-admin member whose state we drive directly to forge re-wrapped duplicates.
   async function twoMemberGroup() {
-    const adminPubkey = "a".repeat(64);
-    const memberPubkey = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const memberAccount = testAccount(9);
+    const adminPubkey = adminAccount.pubkey;
+    const memberPubkey = memberAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -507,6 +538,7 @@ describe("MarmotGroupEngine content-derived dedup (inbound-processing.md)", () =
     };
     const adminKp = await generateKeyPackage({
       credential: createCredential(adminPubkey),
+      signer: adminAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: adminEpoch0 } = await createSimpleGroup(
@@ -517,6 +549,7 @@ describe("MarmotGroupEngine content-derived dedup (inbound-processing.md)", () =
     );
     const memberKp = await generateKeyPackage({
       credential: createCredential(memberPubkey),
+      signer: memberAccount.signer,
       ciphersuiteImpl: impl,
     });
     const add = await createCommit({

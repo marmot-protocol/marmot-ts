@@ -40,6 +40,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import {
   deserializeClientState,
   serializeClientState,
@@ -95,9 +96,12 @@ function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
  * below is a genuine local commit-staging call.
  */
 async function twoAdminGroup() {
-  const adminPubkey = "a".repeat(64);
-  const admin2Pubkey = "2".repeat(64);
-  const memberPubkey = "d".repeat(64);
+  const adminAccount = testAccount(6);
+  const admin2Account = testAccount(0);
+  const memberAccount = testAccount(9);
+  const adminPubkey = adminAccount.pubkey;
+  const admin2Pubkey = admin2Account.pubkey;
+  const memberPubkey = memberAccount.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -108,6 +112,7 @@ async function twoAdminGroup() {
   };
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: epoch0 } = await createSimpleGroup(
@@ -119,10 +124,12 @@ async function twoAdminGroup() {
 
   const admin2Kp = await generateKeyPackage({
     credential: createCredential(admin2Pubkey),
+    signer: admin2Account.signer,
     ciphersuiteImpl: impl,
   });
   const memberKp = await generateKeyPackage({
     credential: createCredential(memberPubkey),
+    signer: memberAccount.signer,
     ciphersuiteImpl: impl,
   });
 
@@ -189,8 +196,10 @@ async function stageAdminPolicyProposal(
  * fixture D-08's account-level (not leaf-level) survival rule needs.
  */
 async function twoLeafAdminGroup() {
-  const adminPubkey = "a".repeat(64);
-  const admin2Pubkey = "2".repeat(64);
+  const adminAccount = testAccount(6);
+  const admin2Account = testAccount(0);
+  const adminPubkey = adminAccount.pubkey;
+  const admin2Pubkey = admin2Account.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -201,6 +210,7 @@ async function twoLeafAdminGroup() {
   };
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: epoch0 } = await createSimpleGroup(
@@ -212,10 +222,12 @@ async function twoLeafAdminGroup() {
 
   const admin2KpA = await generateKeyPackage({
     credential: createCredential(admin2Pubkey),
+    signer: admin2Account.signer,
     ciphersuiteImpl: impl,
   });
   const admin2KpB = await generateKeyPackage({
     credential: createCredential(admin2Pubkey),
+    signer: admin2Account.signer,
     ciphersuiteImpl: impl,
   });
 
@@ -254,8 +266,10 @@ async function twoLeafAdminGroup() {
  * winner-chain link from admin1's (the engine's) point of view.
  */
 async function twoAdminGroupWithJoin() {
-  const adminPubkey = "a".repeat(64);
-  const admin2Pubkey = "2".repeat(64);
+  const adminAccount = testAccount(6);
+  const admin2Account = testAccount(0);
+  const adminPubkey = adminAccount.pubkey;
+  const admin2Pubkey = admin2Account.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -266,6 +280,7 @@ async function twoAdminGroupWithJoin() {
   };
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: epoch0 } = await createSimpleGroup(
@@ -277,6 +292,7 @@ async function twoAdminGroupWithJoin() {
 
   const admin2Kp = await generateKeyPackage({
     credential: createCredential(admin2Pubkey),
+    signer: admin2Account.signer,
     ciphersuiteImpl: impl,
   });
   const add = await createCommit({

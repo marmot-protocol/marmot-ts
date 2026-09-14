@@ -28,6 +28,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { MemoryAuditSink } from "../../audit/index.js";
 import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../../core/components/ids.js";
 import { commitDigest } from "../../core/convergence.js";
@@ -76,10 +77,14 @@ function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
  * so the violating commit lands in the fork pool as a past-epoch candidate.
  */
 async function fourPartyEpoch1Group() {
-  const adminPubkey = "a".repeat(64);
-  const admin2Pubkey = "2".repeat(64);
-  const admin3Pubkey = "3".repeat(64);
-  const memberPubkey = "d".repeat(64);
+  const adminAccount = testAccount(6);
+  const admin2Account = testAccount(0);
+  const admin3Account = testAccount(1);
+  const memberAccount = testAccount(9);
+  const adminPubkey = adminAccount.pubkey;
+  const admin2Pubkey = admin2Account.pubkey;
+  const admin3Pubkey = admin3Account.pubkey;
+  const memberPubkey = memberAccount.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -90,6 +95,7 @@ async function fourPartyEpoch1Group() {
   };
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: adminEpoch0 } = await createSimpleGroup(
@@ -104,14 +110,17 @@ async function fourPartyEpoch1Group() {
 
   const admin2Kp = await generateKeyPackage({
     credential: createCredential(admin2Pubkey),
+    signer: admin2Account.signer,
     ciphersuiteImpl: impl,
   });
   const admin3Kp = await generateKeyPackage({
     credential: createCredential(admin3Pubkey),
+    signer: admin3Account.signer,
     ciphersuiteImpl: impl,
   });
   const memberKp = await generateKeyPackage({
     credential: createCredential(memberPubkey),
+    signer: memberAccount.signer,
     ciphersuiteImpl: impl,
   });
 
@@ -241,7 +250,7 @@ function rejectionReasons(sink: MemoryAuditSink): string[] {
 
 describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity", () => {
   it("refuses auto-commit preparation after the group is removed", async () => {
-    const { impl, adminEpoch1 } = await fourPartyEpoch1Group();
+    const { impl, adminPubkey, adminEpoch1 } = await fourPartyEpoch1Group();
     const removedState = {
       ...adminEpoch1,
       groupActiveState: { kind: "removedFromGroup" as const },
@@ -255,7 +264,7 @@ describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity",
     await expect(
       engine.send({
         kind: "commit",
-        actorPubkey: "a".repeat(64),
+        actorPubkey: adminPubkey,
         extraProposals: [],
       }),
     ).rejects.toThrow(
@@ -395,8 +404,10 @@ describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity",
     // self-remove-only — the pre-existing
     // refs/marmot/protocol-core/group-messaging.md admin gate rejects this
     // before the commit ever reaches the WIRE-03/CONV-01 legality gate.
+    const extraAccount = testAccount(11);
     const extraKp = await generateKeyPackage({
-      credential: createCredential("e".repeat(64)),
+      credential: createCredential(extraAccount.pubkey),
+      signer: extraAccount.signer,
       ciphersuiteImpl: impl,
     });
     const unauthorized = await createCommit({

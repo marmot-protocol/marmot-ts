@@ -12,6 +12,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { encodeAdminPolicyV1 } from "../../core/components/admin-policy.js";
 import { GROUP_ADMIN_POLICY_COMPONENT_ID } from "../../core/components/ids.js";
 import { createCredential } from "../../core/credential.js";
@@ -47,9 +48,12 @@ function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
 }
 
 async function memberGroup() {
-  const adminPubkey = "a".repeat(64);
-  const memberPubkey = "d".repeat(64);
-  const siblingPubkey = "3".repeat(64);
+  const adminAccount = testAccount(6);
+  const memberAccount = testAccount(9);
+  const siblingAccount = testAccount(1);
+  const adminPubkey = adminAccount.pubkey;
+  const memberPubkey = memberAccount.pubkey;
+  const siblingPubkey = siblingAccount.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -60,6 +64,7 @@ async function memberGroup() {
   };
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: epoch0 } = await createSimpleGroup(
@@ -70,10 +75,12 @@ async function memberGroup() {
   );
   const memberKp = await generateKeyPackage({
     credential: createCredential(memberPubkey),
+    signer: memberAccount.signer,
     ciphersuiteImpl: impl,
   });
   const siblingKp = await generateKeyPackage({
     credential: createCredential(siblingPubkey),
+    signer: siblingAccount.signer,
     ciphersuiteImpl: impl,
   });
   const add = await createCommit({
@@ -99,7 +106,7 @@ async function memberGroup() {
     privateKeys: memberKp.privatePackage,
     ratchetTree: undefined,
   });
-  return { adminPubkey, memberPubkey, impl, memberState };
+  return { adminPubkey, memberPubkey, siblingPubkey, impl, memberState };
 }
 
 async function stageForeignProposal(
@@ -150,14 +157,14 @@ describe("outbound commit authorization seams", () => {
   );
 
   it("allows a valid local self-update when an unrelated leaf credential is malformed", async () => {
-    const { impl, memberState } = await memberGroup();
+    const { adminPubkey, impl, memberState } = await memberGroup();
     const localNodeIndex = Number(memberState.privatePath.leafIndex) * 2;
     const unrelatedLeaf = memberState.ratchetTree.find(
       (node, nodeIndex) =>
         node?.nodeType === nodeTypes.leaf &&
         nodeIndex !== localNodeIndex &&
         node.leaf.credential.identity.length === 32 &&
-        bytesToHex(node.leaf.credential.identity) !== "a".repeat(64),
+        bytesToHex(node.leaf.credential.identity) !== adminPubkey,
     );
     if (!unrelatedLeaf || unrelatedLeaf.nodeType !== nodeTypes.leaf)
       throw new Error("expected unrelated leaf");

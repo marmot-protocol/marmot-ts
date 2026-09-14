@@ -6,6 +6,7 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
@@ -17,12 +18,14 @@ describe("contentDedupId", () => {
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
+    const admin = testAccount(6);
     const kp = await generateKeyPackage({
-      credential: createCredential("a".repeat(64)),
+      credential: createCredential(admin.pubkey),
+      signer: admin.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
-      adminPubkeys: ["a".repeat(64)],
+      adminPubkeys: [admin.pubkey],
       relays: [],
     });
 

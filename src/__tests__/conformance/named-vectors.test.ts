@@ -117,7 +117,7 @@ async function executeFixture(fixture: Fixture) {
             actor,
             await generateKeyPackage({
               credential: createCredential(identities.get(actor)!),
-              accountProofSigner: accounts.get(actor)!.signer,
+              signer: accounts.get(actor)!.signer,
               ciphersuiteImpl: ciphersuite,
             }),
           ] as const,

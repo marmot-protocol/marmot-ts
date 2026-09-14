@@ -25,6 +25,7 @@ import {
   type AccountIdentityProofSigner,
   buildAccountIdentityProofExtension,
 } from "./account-identity-proof.js";
+import type { AuthorizationProofSigner } from "./authorization-proof.js";
 import { ensureMarmotCapabilities } from "./capabilities.js";
 import { makeLeafAppComponentsExtension } from "./components/index.js";
 import { getCredentialPubkey } from "./credential.js";
@@ -83,6 +84,12 @@ export type GenerateKeyPackageOptions = {
    * interop with darkmatter, which validates this proof on every leaf.
    */
   accountProofSigner?: AccountIdentityProofSigner;
+  /**
+   * The Nostr account signer whose signEvent proves this KeyPackage's leaf;
+   * its public key MUST equal the credential identity. Any signEvent-capable
+   * signer works (a local key signer, NIP-07, NIP-46).
+   */
+  signer?: AuthorizationProofSigner;
   ciphersuiteImpl: CiphersuiteImpl;
 };
 
@@ -94,8 +101,10 @@ export async function generateKeyPackage({
   extensions,
   isLastResort = true,
   accountProofSigner,
+  signer,
   ciphersuiteImpl,
 }: GenerateKeyPackageOptions): Promise<CompleteKeyPackage> {
+  const effectiveProofSigner = signer ?? accountProofSigner;
   if (credential.credentialType !== defaultCredentialTypes.basic)
     throw new Error("Marmot key packages must use a basic credential");
 
@@ -128,14 +137,14 @@ export async function generateKeyPackage({
   // When an account signer is supplied, generate the leaf signature keypair
   // first, bind it to the Nostr account with an identity proof, and carry the
   // proof on the LeafNode (darkmatter validates this on every leaf).
-  if (accountProofSigner) {
+  if (effectiveProofSigner) {
     const signatureKeyPair = await ciphersuiteImpl.signature.keygen();
     leafNodeExtensions.push(
       await buildAccountIdentityProofExtension({
         accountIdentity: hexToBytes(accountPubkey),
         mlsSignaturePublicKey: signatureKeyPair.publicKey,
         ciphersuite: ciphersuiteImpl.id,
-        signer: accountProofSigner,
+        signer: effectiveProofSigner,
       }),
     );
     return await MLSGenerateKeyPackageWithKey({

@@ -17,10 +17,7 @@ import {
 } from "../core/client-state.js";
 import type { MarmotGroupInfo } from "../core/client-state.js";
 import { GROUP_EVENT_KIND } from "../core/protocol.js";
-import {
-  type AccountIdentityProofSigner,
-  verifyAllLeafAccountIdentityProofs,
-} from "../core/account-identity-proof.js";
+import { verifyAllLeafAccountIdentityProofs } from "../core/account-identity-proof.js";
 import { marmotAuthService } from "../core/auth-service.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
 import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
@@ -133,12 +130,6 @@ export type GroupsManagerOptions<
   removedMarkerStore?: GenericKeyValueStore<boolean>;
   /** The signer used for the clients identity */
   signer: EventSigner;
-  /**
-   * Signs the account identity proof carried on the group creator's own leaf.
-   * Required for the creator to be addable to spec-conformant groups, which
-   * validate the proof on every leaf.
-   */
-  accountProofSigner?: AccountIdentityProofSigner;
   /** The nostr relay pool to use for the client */
   network: NostrNetworkInterface;
   /** Optional forensic audit sink inherited by groups. Omitted by default. */
@@ -235,8 +226,6 @@ export class GroupsManager<
   readonly store: GenericKeyValueStore<SerializedClientState>;
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
-  /** Signs the account identity proof on the group creator's own leaf */
-  readonly accountProofSigner?: AccountIdentityProofSigner;
   /** The nostr relay pool to use for the client */
   readonly network: NostrNetworkInterface;
 
@@ -246,7 +235,7 @@ export class GroupsManager<
 
   /** Owns the in-memory cache + store hydration. */
   readonly #registry: GroupRegistry<THistory, TMedia>;
-  /** Builds new groups (the accountProofSigner/ciphersuite consumer). */
+  /** Builds new groups (the identity-signer/ciphersuite consumer). */
   readonly #factory: GroupFactory<THistory, TMedia>;
   /** The injectable event verifier gating the 445 drain (SEC-01). */
   readonly #verifyEvent: VerifyEventMethod;
@@ -256,7 +245,6 @@ export class GroupsManager<
     this.store = options.store;
     this.ingestPersistence = options.ingestPersistence;
     this.signer = options.signer;
-    this.accountProofSigner = options.accountProofSigner;
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
@@ -291,7 +279,6 @@ export class GroupsManager<
       audit: options.audit,
       auditContext: options.auditContext,
       cryptoProvider: this.cryptoProvider,
-      accountProofSigner: options.accountProofSigner,
       historyFactory: options.historyFactory,
       mediaFactory: options.mediaFactory,
     });

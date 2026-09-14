@@ -23,7 +23,6 @@ import {
 } from "../welcome.js";
 import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { accountProofSignerFor } from "../../__tests__/helpers/account-proof.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 
 // ---------------------------------------------------------------------------
@@ -178,7 +177,6 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupView", () => {
       groupStateStore: new InMemoryKeyValueStore(),
       keyPackageStore: new InMemoryKeyValueStore(),
       signer: adminAccount.signer,
-      accountProofSigner: accountProofSignerFor(adminAccount),
       network: mockNetwork,
     });
   });
@@ -191,7 +189,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupView", () => {
     const inviteeKeyPackage = await generateKeyPackage({
       credential: createCredential(inviteePubkey),
       ciphersuiteImpl: ciphersuite,
-      accountProofSigner: accountProofSignerFor(inviteeAccount),
+      signer: inviteeAccount.signer,
     });
 
     // Publish invitee key package event to the mock network
@@ -308,11 +306,12 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupView", () => {
     );
 
     // Generate a completely different (unrelated) key package
-    const otherPubkey =
-      await PrivateKeyAccount.generateNew().signer.getPublicKey();
+    const otherAccount = PrivateKeyAccount.generateNew();
+    const otherPubkey = await otherAccount.signer.getPublicKey();
     const wrongKeyPackage = await generateKeyPackage({
       credential: createCredential(otherPubkey),
       ciphersuiteImpl: ciphersuite,
+      signer: otherAccount.signer,
     });
 
     await expect(

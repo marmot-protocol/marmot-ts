@@ -10,7 +10,6 @@ import type { SerializedClientState } from "../core/client-state.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
 import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
 import type { AuditContextOptions, AuditSink } from "../audit/index.js";
-import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import { createCredential } from "../core/credential.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
@@ -46,7 +45,6 @@ export type GroupFactoryOptions<
   /** Required when `audit` is set; contains stable engine/account/session metadata. */
   auditContext?: AuditContextOptions;
   cryptoProvider?: CryptoProvider;
-  accountProofSigner?: AccountIdentityProofSigner;
   historyFactory?: GroupHistoryFactory<THistory>;
   mediaFactory?: GroupMediaFactory<TMedia>;
   /** Convergence policy applied to newly created/imported groups. */
@@ -60,10 +58,10 @@ export type CreateGroupOptions = SimpleGroupOptions & {
 };
 
 /**
- * Builds new {@link MarmotGroup} instances. Isolates the only consumers of the
- * account-identity-proof signer and the ciphersuite implementation — i.e. the
- * native-sensitive group-creation seam (darkmatter's `do_create_group`). The
- * factory only constructs and persists; caching/eventing is the registry's job.
+ * Builds new {@link MarmotGroup} instances. Isolates the identity signer and
+ * the ciphersuite implementation — i.e. the native-sensitive group-creation
+ * seam (darkmatter's `do_create_group`). The factory only constructs and
+ * persists; caching/eventing is the registry's job.
  */
 export class GroupFactory<
   THistory extends BaseGroupHistory | undefined = any,
@@ -79,7 +77,6 @@ export class GroupFactory<
   readonly #audit?: AuditSink;
   readonly #auditContext?: AuditContextOptions;
   readonly #cryptoProvider: CryptoProvider;
-  readonly #accountProofSigner?: AccountIdentityProofSigner;
   readonly #historyFactory: GroupHistoryFactory<THistory>;
   readonly #mediaFactory: GroupMediaFactory<TMedia>;
   readonly #convergencePolicy?: ConvergencePolicy;
@@ -98,7 +95,6 @@ export class GroupFactory<
     this.#audit = options.audit;
     this.#auditContext = options.auditContext;
     this.#cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
-    this.#accountProofSigner = options.accountProofSigner;
     this.#historyFactory =
       options.historyFactory as GroupHistoryFactory<THistory>;
     this.#mediaFactory = options.mediaFactory as GroupMediaFactory<TMedia>;
@@ -130,7 +126,7 @@ export class GroupFactory<
     const keyPackage = await generateKeyPackage({
       credential,
       ciphersuiteImpl,
-      accountProofSigner: this.#accountProofSigner,
+      signer: this.#signer,
     });
 
     const { clientState } = await createSimpleGroup(

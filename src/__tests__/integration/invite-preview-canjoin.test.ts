@@ -7,7 +7,6 @@ import {
 } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { accountProofSignerFor } from "../helpers/account-proof.js";
 import { MarmotClient } from "../../client/marmot-client.js";
 import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import type { UnreadInvite } from "../../client/invite-manager.js";
@@ -38,7 +37,6 @@ describe("invite preview + canJoin (MarmotClient)", () => {
       groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
       keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: adminAccount.signer,
-      accountProofSigner: accountProofSignerFor(adminAccount),
       network: mockNetwork,
     });
 
@@ -46,7 +44,6 @@ describe("invite preview + canJoin (MarmotClient)", () => {
       groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
       keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
-      accountProofSigner: accountProofSignerFor(inviteeAccount),
       network: mockNetwork,
       clientId: "test-invitee-device",
     });

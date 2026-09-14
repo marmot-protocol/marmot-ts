@@ -25,7 +25,6 @@ import {
 } from "@internet-privacy/marmot-ts/extra";
 import { NodeJsonlAuditRecorder } from "@internet-privacy/marmot-ts/extra/audit/node";
 
-import { accountProofSignerFor } from "../helpers/account-proof.js";
 import { Directory, LOOKUP_RELAYS } from "../helpers/discovery.js";
 import { PrefixedKeyValueStore } from "../helpers/prefixed-store.js";
 import { SqliteKeyValueStore } from "../helpers/sqlite-store.js";
@@ -284,7 +283,6 @@ export async function createController(
 
   const client = new MarmotClient({
     signer: account.signer,
-    accountProofSigner: accountProofSignerFor(account),
     network: pool,
     audit,
     auditContext,

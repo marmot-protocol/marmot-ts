@@ -16,7 +16,6 @@ import {
 } from "ts-mls";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { accountProofSignerFor } from "../../../__tests__/helpers/account-proof.js";
 import { createCredential } from "../../../core/credential.js";
 import { createKeyPackageEvent } from "../../../core/key-package-event.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
@@ -39,7 +38,7 @@ describe("createInviteIntent", () => {
     const keyPackage = await generateKeyPackage({
       credential: createCredential(pubkey),
       ciphersuiteImpl: ciphersuite,
-      accountProofSigner: accountProofSignerFor(invitee),
+      signer: invitee.signer,
     });
     const event = await invitee.signer.signEvent(
       await createKeyPackageEvent({
@@ -172,7 +171,7 @@ describe("createInviteIntent", () => {
       const keyPackage = await generateKeyPackage({
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
-        accountProofSigner: accountProofSignerFor(invitee),
+        signer: invitee.signer,
       });
       const now = BigInt(Math.floor(Date.now() / 1000));
       const overCapPackage = {
@@ -213,7 +212,7 @@ describe("createInviteIntent", () => {
       const keyPackage = await generateKeyPackage({
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
-        accountProofSigner: accountProofSignerFor(invitee),
+        signer: invitee.signer,
       });
       const now = BigInt(Math.floor(Date.now() / 1000));
       const expiredPackage = {

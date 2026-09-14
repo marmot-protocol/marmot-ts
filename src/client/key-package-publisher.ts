@@ -11,7 +11,6 @@ import {
   PrivateKeyPackage,
 } from "ts-mls";
 
-import type { AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import { createCredential } from "../core/credential.js";
 import {
   createDeleteKeyPackageEvent,
@@ -27,12 +26,6 @@ export type KeyPackagePublisherOptions = {
   signer: EventSigner;
   /** The nostr relay pool used to publish key package and deletion events */
   network: NostrNetworkInterface;
-  /**
-   * Optional Nostr-account proof signer. When provided, generated key packages
-   * carry a `marmot.account-identity-proof.v1` LeafNode extension binding the
-   * account to the leaf signature key (required for darkmatter wire interop).
-   */
-  accountProofSigner?: AccountIdentityProofSigner;
   /** The crypto provider to use for cryptographic operations */
   cryptoProvider?: CryptoProvider;
 };
@@ -75,14 +68,12 @@ export type PublishKeyPackageOptions = {
 export class KeyPackagePublisher {
   readonly #signer: EventSigner;
   readonly #network: NostrNetworkInterface;
-  readonly #accountProofSigner?: AccountIdentityProofSigner;
   readonly #cryptoProvider: CryptoProvider;
   #log = logger.extend("KeyPackagePublisher");
 
   constructor(options: KeyPackagePublisherOptions) {
     this.#signer = options.signer;
     this.#network = options.network;
-    this.#accountProofSigner = options.accountProofSigner;
     this.#cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
   }
 
@@ -108,7 +99,7 @@ export class KeyPackagePublisher {
       credential,
       ciphersuiteImpl,
       isLastResort: options?.isLastResort,
-      accountProofSigner: this.#accountProofSigner,
+      signer: this.#signer,
     });
   }
 

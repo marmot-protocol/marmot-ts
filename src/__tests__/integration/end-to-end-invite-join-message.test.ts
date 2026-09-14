@@ -8,7 +8,6 @@ import {
   getCiphersuiteImpl,
 } from "ts-mls";
 import { beforeEach, describe, expect, it } from "vitest";
-import { accountProofSignerFor } from "../helpers/account-proof.js";
 import { createApplicationMessageIntent } from "../../client/group/application-message.js";
 import { MarmotClient } from "../../client/marmot-client.js";
 import {
@@ -58,7 +57,6 @@ describe("End-to-end: invite, join, first message", () => {
       groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
       keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: adminAccount.signer,
-      accountProofSigner: accountProofSignerFor(adminAccount),
       network: mockNetwork,
     });
 
@@ -66,7 +64,6 @@ describe("End-to-end: invite, join, first message", () => {
       groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
       keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
-      accountProofSigner: accountProofSignerFor(inviteeAccount),
       network: mockNetwork,
       clientId: "test-invitee-device",
     });

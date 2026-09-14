@@ -8,7 +8,6 @@ import {
   GroupInfo,
   Welcome,
 } from "ts-mls";
-import { type AccountIdentityProofSigner } from "../core/account-identity-proof.js";
 import {
   getMarmotGroupView,
   SerializedClientState,
@@ -91,15 +90,12 @@ export type MarmotClientOptions<
   THistory extends BaseGroupHistory | undefined = undefined,
   TMedia extends BaseGroupMedia | undefined = undefined,
 > = {
-  /** The signer used for the clients identity */
-  signer: EventSigner;
   /**
-   * Optional Nostr-account proof signer. When provided, key packages this
-   * client publishes carry a `marmot.account-identity-proof.v1` LeafNode
-   * extension required for darkmatter wire interop. Supply from a signer with
-   * raw BIP-340 access (the applesauce `EventSigner` cannot sign the digest).
+   * The signer used for the client's Nostr identity. Also signs the kind-450
+   * account identity proof carried by every KeyPackage and leaf this client
+   * creates.
    */
-  accountProofSigner?: AccountIdentityProofSigner;
+  signer: EventSigner;
   /** The capabilities to use for the client */
   capabilities?: Capabilities;
   /** The backend to store and load the groups from */
@@ -227,7 +223,6 @@ export class MarmotClient<
     this.keyPackages = new KeyPackageManager({
       store: options.keyPackageStore,
       signer: options.signer,
-      accountProofSigner: options.accountProofSigner,
       network: options.network,
       clientId: options.clientId,
       verifyEvent,
@@ -250,7 +245,6 @@ export class MarmotClient<
       convergencePolicy: options.convergencePolicy,
       ingestionPool: options.ingestionPool,
       signer: this.signer,
-      accountProofSigner: options.accountProofSigner,
       network: this.network,
       audit: options.audit,
       auditContext: options.auditContext,

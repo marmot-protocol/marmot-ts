@@ -1,4 +1,3 @@
-import type { EventSigner } from "applesauce-core/factories";
 import {
   finalizeEvent,
   generateSecretKey,
@@ -15,12 +14,18 @@ import type { SerializedClientState } from "../core/client-state.js";
 import { InMemoryKeyValueStore } from "../extra/in-memory-key-value-store.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
 import { MockNetwork } from "./helpers/mock-network.js";
+import { testAccount } from "./helpers/test-accounts.js";
 import {
   disbandTombstoneKey,
   encodeDisbandTombstone,
 } from "../engine/disband-tombstone.js";
 
-const ADMIN = "a".repeat(64);
+// A real signer is required (not a getPublicKey-only stub): D-01 has every
+// client-built leaf/KeyPackage proven with the client's identity signer, so
+// `GroupsManager.create()` now always calls `signer.signEvent` for the
+// creator's account identity proof.
+const ADMIN_ACCOUNT = testAccount(0);
+const ADMIN = ADMIN_ACCOUNT.pubkey;
 
 class EmptyGroupStateStore implements GenericKeyValueStore<SerializedClientState> {
   async getItem(): Promise<SerializedClientState | null> {
@@ -76,7 +81,7 @@ describe("GroupsManager session/runtime helpers", () => {
     const manager = new GroupsManager({
       store: stateStore,
       lifecycleStore,
-      signer: { getPublicKey: async () => ADMIN } as EventSigner,
+      signer: ADMIN_ACCOUNT.signer,
       network,
     });
     const group = await manager.create("Terminal", {
@@ -126,7 +131,7 @@ describe("GroupsManager session/runtime helpers", () => {
     const manager = new GroupsManager({
       store: stateStore,
       removedMarkerStore: markerStore,
-      signer: { getPublicKey: async () => ADMIN } as EventSigner,
+      signer: ADMIN_ACCOUNT.signer,
       network,
     });
     const group = await manager.create("Test Group", {
@@ -148,7 +153,7 @@ describe("GroupsManager session/runtime helpers", () => {
     expect(removedKeys).toEqual([`${group.idStr}/removed`, group.idStr]);
   });
   function makeManager(network: NostrNetworkInterface) {
-    const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+    const signer = ADMIN_ACCOUNT.signer;
     return new GroupsManager({
       store: new InMemoryKeyValueStore<SerializedClientState>(),
       signer,
@@ -228,7 +233,7 @@ describe("GroupsManager session/runtime helpers", () => {
     const network = new MockNetwork(["wss://relay.test"]);
     const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
     const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
-    const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+    const signer = ADMIN_ACCOUNT.signer;
     const options = {
       store: stateStore,
       removedMarkerStore,
@@ -280,7 +285,7 @@ describe("GroupsManager session/runtime helpers", () => {
   it("disposes a failed reconvergence activation and retries with a fresh group", async () => {
     const network = new MockNetwork(["wss://relay.test"]);
     const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+    const signer = ADMIN_ACCOUNT.signer;
     const writer = new GroupsManager({ store: stateStore, signer, network });
     const created = await writer.create("Activation Retry", {
       relays: ["wss://relay.test"],
@@ -320,7 +325,7 @@ describe("GroupsManager session/runtime helpers", () => {
     vi.spyOn(removedMarkerStore, "getItem")
       .mockRejectedValueOnce(markerError)
       .mockResolvedValueOnce(null);
-    const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+    const signer = ADMIN_ACCOUNT.signer;
     const writer = new GroupsManager({ store: stateStore, signer, network });
     const created = await writer.create("Marker Retry", {
       relays: ["wss://relay.test"],
@@ -356,7 +361,7 @@ describe("GroupsManager session/runtime helpers", () => {
     async (activationStep) => {
       const network = new MockNetwork(["wss://relay.test"]);
       const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
-      const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+      const signer = ADMIN_ACCOUNT.signer;
       const writer = new GroupsManager({ store: stateStore, signer, network });
       const created = await writer.create("Late Activation", {
         relays: ["wss://relay.test"],
@@ -467,7 +472,7 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
     network: NostrNetworkInterface,
     verifyEvent?: (event: NostrEvent) => boolean,
   ) {
-    const signer = { getPublicKey: async () => ADMIN } as EventSigner;
+    const signer = ADMIN_ACCOUNT.signer;
     return new GroupsManager({
       store: new InMemoryKeyValueStore<SerializedClientState>(),
       signer,

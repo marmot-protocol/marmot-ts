@@ -1,6 +1,5 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
-import { accountProofSignerFor } from "../helpers/account-proof.js";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { unlockGiftWrap } from "applesauce-common/helpers/gift-wrap";
 import {
@@ -153,7 +152,6 @@ describe("chat messages via session/runtime", () => {
       groupStateStore: new InMemoryKeyValueStore(),
       keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: adminAccount.signer,
-      accountProofSigner: accountProofSignerFor(adminAccount),
       network: mockNetwork,
     });
 
@@ -161,7 +159,6 @@ describe("chat messages via session/runtime", () => {
       groupStateStore: new InMemoryKeyValueStore(),
       keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
-      accountProofSigner: accountProofSignerFor(inviteeAccount),
       network: mockNetwork,
       clientId: "test-invitee-device",
     });
@@ -351,7 +348,6 @@ describe("chat messages via session/runtime", () => {
       groupStateStore: new InMemoryKeyValueStore(),
       keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
       signer: inviteeAccount.signer,
-      accountProofSigner: accountProofSignerFor(inviteeAccount),
       network: mockNetwork,
       clientId: "test-invitee-device",
       historyFactory: () => history,
@@ -405,7 +401,6 @@ describe("chat messages via session/runtime", () => {
       groupStateStore: inviteeGroupBackend,
       keyPackageStore: inviteeKeyPackageBackend,
       signer: inviteeAccount.signer,
-      accountProofSigner: accountProofSignerFor(inviteeAccount),
       network: mockNetwork,
       clientId: "test-invitee-device",
     });
@@ -427,7 +422,6 @@ describe("chat messages via session/runtime", () => {
       groupStateStore: inviteeGroupBackend,
       keyPackageStore: inviteeKeyPackageBackend,
       signer: inviteeAccount.signer,
-      accountProofSigner: accountProofSignerFor(inviteeAccount),
       network: mockNetwork,
     });
 

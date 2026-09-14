@@ -36,6 +36,7 @@ import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
+import { testAccount } from "../helpers/test-accounts.js";
 import { GroupHistoryTree } from "../../engine/history-tree.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 
@@ -84,9 +85,12 @@ function marmotGroup(
  * message (so a test can independently compute its expected digest).
  */
 async function buildRemovalFixture() {
-  const adminPubkey = "a".repeat(64);
-  const dPubkey = "d".repeat(64);
-  const ePubkey = "e".repeat(64);
+  const adminAccount = testAccount(6);
+  const dAccount = testAccount(9);
+  const eAccount = testAccount(11);
+  const adminPubkey = adminAccount.pubkey;
+  const dPubkey = dAccount.pubkey;
+  const ePubkey = eAccount.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -99,6 +103,7 @@ async function buildRemovalFixture() {
   // 3-member group: admin "a" (leaf 0), "d" (leaf 1), "e" (leaf 2).
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: created } = await createSimpleGroup(
@@ -109,10 +114,12 @@ async function buildRemovalFixture() {
   );
   const dKp = await generateKeyPackage({
     credential: createCredential(dPubkey),
+    signer: dAccount.signer,
     ciphersuiteImpl: impl,
   });
   const eKp = await generateKeyPackage({
     credential: createCredential(ePubkey),
+    signer: eAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { newState: adminEpoch1, welcome } = await createCommit({

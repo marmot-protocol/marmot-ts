@@ -25,6 +25,7 @@ import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
+import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://relay.test";
 const QUIESCENCE_MS = 1_000;
@@ -103,8 +104,10 @@ function marmotGroup(
 
 describe("convergence status (B5, increment 2)", () => {
   it("starts Settled, goes Syncing on a commit, then Settled after the quiescence window", async () => {
-    const adminPubkey = "a".repeat(64);
-    const dPubkey = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const dAccount = testAccount(9);
+    const adminPubkey = adminAccount.pubkey;
+    const dPubkey = dAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -117,6 +120,7 @@ describe("convergence status (B5, increment 2)", () => {
     // 2-member group: admin "a" (leaf 0), "d" (leaf 1).
     const adminKp = await generateKeyPackage({
       credential: createCredential(adminPubkey),
+      signer: adminAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: created } = await createSimpleGroup(
@@ -127,6 +131,7 @@ describe("convergence status (B5, increment 2)", () => {
     );
     const dKp = await generateKeyPackage({
       credential: createCredential(dPubkey),
+      signer: dAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { newState: adminEpoch1, welcome } = await createCommit({
@@ -206,8 +211,10 @@ describe("convergence status (B5, increment 2)", () => {
   });
 
   it("queues an outbound send while Syncing and drains it once the window settles (Inc 3)", async () => {
-    const adminPubkey = "a".repeat(64);
-    const dPubkey = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const dAccount = testAccount(9);
+    const adminPubkey = adminAccount.pubkey;
+    const dPubkey = dAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -219,6 +226,7 @@ describe("convergence status (B5, increment 2)", () => {
 
     const adminKp = await generateKeyPackage({
       credential: createCredential(adminPubkey),
+      signer: adminAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: created } = await createSimpleGroup(
@@ -229,6 +237,7 @@ describe("convergence status (B5, increment 2)", () => {
     );
     const dKp = await generateKeyPackage({
       credential: createCredential(dPubkey),
+      signer: dAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { newState: adminEpoch1, welcome } = await createCommit({

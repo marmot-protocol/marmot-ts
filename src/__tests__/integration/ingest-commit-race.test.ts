@@ -1,6 +1,7 @@
 import { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { EventSigner } from "applesauce-core";
 import { getEventHash } from "applesauce-core/helpers/event";
+import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import {
   CiphersuiteImpl,
   type ClientState,
@@ -33,14 +34,20 @@ import {
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store";
+import { testAccount } from "../helpers/test-accounts.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 async function createTestGroupState(
-  adminPubkey: string,
+  adminAccount: PrivateKeyAccount<any>,
   ciphersuiteImpl: CiphersuiteImpl,
 ) {
+  const adminPubkey = adminAccount.pubkey;
   const credential = createCredential(adminPubkey);
-  const kp = await generateKeyPackage({ credential, ciphersuiteImpl });
+  const kp = await generateKeyPackage({
+    credential,
+    signer: adminAccount.signer,
+    ciphersuiteImpl,
+  });
   const { clientState } = await createSimpleGroup(
     kp,
     ciphersuiteImpl,
@@ -52,22 +59,25 @@ async function createTestGroupState(
 
 describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
   it("orders same-epoch commits by content-derived commit_digest, ignoring transport fields", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
 
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
 
     // Make this a 2-member group (required for update paths).
-    const memberPubkey = "e".repeat(64);
+    const memberAccount = testAccount(11);
+    const memberPubkey = memberAccount.pubkey;
     const memberCredential = createCredential(memberPubkey);
     const memberKeyPackage = await generateKeyPackage({
       credential: memberCredential,
+      signer: memberAccount.signer,
       ciphersuiteImpl: impl,
     });
 
@@ -141,14 +151,15 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
   });
 
   it("applies exactly one commit for an epoch (convergence picks the winner), even if events arrive reversed", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
 
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
 
@@ -158,10 +169,12 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     // ("Could not find common ancestor") because update paths are defined over
     // paths between distinct leaves.
     // ----------------------------------------------------------------------
-    const memberPubkey = "e".repeat(64);
+    const memberAccount = testAccount(11);
+    const memberPubkey = memberAccount.pubkey;
     const memberCredential = createCredential(memberPubkey);
     const memberKeyPackage = await generateKeyPackage({
       credential: memberCredential,
+      signer: memberAccount.signer,
       ciphersuiteImpl: impl,
     });
 
@@ -307,20 +320,23 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
   });
 
   it("recovers from a cross-ingest fork by rewinding to retained state and applying the canonical commit", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
 
     // Build a 2-member group; the member is the fork-recovery receiver.
-    const memberPubkey = "e".repeat(64);
+    const memberAccount = testAccount(11);
+    const memberPubkey = memberAccount.pubkey;
     const memberKeyPackage = await generateKeyPackage({
       credential: createCredential(memberPubkey),
+      signer: memberAccount.signer,
       ciphersuiteImpl: impl,
     });
     const ctx = {
@@ -438,20 +454,23 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
   });
 
   it("reports a locally sent app payload on an abandoned branch as invalidated on rewind (M7)", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
 
     // 2-member group; the member is the fork-recovery receiver.
-    const memberPubkey = "e".repeat(64);
+    const memberAccount = testAccount(11);
+    const memberPubkey = memberAccount.pubkey;
     const memberKeyPackage = await generateKeyPackage({
       credential: createCredential(memberPubkey),
+      signer: memberAccount.signer,
       ciphersuiteImpl: impl,
     });
     const ctx = {
@@ -613,13 +632,14 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
   });
 
   it("converges onto a deeper competing branch whose child commit is encrypted under an unreached epoch", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
     const ctx = {
@@ -628,9 +648,11 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     };
 
     // 2-member group; the member is the receiver.
-    const memberPubkey = "e".repeat(64);
+    const memberAccount = testAccount(11);
+    const memberPubkey = memberAccount.pubkey;
     const memberKeyPackage = await generateKeyPackage({
       credential: createCredential(memberPubkey),
+      signer: memberAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { newState: adminStateEpoch1, welcome } = await createCommit({
@@ -748,13 +770,14 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
   });
 
   it("converges onto a witnessed branch via app-payload witness quorum, overriding the lower-digest competitor", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
     const ctx = {
@@ -763,14 +786,18 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     };
 
     // 3-member group: admin (committer), C (receiver + witness), D (witness).
-    const cPub = "e".repeat(64);
-    const dPub = "d".repeat(64);
+    const cAccount = testAccount(11);
+    const dAccount = testAccount(9);
+    const cPub = cAccount.pubkey;
+    const dPub = dAccount.pubkey;
     const cKp = await generateKeyPackage({
       credential: createCredential(cPub),
+      signer: cAccount.signer,
       ciphersuiteImpl: impl,
     });
     const dKp = await generateKeyPackage({
       credential: createCredential(dPub),
+      signer: dAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { newState: adminEpoch1, welcome } = await createCommit({
@@ -926,7 +953,8 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
   });
 
   it("persists application message epoch advancement (forward secrecy)", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -934,15 +962,17 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
 
     // Create initial group state
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
 
     // Add a member to make it a 2-member group (required for update paths)
-    const memberPubkey = "e".repeat(64);
+    const memberAccount = testAccount(11);
+    const memberPubkey = memberAccount.pubkey;
     const memberCredential = createCredential(memberPubkey);
     const memberKeyPackage = await generateKeyPackage({
       credential: memberCredential,
+      signer: memberAccount.signer,
       ciphersuiteImpl: impl,
     });
 
@@ -1064,7 +1094,8 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
   });
 
   it("processes proposals before commits (proposal/commit integration)", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -1072,15 +1103,17 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
 
     // Create initial group state
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
 
     // Add first member to make it a 2-member group
-    const member1Pubkey = "e".repeat(64);
+    const member1Account = testAccount(11);
+    const member1Pubkey = member1Account.pubkey;
     const member1Credential = createCredential(member1Pubkey);
     const member1KeyPackage = await generateKeyPackage({
       credential: member1Credential,
+      signer: member1Account.signer,
       ciphersuiteImpl: impl,
     });
 
@@ -1137,10 +1170,12 @@ describe("MarmotGroup.ingest() commit race ordering (MIP-03)", () => {
     });
 
     // Create a proposal to add a second member
-    const member2Pubkey = "d".repeat(64);
+    const member2Account = testAccount(9);
+    const member2Pubkey = member2Account.pubkey;
     const member2Credential = createCredential(member2Pubkey);
     const member2KeyPackage = await generateKeyPackage({
       credential: member2Credential,
+      signer: member2Account.signer,
       ciphersuiteImpl: impl,
     });
 

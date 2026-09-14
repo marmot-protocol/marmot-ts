@@ -37,6 +37,12 @@ export const GROUP_MESSAGE_RETENTION_COMPONENT_ID: AppComponentId = 0x8005;
 export const AGENT_TEXT_STREAM_QUIC_COMPONENT_ID: AppComponentId = 0x8006;
 export const GROUP_AVATAR_URL_COMPONENT_ID: AppComponentId = 0x8007;
 export const GROUP_ENCRYPTED_MEDIA_COMPONENT_ID: AppComponentId = 0x8008;
+/**
+ * `marmot.member.account-identity-proof.v2` — LeafNode-only proof binding the
+ * MLS signature key to the credential's Nostr account identity.
+ * @see refs/marmot/app-components/account-identity-proof-v2.md
+ */
+export const ACCOUNT_IDENTITY_PROOF_COMPONENT_ID: AppComponentId = 0x8009;
 export const GROUP_LIFECYCLE_COMPONENT_ID: AppComponentId = 0x800c;
 
 /** Human-readable component names (the `v1` suffix is part of the name). */
@@ -51,6 +57,8 @@ export const AGENT_TEXT_STREAM_QUIC_COMPONENT =
 export const GROUP_AVATAR_URL_COMPONENT = "marmot.group.avatar-url.v1";
 export const GROUP_ENCRYPTED_MEDIA_COMPONENT =
   "marmot.group.encrypted-media.v1";
+export const ACCOUNT_IDENTITY_PROOF_COMPONENT =
+  "marmot.member.account-identity-proof.v2";
 export const GROUP_LIFECYCLE_COMPONENT = "marmot.group.lifecycle.v1";
 
 /**

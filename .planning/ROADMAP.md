@@ -30,7 +30,7 @@ so marmot-ts interoperates with MDK's default Current-profile groups.
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 6: Shared Authorization-Proof Envelope Primitive** - Pure 104-byte `MarmotAuthorizationProof` codec, `created_at` range check, and BIP-340/external-signer verification, independent of any proof class (completed 2026-09-12)
-- [ ] **Phase 7: Account Identity Proof Component (0x8009) + Legacy Clean Cut** - Kind-450 proof-class module, KeyPackage/leaf negotiation, and full removal of the legacy `0xf2f1` extension with no fallback
+- [x] **Phase 7: Account Identity Proof Component (0x8009) + Legacy Clean Cut** - Kind-450 proof-class module, KeyPackage/leaf negotiation, and full removal of the legacy `0xf2f1` extension with no fallback (completed 2026-09-14)
 - [ ] **Phase 8: GroupContext Profile Requirement & Legality-Seam Extension** - `0x8009` required on every group and enforced identically across create, invite, join, inbound, and convergence seams
 - [ ] **Phase 9: Self-Update / Replacement-Leaf Identity Binding** - Leaf replacement preserves account identity and keeps the proof bound to the new signature key
 - [ ] **Phase 10: Founding Group Creation via Welcome** - Current-profile group creation merges the founding Add locally and delivers membership via independently-retryable Welcomes only
@@ -75,7 +75,7 @@ removed from publish, verify, capabilities, and admin policy with no fallback pa
 4. marmot-ts never emits `0xf2f1` anywhere — not in leaves, `Capabilities.extensions`, or required capabilities — and the legacy proof exports no longer exist in the package.
 5. Any KeyPackage, leaf, or group still carrying or requiring `0xf2f1` is rejected outright.
 
-**Plans**: 7/8 plans executed
+**Plans**: 8/8 plans complete
 
 Plans:
 **Wave 1**
@@ -96,7 +96,7 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 07-07-PLAN.md — Delete legacy module, tests, fixture, and proof-v2-probe; exports snapshot; grep audit (wave 4)
-- [ ] 07-08-PLAN.md — Skip non-current stored KeyPackages (D-09); major changeset and docs migration (wave 4)
+- [x] 07-08-PLAN.md — Skip non-current stored KeyPackages (D-09); major changeset and docs migration (wave 4)
 
 ### Phase 8: GroupContext Profile Requirement & Legality-Seam Extension
 
@@ -199,7 +199,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 3.1 → 4 → 4.1 → 5 → 6
 | 4.1. Terminal Group Disbanding                             | v1.0      | 6/6             | Complete    | 2026-09-06 |
 | 5. Quality Gate                                            | v1.0      | 8/8             | Complete    | 2026-09-06 |
 | 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 1/1 | Complete    | 2026-09-12 |
-| 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 7/8 | In Progress|  |
+| 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 8/8 | Complete   | 2026-09-14 |
 | 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 0/TBD           | Not started | -          |
 | 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 0/TBD           | Not started | -          |
 | 10. Founding Group Creation via Welcome                    | v2.0      | 0/TBD           | Not started | -          |

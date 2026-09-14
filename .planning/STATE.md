@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Account identity proof v2
 current_phase: 07
 current_phase_name: account-identity-proof-component-0x8009-legacy-clean-cut
-status: executing
-stopped_at: Completed 07-07-PLAN.md
-last_updated: "2026-09-14T20:13:01.306Z"
+status: verifying
+stopped_at: Completed 07-08-PLAN.md (Phase 07 complete)
+last_updated: "2026-09-14T20:22:00.305Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 07 execution started
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 9
-  completed_plans: 8
-  percent: 17
+  completed_plans: 9
+  percent: 33
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 
 Phase: 07 (account-identity-proof-component-0x8009-legacy-clean-cut) — EXECUTING
 Plan: 8 of 8
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-14 — Phase 07 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -131,6 +131,7 @@ _Updated after each plan completion_
 | Phase 07 P05 | 25min | 2 tasks | 12 files |
 | Phase 07 P06 | 30min | 3 tasks | 15 files |
 | Phase 07 P07 | 15min | 2 tasks | 6 files |
+| Phase 07 P08 | 25min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -271,6 +272,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 07-06]: admin-policy's Add gate is a like-for-like swap only -- a proof-less Add is still skipped (KNOWN GAP D-06, transferred to Phase 8); legacy-only material is no longer skipped, it is validated and rejected (CUT-02)
 - [Phase 07]: [Phase 07-07]: Retired proof-v2-probe (Rust legacy fixture generator) in this plan rather than Phase 11, per RESEARCH Pitfall 2, so no template for the 0xf2f1 shape survives
 - [Phase 07]: [Phase 07-07]: admin-policy's D-06 known gap (proof-less Add skips the proof gate) is now pinned by a named test asserting the callback throws rather than rejects, transferred to Phase 8 GRP-02/GRP-04
+- [Phase ?]: [Phase 07-08]: Chose an optional ListedKeyPackage.nonCurrent listing field (Claude's Discretion per D-09), computed inline in KeyPackageStore.list() via validateKeyPackageAccountIdentityProof, rather than a separate query method
+- [Phase ?]: [Phase 07-08]: ensurePublished's selector change (!pkg.used && !pkg.nonCurrent) is the only production edit to that method -- create/rotate/remove/purge/selectForWelcome untouched, per the plan's explicit scope boundary
 
 ### Pending Todos
 
@@ -309,10 +312,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-14T20:13:01.296Z
-Stopped at: Completed 07-07-PLAN.md
+Last session: 2026-09-14T20:22:00.293Z
+Stopped at: Completed 07-08-PLAN.md (Phase 07 complete)
 Resume file:
 
-## Operator Next Steps
+None
 
 - Roadmap is ready. Plan the first v2.0 phase with `/gsd-plan-phase 6` (research-phase not recommended for Phase 6 — pure codec work against an already-verified spec vector).

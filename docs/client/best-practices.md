@@ -50,9 +50,19 @@ Every account must use completely separate `groupStateStore`, `keyPackageStore`,
 
 `watch()`, `watchKeyPackages()`, `watchUnread()`, and `history.subscribe()` are long-lived async generators. Break out of their loops (or abort them) when a component unmounts or the user switches accounts, and call `group.dispose()` when unloading a group, to avoid leaking listeners and timers.
 
-## Supply an account-identity-proof signer for interop
+## Migrating to account identity proof v2 (0x8009)
 
-To interoperate with darkmatter and other Marmot v2 implementations, provide an `accountProofSigner` so your LeafNodes carry a valid `marmot.account-identity-proof.v1`. Invites from peers that validate proofs (and `proposeInviteUser`) will otherwise reject your key packages.
+### Signer
+
+The client's own signer signs the `0x8009` account identity proof — NIP-07 and NIP-46 signers work the same as a local key signer. There is no separate `accountProofSigner` option anywhere in the library; every `generateKeyPackage` call always emits a current, verifiable proof.
+
+### Republish key packages
+
+A KeyPackage published by a pre-v2 release (or one built with the removed `accountProofSigner` option) carries the legacy proof shape and is never reused for new invitations. Call `client.keyPackages.ensurePublished({ relays })` to have the client skip any such entry and publish a fresh current KeyPackage automatically. List stored entries with `client.keyPackages.list()` — non-current ones carry `nonCurrent: true` — and remove them explicitly with `client.keyPackages.purge(refs)`. Nothing is deleted automatically.
+
+### Legacy groups
+
+Groups whose `GroupContext` still requires the legacy `0xf2f1` proof extension, or that never required `0x8009` at all, are outside the current profile: they cannot be joined, they do not interoperate with v2 peers, and they must be recreated.
 
 ## Next steps
 

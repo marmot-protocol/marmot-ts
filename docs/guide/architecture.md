@@ -47,7 +47,7 @@ the engine's outbound effects to relays).
 The [Core module](/core/) implements the Marmot v2 protocol layer and provides fundamental building blocks:
 
 - **Protocol Implementation:** MLS group operations following the Marmot v2 specifications (MIP-00 through MIP-03)
-- **Identity Bridging:** Converting Nostr public keys to MLS credentials (incl. the account-identity-proof LeafNode extension)
+- **Identity Bridging:** Converting Nostr public keys to MLS credentials (incl. the account identity proof app component, `0x8009`)
 - **Message Encryption:** Per-epoch MIP-03 encryption for group events; NIP-59 gift wraps for Welcomes
 - **Key Package Management:** Creating and handling cryptographic material for member addition
 - **State Serialization:** Encoding/decoding group state for persistence

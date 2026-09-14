@@ -45,6 +45,7 @@ const keyPackage = await generateKeyPackage({
   credential,
   ciphersuiteImpl,
   isLastResort: true,
+  signer, // signs the 0x8009 account identity proof
 });
 
 // keyPackage.publicPackage - publish this
@@ -58,6 +59,7 @@ All Marmot key packages must:
 - Use **basic credentials** (Nostr pubkeys)
 - Support **Marmot Group Data Extension** (0xf2ee)
 - Include **last_resort extension** (0x000a) when reusable key packages are desired
+- Carry a valid account identity proof app component (`0x8009`) on the LeafNode, signed by `signer`
 - Only use `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` ciphersuite
 - Have default lifetime of 3 months (configurable)
 
@@ -154,6 +156,7 @@ const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
 const kp = await generateKeyPackage({
   credential,
   ciphersuiteImpl,
+  signer, // signs the 0x8009 account identity proof
 });
 
 // 2. Calculate reference for storage

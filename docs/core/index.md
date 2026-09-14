@@ -12,7 +12,7 @@ The Core module (`marmot-ts/core`) implements the Marmot v2 protocol layer, prov
 The Core module is responsible for:
 
 - **Protocol Implementation:** MLS group operations following the Marmot v2 specifications (MIP-00 through MIP-03)
-- **Identity Bridging:** Converting Nostr public keys to MLS credentials, including the `marmot.account-identity-proof.v1` LeafNode extension
+- **Identity Bridging:** Converting Nostr public keys to MLS credentials, including the account identity proof app component (`0x8009`, `marmot.member.account-identity-proof.v2`)
 - **Message Encryption:** Group events (kind 445) encrypted with a per-epoch MIP-03 key; Welcome messages gift-wrapped via NIP-59
 - **Key Package Management:** Creating and handling cryptographic material for member addition
 - **State Serialization:** Encoding/decoding group state for persistence

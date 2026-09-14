@@ -16,7 +16,7 @@ TypeScript implementation of the [Marmot protocol](https://github.com/marmot-pro
 
 ## Marmot Protocol Compliance
 
-`marmot-ts` tracks the **Marmot v2** protocol and is wire-compatible with the [darkmatter](https://github.com/parres-hq/darkmatter) reference implementation — including the v2 app-component group model, MLS `PublicMessage`-framed handshakes, and the `marmot.account-identity-proof.v1` LeafNode extension.
+`marmot-ts` tracks the **Marmot v2** protocol and is wire-compatible with the [darkmatter](https://github.com/parres-hq/darkmatter) reference implementation — including the v2 app-component group model, MLS `PublicMessage`-framed handshakes, and the account identity proof app component (`0x8009`, `marmot.member.account-identity-proof.v2`).
 
 It currently supports the following [Marmot Improvement Proposals (MIPs)](https://github.com/marmot-protocol/mips):
 
@@ -40,7 +40,7 @@ pnpm add @internet-privacy/marmot-ts
 
 A `MarmotClient` needs four things to operate:
 
-1. **A signer** (`EventSigner`, from `applesauce-core`) — signs Nostr events on behalf of the user.
+1. **A signer** (`EventSigner`, from `applesauce-core`) — signs Nostr events on behalf of the user, including the `0x8009` account identity proof carried on every key package's LeafNode.
 2. **A network interface** (`NostrNetworkInterface`) — publishes, requests, and subscribes to events on relays.
 3. **A group state store** — persists serialized MLS group state (`GenericKeyValueStore<SerializedClientState>`).
 4. **A key package store** — persists local key package material (`GenericKeyValueStore<StoredKeyPackage>`).
@@ -49,7 +49,6 @@ The stores share a single interface: `GenericKeyValueStore<T>`.
 
 You can optionally supply:
 
-- **`accountProofSigner`** — signs the `marmot.account-identity-proof.v1` LeafNode extension. This needs raw BIP-340 access (the applesauce `EventSigner` cannot provide it) and is required for full wire interop with darkmatter, which validates the proof on every leaf.
 - **`inviteStore`** — persists received invites; defaults to an in-memory store.
 - **`historyFactory`** — wires a per-group message history backend (see [`GroupRumorHistory`](docs/client/history.md)).
 - **`clientId`** — a stable `d`-tag slot for your published kind 30443 key packages.

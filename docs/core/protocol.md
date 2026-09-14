@@ -86,9 +86,11 @@ Individual components can be read with the typed getters
 ### Required capabilities
 
 New groups declare a `required_capabilities` (`0x0003`) extension covering the
-Marmot baseline — `app_data_dictionary` (`0x0006`), account-identity-proof
-(`0xF2F1`), and the `app_data_update` proposal (`0x0008`) — so MLS refuses to
-add a member whose KeyPackage does not advertise them.
+Marmot baseline — `app_data_dictionary` (`0x0006`) and the `app_data_update`
+(`0x0008`) / `self_remove` (`0x000a`) proposals — so MLS refuses to add a
+member whose KeyPackage does not advertise them. Every new group also
+requires the account identity proof app component (`0x8009`) in its
+`app_components` list.
 
 ## Specification Reference
 

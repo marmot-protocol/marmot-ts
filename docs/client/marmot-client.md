@@ -31,14 +31,13 @@ const client = new MarmotClient({
 
 **Required dependencies:**
 
-- **`signer`** - Signs Nostr events; an `EventSigner` from `applesauce-core` (compatible with NIP-07, `applesauce-signers`, etc.)
+- **`signer`** - Signs Nostr events; an `EventSigner` from `applesauce-core` (compatible with NIP-07, `applesauce-signers`, etc.). Also signs the `0x8009` account identity proof carried on every key package's LeafNode.
 - **`network`** - Publishes/fetches events from Nostr relays (see [Network Interface](/client/network))
 - **`groupStateStore`** - Persists serialized MLS group state, `GenericKeyValueStore<SerializedClientState>` (see [Storage](/client/storage))
 - **`keyPackageStore`** - Stores key package private material and publish tracking, `GenericKeyValueStore<StoredKeyPackage>` (see [Storage](/client/storage))
 
 **Optional dependencies:**
 
-- **`accountProofSigner`** - Signs the `marmot.account-identity-proof.v1` LeafNode extension. Requires raw BIP-340 access (the applesauce `EventSigner` cannot provide it), and is required for full wire interop with darkmatter, which validates the proof on every leaf.
 - **`inviteStore`** - `GenericKeyValueStore<StoredInviteEntry>` backing `client.invites`; defaults to an in-memory store.
 - **`historyFactory`** - Per-group message history backend factory (see [History](/client/history)).
 - **`capabilities`** - MLS `Capabilities` advertised on key packages; defaults to `defaultCapabilities()`.

@@ -10,7 +10,7 @@ Each builder returns a `ProposalAction` — an async function `(context) => Prop
 
 ## Inviting users
 
-`proposeInviteUser` builds an Add proposal from a key package event (or a raw `KeyPackage`). The invitee's LeafNode must carry a valid `marmot.account-identity-proof.v1` — the builder verifies it and throws if it is missing or invalid.
+`proposeInviteUser` builds an Add proposal from a key package event (or a raw `KeyPackage`). The invitee's LeafNode must carry a valid `marmot.member.account-identity-proof.v2` (`0x8009`) proof, validated with its own ciphersuite — the builder throws `AccountIdentityProofError` if it is missing, invalid, or the legacy extension.
 
 For a single invite, the `client.groups.invite` shortcut handles the commit and Welcome delivery for you:
 

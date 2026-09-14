@@ -46,8 +46,8 @@ detached. That hook is the thing this example is really here to exercise.
   `focus.ts` defines the pane cycle.
 - **`src/helpers/`** — `RelayPool`, `Directory` (imperative relay-list/profile
   lookups that read from the shared `EventStore`, whose loader auto-fetches and
-  de-duplicates — the same cache the reactive UI casts read), `FileKeyValueStore`,
-  and the account-proof signer.
+  de-duplicates — the same cache the reactive UI casts read), and
+  `FileKeyValueStore`.
 
 ## Runtime
 

@@ -125,6 +125,7 @@ const ciphersuiteImpl = await defaultCryptoProvider.getCiphersuiteImpl(
 const myKeyPackage = await generateKeyPackage({
   credential,
   ciphersuiteImpl,
+  signer, // signs the 0x8009 account identity proof
 });
 
 // 2. Create the group (seeds profile + admin-policy + nostr routing components)

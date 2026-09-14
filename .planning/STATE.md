@@ -5,15 +5,15 @@ milestone_name: Account identity proof v2
 current_phase: 07
 current_phase_name: account-identity-proof-component-0x8009-legacy-clean-cut
 status: executing
-stopped_at: Completed 07-05-PLAN.md
-last_updated: "2026-09-14T19:43:36.066Z"
+stopped_at: Completed 07-06-PLAN.md
+last_updated: "2026-09-14T20:04:36.100Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 07 execution started
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 9
-  completed_plans: 6
+  completed_plans: 7
   percent: 17
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 ## Current Position
 
 Phase: 07 (account-identity-proof-component-0x8009-legacy-clean-cut) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 Status: Ready to execute
 Last activity: 2026-09-14 — Phase 07 execution started
 
@@ -129,6 +129,7 @@ _Updated after each plan completion_
 | Phase 07 P03 | 25min | 2 tasks | 17 files |
 | Phase 07 P04 | 35min | 2 tasks | 17 files |
 | Phase 07 P05 | 25min | 2 tasks | 12 files |
+| Phase 07 P06 | 30min | 3 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -265,6 +266,8 @@ Recent decisions affecting current work:
 - [Phase 07]: [Phase 07-03]: Replaced two getPublicKey-only EventSigner stubs with the matching testAccount's real signer, since they stood for an identity already migrated elsewhere in the same fixture
 - [Phase ?]: [Phase 07-04]: Updated key-package.test.ts's default-capabilities test to expect 2 leaf extensions (was 1) since every call now carries a real signer (D-02), always emitting the account-identity-proof extension alongside app_data_dictionary
 - [Phase ?]: [Phase 07-05]: Left existing getPublicKey-only EventSigner stubs untouched beyond swapping the underlying literal for the derived account pubkey -- those represent the local client's own identity for message-signing paths this plan does not touch, not the generateKeyPackage credential signer
+- [Phase ?]: [Phase 07-06]: CUT-01 stays Pending -- its 'legacy proof exports are removed' clause is still false until plan 07-07 deletes src/core/account-identity-proof.ts; marked PROOF-04/05/06 and CUT-02 Complete since every seam behavior they describe is now reachable and tested
+- [Phase ?]: [Phase 07-06]: admin-policy's Add gate is a like-for-like swap only -- a proof-less Add is still skipped (KNOWN GAP D-06, transferred to Phase 8); legacy-only material is no longer skipped, it is validated and rejected (CUT-02)
 
 ### Pending Todos
 
@@ -303,8 +306,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-14T19:43:36.056Z
-Stopped at: Completed 07-05-PLAN.md
+Last session: 2026-09-14T20:04:36.089Z
+Stopped at: Completed 07-06-PLAN.md
 Resume file:
 None
 

@@ -30,14 +30,14 @@ Shared `src/core` primitive per `foundation/authorization-proofs.md`; the accoun
 
 - [x] **PROOF-02**: The kind-450 proof event uses the exact 5 ordered tags, `0x`-hex ciphersuite/signature-scheme values, the fixed content string, and a real `created_at`, matching the spec signing test vector byte-for-byte (event id, signature, 104-byte component)
 - [x] **PROOF-03**: A generated KeyPackage leaf advertises `0x8009` in its `app_components` support list and carries exactly one `0x8009` entry inside its single LeafNode `app_data_dictionary` extension, via both raw-key and external signers
-- [ ] **PROOF-04**: A KeyPackage or member leaf is rejected when `0x8009` support or data is missing, the signer differs from the `BasicCredential` identity, the ciphersuite/scheme mismatches (KeyPackage validated with its own ciphersuite, member leaf with the group's), the signed MLS signature key differs from the leaf's, or the signature does not verify
-- [ ] **PROOF-05**: A `0x8009` proof placed in a KeyPackage-level `extensions` dictionary (instead of `keyPackage.leafNode.extensions`) is rejected
-- [ ] **PROOF-06**: `0x8009` data in a GroupContext dictionary, GroupInfo, `AppEphemeral` proposal, or SafeAAD item is rejected
+- [x] **PROOF-04**: A KeyPackage or member leaf is rejected when `0x8009` support or data is missing, the signer differs from the `BasicCredential` identity, the ciphersuite/scheme mismatches (KeyPackage validated with its own ciphersuite, member leaf with the group's), the signed MLS signature key differs from the leaf's, or the signature does not verify
+- [x] **PROOF-05**: A `0x8009` proof placed in a KeyPackage-level `extensions` dictionary (instead of `keyPackage.leafNode.extensions`) is rejected
+- [x] **PROOF-06**: `0x8009` data in a GroupContext dictionary, GroupInfo, `AppEphemeral` proposal, or SafeAAD item is rejected
 
 ### Legacy clean cut (CUT)
 
 - [ ] **CUT-01**: marmot-ts never emits `0xf2f1` — not in KeyPackage leaves, `Capabilities.extensions`, or required capabilities — and the legacy proof exports are removed
-- [ ] **CUT-02**: A KeyPackage or leaf carrying `0xf2f1` (alone or together with `0x8009`) is rejected, and a group requiring `0xf2f1` is rejected as outside the profile
+- [x] **CUT-02**: A KeyPackage or leaf carrying `0xf2f1` (alone or together with `0x8009`) is rejected, and a group requiring `0xf2f1` is rejected as outside the profile
 
 ### Group profile requirement (GRP)
 
@@ -110,11 +110,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTHZ-05 | Phase 6 | Complete |
 | PROOF-02 | Phase 7 | Complete |
 | PROOF-03 | Phase 7 | Complete |
-| PROOF-04 | Phase 7 | Pending |
-| PROOF-05 | Phase 7 | Pending |
-| PROOF-06 | Phase 7 | Pending |
+| PROOF-04 | Phase 7 | Complete |
+| PROOF-05 | Phase 7 | Complete |
+| PROOF-06 | Phase 7 | Complete |
 | CUT-01 | Phase 7 | Pending |
-| CUT-02 | Phase 7 | Pending |
+| CUT-02 | Phase 7 | Complete |
 | GRP-01 | Phase 8 | Pending |
 | GRP-02 | Phase 8 | Pending |
 | GRP-03 | Phase 8 | Pending |

@@ -75,7 +75,7 @@ removed from publish, verify, capabilities, and admin policy with no fallback pa
 4. marmot-ts never emits `0xf2f1` anywhere — not in leaves, `Capabilities.extensions`, or required capabilities — and the legacy proof exports no longer exist in the package.
 5. Any KeyPackage, leaf, or group still carrying or requiring `0xf2f1` is rejected outright.
 
-**Plans**: 5/8 plans executed
+**Plans**: 6/8 plans executed
 
 Plans:
 **Wave 1**
@@ -91,7 +91,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 07-06-PLAN.md — Atomic wire cut: required signer + `0x8009` leaf, groups require `0x8009`, `0xf2f1` dropped, invite/admin/join seams validate (wave 3)
+- [x] 07-06-PLAN.md — Atomic wire cut: required signer + `0x8009` leaf, groups require `0x8009`, `0xf2f1` dropped, invite/admin/join seams validate (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -199,7 +199,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 3.1 → 4 → 4.1 → 5 → 6
 | 4.1. Terminal Group Disbanding                             | v1.0      | 6/6             | Complete    | 2026-09-06 |
 | 5. Quality Gate                                            | v1.0      | 8/8             | Complete    | 2026-09-06 |
 | 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 1/1 | Complete    | 2026-09-12 |
-| 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 5/8 | In Progress|  |
+| 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 6/8 | In Progress|  |
 | 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 0/TBD           | Not started | -          |
 | 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 0/TBD           | Not started | -          |
 | 10. Founding Group Creation via Welcome                    | v2.0      | 0/TBD           | Not started | -          |

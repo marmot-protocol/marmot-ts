@@ -22,10 +22,13 @@ import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://mock-relay.test";
-const MEMBER = "e".repeat(64);
-const ADMIN = "a".repeat(64);
+const MEMBER_ACCOUNT = testAccount(11);
+const ADMIN_ACCOUNT = testAccount(6);
+const MEMBER = MEMBER_ACCOUNT.pubkey;
+const ADMIN = ADMIN_ACCOUNT.pubkey;
 const SIGNER = { getPublicKey: async () => MEMBER } as EventSigner;
 
 /** Mock network that acks every publish and records the envelopes. */
@@ -60,6 +63,7 @@ async function buildMemberState() {
 
   const adminKp = await generateKeyPackage({
     credential: createCredential(ADMIN),
+    signer: ADMIN_ACCOUNT.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: created } = await createSimpleGroup(
@@ -70,6 +74,7 @@ async function buildMemberState() {
   );
   const memberKp = await generateKeyPackage({
     credential: createCredential(MEMBER),
+    signer: MEMBER_ACCOUNT.signer,
     ciphersuiteImpl: impl,
   });
   const { welcome } = await createCommit({

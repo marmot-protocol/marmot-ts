@@ -20,6 +20,7 @@ import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { testAccount } from "../helpers/test-accounts.js";
 
 const NETWORK: NostrNetworkInterface = {
   request: async () => {
@@ -36,7 +37,8 @@ const NETWORK: NostrNetworkInterface = {
   },
 };
 
-const MEMBER = "e".repeat(64);
+const MEMBER_ACCOUNT = testAccount(11);
+const MEMBER = MEMBER_ACCOUNT.pubkey;
 const SIGNER = { getPublicKey: async () => MEMBER } as EventSigner;
 
 async function drain(gen: AsyncIterable<unknown>): Promise<void> {
@@ -54,18 +56,24 @@ describe("history tree persistence across restart", () => {
       authService: unsafeTestingAuthenticationService,
     };
 
+    const adminAccount = testAccount(6);
     const adminKp = await generateKeyPackage({
-      credential: createCredential("a".repeat(64)),
+      credential: createCredential(adminAccount.pubkey),
+      signer: adminAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: created } = await createSimpleGroup(
       adminKp,
       impl,
       "Test Group",
-      { adminPubkeys: ["a".repeat(64)], relays: ["wss://mock-relay.test"] },
+      {
+        adminPubkeys: [adminAccount.pubkey],
+        relays: ["wss://mock-relay.test"],
+      },
     );
     const memberKp = await generateKeyPackage({
       credential: createCredential(MEMBER),
+      signer: MEMBER_ACCOUNT.signer,
       ciphersuiteImpl: impl,
     });
     const { newState: adminE1, welcome } = await createCommit({

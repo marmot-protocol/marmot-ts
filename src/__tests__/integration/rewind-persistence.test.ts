@@ -34,6 +34,7 @@ import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { testAccount } from "../helpers/test-accounts.js";
 
 const NETWORK: NostrNetworkInterface = {
   request: async () => {
@@ -50,7 +51,8 @@ const NETWORK: NostrNetworkInterface = {
   },
 };
 
-const MEMBER_PUBKEY = "e".repeat(64);
+const MEMBER_ACCOUNT = testAccount(11);
+const MEMBER_PUBKEY = MEMBER_ACCOUNT.pubkey;
 const SIGNER = { getPublicKey: async () => MEMBER_PUBKEY } as EventSigner;
 
 /**
@@ -60,7 +62,8 @@ const SIGNER = { getPublicKey: async () => MEMBER_PUBKEY } as EventSigner;
  * canonical (lower) and losing (higher) post-commit member states.
  */
 async function buildForkScenario(impl: CiphersuiteImpl) {
-  const adminPubkey = "a".repeat(64);
+  const adminAccount = testAccount(6);
+  const adminPubkey = adminAccount.pubkey;
   const ctx = {
     cipherSuite: impl,
     authService: unsafeTestingAuthenticationService,
@@ -68,6 +71,7 @@ async function buildForkScenario(impl: CiphersuiteImpl) {
 
   const adminKp = await generateKeyPackage({
     credential: createCredential(adminPubkey),
+    signer: adminAccount.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: createdState } = await createSimpleGroup(
@@ -79,6 +83,7 @@ async function buildForkScenario(impl: CiphersuiteImpl) {
 
   const memberKp = await generateKeyPackage({
     credential: createCredential(MEMBER_PUBKEY),
+    signer: MEMBER_ACCOUNT.signer,
     ciphersuiteImpl: impl,
   });
   const { newState: adminEpoch1, welcome } = await createCommit({

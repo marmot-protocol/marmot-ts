@@ -52,6 +52,7 @@ describe("deterministic offline catchup pressure", () => {
               client,
               await generateKeyPackage({
                 credential: createCredential(identities.get(client)!),
+                signer: accounts.get(client)!.signer,
                 ciphersuiteImpl: ciphersuite,
               }),
             ] as const,

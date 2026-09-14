@@ -16,6 +16,7 @@ import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js"
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { GroupRegistry } from "../../client/group-registry.js";
 import { MockNetwork } from "../helpers/mock-network.js";
+import { testAccount } from "../helpers/test-accounts.js";
 import {
   resolveManifestArtifact,
   validateConformanceManifest,
@@ -75,8 +76,10 @@ describe("conformance adapter", () => {
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
+    const account = testAccount(6);
     const keyPackage = await generateKeyPackage({
-      credential: createCredential("a".repeat(64)),
+      credential: createCredential(account.pubkey),
+      signer: account.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState } = await createSimpleGroup(
@@ -84,7 +87,7 @@ describe("conformance adapter", () => {
       impl,
       "projection",
       {
-        adminPubkeys: ["a".repeat(64)],
+        adminPubkeys: [account.pubkey],
         relays: ["wss://relay.test"],
       },
     );
@@ -160,9 +163,11 @@ describe("conformance adapter", () => {
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
-    const pubkey = "a".repeat(64);
+    const account = testAccount(6);
+    const pubkey = account.pubkey;
     const keyPackage = await generateKeyPackage({
       credential: createCredential(pubkey),
+      signer: account.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState } = await createSimpleGroup(

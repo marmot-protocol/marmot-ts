@@ -24,10 +24,13 @@ import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { framedCommitProposals } from "../../engine/wire-format.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://mock-relay.test";
-const ADMIN = "a".repeat(64);
-const MEMBER = "d".repeat(64);
+const ADMIN_ACCOUNT = testAccount(6);
+const MEMBER_ACCOUNT = testAccount(9);
+const ADMIN = ADMIN_ACCOUNT.pubkey;
+const MEMBER = MEMBER_ACCOUNT.pubkey;
 const SIGNER = { getPublicKey: async () => ADMIN } as EventSigner;
 
 function ackingNetwork(): NostrNetworkInterface {
@@ -60,6 +63,7 @@ async function buildAdminState() {
 
   const adminKp = await generateKeyPackage({
     credential: createCredential(ADMIN),
+    signer: ADMIN_ACCOUNT.signer,
     ciphersuiteImpl: impl,
   });
   const { clientState: created } = await createSimpleGroup(
@@ -70,6 +74,7 @@ async function buildAdminState() {
   );
   const memberKp = await generateKeyPackage({
     credential: createCredential(MEMBER),
+    signer: MEMBER_ACCOUNT.signer,
     ciphersuiteImpl: impl,
   });
   const { newState: adminE1 } = await createCommit({

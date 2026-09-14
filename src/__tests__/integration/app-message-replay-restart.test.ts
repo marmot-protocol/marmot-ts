@@ -29,6 +29,7 @@ import {
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { testAccount } from "../helpers/test-accounts.js";
 import { TerminalWrapperLedger } from "../../client/group/wrapper-ledger.js";
 import restartFaultFixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/restart-delivery-faults.v1.json";
 import { projectCanonicalConformanceSnapshot } from "../conformance/snapshot.js";
@@ -84,14 +85,17 @@ describe("application message replay across restart", () => {
     };
     const aliceKp = await generateKeyPackage({
       credential: createCredential(alice),
+      signer: aliceAccount.signer,
       ciphersuiteImpl: impl,
     });
     const bobKp = await generateKeyPackage({
       credential: createCredential(bob),
+      signer: bobAccount.signer,
       ciphersuiteImpl: impl,
     });
     const carolKp = await generateKeyPackage({
       credential: createCredential(carol),
+      signer: carolAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: created } = await createSimpleGroup(
@@ -193,8 +197,10 @@ describe("application message replay across restart", () => {
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
-    const adminPubkey = "a".repeat(64);
-    const memberPubkey = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const memberAccount = testAccount(9);
+    const adminPubkey = adminAccount.pubkey;
+    const memberPubkey = memberAccount.pubkey;
     const ctx = {
       cipherSuite: impl,
       authService: unsafeTestingAuthenticationService,
@@ -204,6 +210,7 @@ describe("application message replay across restart", () => {
     // raw state we drive to produce one application message.
     const adminKp = await generateKeyPackage({
       credential: createCredential(adminPubkey),
+      signer: adminAccount.signer,
       ciphersuiteImpl: impl,
     });
     const { clientState: adminEpoch0 } = await createSimpleGroup(
@@ -214,6 +221,7 @@ describe("application message replay across restart", () => {
     );
     const memberKp = await generateKeyPackage({
       credential: createCredential(memberPubkey),
+      signer: memberAccount.signer,
       ciphersuiteImpl: impl,
     });
     const add = await createCommit({

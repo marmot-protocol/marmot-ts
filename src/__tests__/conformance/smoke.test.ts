@@ -15,6 +15,7 @@ import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { testAccount } from "../helpers/test-accounts.js";
 import { MarmotConformanceSubject, parseMdkScenarioStep } from "./subject.js";
 
 const VECTORS_ROOT = "refs/mdk/crates/cgka-conformance-simulator/vectors";
@@ -106,9 +107,11 @@ describe("portable MDK conformance smoke corpus", () => {
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
-    const pubkey = "a".repeat(64);
+    const account = testAccount(6);
+    const pubkey = account.pubkey;
     const keyPackage = await generateKeyPackage({
       credential: createCredential(pubkey),
+      signer: account.signer,
       ciphersuiteImpl: ciphersuite,
     });
     const { clientState } = await createSimpleGroup(

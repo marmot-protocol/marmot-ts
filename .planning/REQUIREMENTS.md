@@ -28,7 +28,7 @@ Shared `src/core` primitive per `foundation/authorization-proofs.md`; the accoun
 
 ### Account identity proof component (PROOF)
 
-- [ ] **PROOF-02**: The kind-450 proof event uses the exact 5 ordered tags, `0x`-hex ciphersuite/signature-scheme values, the fixed content string, and a real `created_at`, matching the spec signing test vector byte-for-byte (event id, signature, 104-byte component)
+- [x] **PROOF-02**: The kind-450 proof event uses the exact 5 ordered tags, `0x`-hex ciphersuite/signature-scheme values, the fixed content string, and a real `created_at`, matching the spec signing test vector byte-for-byte (event id, signature, 104-byte component)
 - [ ] **PROOF-03**: A generated KeyPackage leaf advertises `0x8009` in its `app_components` support list and carries exactly one `0x8009` entry inside its single LeafNode `app_data_dictionary` extension, via both raw-key and external signers
 - [ ] **PROOF-04**: A KeyPackage or member leaf is rejected when `0x8009` support or data is missing, the signer differs from the `BasicCredential` identity, the ciphersuite/scheme mismatches (KeyPackage validated with its own ciphersuite, member leaf with the group's), the signed MLS signature key differs from the leaf's, or the signature does not verify
 - [ ] **PROOF-05**: A `0x8009` proof placed in a KeyPackage-level `extensions` dictionary (instead of `keyPackage.leafNode.extensions`) is rejected
@@ -108,7 +108,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTHZ-03 | Phase 6 | Complete |
 | AUTHZ-04 | Phase 6 | Complete |
 | AUTHZ-05 | Phase 6 | Complete |
-| PROOF-02 | Phase 7 | Pending |
+| PROOF-02 | Phase 7 | Complete |
 | PROOF-03 | Phase 7 | Pending |
 | PROOF-04 | Phase 7 | Pending |
 | PROOF-05 | Phase 7 | Pending |

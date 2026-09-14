@@ -1,4 +1,4 @@
-import { EventSigner } from "applesauce-core/factories";
+import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import {
   CiphersuiteImpl,
   appDataUpdateProposalType,
@@ -47,13 +47,19 @@ import {
   createAdminCommitPolicyCallback,
   MarmotGroup,
 } from "../marmot-group.js";
+import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 
 async function createTestGroupState(
-  adminPubkey: string,
+  account: PrivateKeyAccount<any>,
   ciphersuiteImpl: CiphersuiteImpl,
 ) {
+  const adminPubkey = account.pubkey;
   const credential = createCredential(adminPubkey);
-  const kp = await generateKeyPackage({ credential, ciphersuiteImpl });
+  const kp = await generateKeyPackage({
+    credential,
+    ciphersuiteImpl,
+    signer: account.signer,
+  });
   const { clientState } = await createSimpleGroup(
     kp,
     ciphersuiteImpl,
@@ -65,12 +71,13 @@ async function createTestGroupState(
 
 describe("MarmotGroup lifecycle (group-state.md)", () => {
   it("automatically regenerates disband after real convergence selects a deeper active branch", async () => {
-    const admin = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const admin = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
-    const { clientState } = await createTestGroupState(admin, impl);
+    const { clientState } = await createTestGroupState(adminAccount, impl);
     const cloneState = () =>
       deserializeClientState(serializeClientState(clientState));
     let nowMs = 100;
@@ -88,7 +95,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     const target = new MarmotGroup(cloneState(), {
       store: new InMemoryKeyValueStore(),
       lifecycleStore: new InMemoryKeyValueStore(),
-      signer: { getPublicKey: async () => admin } as EventSigner,
+      signer: adminAccount.signer,
       ciphersuite: impl,
       network: targetNetwork,
       now: () => nowMs,
@@ -103,7 +110,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
 
     const competitor = new MarmotGroup(cloneState(), {
       store: new InMemoryKeyValueStore(),
-      signer: { getPublicKey: async () => admin } as EventSigner,
+      signer: adminAccount.signer,
       ciphersuite: impl,
       network: new MockNetwork(["wss://relay.test"]),
     });
@@ -158,8 +165,10 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
   });
 
   it("rejects public legacy enablement when any resulting leaf lacks lifecycle support", async () => {
-    const admin = "a".repeat(64);
-    const member = "e".repeat(64);
+    const adminAccount = testAccount(6);
+    const admin = adminAccount.pubkey;
+    const memberAccount = testAccount(11);
+    const member = memberAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -167,10 +176,12 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     const adminPackage = await generateKeyPackage({
       credential: createCredential(admin),
       ciphersuiteImpl: impl,
+      signer: adminAccount.signer,
     });
     const memberPackage = await generateKeyPackage({
       credential: createCredential(member),
       ciphersuiteImpl: impl,
+      signer: memberAccount.signer,
     });
     const { clientState } = await createSimpleGroup(
       adminPackage,
@@ -228,7 +239,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     const group = new MarmotGroup(legacy, {
       store: new InMemoryKeyValueStore(),
       lifecycleStore: new InMemoryKeyValueStore(),
-      signer: { getPublicKey: async () => admin } as EventSigner,
+      signer: adminAccount.signer,
       ciphersuite: impl,
       network,
     });
@@ -240,18 +251,19 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
   });
 
   it("publishes disband intent once and keeps the durable request pending", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
-    const { clientState } = await createTestGroupState(adminPubkey, impl);
+    const { clientState } = await createTestGroupState(adminAccount, impl);
     const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
     const network = new MockNetwork(["wss://relay.test"]);
     const group = new MarmotGroup(clientState, {
       store: new InMemoryKeyValueStore(),
       lifecycleStore,
-      signer: { getPublicKey: async () => adminPubkey } as EventSigner,
+      signer: adminAccount.signer,
       ciphersuite: impl,
       network,
     });
@@ -269,12 +281,13 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
   });
 
   it("retains disband intent and rolls staged state back on publish failure", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
-    const { clientState } = await createTestGroupState(adminPubkey, impl);
+    const { clientState } = await createTestGroupState(adminAccount, impl);
     const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
     const network = new MockNetwork(["wss://relay.test"]);
     vi.spyOn(network, "publish").mockResolvedValue({
@@ -283,7 +296,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     const group = new MarmotGroup(clientState, {
       store: new InMemoryKeyValueStore(),
       lifecycleStore,
-      signer: { getPublicKey: async () => adminPubkey } as EventSigner,
+      signer: adminAccount.signer,
       ciphersuite: impl,
       network,
     });
@@ -298,16 +311,17 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
   });
 
   it("reports lifecycle enablement idempotently through the public facade", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
-    const { clientState } = await createTestGroupState(adminPubkey, impl);
+    const { clientState } = await createTestGroupState(adminAccount, impl);
     const group = new MarmotGroup(clientState, {
       store: new InMemoryKeyValueStore(),
       lifecycleStore: new InMemoryKeyValueStore(),
-      signer: { getPublicKey: async () => adminPubkey } as EventSigner,
+      signer: adminAccount.signer,
       ciphersuite: impl,
       network: new MockNetwork(["wss://relay.test"]),
     });
@@ -318,13 +332,18 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
   });
 
   it("starts Stable, returns to Stable after commit, and resets to Stable on publish failure", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const credential = createCredential(adminPubkey);
-    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const kp = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl: impl,
+      signer: adminAccount.signer,
+    });
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
       adminPubkeys: [adminPubkey],
       relays: ["wss://relay.test"],
@@ -347,9 +366,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
           : { from: "wss://relay.test", ok: true },
       }),
     };
-    const signer = {
-      getPublicKey: async () => adminPubkey,
-    } as EventSigner;
+    const signer = adminAccount.signer;
 
     const group = new MarmotGroup(clientState, {
       store: new InMemoryKeyValueStore(),
@@ -407,13 +424,18 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
   });
 
   it("publishes session effects through the group runtime", async () => {
-    const adminPubkey = "a".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const credential = createCredential(adminPubkey);
-    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const kp = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl: impl,
+      signer: adminAccount.signer,
+    });
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
       adminPubkeys: [adminPubkey],
       relays: ["wss://relay.test"],
@@ -430,7 +452,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
         "wss://relay.test": { from: "wss://relay.test", ok: true },
       }),
     };
-    const signer = { getPublicKey: async () => adminPubkey } as EventSigner;
+    const signer = adminAccount.signer;
     const group = new MarmotGroup(clientState, {
       store: new InMemoryKeyValueStore(),
       signer,
@@ -458,8 +480,10 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
 
 describe("MarmotGroup admin verification (MIP-03)", () => {
   it("rejects commits from non-admin members", async () => {
-    const adminPubkey = "a".repeat(64);
-    const nonAdminPubkey = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
+    const nonAdminAccount = testAccount(9);
+    const nonAdminPubkey = nonAdminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -467,7 +491,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
 
     // Create initial group with admin as sole member
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
 
@@ -476,6 +500,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     const nonAdminKeyPackage = await generateKeyPackage({
       credential: nonAdminCredential,
       ciphersuiteImpl: impl,
+      signer: nonAdminAccount.signer,
     });
 
     const addProposal = {
@@ -511,11 +536,13 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     // Non-admin attempts to create a commit (should be rejected by admin verification)
     // Create a commit that includes proposals (not a self-update), which MUST remain
     // admin-only under MIP-03.
-    const thirdPubkey = "e".repeat(64);
+    const thirdAccount = testAccount(11);
+    const thirdPubkey = thirdAccount.pubkey;
     const thirdCredential = createCredential(thirdPubkey);
     const thirdKeyPackage = await generateKeyPackage({
       credential: thirdCredential,
       ciphersuiteImpl: impl,
+      signer: thirdAccount.signer,
     });
     const nonAdminAddProposal = {
       proposalType: defaultProposalTypes.add,
@@ -555,9 +582,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
       },
     };
 
-    const signer = {
-      getPublicKey: async () => adminPubkey,
-    } as EventSigner;
+    const signer = adminAccount.signer;
 
     const group = new MarmotGroup(adminStateEpoch1, {
       store,
@@ -648,8 +673,10 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
   });
 
   it("accepts non-admin self-update commits (no proposals) (MIP-02)", async () => {
-    const adminPubkey = "a".repeat(64);
-    const nonAdminPubkey = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
+    const nonAdminAccount = testAccount(9);
+    const nonAdminPubkey = nonAdminAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -657,7 +684,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
 
     // Create initial group with admin as sole member
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
 
@@ -666,6 +693,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     const nonAdminKeyPackage = await generateKeyPackage({
       credential: nonAdminCredential,
       ciphersuiteImpl: impl,
+      signer: nonAdminAccount.signer,
     });
 
     const addProposal = {
@@ -730,9 +758,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
       },
     };
 
-    const signer = {
-      getPublicKey: async () => adminPubkey,
-    } as EventSigner;
+    const signer = adminAccount.signer;
 
     const group = new MarmotGroup(adminStateEpoch1, {
       store,
@@ -767,8 +793,10 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
   });
 
   it("accepts commits from admin members", async () => {
-    const adminPubkey = "a".repeat(64);
-    const memberPubkey = "d".repeat(64);
+    const adminAccount = testAccount(6);
+    const adminPubkey = adminAccount.pubkey;
+    const memberAccount = testAccount(9);
+    const memberPubkey = memberAccount.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -776,7 +804,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
 
     // Create initial group with admin as sole member
     const { clientState: createdState } = await createTestGroupState(
-      adminPubkey,
+      adminAccount,
       impl,
     );
 
@@ -788,6 +816,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     const memberKeyPackage = await generateKeyPackage({
       credential: memberCredential,
       ciphersuiteImpl: impl,
+      signer: memberAccount.signer,
     });
 
     const addProposal = {
@@ -853,9 +882,7 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
       },
     };
 
-    const signer = {
-      getPublicKey: async () => memberPubkey,
-    } as EventSigner;
+    const signer = memberAccount.signer;
 
     const group = new MarmotGroup(memberStateEpoch1, {
       store,

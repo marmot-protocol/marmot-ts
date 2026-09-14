@@ -2,19 +2,15 @@
  * Tests that the invite proposal verifies a Marmot account identity proof when
  * the invitee's LeafNode carries one, and rejects a forged proof.
  */
-import { bytesToHex } from "@noble/hashes/utils.js";
-import { schnorr } from "@noble/curves/secp256k1.js";
 import {
   type CiphersuiteImpl,
   defaultCryptoProvider,
   getCiphersuiteImpl,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
+import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 
-import {
-  ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
-  signAccountIdentityProof,
-} from "../../../../core/account-identity-proof.js";
+import { ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE } from "../../../../core/account-identity-proof.js";
 import { createCredential } from "../../../../core/credential.js";
 import { generateKeyPackage } from "../../../../core/key-package.js";
 import type { ProposalContext } from "../../marmot-group.js";
@@ -26,14 +22,12 @@ async function keyPackageWithProof(
   impl: CiphersuiteImpl,
   secretKey: Uint8Array,
 ) {
-  const credential = createCredential(
-    bytesToHex(schnorr.getPublicKey(secretKey)),
-  );
+  const account = PrivateKeyAccount.fromKey(secretKey);
+  const credential = createCredential(account.pubkey);
   return generateKeyPackage({
     credential,
     ciphersuiteImpl: impl,
-    accountProofSigner: (request) =>
-      signAccountIdentityProof(request, secretKey),
+    signer: account.signer,
   });
 }
 

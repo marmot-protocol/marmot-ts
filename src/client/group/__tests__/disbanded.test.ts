@@ -1,4 +1,3 @@
-import { EventSigner } from "applesauce-core/factories";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { describe, expect, it, vi } from "vitest";
@@ -16,6 +15,7 @@ import {
   encodeDisbandTombstone,
   type DisbandTombstone,
 } from "../../../engine/disband-tombstone.js";
+import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 
 const GROUP_ID = new Uint8Array([1, 2, 3]);
 const COMMIT_DIGEST = new Uint8Array(32).fill(4);
@@ -74,7 +74,8 @@ describe("disband tombstone", () => {
 });
 
 async function fixture() {
-  const pubkey = "a".repeat(64);
+  const account = testAccount(6);
+  const pubkey = account.pubkey;
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
@@ -82,6 +83,7 @@ async function fixture() {
   const kp = await generateKeyPackage({
     credential: createCredential(pubkey),
     ciphersuiteImpl: impl,
+    signer: account.signer,
   });
   const { clientState } = await createSimpleGroup(kp, impl, "terminal", {
     adminPubkeys: [pubkey],
@@ -93,16 +95,17 @@ async function fixture() {
   const group = new MarmotGroup(clientState, {
     store,
     lifecycleStore,
-    signer: { getPublicKey: async () => pubkey } as EventSigner,
+    signer: account.signer,
     ciphersuite: impl,
     network,
   });
-  return { group, lifecycleStore, store, network, pubkey };
+  return { group, lifecycleStore, store, network, pubkey, account };
 }
 
 describe("public disband terminal contract", () => {
   it("repairs a missing registry shell after the tombstone write and survives two restarts", async () => {
-    const { group, lifecycleStore, store, network, pubkey } = await fixture();
+    const { group, lifecycleStore, store, network, pubkey, account } =
+      await fixture();
     await group.save(true);
     let failShell = true;
     const faultStore = {
@@ -121,7 +124,7 @@ describe("public disband terminal contract", () => {
     const crashing = new MarmotGroup(group.state, {
       store,
       lifecycleStore: faultStore,
-      signer: { getPublicKey: async () => pubkey } as EventSigner,
+      signer: account.signer,
       ciphersuite: group.ciphersuite,
       network,
     });
@@ -139,7 +142,7 @@ describe("public disband terminal contract", () => {
       store,
       ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
       lifecycleStore,
-      signer: { getPublicKey: async () => pubkey } as EventSigner,
+      signer: account.signer,
       network,
     };
     const first = new GroupRegistry(options);
@@ -150,7 +153,8 @@ describe("public disband terminal contract", () => {
   });
 
   it("discovers and loads a scrubbed terminal facade after live-state cleanup", async () => {
-    const { group, lifecycleStore, store, network, pubkey } = await fixture();
+    const { group, lifecycleStore, store, network, pubkey, account } =
+      await fixture();
     await group.session.persistSelectedDisband({
       actorPubkey: pubkey,
       commitDigest: COMMIT_DIGEST,
@@ -164,7 +168,7 @@ describe("public disband terminal contract", () => {
       store,
       ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
       lifecycleStore,
-      signer: { getPublicKey: async () => pubkey } as EventSigner,
+      signer: account.signer,
       network,
     });
     expect((await registry.listIds()).map(bytesToHex)).toContain(group.idStr);

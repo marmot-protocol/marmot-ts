@@ -1,5 +1,4 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { EventSigner } from "applesauce-core";
 import {
   type CiphersuiteImpl,
   createCommit,
@@ -19,6 +18,7 @@ import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
 import { MarmotGroup } from "../marmot-group.js";
+import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 
 const NETWORK: NostrNetworkInterface = {
   request: async () => {
@@ -35,8 +35,9 @@ const NETWORK: NostrNetworkInterface = {
   },
 };
 
-const MEMBER = "e".repeat(64);
-const SIGNER = { getPublicKey: async () => MEMBER } as EventSigner;
+const MEMBER_ACCOUNT = testAccount(11);
+const MEMBER = MEMBER_ACCOUNT.pubkey;
+const SIGNER = MEMBER_ACCOUNT.signer;
 
 async function drain(gen: AsyncIterable<unknown>): Promise<void> {
   for await (const _ of gen) void _;
@@ -53,19 +54,25 @@ describe("MarmotGroup fork-tree customer API", () => {
       authService: unsafeTestingAuthenticationService,
     };
 
+    const adminAccount = testAccount(6);
     const adminKp = await generateKeyPackage({
-      credential: createCredential("a".repeat(64)),
+      credential: createCredential(adminAccount.pubkey),
       ciphersuiteImpl: impl,
+      signer: adminAccount.signer,
     });
     const { clientState: created } = await createSimpleGroup(
       adminKp,
       impl,
       "Test Group",
-      { adminPubkeys: ["a".repeat(64)], relays: ["wss://mock-relay.test"] },
+      {
+        adminPubkeys: [adminAccount.pubkey],
+        relays: ["wss://mock-relay.test"],
+      },
     );
     const memberKp = await generateKeyPackage({
       credential: createCredential(MEMBER),
       ciphersuiteImpl: impl,
+      signer: MEMBER_ACCOUNT.signer,
     });
     const { newState: adminE1, welcome } = await createCommit({
       context: ctx,

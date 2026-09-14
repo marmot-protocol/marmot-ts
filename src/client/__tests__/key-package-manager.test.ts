@@ -244,6 +244,7 @@ describe("KeyPackageManager", () => {
       const kp = await generateKeyPackage({
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
+        signer: account.signer,
       });
       await manager.add(kp);
 
@@ -281,6 +282,7 @@ describe("KeyPackageManager", () => {
       const kp = await generateKeyPackage({
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
+        signer: account.signer,
       });
       // add without d — simulates legacy entry
       await manager.add(kp);
@@ -367,6 +369,7 @@ describe("KeyPackageManager", () => {
       const kp = await generateKeyPackage({
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
+        signer: account.signer,
       });
       await manager.add(kp);
 
@@ -538,6 +541,7 @@ describe("KeyPackageManager", () => {
       const kp = await generateKeyPackage({
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
+        signer: account.signer,
       });
       await manager.add(kp);
       const listed = await manager.list();
@@ -953,6 +957,7 @@ describe("KeyPackageManager", () => {
       const kp = await generateKeyPackage({
         credential: createCredential(pubkey),
         ciphersuiteImpl,
+        signer: account.signer,
       });
       const now = BigInt(Math.floor(Date.now() / 1000));
       const overCapPackage = {
@@ -1001,6 +1006,7 @@ describe("KeyPackageManager", () => {
       const kp = await generateKeyPackage({
         credential: createCredential(pubkey),
         ciphersuiteImpl,
+        signer: account.signer,
       });
       const now = BigInt(Math.floor(Date.now() / 1000));
       const expiredPackage = {
@@ -1160,6 +1166,7 @@ describe("KeyPackageManager", () => {
       const kp = await generateKeyPackage({
         credential: createCredential(pubkey),
         ciphersuiteImpl: ciphersuite,
+        signer: account.signer,
       });
       await manager.add(kp);
 

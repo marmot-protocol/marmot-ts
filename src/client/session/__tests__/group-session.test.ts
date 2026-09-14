@@ -23,9 +23,12 @@ import type { UnreadableIngestResult } from "../group-session.js";
 import type { IngestResult as EngineIngestResult } from "../../../engine/types.js";
 import { disbandTombstoneKey } from "../../../engine/disband-tombstone.js";
 import { encodeDisbandRequest } from "../../../engine/disband-request.js";
+import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 
-const ADMIN = "a".repeat(64);
-const MEMBER = "d".repeat(64);
+const ADMIN_ACCOUNT = testAccount(6);
+const MEMBER_ACCOUNT = testAccount(9);
+const ADMIN = ADMIN_ACCOUNT.pubkey;
+const MEMBER = MEMBER_ACCOUNT.pubkey;
 
 type EngineUnreadableIngestResult = Extract<
   EngineIngestResult<import("applesauce-core/helpers/event").NostrEvent>,
@@ -66,7 +69,11 @@ async function getImpl(): Promise<CiphersuiteImpl> {
 
 async function createAdminState(impl: CiphersuiteImpl) {
   const credential = createCredential(ADMIN);
-  const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+  const kp = await generateKeyPackage({
+    credential,
+    ciphersuiteImpl: impl,
+    signer: ADMIN_ACCOUNT.signer,
+  });
   const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
     adminPubkeys: [ADMIN],
     relays: ["wss://relay.test"],
@@ -84,6 +91,7 @@ async function createTwoMemberStates(impl: CiphersuiteImpl) {
   const memberKp = await generateKeyPackage({
     credential: createCredential(MEMBER),
     ciphersuiteImpl: impl,
+    signer: MEMBER_ACCOUNT.signer,
   });
 
   const { newState: adminEpoch1, welcome } = await createCommit({

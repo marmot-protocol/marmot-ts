@@ -13,12 +13,18 @@ import { generateKeyPackage } from "../../../core/key-package.js";
 import type { MediaAttachment } from "../../../core/media.js";
 import { GroupMediaService } from "../group-media-service.js";
 import type { BaseGroupMedia, StoredMedia } from "../marmot-group.js";
+import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 
-const ADMIN = "a".repeat(64);
+const ADMIN_ACCOUNT = testAccount(6);
+const ADMIN = ADMIN_ACCOUNT.pubkey;
 
 async function createState(impl: CiphersuiteImpl) {
   const credential = createCredential(ADMIN);
-  const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+  const kp = await generateKeyPackage({
+    credential,
+    ciphersuiteImpl: impl,
+    signer: ADMIN_ACCOUNT.signer,
+  });
   const { clientState } = await createSimpleGroup(kp, impl, "Media Group", {
     adminPubkeys: [ADMIN],
     relays: [],

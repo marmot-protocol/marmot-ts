@@ -13,15 +13,21 @@ import { generateKeyPackage } from "../../core/key-package.js";
 import { StoredKeyPackage } from "../key-package-manager.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 
 const CIPHERSUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
 
 describe("admin pubkey deduplication — createSimpleGroup", () => {
   it("deduplicates exact duplicate pubkeys passed in adminPubkeys", async () => {
     const impl = await getCiphersuiteImpl(CIPHERSUITE, defaultCryptoProvider);
-    const pubkey = "a".repeat(64);
+    const account = testAccount(6);
+    const pubkey = account.pubkey;
     const credential = createCredential(pubkey);
-    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const kp = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl: impl,
+      signer: account.signer,
+    });
 
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
       adminPubkeys: [pubkey, pubkey, pubkey],
@@ -37,10 +43,15 @@ describe("admin pubkey deduplication — createSimpleGroup", () => {
 
   it("deduplicates when multiple distinct pubkeys have some duplicates", async () => {
     const impl = await getCiphersuiteImpl(CIPHERSUITE, defaultCryptoProvider);
-    const alice = "a".repeat(64);
+    const aliceAccount = testAccount(6);
+    const alice = aliceAccount.pubkey;
     const bob = "b".repeat(64);
     const credential = createCredential(alice);
-    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const kp = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl: impl,
+      signer: aliceAccount.signer,
+    });
 
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
       adminPubkeys: [alice, bob, alice, bob, "c".repeat(64)],
@@ -59,9 +70,14 @@ describe("admin pubkey deduplication — createSimpleGroup", () => {
 
   it("preserves a single pubkey without modification", async () => {
     const impl = await getCiphersuiteImpl(CIPHERSUITE, defaultCryptoProvider);
-    const pubkey = "a".repeat(64);
+    const account = testAccount(6);
+    const pubkey = account.pubkey;
     const credential = createCredential(pubkey);
-    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const kp = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl: impl,
+      signer: account.signer,
+    });
 
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
       adminPubkeys: [pubkey],
@@ -74,9 +90,14 @@ describe("admin pubkey deduplication — createSimpleGroup", () => {
 
   it("handles an empty adminPubkeys list without error", async () => {
     const impl = await getCiphersuiteImpl(CIPHERSUITE, defaultCryptoProvider);
-    const pubkey = "a".repeat(64);
+    const account = testAccount(6);
+    const pubkey = account.pubkey;
     const credential = createCredential(pubkey);
-    const kp = await generateKeyPackage({ credential, ciphersuiteImpl: impl });
+    const kp = await generateKeyPackage({
+      credential,
+      ciphersuiteImpl: impl,
+      signer: account.signer,
+    });
 
     const { clientState } = await createSimpleGroup(kp, impl, "Test Group", {
       adminPubkeys: [],

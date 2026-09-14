@@ -1,4 +1,3 @@
-import { EventSigner } from "applesauce-core/factories";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
@@ -8,10 +7,12 @@ import { generateKeyPackage } from "../../core/key-package.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { MarmotGroup } from "../group/marmot-group.js";
+import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 
 describe("disbanded inbound routing", () => {
   it("classifies every late envelope before peel", async () => {
-    const pubkey = "a".repeat(64);
+    const account = testAccount(6);
+    const pubkey = account.pubkey;
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -19,6 +20,7 @@ describe("disbanded inbound routing", () => {
     const kp = await generateKeyPackage({
       credential: createCredential(pubkey),
       ciphersuiteImpl: impl,
+      signer: account.signer,
     });
     const { clientState } = await createSimpleGroup(kp, impl, "terminal", {
       adminPubkeys: [pubkey],
@@ -27,7 +29,7 @@ describe("disbanded inbound routing", () => {
     const group = new MarmotGroup(clientState, {
       store: new InMemoryKeyValueStore(),
       lifecycleStore: new InMemoryKeyValueStore(),
-      signer: { getPublicKey: async () => pubkey } as EventSigner,
+      signer: account.signer,
       ciphersuite: impl,
       network: new MockNetwork(["wss://relay.test"]),
     });

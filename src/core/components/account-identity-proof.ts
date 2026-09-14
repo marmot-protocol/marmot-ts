@@ -20,15 +20,40 @@
  * @see refs/marmot/foundation/authorization-proofs.md
  * @see refs/mdk/crates/cgka-engine/src/account_identity_proof.rs
  */
+import { schnorr } from "@noble/curves/secp256k1.js";
+import { bytesToNumberBE } from "@noble/curves/utils.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
+import {
+  appDataDictionaryExtensionType,
+  defaultCredentialTypes,
+  defaultExtensionTypes,
+  getAppDataDictionary,
+  getGroupMembers,
+  type ClientState,
+  type CredentialBasic,
+  type ExtensionRequiredCapabilities,
+  type GroupContextExtension,
+  type KeyPackage,
+  type LeafNode,
+} from "ts-mls";
 
 import {
+  type AuthorizationProof,
   type AuthorizationProofSigner,
   type AuthorizationProofTemplate,
+  AuthorizationProofError,
+  decodeAuthorizationProof,
   encodeAuthorizationProof,
   produceAuthorizationProof,
+  verifyAuthorizationProof,
 } from "../authorization-proof.js";
-import { ACCOUNT_IDENTITY_PROOF_COMPONENT_ID } from "./ids.js";
+import { BinaryReader } from "../binary.js";
+import { decodeComponentsList } from "./app-components-list.js";
+import {
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+  APP_COMPONENTS_COMPONENT_ID,
+  SAFE_AAD_COMPONENT_ID,
+} from "./ids.js";
 
 /** The kind-450 proof event carries this fixed `d` tag value (spec-mandated; not editable). */
 const ACCOUNT_IDENTITY_PROOF_DOMAIN = "marmot.account-identity-proof.v2";
@@ -184,4 +209,474 @@ export async function produceAccountIdentityProof(
     createdAt: params.createdAt,
   });
   return encodeAuthorizationProof(proof);
+}
+
+// ---------------------------------------------------------------------------
+// Validators, profile classifier, and container location guards
+// ---------------------------------------------------------------------------
+
+/**
+ * The deployed legacy `marmot.account-identity-proof.v2` custom LeafNode extension type
+ * (`../account-identity-proof.js`). Not exported: CUT-01 forbids any legacy export from this
+ * module — it exists here only so validators can detect and reject it (Pitfall 10).
+ */
+const LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE = 0xf2f1;
+
+/**
+ * Signature-key byte lengths a scheme accepts. Ed25519/Ed448 (`0x0807`/`0x0808`) have one
+ * valid length; the ECDSA schemes accept both noble's default compressed SEC1 output and
+ * MLS/OpenMLS's uncompressed SEC1 form (planning-time fact, RESEARCH).
+ */
+const SIGNATURE_KEY_LENGTHS_BY_SCHEME: Record<number, readonly number[]> = {
+  0x0807: [32],
+  0x0808: [57],
+  0x0403: [33, 65],
+  0x0503: [49, 97],
+  0x0603: [67, 133],
+};
+
+/** A single raw `{ componentId, data }` entry read directly off `app_data_dictionary` bytes. */
+interface RawDictionaryEntry {
+  componentId: number;
+  data: Uint8Array;
+}
+
+/**
+ * Raw-parses `app_data_dictionary` extension bytes as an MLS vector of
+ * `{ uint16 componentId; opaque data<V> }`, without building a `Map` — so duplicate
+ * component ids (including duplicate `0x8009` entries) survive into the result instead of
+ * being silently collapsed by a dictionary-style decoder (Pitfall 8). Never routes through
+ * `ts-mls`'s `getAppDataDictionary`, which throws on a duplicate id rather than reporting
+ * the count.
+ */
+function readDictionaryEntries(
+  extensionData: Uint8Array,
+): RawDictionaryEntry[] {
+  try {
+    const reader = new BinaryReader(extensionData);
+    const entries = reader.vector((r) => ({
+      componentId: r.uint16(),
+      data: r.opaque(),
+    }));
+    reader.end();
+    return entries;
+  } catch (err) {
+    throw new AccountIdentityProofError(
+      `account identity proof dictionary did not decode: ${err instanceof Error ? err.message : String(err)}`,
+      "invalid-dictionary",
+      { cause: err instanceof Error ? err : undefined },
+    );
+  }
+}
+
+/**
+ * Narrows a heterogeneous extension list (GroupContext, GroupInfo, LeafNode, or KeyPackage
+ * extensions all pass structurally) down to the `app_data_dictionary`-typed entries whose
+ * `extensionData` is raw bytes.
+ */
+function dictionaryExtensionsOf(
+  extensions: readonly { extensionType: number }[],
+): { extensionType: number; extensionData: Uint8Array }[] {
+  return extensions.filter(
+    (ext): ext is { extensionType: number; extensionData: Uint8Array } =>
+      ext.extensionType === appDataDictionaryExtensionType &&
+      (ext as { extensionData?: unknown }).extensionData instanceof Uint8Array,
+  );
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/**
+ * Converts any throw from the shared envelope primitive's decode/verify steps (an
+ * `AuthorizationProofError`, or any other error) into `AccountIdentityProofError` with
+ * reason `invalid-proof`, preserving the original as `cause`. No untyped error may escape a
+ * validator in this module (T-07-06).
+ */
+function wrapAsInvalidProof(err: unknown): AccountIdentityProofError {
+  return new AccountIdentityProofError(
+    `account identity proof envelope invalid: ${err instanceof Error ? err.message : String(err)}`,
+    "invalid-proof",
+    {
+      cause:
+        err instanceof AuthorizationProofError
+          ? err
+          : err instanceof Error
+            ? err
+            : undefined,
+    },
+  );
+}
+
+/**
+ * Validates a `0x8009` account identity proof on a single MLS LeafNode against an explicit
+ * ciphersuite (D-16: never inferred from the leaf itself). Throws `AccountIdentityProofError`
+ * on the first failing check, in the exact order documented below.
+ *
+ * @see refs/marmot/app-components/account-identity-proof-v2.md "Validation"
+ */
+export function validateLeafAccountIdentityProof(
+  leaf: LeafNode,
+  ciphersuite: number,
+): void {
+  // 1. Credential must be basic with a 32-byte, on-curve x-only identity.
+  if (leaf.credential.credentialType !== defaultCredentialTypes.basic)
+    throw new AccountIdentityProofError(
+      "leaf credential is not a basic credential",
+      "invalid-credential",
+    );
+  const identity = (leaf.credential as CredentialBasic).identity;
+  if (identity.length !== 32)
+    throw new AccountIdentityProofError(
+      "credential identity must be exactly 32 bytes",
+      "invalid-credential",
+    );
+  try {
+    schnorr.utils.lift_x(bytesToNumberBE(identity));
+  } catch {
+    throw new AccountIdentityProofError(
+      "credential identity is not a valid x-only secp256k1 point",
+      "invalid-credential",
+    );
+  }
+
+  // 2. Any legacy 0xf2f1 extension anywhere on the leaf is an outright reject (CUT-02,
+  //    Pitfall 10) — covers both legacy-only and mixed leaves.
+  if (
+    leaf.extensions.some(
+      (ext) =>
+        ext.extensionType === LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+    )
+  )
+    throw new AccountIdentityProofError(
+      "leaf carries the legacy 0xf2f1 account identity proof extension",
+      "legacy-extension-present",
+    );
+
+  // 3. Exactly one app_data_dictionary extension.
+  const dictionaryExtensions = dictionaryExtensionsOf(leaf.extensions);
+  if (dictionaryExtensions.length > 1)
+    throw new AccountIdentityProofError(
+      "leaf carries more than one app_data_dictionary extension",
+      "duplicate-data",
+    );
+  if (dictionaryExtensions.length === 0)
+    throw new AccountIdentityProofError(
+      "leaf carries no app_data_dictionary extension",
+      "missing-support",
+    );
+
+  const entries = readDictionaryEntries(dictionaryExtensions[0]!.extensionData);
+
+  // 4. Duplicate 0x8009 entries reject first (Pitfall 8); otherwise the entries must be
+  //    strictly ascending (a general dictionary-structure requirement this raw parse must
+  //    re-check itself, since it bypasses ts-mls's own sorted+unique enforcement).
+  const proofEntries = entries.filter(
+    (e) => e.componentId === ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+  );
+  if (proofEntries.length > 1)
+    throw new AccountIdentityProofError(
+      "leaf app_data_dictionary carries more than one 0x8009 entry",
+      "duplicate-data",
+    );
+  for (let i = 1; i < entries.length; i++) {
+    if (entries[i - 1]!.componentId >= entries[i]!.componentId)
+      throw new AccountIdentityProofError(
+        "leaf app_data_dictionary entries are not sorted ascending by componentId",
+        "invalid-dictionary",
+      );
+  }
+
+  // 5. Support-list membership (Pitfall 7: independent of the data-entry check below).
+  const supportEntry = entries.find(
+    (e) => e.componentId === APP_COMPONENTS_COMPONENT_ID,
+  );
+  let supportsProof = false;
+  if (supportEntry !== undefined) {
+    try {
+      supportsProof = decodeComponentsList(supportEntry.data).includes(
+        ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+      );
+    } catch (err) {
+      throw new AccountIdentityProofError(
+        `leaf app_components support list did not decode: ${err instanceof Error ? err.message : String(err)}`,
+        "invalid-dictionary",
+        { cause: err instanceof Error ? err : undefined },
+      );
+    }
+  }
+  if (!supportsProof)
+    throw new AccountIdentityProofError(
+      "leaf does not advertise 0x8009 in its app_components support list",
+      "missing-support",
+    );
+
+  // 6. The data entry itself must exist.
+  if (proofEntries.length === 0)
+    throw new AccountIdentityProofError(
+      "leaf app_data_dictionary has no 0x8009 entry",
+      "missing-data",
+    );
+
+  // 7. SafeAAD (0x0002) must not list 0x8009 (PROOF-06, D-08).
+  const safeAadEntry = entries.find(
+    (e) => e.componentId === SAFE_AAD_COMPONENT_ID,
+  );
+  if (safeAadEntry !== undefined) {
+    let safeAadIds: number[];
+    try {
+      safeAadIds = decodeComponentsList(safeAadEntry.data);
+    } catch (err) {
+      throw new AccountIdentityProofError(
+        `leaf SafeAAD entry did not decode: ${err instanceof Error ? err.message : String(err)}`,
+        "invalid-dictionary",
+        { cause: err instanceof Error ? err : undefined },
+      );
+    }
+    if (safeAadIds.includes(ACCOUNT_IDENTITY_PROOF_COMPONENT_ID))
+      throw new AccountIdentityProofError(
+        "leaf SafeAAD entry lists 0x8009, which is not a valid SafeAAD location",
+        "invalid-location",
+      );
+  }
+
+  // 8. The leaf's own signature key must be a valid length for the ciphersuite's scheme,
+  //    checked before the event is reconstructed (spec: "MUST be valid for that ciphersuite
+  //    before the event is reconstructed").
+  const scheme = mlsSignatureSchemeForCiphersuite(ciphersuite);
+  const allowedLengths = SIGNATURE_KEY_LENGTHS_BY_SCHEME[scheme] ?? [];
+  if (!allowedLengths.includes(leaf.signaturePublicKey.length))
+    throw new AccountIdentityProofError(
+      `leaf signature key length ${leaf.signaturePublicKey.length} is not valid for signature scheme 0x${scheme.toString(16)}`,
+      "signature-key-mismatch",
+    );
+
+  // 9. Decode the 104-byte envelope.
+  let decoded: AuthorizationProof;
+  try {
+    decoded = decodeAuthorizationProof(proofEntries[0]!.data);
+  } catch (err) {
+    throw wrapAsInvalidProof(err);
+  }
+
+  // 10. The proof's signer must be exactly the credential identity (Production and reuse).
+  if (!bytesEqual(decoded.signerPubkey, identity))
+    throw new AccountIdentityProofError(
+      "account identity proof signer does not match credential identity",
+      "identity-mismatch",
+    );
+
+  // 11. Reconstruct the exact signing event from the leaf's own signature key (T-07-02) and
+  //     verify the BIP-340 signature.
+  try {
+    verifyAuthorizationProof(
+      accountIdentityProofTemplate(ciphersuite, leaf.signaturePublicKey),
+      decoded,
+    );
+  } catch (err) {
+    throw wrapAsInvalidProof(err);
+  }
+}
+
+/**
+ * True iff `leaf` carries any account-identity-proof material at all: the legacy `0xf2f1`
+ * extension, a `0x8009` dictionary entry, or a dictionary that fails to decode (fail closed
+ * — an undecodable dictionary might be hiding proof material). Does not itself validate the
+ * material; use {@link validateLeafAccountIdentityProof} for that.
+ */
+export function hasAccountIdentityProofMaterial(leaf: LeafNode): boolean {
+  if (
+    leaf.extensions.some(
+      (ext) =>
+        ext.extensionType === LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+    )
+  )
+    return true;
+
+  for (const ext of dictionaryExtensionsOf(leaf.extensions)) {
+    let entries: RawDictionaryEntry[];
+    try {
+      entries = readDictionaryEntries(ext.extensionData);
+    } catch {
+      return true;
+    }
+    if (
+      entries.some((e) => e.componentId === ACCOUNT_IDENTITY_PROOF_COMPONENT_ID)
+    )
+      return true;
+  }
+  return false;
+}
+
+/**
+ * Rejects `0x8009` account identity proof data appearing anywhere it is not valid: the
+ * GroupContext dictionary, KeyPackage-level extensions, or a GroupInfo extension list
+ * (PROOF-06, D-08). `location` names the container in the thrown message. Structurally
+ * accepts any of ts-mls's GroupContext, GroupInfo, LeafNode, or KeyPackage extension array
+ * types (all are `{ extensionType: number, ... }[]`).
+ */
+export function assertNoAccountIdentityProofComponent(
+  extensions: readonly { extensionType: number }[],
+  location: AccountIdentityProofLocation,
+): void {
+  for (const ext of dictionaryExtensionsOf(extensions)) {
+    const entries = readDictionaryEntries(ext.extensionData);
+    if (
+      entries.some((e) => e.componentId === ACCOUNT_IDENTITY_PROOF_COMPONENT_ID)
+    )
+      throw new AccountIdentityProofError(
+        `account identity proof component 0x8009 is not a valid ${location} entry`,
+        "invalid-location",
+      );
+  }
+}
+
+/**
+ * Validates a `0x8009` account identity proof carried on a KeyPackage: rejects an explicit
+ * `expectedCiphersuite` mismatch, a legacy `0xf2f1` or `0x8009` entry at the KeyPackage
+ * level (PROOF-05), then validates the embedded LeafNode using the KeyPackage's own
+ * ciphersuite (D-16 — never a caller-supplied "current" ciphersuite).
+ */
+export function validateKeyPackageAccountIdentityProof(
+  keyPackage: KeyPackage,
+  expectedCiphersuite?: number,
+): void {
+  if (
+    expectedCiphersuite !== undefined &&
+    expectedCiphersuite !== keyPackage.cipherSuite
+  )
+    throw new AccountIdentityProofError(
+      `KeyPackage ciphersuite ${keyPackage.cipherSuite} does not match expected ciphersuite ${expectedCiphersuite}`,
+      "ciphersuite-mismatch",
+    );
+
+  if (
+    keyPackage.extensions.some(
+      (ext) =>
+        ext.extensionType === LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+    )
+  )
+    throw new AccountIdentityProofError(
+      "KeyPackage-level extensions carry the legacy 0xf2f1 proof extension",
+      "legacy-extension-present",
+    );
+
+  assertNoAccountIdentityProofComponent(keyPackage.extensions, "key-package");
+
+  validateLeafAccountIdentityProof(keyPackage.leafNode, keyPackage.cipherSuite);
+}
+
+/**
+ * Validates the `0x8009` account identity proof of every member leaf in `state`. Throws on
+ * the first invalid leaf, wrapping the original `AccountIdentityProofError` as `cause` and
+ * naming only the member's tree position — never a pubkey (T-07-08).
+ */
+export function validateGroupMemberAccountIdentityProofs(
+  state: ClientState,
+  ciphersuite: number,
+): void {
+  const members = getGroupMembers(state);
+  for (let index = 0; index < members.length; index++) {
+    try {
+      validateLeafAccountIdentityProof(members[index]!, ciphersuite);
+    } catch (err) {
+      if (err instanceof AccountIdentityProofError)
+        throw new AccountIdentityProofError(
+          `account identity proof invalid for group member ${index}: ${err.message}`,
+          err.reason,
+          { cause: err },
+        );
+      throw err;
+    }
+  }
+}
+
+/**
+ * Classifies a GroupContext's account-identity-proof profile from its extensions, modelled
+ * on MDK's `protocol_profile_of_group_extensions` (D-07): `"current"` (0x8009 required, no
+ * legacy requirement), `"legacy"` (0xf2f1 required, no 0x8009 requirement), `"mixed"`
+ * (both), or `"neither"`. Throws `invalid-location` if the GroupContext dictionary itself
+ * carries `0x8009` data (Pitfall 9) — that is always a class-level violation, not a profile.
+ */
+export function classifyGroupAccountIdentityProofProfile(
+  extensions: GroupContextExtension[],
+): AccountIdentityProofProfile {
+  assertNoAccountIdentityProofComponent(extensions, "group-context");
+
+  const legacyRequired = extensions.some((ext) => {
+    if (ext.extensionType !== defaultExtensionTypes.required_capabilities)
+      return false;
+    const required = ext as ExtensionRequiredCapabilities;
+    return required.extensionData.extensionTypes.includes(
+      LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
+    );
+  });
+
+  let dictionary: ReturnType<typeof getAppDataDictionary>;
+  try {
+    dictionary = getAppDataDictionary(extensions);
+  } catch (err) {
+    throw new AccountIdentityProofError(
+      `group app_components could not classify proof profile: ${err instanceof Error ? err.message : String(err)}`,
+      "invalid-dictionary",
+      { cause: err instanceof Error ? err : undefined },
+    );
+  }
+
+  const appComponentsData = dictionary?.find(
+    (entry) => entry.componentId === APP_COMPONENTS_COMPONENT_ID,
+  )?.data;
+
+  let currentRequired = false;
+  if (appComponentsData !== undefined) {
+    try {
+      currentRequired = decodeComponentsList(appComponentsData).includes(
+        ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+      );
+    } catch (err) {
+      throw new AccountIdentityProofError(
+        `group app_components could not classify proof profile: ${err instanceof Error ? err.message : String(err)}`,
+        "invalid-dictionary",
+        { cause: err instanceof Error ? err : undefined },
+      );
+    }
+  }
+
+  if (currentRequired && legacyRequired) return "mixed";
+  if (currentRequired) return "current";
+  if (legacyRequired) return "legacy";
+  return "neither";
+}
+
+/**
+ * Throws unless `extensions` classify as the `"current"` account-identity-proof profile
+ * (D-07, D-13): `"legacy"` -> `legacy-group`, `"mixed"` -> `mixed-profile`, `"neither"` ->
+ * `missing-requirement`.
+ */
+export function assertCurrentGroupAccountIdentityProofProfile(
+  extensions: GroupContextExtension[],
+): void {
+  const profile = classifyGroupAccountIdentityProofProfile(extensions);
+  switch (profile) {
+    case "current":
+      return;
+    case "legacy":
+      throw new AccountIdentityProofError(
+        "group requires the legacy 0xf2f1 proof extension, not 0x8009",
+        "legacy-group",
+      );
+    case "mixed":
+      throw new AccountIdentityProofError(
+        "group requires both the legacy 0xf2f1 proof extension and 0x8009",
+        "mixed-profile",
+      );
+    case "neither":
+      throw new AccountIdentityProofError(
+        "group requires neither the legacy 0xf2f1 proof extension nor 0x8009",
+        "missing-requirement",
+      );
+  }
 }

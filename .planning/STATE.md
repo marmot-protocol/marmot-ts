@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Account identity proof v2
-current_phase: 8
+current_phase: 08
 current_phase_name: GroupContext Profile Requirement & Legality-Seam Extension
 status: executing
-stopped_at: Phase 8 context gathered
-last_updated: "2026-09-15T15:26:49.240Z"
-last_activity: 2026-09-14
-last_activity_desc: Phase 07 complete, transitioned to Phase 8
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-09-15T16:38:28.876Z"
+last_activity: 2026-09-15
+last_activity_desc: Phase 08 execution started
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 9
-  completed_plans: 9
+  total_plans: 13
+  completed_plans: 10
   percent: 33
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-11)
 
 **Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
-**Current focus:** Phase 07 — account-identity-proof-component-0x8009-legacy-clean-cut
+**Current focus:** Phase 08 — GroupContext Profile Requirement & Legality-Seam Extension
 
 ## Current Position
 
-Phase: 8 — GroupContext Profile Requirement & Legality-Seam Extension
-Plan: Not started
+Phase: 08 (GroupContext Profile Requirement & Legality-Seam Extension) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-09-14 — Phase 07 complete, transitioned to Phase 8
+Last activity: 2026-09-15 — Phase 08 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -132,6 +132,7 @@ _Updated after each plan completion_
 | Phase 07 P06 | 30min | 3 tasks | 15 files |
 | Phase 07 P07 | 15min | 2 tasks | 6 files |
 | Phase 07 P08 | 25min | 2 tasks | 13 files |
+| Phase 08 P01 | 20min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -274,6 +275,8 @@ Recent decisions affecting current work:
 - [Phase 07]: [Phase 07-07]: admin-policy's D-06 known gap (proof-less Add skips the proof gate) is now pinned by a named test asserting the callback throws rather than rejects, transferred to Phase 8 GRP-02/GRP-04
 - [Phase ?]: [Phase 07-08]: Chose an optional ListedKeyPackage.nonCurrent listing field (Claude's Discretion per D-09), computed inline in KeyPackageStore.list() via validateKeyPackageAccountIdentityProof, rather than a separate query method
 - [Phase ?]: [Phase 07-08]: ensurePublished's selector change (!pkg.used && !pkg.nonCurrent) is the only production edit to that method -- create/rotate/remove/purge/selectForWelcome untouched, per the plan's explicit scope boundary
+- [Phase ?]: [Phase 08-01]: diffChangedLeaves reports the true MLS leaf index (nodeIndex/2), never validateGroupMemberAccountIdentityProofs's member-enumeration index
+- [Phase ?]: [Phase 08-01]: validateAddProposalAccountIdentityProofs left unwired in this plan (pure helper only); admin-policy.ts/group-engine.ts wiring is plan 08-02's D-08/D-09 scope
 
 ### Pending Todos
 
@@ -312,10 +315,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-15T14:31:43.954Z
-Stopped at: Phase 8 context gathered
+Last session: 2026-09-15T16:38:28.866Z
+Stopped at: Completed 08-01-PLAN.md
 Resume file:
 
-.planning/phases/08-groupcontext-profile-requirement-legality-seam-extension/08-CONTEXT.md
+None
 
 - Roadmap is ready. Plan the first v2.0 phase with `/gsd-plan-phase 6` (research-phase not recommended for Phase 6 — pure codec work against an already-verified spec vector).

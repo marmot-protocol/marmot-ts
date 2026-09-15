@@ -115,12 +115,12 @@ shared `validateCommitLegality` adapter before any seam-local swap.
 3. Joining via Welcome fails when the group does not require `0x8009` or any current member's proof is invalid.
 4. Inviting a user, and admin-policy admission of a standalone Add proposal, both validate the invitee's `0x8009` proof before the proposal is created or queued.
 
-**Plans**: 4 plans
+**Plans**: 1/4 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 08-01-PLAN.md — Core: `diffChangedLeaves` tree diff, `getGroupProfileSupport`, profile + changed-leaf proof check inside `validateCommitLegality`, Add-proposal proof helper; GRP-01/GRP-03 tests (wave 1)
+- [x] 08-01-PLAN.md — Core: `diffChangedLeaves` tree diff, `getGroupProfileSupport`, profile + changed-leaf proof check inside `validateCommitLegality`, Add-proposal proof helper; GRP-01/GRP-03 tests (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -210,7 +210,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 3.1 → 4 → 4.1 → 5 → 6
 | 5. Quality Gate                                            | v1.0      | 8/8             | Complete    | 2026-09-06 |
 | 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 1/1 | Complete    | 2026-09-12 |
 | 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 8/8 | Complete    | 2026-09-14 |
-| 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 0/4             | Planned     | -          |
+| 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 1/4 | In Progress|  |
 | 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 0/TBD           | Not started | -          |
 | 10. Founding Group Creation via Welcome                    | v2.0      | 0/TBD           | Not started | -          |
 | 11. Interop Fixtures, Exports Snapshot & QA Gate           | v2.0      | 0/TBD           | Not started | -          |

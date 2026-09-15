@@ -41,9 +41,9 @@ Shared `src/core` primitive per `foundation/authorization-proofs.md`; the accoun
 
 ### Group profile requirement (GRP)
 
-- [ ] **GRP-01**: A newly created group requires `0x8009` in its GroupContext `app_components` required-component list (not `required_capabilities`) and holds no GroupContext state for it
+- [x] **GRP-01**: A newly created group requires `0x8009` in its GroupContext `app_components` required-component list (not `required_capabilities`) and holds no GroupContext state for it
 - [ ] **GRP-02**: A commit whose resulting epoch drops the `0x8009` requirement or contains a member leaf without valid `0x8009` support and proof is rejected identically on the send, inbound ingest, pool-replay/fork-recovery, and tree-fed convergence seams
-- [ ] **GRP-03**: Joining via Welcome fails when the group does not require `0x8009` or any current member lacks a valid proof
+- [x] **GRP-03**: Joining via Welcome fails when the group does not require `0x8009` or any current member lacks a valid proof
 - [ ] **GRP-04**: Inviting a user and admin-policy admission of a standalone Add proposal validate the invitee's `0x8009` proof before it is proposed or queued
 
 ### Self-update binding (UPD)
@@ -115,9 +115,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PROOF-06 | Phase 7 | Complete |
 | CUT-01 | Phase 7 | Complete |
 | CUT-02 | Phase 7 | Complete |
-| GRP-01 | Phase 8 | Pending |
+| GRP-01 | Phase 8 | Complete |
 | GRP-02 | Phase 8 | Pending |
-| GRP-03 | Phase 8 | Pending |
+| GRP-03 | Phase 8 | Complete |
 | GRP-04 | Phase 8 | Pending |
 | UPD-01 | Phase 9 | Pending |
 | UPD-02 | Phase 9 | Pending |

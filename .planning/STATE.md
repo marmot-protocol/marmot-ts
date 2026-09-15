@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Account identity proof v2
 current_phase: 08
 current_phase_name: GroupContext Profile Requirement & Legality-Seam Extension
-status: executing
-stopped_at: Completed 08-03-PLAN.md
-last_updated: "2026-09-15T17:08:28.263Z"
+status: verifying
+stopped_at: Completed 08-04-PLAN.md
+last_updated: "2026-09-15T17:24:21.487Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 08 execution started
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 13
-  completed_plans: 12
-  percent: 33
+  completed_plans: 13
+  percent: 50
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 
 Phase: 08 (GroupContext Profile Requirement & Legality-Seam Extension) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-15 — Phase 08 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -135,6 +135,7 @@ _Updated after each plan completion_
 | Phase 08 P01 | 20min | 3 tasks | 12 files |
 | Phase 08 P02 | 25min | 3 tasks | 8 files |
 | Phase 08 P03 | 15min | 3 tasks | 11 files |
+| Phase 08 P04 | 15min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -284,6 +285,9 @@ Recent decisions affecting current work:
 - [Phase 08]: [Phase 08-02]: Left GRP-02 Pending in REQUIREMENTS.md (only GRP-04 marked complete) -- the full seam-parity matrix GRP-02 requires is plan 08-04's explicit scope
 - [Phase ?]: [Phase 08-03]: GroupRegistry.track() guards both reconverge() and resumePendingDisband() with one profileSupported boolean, even though resumePendingDisband() already self-guards, per the plan's explicit instruction
 - [Phase ?]: [Phase 08-03]: Left GRP-02 unmarked in REQUIREMENTS.md -- its full seam-parity-matrix text is plan 08-04's explicit scope, matching the discretion 08-01/08-02 already exercised
+- [Phase 08]: [Phase 8-04]: Computed the proof-less-Add fixture's expected proofReason dynamically via validateKeyPackageAccountIdentityProof rather than hardcoding it, tracking the validator's own source of truth
+- [Phase 08]: [Phase 8-04]: Split each D-04 fixture into 4 independent send/inbound/replay/tree-fed it blocks rather than one combined test, satisfying Pitfall 3's warning sign and the plan's per-task test-count acceptance criteria
+- [Phase 08]: [Phase 8-04]: GRP-02 marked complete in REQUIREMENTS.md -- the seam-parity matrix plans 08-01/08-02/08-03 deliberately left it Pending for is now built and green
 
 ### Pending Todos
 
@@ -322,8 +326,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-15T17:08:28.252Z
-Stopped at: Completed 08-03-PLAN.md
+Last session: 2026-09-15T17:24:21.475Z
+Stopped at: Completed 08-04-PLAN.md
 Resume file:
 
 None

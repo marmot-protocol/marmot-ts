@@ -13,3 +13,4 @@ export * from "./group-lifecycle.js";
 export * from "./disband-validation.js";
 export * from "./dictionary.js";
 export * from "./integrity.js";
+export * from "./tree-diff.js";

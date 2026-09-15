@@ -757,11 +757,9 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
       ).toThrow(AccountIdentityProofError);
     }
 
-    // Control: with no proof material anywhere the Add is skipped by the proof gate
-    // (documented D-06 gap) and evaluation proceeds to the sender check.
-    expect(() => callback(addCommit([]) as never)).toThrow(
-      "unverifiable commit sender",
-    );
+    // Control: per D-08, an Add with no proof material anywhere is rejected by
+    // the same validator that gates the invite seam, not skipped.
+    expect(callback(addCommit([]) as never)).toBe("reject");
   });
 
   it("accepts non-admin self-update commits (no proposals) (MIP-02)", async () => {

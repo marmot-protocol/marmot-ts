@@ -9,10 +9,7 @@ import {
   type ProposalWithSender,
 } from "ts-mls";
 
-import {
-  hasAccountIdentityProofMaterial,
-  validateKeyPackageAccountIdentityProof,
-} from "../core/components/account-identity-proof.js";
+import { validateAddProposalAccountIdentityProofs } from "../core/components/integrity.js";
 import { getCredentialPubkey } from "../core/credential.js";
 
 function toLeafIndex(index: number): LeafIndex {
@@ -22,6 +19,18 @@ function toLeafIndex(index: number): LeafIndex {
 /**
  * Build an incoming-message callback that enforces
  * `refs/marmot/protocol-core/group-messaging.md` "admin-only commits".
+ *
+ * Every Add — whether committed or proposed standalone — is validated
+ * before apply with the same core validator
+ * ({@link validateAddProposalAccountIdentityProofs}) that `proposeInviteUser`
+ * (the invite seam) and the post-apply tree-diff adapter
+ * (`src/core/components/integrity.ts` `validateCommitAccountIdentityProofs`)
+ * use, so a bad Add cannot reach the queued-proposal or applied-tree state
+ * through this callback regardless of which of the two `IncomingMessageCallback`
+ * kinds it arrives as (D-08/D-09).
+ *
+ * @see refs/marmot/protocol-core/group-messaging.md "admin-only commits"
+ * @see refs/mdk/crates/cgka-engine/src/app_components.rs `validate_membership_proposal`
  */
 export function createAdminCommitPolicyCallback(args: {
   ratchetTree: ClientState["ratchetTree"];
@@ -37,28 +46,25 @@ export function createAdminCommitPolicyCallback(args: {
   } = args;
 
   return (incoming) => {
-    if (incoming.kind === "proposal") return "accept";
-
-    for (const { proposal } of incoming.proposals) {
-      if (proposal.proposalType !== defaultProposalTypes.add) continue;
-      if (!("add" in proposal)) continue;
-      const keyPackage = proposal.add.keyPackage;
-      // Proof material at the KeyPackage level (legacy 0xf2f1 or a misplaced 0x8009) counts as
-      // material, so it always reaches the validator and is rejected exactly as the invite
-      // seam (`proposeInviteUser`) rejects it — no send/inbound asymmetry (mdk#707).
-      // KNOWN GAP (D-06): only Adds with no proof material anywhere (neither the KeyPackage
-      // nor its leaf) are skipped here; Phase 8 (GRP-02/GRP-04) closes it.
-      if (
-        !hasAccountIdentityProofMaterial(keyPackage) &&
-        !hasAccountIdentityProofMaterial(keyPackage.leafNode)
+    if (incoming.kind === "proposal") {
+      // Only Add proposals are validated here (D-09). Standalone Update
+      // admission is deferred to Phase 9 (D-10) -- a bad Update leaf is
+      // still caught at commit time by the tree-diff adapter.
+      return validateAddProposalAccountIdentityProofs(
+        [incoming.proposal],
+        ciphersuiteId,
       )
-        continue;
-      try {
-        validateKeyPackageAccountIdentityProof(keyPackage, ciphersuiteId);
-      } catch {
-        return "reject";
-      }
+        ? "reject"
+        : "accept";
     }
+
+    if (
+      validateAddProposalAccountIdentityProofs(
+        incoming.proposals,
+        ciphersuiteId,
+      )
+    )
+      return "reject";
 
     // An admin MUST drop admin before self-removing (member-departure.md), so a
     // self_remove whose sender (the leaver) is still an active admin is invalid.
@@ -145,10 +151,11 @@ export function createAdminCommitPolicyCallback(args: {
  * `refs/marmot/protocol-core/group-messaging.md` admin gate, the
  * account-identity-proof check, and the admin-self-remove guard in
  * `createAdminCommitPolicyCallback` all keep their exact current behavior.
- * Its only extra effect: when `incoming.kind === "commit"`, it appends
- * `incoming.proposals.map((p) => p.proposal)` to a private buffer BEFORE
- * returning `inner(incoming)`, so proposals are captured even for a commit
- * the admin gate itself rejects.
+ * Its only extra effect: BEFORE returning `inner(incoming)`, it appends the
+ * proposal(s) to a private buffer — for `incoming.kind === "commit"`,
+ * `incoming.proposals.map((p) => p.proposal)`; for `incoming.kind ===
+ * "proposal"`, the single `incoming.proposal` — so proposals are captured
+ * even for a message `inner` itself rejects.
  *
  * No validation logic may be added inside this wrapper or inside `inner`
  * (Pitfall 1 — validating inside the callback runs before the resulting
@@ -176,6 +183,8 @@ export function withCapturedProposals(inner: IncomingMessageCallback): {
     if (incoming.kind === "commit") {
       buffered = buffered.concat(incoming.proposals);
       committerLeafIndex = incoming.senderLeafIndex;
+    } else if (incoming.kind === "proposal") {
+      buffered = buffered.concat(incoming.proposal);
     }
     return inner(incoming);
   };

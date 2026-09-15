@@ -29,7 +29,10 @@ import {
 } from "../../core/group-message.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { DEFAULT_CONVERGENCE_POLICY } from "../../core/convergence.js";
-import { createAdminCommitPolicyCallback } from "../admin-policy.js";
+import {
+  createAdminCommitPolicyCallback,
+  withCapturedProposals,
+} from "../admin-policy.js";
 import { MarmotGroupEngine } from "../group-engine.js";
 import { RetainedHistoryStore } from "../retained-store.js";
 import type { GroupPeeler } from "../types.js";
@@ -422,19 +425,109 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
       expect(callback(incoming as never)).toBe("reject");
     });
 
-    it("D-06 known gap (Phase 8 GRP-02/GRP-04): an Add with no proof material skips the proof gate", () => {
+    it("D-08 (GRP-02/GRP-04): an Add with no proof material is rejected by the proof gate", () => {
       const account = testAccount(6);
       const callback = buildCallback(account);
       const incoming = buildIncomingAdd(account, []);
 
-      // hasAccountIdentityProofMaterial is false, so the proof loop never
-      // rejects this Add -- it falls through to the sender lookup, which
-      // throws because ratchetTree is empty. This proves the proof-less Add
-      // skipped the proof gate rather than being rejected by it. Phase 8
-      // (GRP-02/GRP-04) must flip this to an explicit "reject".
-      expect(() => callback(incoming as never)).toThrow(
-        "unverifiable commit sender",
-      );
+      // validateAddProposalAccountIdentityProofs rejects an Add with no
+      // 0x8009 proof material, so the callback returns "reject" directly
+      // instead of falling through to the (now-unreachable) sender lookup.
+      expect(callback(incoming as never)).toBe("reject");
+    });
+
+    it("D-09: a standalone Add proposal with a missing or tampered proof is rejected", async () => {
+      const account = testAccount(6);
+      const callback = buildCallback(account);
+
+      const missing = buildIncomingAdd(account, []);
+      expect(
+        callback({
+          kind: "proposal",
+          proposal: missing.proposals[0]!.proposal,
+        } as never),
+      ).toBe("reject");
+
+      const proof = await produceAccountIdentityProof({
+        signer: account.signer,
+        accountIdentity: hexToBytes(account.pubkey),
+        mlsSignatureKey: mlsKey,
+        ciphersuite: ciphersuiteId,
+        createdAt: 1700000000,
+      });
+      const tampered = proof.slice();
+      tampered[tampered.length - 1] ^= 0xff;
+      const forged = buildIncomingAdd(account, [
+        makeLeafAppComponentsExtension(tampered),
+      ]);
+      expect(
+        callback({
+          kind: "proposal",
+          proposal: forged.proposals[0]!.proposal,
+        } as never),
+      ).toBe("reject");
+    });
+
+    it("D-09/D-10: a standalone Add with a valid proof is accepted; a standalone Update is unaffected", async () => {
+      const account = testAccount(6);
+      const callback = buildCallback(account);
+
+      const proof = await produceAccountIdentityProof({
+        signer: account.signer,
+        accountIdentity: hexToBytes(account.pubkey),
+        mlsSignatureKey: mlsKey,
+        ciphersuite: ciphersuiteId,
+        createdAt: 1700000000,
+      });
+      const valid = buildIncomingAdd(account, [
+        makeLeafAppComponentsExtension(proof),
+      ]);
+      expect(
+        callback({
+          kind: "proposal",
+          proposal: valid.proposals[0]!.proposal,
+        } as never),
+      ).toBe("accept");
+
+      // D-10: standalone Update admission is deferred to Phase 9; any
+      // non-Add proposal kind keeps the existing blanket "accept" here.
+      expect(
+        callback({
+          kind: "proposal",
+          proposal: {
+            proposalType: defaultProposalTypes.update,
+            update: {},
+          },
+        } as never),
+      ).toBe("accept");
+    });
+
+    it("withCapturedProposals: captures a standalone proposal with committerLeafIndex undefined", async () => {
+      const account = testAccount(6);
+      const callback = buildCallback(account);
+      const wrapped = withCapturedProposals(callback);
+
+      const proof = await produceAccountIdentityProof({
+        signer: account.signer,
+        accountIdentity: hexToBytes(account.pubkey),
+        mlsSignatureKey: mlsKey,
+        ciphersuite: ciphersuiteId,
+        createdAt: 1700000000,
+      });
+      const valid = buildIncomingAdd(account, [
+        makeLeafAppComponentsExtension(proof),
+      ]);
+      const proposalWithSender = valid.proposals[0]!;
+
+      wrapped.take();
+      const result = wrapped.callback({
+        kind: "proposal",
+        proposal: proposalWithSender.proposal,
+      } as never);
+      expect(result).toBe("accept");
+      const captured = wrapped.take();
+      expect(captured.proposals).toEqual([proposalWithSender.proposal]);
+      expect(captured.committerLeafIndex).toBeUndefined();
     });
   });
 });

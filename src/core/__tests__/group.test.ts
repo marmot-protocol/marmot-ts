@@ -8,7 +8,7 @@ import {
 
 import { createCredential } from "../credential.js";
 import { generateKeyPackage } from "../key-package.js";
-import { createGroup } from "../group.js";
+import { createGroup, createSimpleGroup } from "../group.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { marmotRequiredCapabilitiesExtension } from "../capabilities.js";
 import { getMarmotGroupView } from "../client-state.js";
@@ -20,6 +20,7 @@ import {
   encryptedMediaEntry,
   getAppComponents,
   getComponentData,
+  getGroupProfileSupport,
   groupAvatarUrlEntry,
   groupProfileEntry,
   messageRetentionEntry,
@@ -97,6 +98,44 @@ describe("group construction", () => {
     expect((required as ExtensionRequiredCapabilities).extensionData).toEqual(
       marmotRequiredCapabilitiesExtension().extensionData,
     );
+  });
+
+  it("GRP-01: a created group requires 0x8009 in app_components, not required_capabilities, with no GroupContext state", async () => {
+    const adminAccount = testAccount(6);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const kp = await generateKeyPackage({
+      credential: createCredential(adminAccount.pubkey),
+      ciphersuiteImpl: impl,
+      signer: adminAccount.signer,
+    });
+
+    const { clientState } = await createSimpleGroup(kp, impl, "GRP-01", {
+      adminPubkeys: [adminAccount.pubkey],
+    });
+    const { extensions } = clientState.groupContext;
+
+    expect(getAppComponents(extensions)).toContain(
+      ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+    );
+    expect(
+      getComponentData(extensions, ACCOUNT_IDENTITY_PROOF_COMPONENT_ID),
+    ).toBeUndefined();
+
+    const required = extensions.find(
+      (e) => e.extensionType === defaultExtensionTypes.required_capabilities,
+    ) as ExtensionRequiredCapabilities | undefined;
+    expect(required).toBeTruthy();
+    expect(
+      required!.extensionData.extensionTypes.includes(
+        ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+      ),
+    ).toBe(false);
+    expect(required!.extensionData.extensionTypes.includes(0xf2f1)).toBe(false);
+
+    expect(getGroupProfileSupport(extensions)).toEqual({ kind: "supported" });
   });
 
   it("surfaces avatar, encrypted-media policy, and retention through the group view", async () => {

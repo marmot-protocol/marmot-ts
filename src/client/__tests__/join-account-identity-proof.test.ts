@@ -24,6 +24,10 @@ import { MarmotClient } from "../marmot-client.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
+import {
+  dropAccountIdentityProofRequirement,
+  forgeKeyPackage,
+} from "../../__tests__/helpers/account-identity-proof-fixtures.js";
 import { marmotAuthService } from "../../core/auth-service.js";
 import type { SerializedClientState } from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
@@ -145,7 +149,115 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
     ).toBe("current");
   });
 
-  it("rejects a group that requires both 0xf2f1 and 0x8009 (mixed profile) without persisting it", async () => {
+  it("GRP-03: rejects a Welcome into a group that does not require 0x8009 without persisting it", async () => {
+    const adminAccount = testAccount(6);
+    const inviteeAccount = testAccount(9);
+    const adminKp = await generateKeyPackage({
+      credential: createCredential(adminAccount.pubkey),
+      ciphersuiteImpl,
+      signer: adminAccount.signer,
+    });
+    const inviteeKp = await generateKeyPackage({
+      credential: createCredential(inviteeAccount.pubkey),
+      ciphersuiteImpl,
+      signer: inviteeAccount.signer,
+    });
+
+    const { clientState } = await createSimpleGroup(
+      adminKp,
+      ciphersuiteImpl,
+      "No Requirement",
+      { adminPubkeys: [adminAccount.pubkey] },
+    );
+
+    // ts-mls itself has no concept of a "required" component id and accepts
+    // this AppDataUpdate generically; only the Marmot-layer join gate refuses
+    // a group outside the current profile.
+    const dropRequirement = await createCommit({
+      context: {
+        cipherSuite: ciphersuiteImpl,
+        authService: marmotAuthService,
+      },
+      state: clientState,
+      wireAsPublicMessage: false,
+      extraProposals: [dropAccountIdentityProofRequirement(clientState)],
+      ratchetTreeExtension: true,
+    });
+    const droppedState = dropRequirement.newState;
+    expect(
+      classifyGroupAccountIdentityProofProfile(
+        droppedState.groupContext.extensions,
+      ),
+    ).toBe("neither");
+
+    const welcome = await commitInviteeAdd(
+      droppedState,
+      inviteeKp.publicPackage,
+    );
+
+    await expect(joinAsInvitee(welcome, inviteeKp)).rejects.toMatchObject({
+      name: "AccountIdentityProofError",
+      reason: "missing-requirement",
+    });
+    expect(await inviteeGroupStateStore.keys()).toEqual([]);
+  });
+
+  it("GRP-03: rejects a Welcome when a current non-creator member's proof is invalid without persisting it", async () => {
+    const adminAccount = testAccount(6);
+    const badMemberAccount = testAccount(1);
+    const inviteeAccount = testAccount(9);
+    const adminKp = await generateKeyPackage({
+      credential: createCredential(adminAccount.pubkey),
+      ciphersuiteImpl,
+      signer: adminAccount.signer,
+    });
+    const inviteeKp = await generateKeyPackage({
+      credential: createCredential(inviteeAccount.pubkey),
+      ciphersuiteImpl,
+      signer: inviteeAccount.signer,
+    });
+
+    const { clientState } = await createSimpleGroup(
+      adminKp,
+      ciphersuiteImpl,
+      "Bad Member Proof",
+      { adminPubkeys: [adminAccount.pubkey] },
+    );
+
+    const badKp = await forgeKeyPackage({
+      account: badMemberAccount,
+      ciphersuiteImpl,
+      proof: "tampered",
+    });
+    const addBadMember = await createCommit({
+      context: {
+        cipherSuite: ciphersuiteImpl,
+        authService: marmotAuthService,
+      },
+      state: clientState,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: badKp.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+    const stateWithBadMember = addBadMember.newState;
+
+    const welcome = await commitInviteeAdd(
+      stateWithBadMember,
+      inviteeKp.publicPackage,
+    );
+
+    await expect(joinAsInvitee(welcome, inviteeKp)).rejects.toMatchObject({
+      name: "AccountIdentityProofError",
+    });
+    expect(await inviteeGroupStateStore.keys()).toEqual([]);
+  });
+
+  it("GRP-03: rejects a group that requires both 0xf2f1 and 0x8009 (mixed profile) without persisting it", async () => {
     const adminAccount = testAccount(6);
     const inviteeAccount = testAccount(9);
 
@@ -216,7 +328,7 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
     expect(await inviteeGroupStateStore.keys()).toEqual([]);
   });
 
-  it("rejects a group whose creator leaf carries a proof bound to a different signature key", async () => {
+  it("GRP-03: rejects a group whose creator leaf carries a proof bound to a different signature key", async () => {
     const adminAccount = testAccount(6);
     const inviteeAccount = testAccount(9);
 

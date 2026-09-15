@@ -1885,7 +1885,8 @@ export class MarmotGroupEngine<TEnvelope> {
           result,
           envelope,
           message,
-          reason: violation?.reason,
+          // WR-02: same fallback label as both ingest.ts rejection sites.
+          reason: violation?.reason ?? "admin-policy",
           proofReason: violation?.proofReason,
         };
       }

@@ -5,15 +5,15 @@ milestone_name: Account identity proof v2
 current_phase: 08
 current_phase_name: GroupContext Profile Requirement & Legality-Seam Extension
 status: executing
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-09-15T16:38:28.876Z"
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-09-15T16:53:12.215Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 08 execution started
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 13
-  completed_plans: 10
+  completed_plans: 11
   percent: 33
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 ## Current Position
 
 Phase: 08 (GroupContext Profile Requirement & Legality-Seam Extension) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-09-15 — Phase 08 execution started
 
@@ -133,6 +133,7 @@ _Updated after each plan completion_
 | Phase 07 P07 | 15min | 2 tasks | 6 files |
 | Phase 07 P08 | 25min | 2 tasks | 13 files |
 | Phase 08 P01 | 20min | 3 tasks | 12 files |
+| Phase 08 P02 | 25min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -277,6 +278,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 07-08]: ensurePublished's selector change (!pkg.used && !pkg.nonCurrent) is the only production edit to that method -- create/rotate/remove/purge/selectForWelcome untouched, per the plan's explicit scope boundary
 - [Phase ?]: [Phase 08-01]: diffChangedLeaves reports the true MLS leaf index (nodeIndex/2), never validateGroupMemberAccountIdentityProofs's member-enumeration index
 - [Phase ?]: [Phase 08-01]: validateAddProposalAccountIdentityProofs left unwired in this plan (pure helper only); admin-policy.ts/group-engine.ts wiring is plan 08-02's D-08/D-09 scope
+- [Phase 08]: [Phase 08-02]: Merged ingest.ts's two withCapturedProposals wrappers (per-loop) into one shared instance declared before both the non-commit and commit loops, matching the decorator's own documented reuse contract
+- [Phase 08]: [Phase 08-02]: D-05's inbound-commit test uses an admin committer (admin2) to author the forged-Add commit, so it is rejected by the Add-proof check specifically rather than the pre-existing generic admin-policy path
+- [Phase 08]: [Phase 08-02]: Left GRP-02 Pending in REQUIREMENTS.md (only GRP-04 marked complete) -- the full seam-parity matrix GRP-02 requires is plan 08-04's explicit scope
 
 ### Pending Todos
 
@@ -315,8 +319,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-15T16:38:28.866Z
-Stopped at: Completed 08-01-PLAN.md
+Last session: 2026-09-15T16:53:12.205Z
+Stopped at: Completed 08-02-PLAN.md
 Resume file:
 
 None

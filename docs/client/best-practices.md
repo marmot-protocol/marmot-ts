@@ -58,7 +58,18 @@ The client's own signer signs the `0x8009` account identity proof — NIP-07 and
 
 ### Republish key packages
 
-A KeyPackage published by a pre-v2 release (or one built with the removed `accountProofSigner` option) carries the legacy proof shape and is never reused for new invitations. Call `client.keyPackages.ensurePublished({ relays })` to have the client skip any such entry and publish a fresh current KeyPackage automatically. List stored entries with `client.keyPackages.list()` — non-current ones carry `nonCurrent: true` — and remove them explicitly with `client.keyPackages.purge(refs)`. Nothing is deleted automatically.
+A KeyPackage published by a pre-v2 release (or one built with the removed `accountProofSigner` option) carries the legacy proof shape, and v2 peers reject it when they try to invite you with it. Call `client.keyPackages.ensurePublished({ relays })` to publish a fresh current KeyPackage — it ignores legacy entries when checking whether a current one already exists.
+
+That alone does not retire the legacy KeyPackage. Nothing is deleted automatically, so its kind-30443 event stays discoverable on relays, and any peer whose invite picks it will fail. Only the local `ensurePublished` check skips legacy entries: `selectForWelcome` still offers them as Welcome candidates, and `rotate()`, `remove()`, and `clear()` act on them like any other entry. To finish the migration, list stored entries with `client.keyPackages.list()` — non-current ones carry `nonCurrent: true` — and pass their refs to `client.keyPackages.purge(refs)`, which publishes the NIP-09 deletion and removes the local key material:
+
+```ts
+await client.keyPackages.ensurePublished({ relays });
+const legacy = (await client.keyPackages.list()).filter(
+  (pkg) => pkg.nonCurrent,
+);
+if (legacy.length > 0)
+  await client.keyPackages.purge(legacy.map((pkg) => pkg.keyPackageRef));
+```
 
 ### Legacy groups
 

@@ -39,9 +39,12 @@ requires `0x8009`.
   `produceAccountIdentityProof`, `validateGroupMemberAccountIdentityProofs`,
   `validateKeyPackageAccountIdentityProof`, `validateLeafAccountIdentityProof`.
 - `ListedKeyPackage.nonCurrent` — set on any stored KeyPackage listing that lacks a valid
-  current `0x8009` proof (for example one published by a pre-v2 release); such entries are
-  never reused by `KeyPackageManager.ensurePublished` and are only removed by an explicit
-  `purge()`.
+  current `0x8009` proof (for example one published by a pre-v2 release). The flag is
+  informational: `KeyPackageManager.ensurePublished` skips such entries when deciding
+  whether to publish a fresh KeyPackage, but they are never removed automatically, their
+  kind-30443 events stay discoverable on relays (peers' invites that pick them fail), and
+  `selectForWelcome` still offers them as Welcome candidates. Call `purge()` on them to
+  publish the NIP-09 deletion.
 
 See "Migrating to account identity proof v2 (0x8009)" in `docs/client/best-practices.md` for
 the republish/purge path and the rest of the migration story.

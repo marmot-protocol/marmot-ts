@@ -91,8 +91,12 @@ export type StoredKeyPackage = LocalKeyPackage | TrackedKeyPackage;
  *
  * `nonCurrent` is `true` when the stored KeyPackage lacks a valid current account identity
  * proof (`0x8009`) — for example a package built by a pre-v2 release with the legacy proof
- * extension. Such packages are never reused by {@link KeyPackageManager.ensurePublished} and
- * are removed only by an explicit `purge()`.
+ * extension. {@link KeyPackageManager.ensurePublished} does not pick such packages when
+ * deciding whether a current one is already published, but the flag is informational
+ * everywhere else: `selectForWelcome` still returns them as Welcome candidates, and
+ * `rotate()`, `remove()`, `clear()`, and `purge()` act on them like any other entry. They are
+ * never removed automatically, and their kind-30443 events stay discoverable on relays (so
+ * peers' invites that pick them will fail) until `purge()` publishes a NIP-09 deletion.
  */
 export type ListedKeyPackage = Omit<StoredKeyPackage, "privatePackage"> & {
   nonCurrent?: boolean;

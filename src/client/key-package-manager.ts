@@ -292,7 +292,9 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * Stored entries flagged `nonCurrent` (D-09) — for example a KeyPackage
    * published by a pre-v2 release that lacks a valid `0x8009` proof — are
    * skipped and left stored as-is; nothing is deleted and no relay deletion
-   * event is published. Call {@link purge} explicitly to remove them.
+   * event is published. Their kind-30443 events therefore stay discoverable on
+   * relays, and a peer's invite that picks one will fail, until {@link purge}
+   * publishes a NIP-09 deletion for them — call it explicitly when migrating.
    *
    * @returns The existing unused current KeyPackage, or the freshly created one.
    */

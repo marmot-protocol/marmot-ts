@@ -16,7 +16,6 @@ import {
   getCredentialFromLeafIndex,
   type IncomingMessageCallback,
   isSelfRemoveProposal,
-  acceptAll,
   type LeafIndex,
   type MlsFramedMessage,
   type MlsMessage,
@@ -42,6 +41,7 @@ import { encodeAdminPolicyV1 } from "../core/components/admin-policy.js";
 import { encodeComponentsList } from "../core/components/app-components-list.js";
 import { encodeGroupLifecycleV1 } from "../core/components/group-lifecycle.js";
 import {
+  getAdminPolicy,
   getAppComponents,
   getGroupLifecycle,
 } from "../core/components/dictionary.js";
@@ -108,6 +108,7 @@ import { logger } from "../utils/debug.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
 import {
   createAdminCommitPolicyCallback,
+  validatePreApplyProposals,
   withCapturedProposals,
 } from "./admin-policy.js";
 import { DeliveredPayloadLedger } from "./delivered-payloads.js";
@@ -1921,7 +1922,7 @@ export class MarmotGroupEngine<TEnvelope> {
 
     if (result.kind === "newState") {
       if (result.actionTaken === "reject") {
-        const violation = validateAddProposalAccountIdentityProofs(
+        const violation = validatePreApplyProposals(
           captured.proposals,
           this.ciphersuite.id,
         );
@@ -3220,33 +3221,32 @@ export class MarmotGroupEngine<TEnvelope> {
   #createAdminVerificationCallback(
     state: ClientState = this.state,
   ): IncomingMessageCallback {
-    const groupData = getMarmotGroupView(state);
-    if (!groupData) {
-      // WR-04: Add-proof admission is a membership-identity check, not an
-      // admin-policy one, so it must not depend on whether the optional
-      // group-data component decoded. Without admin data the admin gate keeps
-      // its existing permissive fallback, but a standalone or commit-embedded
-      // Add with a missing/invalid 0x8009 proof is still refused before apply
-      // — the same verdict send and the admin callback give.
-      const ciphersuiteId = this.ciphersuite.id;
-      return (incoming) => {
-        const proposals =
-          incoming.kind === "proposal"
-            ? [incoming.proposal]
-            : incoming.proposals;
-        return validateAddProposalAccountIdentityProofs(
-          proposals,
-          ciphersuiteId,
-        )
+    const ciphersuiteId = this.ciphersuite.id;
+    // CR-03: read ONLY the admin policy. `getMarmotGroupView` decodes every
+    // cosmetic component (profile, routing, avatar, media, retention,
+    // lifecycle) inside one `try` and returns null if any of them is
+    // malformed; keying the admin gate off it let one undecodable optional
+    // component switch admin-only-commit enforcement to accept-all for the
+    // whole group. An absent policy is an empty admin set, never accept-all —
+    // MDK `admins_of_group`.
+    let adminPubkeys: string[] | undefined;
+    try {
+      adminPubkeys = getAdminPolicy(state.groupContext.extensions);
+    } catch {
+      // An undecodable admin policy cannot prove any committer is an admin, so
+      // every commit is refused (fail closed; MDK's `admins_of_group` error
+      // propagates the same way). Proposals still get pre-apply admission.
+      return (incoming) =>
+        incoming.kind === "commit" ||
+        validatePreApplyProposals([incoming.proposal], ciphersuiteId)
           ? "reject"
-          : acceptAll(incoming);
-      };
+          : "accept";
     }
 
     return createAdminCommitPolicyCallback({
       ratchetTree: state.ratchetTree,
-      adminPubkeys: groupData.adminPubkeys,
-      ciphersuiteId: this.ciphersuite.id,
+      adminPubkeys: adminPubkeys ?? [],
+      ciphersuiteId,
       onUnverifiableCommit: "retry",
     });
   }

@@ -1,19 +1,115 @@
 /** @module @category Engine */
 import {
+  appDataUpdateProposalType,
   defaultProposalTypes,
   getCredentialFromLeafIndex,
   selfRemoveProposalType,
   type ClientState,
   type IncomingMessageCallback,
   type LeafIndex,
+  type Proposal,
   type ProposalWithSender,
 } from "ts-mls";
 
-import { validateAddProposalAccountIdentityProofs } from "../core/components/integrity.js";
+import { decodeAdminPolicyV1 } from "../core/components/admin-policy.js";
+import { decodeAgentTextStreamQuicPolicyV1 } from "../core/components/agent-text-stream.js";
+import { decodeComponentsList } from "../core/components/app-components-list.js";
+import { decodeGroupAvatarUrlV1 } from "../core/components/avatar-url.js";
+import { decodeEncryptedMediaPolicyV1 } from "../core/components/encrypted-media.js";
+import { decodeGroupLifecycleV1 } from "../core/components/group-lifecycle.js";
+import { decodeGroupProfileV1 } from "../core/components/group-profile.js";
+import {
+  AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
+  APP_COMPONENTS_COMPONENT_ID,
+  GROUP_ADMIN_POLICY_COMPONENT_ID,
+  GROUP_AVATAR_URL_COMPONENT_ID,
+  GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
+  GROUP_LIFECYCLE_COMPONENT_ID,
+  GROUP_MESSAGE_RETENTION_COMPONENT_ID,
+  GROUP_PROFILE_COMPONENT_ID,
+  NOSTR_ROUTING_COMPONENT_ID,
+} from "../core/components/ids.js";
+import {
+  type CommitIntegrityViolation,
+  validateAddProposalAccountIdentityProofs,
+} from "../core/components/integrity.js";
+import { decodeMessageRetentionV1 } from "../core/components/message-retention.js";
+import { decodeNostrRoutingV1 } from "../core/components/nostr-routing.js";
 import { getCredentialPubkey } from "../core/credential.js";
 
 function toLeafIndex(index: number): LeafIndex {
   return index as LeafIndex;
+}
+
+/**
+ * Payload decoders for every app component whose format this library knows.
+ * An AppDataUpdate for an id outside this table is opaque to the library and
+ * left to the application (`app-components/README.md` "Unknown Data").
+ */
+const COMPONENT_PAYLOAD_DECODERS: ReadonlyMap<
+  number,
+  (data: Uint8Array) => unknown
+> = new Map<number, (data: Uint8Array) => unknown>([
+  [APP_COMPONENTS_COMPONENT_ID, decodeComponentsList],
+  [GROUP_PROFILE_COMPONENT_ID, decodeGroupProfileV1],
+  [GROUP_ADMIN_POLICY_COMPONENT_ID, decodeAdminPolicyV1],
+  [NOSTR_ROUTING_COMPONENT_ID, decodeNostrRoutingV1],
+  [GROUP_MESSAGE_RETENTION_COMPONENT_ID, decodeMessageRetentionV1],
+  [AGENT_TEXT_STREAM_QUIC_COMPONENT_ID, decodeAgentTextStreamQuicPolicyV1],
+  [GROUP_AVATAR_URL_COMPONENT_ID, decodeGroupAvatarUrlV1],
+  [GROUP_ENCRYPTED_MEDIA_COMPONENT_ID, decodeEncryptedMediaPolicyV1],
+  [GROUP_LIFECYCLE_COMPONENT_ID, decodeGroupLifecycleV1],
+]);
+
+/**
+ * The pre-apply, parent-independent admission checks every inbound proposal —
+ * standalone or carried by a commit — must pass before it is staged or applied
+ * (CR-03). Returns the first violation, in this order:
+ *
+ * 1. every Add's KeyPackage carries a valid `0x8009` proof
+ *    ({@link validateAddProposalAccountIdentityProofs}, D-08/D-09);
+ * 2. every AppDataUpdate `update` for a known component id carries a payload
+ *    that decodes with that component's codec (`component-integrity`).
+ *    Without this, one AppDataUpdate — which the admin gate admits from any
+ *    member as a standalone proposal, and which a later commit bundles by
+ *    reference — could poison the group dictionary with bytes no member can
+ *    decode.
+ *
+ * Shared by the admin callback and by every seam that labels a callback
+ * rejection, so the verdict and its reason cannot differ per seam.
+ *
+ * @see refs/mdk/crates/cgka-engine/src/app_components.rs `validate_app_data_update_batch`, `validate_membership_proposal`
+ */
+export function validatePreApplyProposals(
+  proposals: readonly (Proposal | ProposalWithSender)[],
+  ciphersuiteId: number,
+): CommitIntegrityViolation | undefined {
+  const addViolation = validateAddProposalAccountIdentityProofs(
+    proposals,
+    ciphersuiteId,
+  );
+  if (addViolation) return addViolation;
+  for (const item of proposals) {
+    const proposal = "proposal" in item ? item.proposal : item;
+    if (
+      proposal.proposalType !== appDataUpdateProposalType ||
+      !("appDataUpdate" in proposal)
+    )
+      continue;
+    const { appDataUpdate } = proposal;
+    if (appDataUpdate.operation !== "update") continue;
+    const decode = COMPONENT_PAYLOAD_DECODERS.get(appDataUpdate.componentId);
+    if (!decode) continue;
+    try {
+      decode(appDataUpdate.update);
+    } catch {
+      return {
+        reason: "component-integrity",
+        detail: `AppDataUpdate payload for app component 0x${appDataUpdate.componentId.toString(16)} does not decode`,
+      };
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -47,23 +143,16 @@ export function createAdminCommitPolicyCallback(args: {
 
   return (incoming) => {
     if (incoming.kind === "proposal") {
-      // Only Add proposals are validated here (D-09). Standalone Update
-      // admission is deferred to Phase 9 (D-10) -- a bad Update leaf is
-      // still caught at commit time by the tree-diff adapter.
-      return validateAddProposalAccountIdentityProofs(
-        [incoming.proposal],
-        ciphersuiteId,
-      )
+      // Add proofs (D-09) and known-component AppDataUpdate payloads (CR-03)
+      // are validated here. Standalone Update admission is deferred to
+      // Phase 9 (D-10) -- a bad Update leaf is still caught at commit time by
+      // the tree-diff adapter.
+      return validatePreApplyProposals([incoming.proposal], ciphersuiteId)
         ? "reject"
         : "accept";
     }
 
-    if (
-      validateAddProposalAccountIdentityProofs(
-        incoming.proposals,
-        ciphersuiteId,
-      )
-    )
+    if (validatePreApplyProposals(incoming.proposals, ciphersuiteId))
       return "reject";
 
     // An admin MUST drop admin before self-removing (member-departure.md), so a

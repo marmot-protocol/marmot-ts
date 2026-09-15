@@ -23,7 +23,6 @@ import {
 import { marmotAuthService } from "../core/auth-service.js";
 import {
   type CommitIntegrityViolation,
-  validateAddProposalAccountIdentityProofs,
   validateCommitAccountIdentityProofs,
   validateCommitLegality,
 } from "../core/components/integrity.js";
@@ -44,7 +43,10 @@ import {
   deserializeClientState,
   serializeClientState,
 } from "../core/client-state.js";
-import { withCapturedProposals } from "./admin-policy.js";
+import {
+  validatePreApplyProposals,
+  withCapturedProposals,
+} from "./admin-policy.js";
 import type { EdgeSnapshot } from "./history-tree.js";
 import type { RetainedAppliedLink } from "./retained-store.js";
 import type { DisbandCandidateEvidence, GroupPeeler } from "./types.js";
@@ -213,7 +215,7 @@ export async function resolveCandidateParent(params: {
       kind: "rejected",
       reason: "authorization_or_components",
       result,
-      violation: validateAddProposalAccountIdentityProofs(
+      violation: validatePreApplyProposals(
         capturedCommit.proposals,
         ciphersuite.id,
       ),

@@ -38,6 +38,13 @@ requires `0x8009`.
   authorized against its own parent rather than the current canonical tip. Inbound ingest
   likewise authorizes every message against the state it is processed on, so a commit from an
   admin demoted earlier in the same batch is rejected.
+- Admin-only-commit enforcement reads only the `admin_policy` component. A malformed optional
+  component (avatar, media, retention, ...) no longer switches the admin gate to accept-all;
+  a group with no `admin_policy` has an empty admin set; an undecodable `admin_policy` refuses
+  every commit. Inbound AppDataUpdate proposals, standalone or carried by a commit, whose
+  payload does not decode for a known component are `rejected` with `component-integrity`
+  before they are staged or applied (`validatePreApplyProposals`, exported from
+  `@internet-privacy/marmot-ts/engine`).
 - `SkippedIngestResult.reason` gains `"unsupported-profile"`; exhaustive switches must handle
   it.
 - Stored groups outside the current profile load but refuse all traffic (this supersedes the

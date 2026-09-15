@@ -20,10 +20,7 @@ import {
 import { verifyApplicationRumorAuthorship } from "../core/application-rumor.js";
 import { getGroupProfileSupport } from "../core/components/account-identity-proof.js";
 import { marmotAuthService } from "../core/auth-service.js";
-import {
-  validateAddProposalAccountIdentityProofs,
-  validateCommitLegality,
-} from "../core/components/integrity.js";
+import { validateCommitLegality } from "../core/components/integrity.js";
 import { classifyDisbandCommit } from "../core/components/disband-validation.js";
 import {
   type CommitOrderingKey,
@@ -33,7 +30,10 @@ import {
 import { getCredentialPubkey } from "../core/credential.js";
 import { type DeferredReason, deferredReasons } from "../core/inbound.js";
 import { classifyLateCommit } from "../core/retained-history.js";
-import { withCapturedProposals } from "./admin-policy.js";
+import {
+  validatePreApplyProposals,
+  withCapturedProposals,
+} from "./admin-policy.js";
 import type { RejectedForkCandidate } from "./fork-recovery.js";
 import { contentDedupId } from "./message-dedup.js";
 import type { RetainedHistoryStore } from "./retained-store.js";
@@ -618,7 +618,7 @@ export async function* ingestEnvelopes<TEnvelope>(
         // rejected proposal's effect, mirroring the application-message
         // branch's ratchet-advance-only handling below -- and
         // recordProposalStaged is deliberately never called.
-        const violation = validateAddProposalAccountIdentityProofs(
+        const violation = validatePreApplyProposals(
           captured.proposals,
           ctx.ciphersuite.id,
         );
@@ -792,7 +792,7 @@ export async function* ingestEnvelopes<TEnvelope>(
           // is labeled identically to every other Add-proof rejection seam
           // (account-identity-proof + proofReason), not the generic
           // admin-policy reason.
-          const addViolation = validateAddProposalAccountIdentityProofs(
+          const addViolation = validatePreApplyProposals(
             capturedCommit.proposals,
             ctx.ciphersuite.id,
           );

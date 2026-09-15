@@ -55,6 +55,8 @@ export function ingestResultDisposition<TEnvelope>(
         case "self-evicted":
         case "group-disbanded":
           return disposition.stale(inputCategories.staleEpoch);
+        case "unsupported-profile":
+          return disposition.stale(inputCategories.unsupportedRequiredFeature);
         default: {
           const exhaustive: never = reason;
           return exhaustive;

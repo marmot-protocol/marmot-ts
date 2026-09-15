@@ -18,6 +18,7 @@ import {
 } from "ts-mls";
 
 import { verifyApplicationRumorAuthorship } from "../core/application-rumor.js";
+import { getGroupProfileSupport } from "../core/components/account-identity-proof.js";
 import { marmotAuthService } from "../core/auth-service.js";
 import {
   validateAddProposalAccountIdentityProofs,
@@ -368,6 +369,29 @@ export async function* ingestEnvelopes<TEnvelope>(
     );
     for (const envelope of envelopes) {
       yield { kind: "skipped", envelope, reason: "self-evicted" };
+    }
+    return;
+  }
+
+  // D-11: a stored group outside the current account-identity-proof profile
+  // (legacy, mixed, or missing the `0x8009` requirement) refuses ALL inbound
+  // traffic, including application messages — classified from canonical
+  // GroupContext before any peel or decrypt, mirroring the disband/self-evicted
+  // gates above. This supersedes Phase 7 D-10 ("load untouched"): commit
+  // legality would already reject every commit for such a group (08-01 D-01a),
+  // but application messages and proposals would otherwise still flow.
+  // @see refs/marmot/app-components/account-identity-proof-v2.md "Migration from v1"
+  const profileSupport = getGroupProfileSupport(
+    ctx.getState().groupContext.extensions,
+  );
+  if (profileSupport.kind === "unsupported") {
+    log(
+      "group outside the current account identity proof profile (%s) – yielding %d envelope(s) as unsupported-profile",
+      profileSupport.proofReason,
+      envelopes.length,
+    );
+    for (const envelope of envelopes) {
+      yield { kind: "skipped", envelope, reason: "unsupported-profile" };
     }
     return;
   }

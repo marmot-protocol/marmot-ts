@@ -50,7 +50,12 @@ import {
   validateAddProposalAccountIdentityProofs,
   validateCommitLegality,
 } from "../core/components/integrity.js";
-import { validateKeyPackageAccountIdentityProof } from "../core/components/account-identity-proof.js";
+import {
+  getGroupProfileSupport,
+  validateKeyPackageAccountIdentityProof,
+  type AccountIdentityProofRejectReason,
+  type GroupProfileSupport,
+} from "../core/components/account-identity-proof.js";
 import {
   APP_COMPONENTS_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
@@ -198,6 +203,30 @@ export class DisbandingError extends Error {
       "Cannot send ordinary outbound work while group disbanding is pending.",
     );
     this.name = "DisbandingError";
+  }
+}
+
+/**
+ * Thrown by {@link MarmotGroupEngine.send} for EVERY outbound intent kind
+ * (application message, proposal, commit, self-update) when the group's
+ * canonical GroupContext no longer classifies as the current account identity
+ * proof profile (D-11): a legacy group, a mixed legacy/current group, or a
+ * group with no `0x8009` requirement at all. Such a group loads and stays
+ * listable/`destroy()`-able (D-11), but this client never validated its
+ * members under the current profile, so all traffic is refused rather than
+ * exchanged. The message is pubkey-free (diagnostics-privacy rule,
+ * `foundation/errors.md`).
+ *
+ * @see refs/marmot/app-components/account-identity-proof-v2.md "Migration from v1"
+ */
+export class UnsupportedGroupProfileError extends Error {
+  readonly reason = "unsupported-profile" as const;
+
+  constructor(readonly proofReason: AccountIdentityProofRejectReason) {
+    super(
+      "Cannot send: this group is outside the current account identity proof profile (0x8009).",
+    );
+    this.name = "UnsupportedGroupProfileError";
   }
 }
 
@@ -561,6 +590,16 @@ export class MarmotGroupEngine<TEnvelope> {
   }
 
   /**
+   * Whether the group's canonical GroupContext still classifies as the
+   * current account identity proof profile (D-11). A derived read, computed
+   * fresh from `this.#state` on every access — never cached — so it always
+   * reflects the latest adopted state. Never throws.
+   */
+  get profileSupport(): GroupProfileSupport {
+    return getGroupProfileSupport(this.#state.groupContext.extensions);
+  }
+
+  /**
    * The group's lifecycle state (`group-state.md`). A new local commit may only
    * be prepared while `Stable`; the commit flow moves through `PendingPublish`
    * (commit prepared, publish unconfirmed) and `Merging` (publish acked, staged
@@ -822,6 +861,14 @@ export class MarmotGroupEngine<TEnvelope> {
         "Cannot send: this client has been removed from the group.",
       );
     }
+    // D-11: every outbound intent kind is refused, before any audit emit, for
+    // a group outside the current account identity proof profile — this
+    // client never validated that group's members under the current profile,
+    // so nothing is sent. `send()` is the single choke point for every intent
+    // kind; no per-case checks are added in `#sendInner`.
+    const profileSupport = this.profileSupport;
+    if (profileSupport.kind === "unsupported")
+      throw new UnsupportedGroupProfileError(profileSupport.proofReason);
     const intentKind = auditSendIntentKind(intent);
     this.#emitAudit({ type: "send_entry", intent_kind: intentKind });
     try {

@@ -201,7 +201,8 @@ export type SkippedIngestResult<TEnvelope> = {
    * group canonically disbanded is classified by its group
    * before any peel or decrypt (`member-departure.md`: such input "need not
    * be decrypted or authenticated"). Every other skip reason still populates
-   * this (D-13).
+   * this (D-13). `message` is also absent for `unsupported-profile`, which is
+   * classified from canonical GroupContext before any peel or decrypt (D-11).
    */
   message?: MlsMessage;
   reason:
@@ -213,7 +214,8 @@ export type SkippedIngestResult<TEnvelope> = {
     | "missing-retained-anchor"
     | "invalid-app-payload"
     | "self-evicted"
-    | "group-disbanded";
+    | "group-disbanded"
+    | "unsupported-profile";
 };
 
 /** An envelope that could not be decrypted or processed after all retry attempts. */

@@ -312,10 +312,26 @@ export class GroupRegistry<
       // change canonical state (including landing on removal), so activate them
       // only after every public lifecycle forwarder is attached.
       await group.session.hydrateLifecycleEvidence();
-      if (group.forkTree.tips().length > 1) await group.reconverge();
+      // D-11/D-12: a group outside the current account identity proof profile
+      // still loads and is fully hydrated above, but activation steps that can
+      // trigger outbound work (reconvergence, resumed disband) are skipped for
+      // it — nothing is published automatically. `getGroupProfileSupport` is
+      // non-throwing (D-11), so classification can never reject this
+      // `Promise.all`-batched load or any sibling group's load.
+      const profileSupported = group.profileSupport.kind === "supported";
+      if (!profileSupported)
+        log(
+          "group %s is outside the current account identity proof profile (%s); loading without reconvergence or resumed disband",
+          id,
+          group.profileSupport.kind === "unsupported"
+            ? group.profileSupport.proofReason
+            : undefined,
+        );
+      if (profileSupported && group.forkTree.tips().length > 1)
+        await group.reconverge();
       await group.realizeRemovalIfNeeded();
       await group.realizeDisbandIfNeeded();
-      await group.resumePendingDisband();
+      if (profileSupported) await group.resumePendingDisband();
       this.#activatingGroups.delete(id);
       this.emit("updated", this.loaded);
     } catch (error) {

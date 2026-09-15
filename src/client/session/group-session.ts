@@ -10,6 +10,7 @@ import {
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
+import type { GroupProfileSupport } from "../../core/components/account-identity-proof.js";
 import {
   getMarmotGroupView,
   serializeClientState,
@@ -310,6 +311,17 @@ export class GroupSession<
 
   get lifecycle() {
     return this.#engine.lifecycle;
+  }
+
+  /**
+   * Whether this group's canonical GroupContext still classifies as the
+   * current account identity proof profile (D-11). Orthogonal to `lifecycle`:
+   * an unsupported group can still be `Stable` — it stays listable and
+   * `destroy()`-able, but every outbound `send` and every inbound envelope is
+   * refused. Delegates to the engine, which recomputes this on every access.
+   */
+  get profileSupport(): GroupProfileSupport {
+    return this.#engine.profileSupport;
   }
 
   /** The derived convergence status (`group-state.md` §Convergence status, B5). */
@@ -724,6 +736,23 @@ export class GroupSession<
           kind: "skipped",
           event,
           reason: "group-disbanded",
+        };
+        yield { ...skipped, disposition: ingestResultDisposition(skipped) };
+      }
+      return;
+    }
+    // D-11 mirror: refuse every event for a group outside the current
+    // account identity proof profile before any effect-ledger replay or
+    // wrapper-ledger bookkeeping, so refused input writes nothing to either
+    // ledger and persists no state. The engine gate (`ingestEnvelopes`)
+    // remains authoritative for direct engine callers; this repeats the
+    // terminal-tombstone precedent of gating at both session and engine.
+    if (this.#engine.profileSupport.kind === "unsupported") {
+      for (const event of events) {
+        const skipped: SkippedIngestResult = {
+          kind: "skipped",
+          event,
+          reason: "unsupported-profile",
         };
         yield { ...skipped, disposition: ingestResultDisposition(skipped) };
       }

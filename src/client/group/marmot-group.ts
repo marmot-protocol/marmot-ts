@@ -14,6 +14,7 @@ import {
 } from "ts-mls";
 
 import type { ProposalAction, ProposalContext } from "../../engine/types.js";
+import type { GroupProfileSupport } from "../../core/components/account-identity-proof.js";
 import type { MediaAttachment } from "../../core/media.js";
 import type { AuditContextOptions, AuditSink } from "../../audit/index.js";
 import { mayReleaseOutbound } from "../../core/convergence-status.js";
@@ -539,6 +540,18 @@ export class MarmotGroup<
     return this.state.groupActiveState.kind === "removedFromGroup"
       ? "removed"
       : "active";
+  }
+
+  /**
+   * Account-identity-proof profile support is orthogonal to membership
+   * `status` (D-11): a stored group whose GroupContext does not classify as
+   * the current profile (legacy, mixed, or missing the `0x8009` requirement)
+   * stays listable and `destroy()`-able, but every outbound send and every
+   * inbound event is refused. Delegates to `session.profileSupport`, which
+   * recomputes from the engine on every access.
+   */
+  get profileSupport(): GroupProfileSupport {
+    return this.session.profileSupport;
   }
 
   /** Group-scoped durable key for removal realization state. */
@@ -1072,6 +1085,10 @@ export class MarmotGroup<
 
   /** Resumes a durable terminal intent after hydration when preparation is eligible. */
   async resumePendingDisband(): Promise<void> {
+    // D-12: nothing is published automatically for a group outside the
+    // current account identity proof profile — `disband()` would call
+    // `session`/`engine.send`, which throws `UnsupportedGroupProfileError`.
+    if (this.profileSupport.kind === "unsupported") return;
     if (
       this.status !== "disbanded" &&
       this.lifecycle === groupLifecycleStates.stable &&

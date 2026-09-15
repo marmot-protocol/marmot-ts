@@ -9,6 +9,7 @@ import {
   type CiphersuiteImpl,
   bytesToBase64,
   defaultCryptoProvider,
+  defaultProposalTypes,
   encode,
   getCiphersuiteImpl,
   mlsMessageEncoder,
@@ -16,12 +17,17 @@ import {
 } from "ts-mls";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { forgeKeyPackage } from "../../../__tests__/helpers/account-identity-proof-fixtures.js";
+import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
+import { getMarmotGroupView } from "../../../core/client-state.js";
 import { createCredential } from "../../../core/credential.js";
+import { createSimpleGroup } from "../../../core/group.js";
 import { createKeyPackageEvent } from "../../../core/key-package-event.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../../core/protocol.js";
 import { fakeVerifyEvent } from "../../verify.js";
 import { createInviteIntent } from "../invite.js";
+import { proposeInviteUser } from "../proposals/invite-user.js";
 
 const SUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
 
@@ -264,6 +270,70 @@ describe("createInviteIntent", () => {
           keyPackageEvent: event,
         },
       ]);
+    });
+  });
+
+  describe("proposeInviteUser account identity proof (GRP-04)", () => {
+    async function buildProposalContext() {
+      const admin = testAccount(13);
+      const adminKp = await generateKeyPackage({
+        credential: createCredential(admin.pubkey),
+        signer: admin.signer,
+        ciphersuiteImpl: ciphersuite,
+      });
+      const { clientState } = await createSimpleGroup(
+        adminKp,
+        ciphersuite,
+        "Test Group",
+      );
+      const groupData = getMarmotGroupView(clientState);
+      if (!groupData) throw new Error("expected a MarmotGroupView");
+      return { state: clientState, ciphersuite, groupData };
+    }
+
+    it("rejects a proof-less invitee KeyPackage with AccountIdentityProofError before proposing", async () => {
+      const context = await buildProposalContext();
+      const forged = await forgeKeyPackage({
+        account: testAccount(14),
+        ciphersuiteImpl: ciphersuite,
+        proof: "missing",
+      });
+
+      await expect(
+        proposeInviteUser(forged.publicPackage)(context),
+      ).rejects.toMatchObject({ name: "AccountIdentityProofError" });
+    });
+
+    it("rejects a tampered invitee KeyPackage with AccountIdentityProofError before proposing", async () => {
+      const context = await buildProposalContext();
+      const forged = await forgeKeyPackage({
+        account: testAccount(15),
+        ciphersuiteImpl: ciphersuite,
+        proof: "tampered",
+      });
+
+      await expect(
+        proposeInviteUser(forged.publicPackage)(context),
+      ).rejects.toMatchObject({
+        name: "AccountIdentityProofError",
+        reason: "invalid-proof",
+      });
+    });
+
+    it("resolves to an Add proposal for a valid invitee KeyPackage", async () => {
+      const context = await buildProposalContext();
+      const invitee = testAccount(2);
+      const validKp = await generateKeyPackage({
+        credential: createCredential(invitee.pubkey),
+        signer: invitee.signer,
+        ciphersuiteImpl: ciphersuite,
+      });
+
+      const proposal = await proposeInviteUser(validKp.publicPackage)(context);
+      expect(proposal.proposalType).toBe(defaultProposalTypes.add);
+      expect(proposal).toMatchObject({
+        add: { keyPackage: validKp.publicPackage },
+      });
     });
   });
 });

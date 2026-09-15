@@ -5,15 +5,15 @@ milestone_name: Account identity proof v2
 current_phase: 08
 current_phase_name: GroupContext Profile Requirement & Legality-Seam Extension
 status: executing
-stopped_at: Completed 08-02-PLAN.md
-last_updated: "2026-09-15T16:53:12.215Z"
+stopped_at: Completed 08-03-PLAN.md
+last_updated: "2026-09-15T17:08:28.263Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 08 execution started
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 13
-  completed_plans: 11
+  completed_plans: 12
   percent: 33
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 ## Current Position
 
 Phase: 08 (GroupContext Profile Requirement & Legality-Seam Extension) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-09-15 — Phase 08 execution started
 
@@ -134,6 +134,7 @@ _Updated after each plan completion_
 | Phase 07 P08 | 25min | 2 tasks | 13 files |
 | Phase 08 P01 | 20min | 3 tasks | 12 files |
 | Phase 08 P02 | 25min | 3 tasks | 8 files |
+| Phase 08 P03 | 15min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -281,6 +282,8 @@ Recent decisions affecting current work:
 - [Phase 08]: [Phase 08-02]: Merged ingest.ts's two withCapturedProposals wrappers (per-loop) into one shared instance declared before both the non-commit and commit loops, matching the decorator's own documented reuse contract
 - [Phase 08]: [Phase 08-02]: D-05's inbound-commit test uses an admin committer (admin2) to author the forged-Add commit, so it is rejected by the Add-proof check specifically rather than the pre-existing generic admin-policy path
 - [Phase 08]: [Phase 08-02]: Left GRP-02 Pending in REQUIREMENTS.md (only GRP-04 marked complete) -- the full seam-parity matrix GRP-02 requires is plan 08-04's explicit scope
+- [Phase ?]: [Phase 08-03]: GroupRegistry.track() guards both reconverge() and resumePendingDisband() with one profileSupported boolean, even though resumePendingDisband() already self-guards, per the plan's explicit instruction
+- [Phase ?]: [Phase 08-03]: Left GRP-02 unmarked in REQUIREMENTS.md -- its full seam-parity-matrix text is plan 08-04's explicit scope, matching the discretion 08-01/08-02 already exercised
 
 ### Pending Todos
 
@@ -319,8 +322,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-15T16:53:12.205Z
-Stopped at: Completed 08-02-PLAN.md
+Last session: 2026-09-15T17:08:28.252Z
+Stopped at: Completed 08-03-PLAN.md
 Resume file:
 
 None

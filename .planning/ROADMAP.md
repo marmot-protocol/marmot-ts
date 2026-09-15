@@ -115,7 +115,7 @@ shared `validateCommitLegality` adapter before any seam-local swap.
 3. Joining via Welcome fails when the group does not require `0x8009` or any current member's proof is invalid.
 4. Inviting a user, and admin-policy admission of a standalone Add proposal, both validate the invitee's `0x8009` proof before the proposal is created or queued.
 
-**Plans**: 2/4 plans executed
+**Plans**: 3/4 plans executed
 
 Plans:
 **Wave 1**
@@ -128,7 +128,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 08-03-PLAN.md — Stored groups outside the profile: load flagged via `profileSupport`, all traffic refused (`UnsupportedGroupProfileError` / skipped `unsupported-profile`), destroy docs + changeset (wave 3)
+- [x] 08-03-PLAN.md — Stored groups outside the profile: load flagged via `profileSupport`, all traffic refused (`UnsupportedGroupProfileError` / skipped `unsupported-profile`), destroy docs + changeset (wave 3)
 - [ ] 08-04-PLAN.md — GRP-02 seam-parity matrix: requirement drop, proof-less Add, invalid update-path proof across send/inbound/replay/tree-fed (wave 3)
 
 ### Phase 9: Self-Update / Replacement-Leaf Identity Binding
@@ -210,7 +210,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 3.1 → 4 → 4.1 → 5 → 6
 | 5. Quality Gate                                            | v1.0      | 8/8             | Complete    | 2026-09-06 |
 | 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 1/1 | Complete    | 2026-09-12 |
 | 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 8/8 | Complete    | 2026-09-14 |
-| 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 2/4 | In Progress|  |
+| 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 3/4 | In Progress|  |
 | 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 0/TBD           | Not started | -          |
 | 10. Founding Group Creation via Welcome                    | v2.0      | 0/TBD           | Not started | -          |
 | 11. Interop Fixtures, Exports Snapshot & QA Gate           | v2.0      | 0/TBD           | Not started | -          |

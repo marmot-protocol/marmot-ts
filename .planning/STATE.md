@@ -4,9 +4,9 @@ milestone: v2.0
 milestone_name: Account identity proof v2
 current_phase: 8
 current_phase_name: GroupContext Profile Requirement & Legality-Seam Extension
-status: verifying
+status: executing
 stopped_at: Phase 8 context gathered
-last_updated: "2026-09-15T14:31:43.964Z"
+last_updated: "2026-09-15T15:26:49.240Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 07 complete, transitioned to Phase 8
 progress:
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 
 Phase: 8 — GroupContext Profile Requirement & Legality-Seam Extension
 Plan: Not started
-Status: Phase complete — ready for verification
+Status: Ready to execute
 Last activity: 2026-09-14 — Phase 07 complete, transitioned to Phase 8
 
 Progress: [░░░░░░░░░░] 0%

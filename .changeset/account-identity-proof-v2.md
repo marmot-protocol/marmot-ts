@@ -25,8 +25,9 @@ requires `0x8009`.
   same structured verdict (`reason: "account-identity-proof"` plus `proofReason` /
   `leafIndex`): send throws `CommitLegalityError`; inbound ingest, fork-recovery pool replay,
   and the ingestion-pool sweep yield `rejected` with that reason; tree-fed convergence has no
-  triggering envelope, so it never adopts a branch containing such a commit and falls back
-  to the best remaining legal branch.
+  triggering envelope, so it never adopts such a commit: a branch containing one competes only
+  as its legal prefix (the chain up to the last valid commit), matching pool replay and MDK,
+  and is dropped only when its first commit is invalid.
 - `createAdminCommitPolicyCallback` now rejects an Add with no proof material. Standalone Add
   proposals are validated before they are staged: inbound yields `rejected` with
   `account-identity-proof`, and local `send({ kind: "proposal" })` throws

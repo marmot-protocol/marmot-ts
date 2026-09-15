@@ -1242,8 +1242,19 @@ describe("#treeResolution winner-chain validation on tree-fed re-convergence (D-
 
     await engine.reconvergeFromHistory();
 
-    // The switch was abandoned: the engine's own tip is still canonical.
-    expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTag);
+    // The illegal sib2 link is never adopted. Its legal prefix (sib1) stays a
+    // scored candidate at the own branch's depth (WR-02, matching MDK), so the
+    // lower tip digest decides between the two.
+    const edgeDigestOf = (tag: string) =>
+      bytesToHex(
+        engine.history.node(tag)?.edge?.commitDigest ?? new Uint8Array(),
+      );
+    expect(bytesToHex(engine.state.confirmationTag)).not.toBe(
+      bytesToHex(sib2State.confirmationTag),
+    );
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(
+      edgeDigestOf(sib1Tag) < edgeDigestOf(ownTag) ? sib1Tag : ownTag,
+    );
     expect(Number(engine.state.groupContext.epoch)).toBe(2);
     expect(engine.lifecycle).toBe("Stable");
   });

@@ -1,8 +1,10 @@
 /** @module @category Engine */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import {
+  bytesToBase64,
   type CiphersuiteImpl,
   type ClientState,
+  contentTypes,
   encode,
   getCredentialFromLeafIndex,
   type IncomingMessageCallback,
@@ -12,6 +14,8 @@ import {
   MlsMessage,
   processMessage,
   type ProcessMessageResult,
+  proposalOrRefTypes,
+  type ProposalWithSender,
   wireformats,
   senderTypes,
 } from "ts-mls";
@@ -20,6 +24,7 @@ import { marmotAuthService } from "../core/auth-service.js";
 import {
   type CommitIntegrityViolation,
   validateAddProposalAccountIdentityProofs,
+  validateCommitAccountIdentityProofs,
   validateCommitLegality,
 } from "../core/components/integrity.js";
 import {
@@ -98,9 +103,43 @@ export interface RejectedForkCandidate {
 }
 
 /**
+ * Rebuilds a PublicMessage commit's proposal list without replaying it: inline
+ * entries (sent by the committer) plus each `ProposalRef` resolved from
+ * `parent.unappliedProposals`, the same lookup ts-mls `applyProposals`
+ * performs. Returns `undefined` when that is not possible — a PrivateMessage
+ * commit (encrypted content), a non-member sender, or a reference the parent
+ * snapshot no longer stages.
+ */
+function proposalsFromPublicCommit(
+  parent: ClientState,
+  message: MlsFramedMessage,
+): { proposals: ProposalWithSender[]; committerLeafIndex: number } | undefined {
+  if (message.wireformat !== wireformats.mls_public_message) return undefined;
+  const content = message.publicMessage.content;
+  if (content.contentType !== contentTypes.commit) return undefined;
+  if (content.sender.senderType !== senderTypes.member) return undefined;
+  const committerLeafIndex = Number(content.sender.leafIndex);
+  const proposals: ProposalWithSender[] = [];
+  for (const entry of content.commit.proposals) {
+    if (entry.proposalOrRefType === proposalOrRefTypes.proposal) {
+      proposals.push({
+        proposal: entry.proposal,
+        senderLeafIndex: committerLeafIndex,
+      });
+      continue;
+    }
+    const staged = parent.unappliedProposals[bytesToBase64(entry.reference)];
+    if (!staged) return undefined;
+    proposals.push(staged);
+  }
+  return { proposals, committerLeafIndex };
+}
+
+/**
  * Authenticates a Commit against one exact parent, then applies the shared
  * parent-relative authorization/component gate. A stamped own Commit is
- * already authenticated and authorized and therefore uses its recorded child.
+ * already authenticated and authorized and therefore uses its recorded child
+ * instead of being replayed — but it still passes the legality gate (WR-03).
  */
 export async function resolveCandidateParent(params: {
   ciphersuite: CiphersuiteImpl;
@@ -110,17 +149,46 @@ export async function resolveCandidateParent(params: {
   known?: KnownNextState;
 }): Promise<ParentResolution> {
   const { ciphersuite, parent, message, callback, known } = params;
-  if (known?.parentTag === bytesToHex(parent.confirmationTag))
-    return {
-      kind: "resolved",
-      result: {
-        kind: "newState",
-        newState: known.state,
-        actionTaken: "accept",
-        consumed: [],
-        aad: new Uint8Array(),
-      },
+  if (known?.parentTag === bytesToHex(parent.confirmationTag)) {
+    // WR-03: an own commit cannot be replayed (RFC 9420: an UpdatePath never
+    // encrypts a path secret to its own committer), but reusing its recorded
+    // child must not skip the legality gate — the recorded state may come
+    // from a persisted edge written by a build that never enforced it. The
+    // proposals are rebuilt off the wire for the full check; when that is
+    // impossible, the proposal-free 0x8009 profile/changed-leaf check runs.
+    const result: ProcessMessageResult & { kind: "newState" } = {
+      kind: "newState",
+      newState: known.state,
+      actionTaken: "accept",
+      consumed: [],
+      aad: new Uint8Array(),
     };
+    const rebuilt = proposalsFromPublicCommit(parent, message);
+    let violation: CommitIntegrityViolation | undefined;
+    try {
+      violation = rebuilt
+        ? validateCommitLegality({
+            parentState: parent,
+            resultingState: known.state,
+            proposals: rebuilt.proposals,
+            committerLeafIndex: rebuilt.committerLeafIndex,
+          })
+        : validateCommitAccountIdentityProofs({
+            parentState: parent,
+            resultingState: known.state,
+          });
+    } catch {
+      return { kind: "deferred", reason: "temporary_refusal" };
+    }
+    if (violation)
+      return {
+        kind: "rejected",
+        reason: "authorization_or_components",
+        result,
+        violation,
+      };
+    return { kind: "resolved", result };
+  }
 
   const capture = withCapturedProposals(callback);
   capture.take();
@@ -375,18 +443,17 @@ export class ForkRecovery<TEnvelope> {
         // where our own commit fails to process against a foreign parent and is
         // dropped as a candidate — which is the correct outcome.
         //
-        // CR-04: reusing a recorded state must NOT also skip the legality gate.
-        // `ours` comes from `RetainedHistoryStore`, which `GroupRegistry`
+        // CR-04/WR-03: reusing a recorded state must NOT also skip the legality
+        // gate. `ours` comes from `RetainedHistoryStore`, which `GroupRegistry`
         // rebuilds on load straight from the persisted history tree — the exact
         // pre-upgrade edge class `#treeResolution` explicitly refuses to
-        // grandfather. This commit cannot be replayed (see below), so its
-        // proposals are read off the wire instead: inline entries plus the
-        // parent's staged proposal for each `ProposalRef`. When that
-        // reconstruction is not possible (a `PrivateMessage` commit, whose
-        // content is encrypted) we deliberately fall through to the ordinary
-        // replay path rather than dropping the candidate — replay yields both
-        // the proposals and the same legality gate, and only fails for a commit
-        // this leaf authored, which Marmot never wires as a `PrivateMessage`.
+        // grandfather. This commit cannot be replayed, so
+        // `resolveCandidateParent` reads its proposals off the wire instead
+        // (inline entries plus the parent's staged proposal for each
+        // `ProposalRef`) and runs `validateCommitLegality` on the recorded
+        // child. When that reconstruction is not possible (a `PrivateMessage`
+        // commit, or a reference the parent snapshot no longer stages) it runs
+        // the proposal-free `0x8009` profile/changed-leaf check instead.
         const knownAtThisParent =
           known !== undefined &&
           known.parentTag === bytesToHex(state.confirmationTag);

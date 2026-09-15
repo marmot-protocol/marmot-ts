@@ -303,6 +303,43 @@ describe("GRP-02 seam parity: commit that drops the 0x8009 requirement (D-04)", 
     ).toEqual(expected);
   });
 
+  it("own-commit shortcut: a known recorded child still runs the legality gate (WR-03)", async () => {
+    const { impl, ctx, admin2Epoch1, adminEpoch1 } = await seamGroup();
+    const rootSnapshot = snapshot(adminEpoch1);
+
+    const violating = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [dropAccountIdentityProofRequirement(admin2Epoch1)],
+    });
+    // A persisted (pre-upgrade) recorded child for this commit, reached with
+    // no Marmot gates at all.
+    const [recordedChild] = await buildAdmin1PerspectiveChain(
+      ctx,
+      snapshot(adminEpoch1),
+      [violating.commit],
+    );
+
+    const resolution = await resolveCandidateParent({
+      ciphersuite: impl,
+      parent: rootSnapshot,
+      message: violating.commit,
+      callback: adminCallbackFor(rootSnapshot, impl),
+      known: {
+        parentTag: bytesToHex(rootSnapshot.confirmationTag),
+        state: recordedChild!,
+      },
+    });
+    expect(resolution.kind).toBe("rejected");
+    expect(
+      project(
+        resolution.kind === "rejected" ? resolution.violation : undefined,
+      ),
+    ).toEqual(expected);
+  });
+
   it("pool sweep: rejects a live second sibling commit that only decrypts on a retained fork node, records no edge (CR-01)", async () => {
     const { impl, ctx, adminPubkey, admin2Epoch1, adminEpoch1 } =
       await seamGroup();

@@ -6,6 +6,7 @@ import {
   type ClientState,
   contentTypes,
   encode,
+  getAppDataDictionary,
   getCredentialFromLeafIndex,
   type IncomingMessageCallback,
   type LeafIndex,
@@ -21,8 +22,16 @@ import {
 } from "ts-mls";
 
 import { marmotAuthService } from "../core/auth-service.js";
+import { getAppComponents } from "../core/components/dictionary.js";
 import {
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+  type AppComponentId,
+} from "../core/components/ids.js";
+import {
+  type AppDataUpdateOp,
   type CommitIntegrityViolation,
+  validateAdminLeafCoupling,
+  validateAppComponentIntegrity,
   validateCommitAccountIdentityProofs,
   validateCommitLegality,
 } from "../core/components/integrity.js";
@@ -39,6 +48,7 @@ import {
   type BranchScore,
 } from "../core/convergence.js";
 import { getCredentialPubkey } from "../core/credential.js";
+import { getGroupMemberPubkeys } from "../core/group-members.js";
 import {
   deserializeClientState,
   serializeClientState,
@@ -138,10 +148,78 @@ function proposalsFromPublicCommit(
 }
 
 /**
+ * WR-03: the part of {@link validateCommitLegality} that is decidable without
+ * the commit's own proposals, for a recorded child whose proposals cannot be
+ * rebuilt off the wire. Runs, in the shared adapter's order:
+ * 1. component integrity rules 1-2 (the dictionary and every protected id are
+ *    never dropped) and the leaf-only `0x8009` guard. Rule 3 — every changed
+ *    entry is backed by one of this commit's own AppDataUpdates — needs those
+ *    proposals, so every resulting entry is treated as backed;
+ * 2. the `0x8009` profile and changed-leaf proof check;
+ * 3. admin-leaf coupling.
+ *
+ * Disband legality classifies the commit's own proposals and cannot run here.
+ */
+function validateLegalityWithoutProposals(
+  parentState: ClientState,
+  resultingState: ClientState,
+): CommitIntegrityViolation | undefined {
+  const currentExtensions = parentState.groupContext.extensions;
+  const resultingExtensions = resultingState.groupContext.extensions;
+  let requiredIds: readonly AppComponentId[];
+  try {
+    requiredIds = getAppComponents(currentExtensions) ?? [];
+  } catch {
+    return {
+      reason: "component-integrity",
+      detail: "current app_components component did not decode",
+    };
+  }
+
+  // Neutralize only rule 3: an op "backing" every resulting entry (and every
+  // removal), so rules 1-2 and the leaf-only guard are the only integrity
+  // checks that can fire. 0x8009 is never synthesized, so a dictionary that
+  // carries it is still reported.
+  const resulting = getAppDataDictionary(resultingExtensions) ?? [];
+  const backedOps: AppDataUpdateOp[] = resulting
+    .filter(
+      (entry) => entry.componentId !== ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+    )
+    .map((entry) => ({ componentId: entry.componentId, data: entry.data }));
+  for (const entry of getAppDataDictionary(currentExtensions) ?? []) {
+    if (entry.componentId === ACCOUNT_IDENTITY_PROOF_COMPONENT_ID) continue;
+    if (!resulting.some((r) => r.componentId === entry.componentId))
+      backedOps.push({ componentId: entry.componentId, data: undefined });
+  }
+  const integrity = validateAppComponentIntegrity({
+    currentExtensions,
+    resultingExtensions,
+    appDataUpdateOps: backedOps,
+    requiredIds,
+  });
+  if (integrity) return integrity;
+
+  const proof = validateCommitAccountIdentityProofs({
+    parentState,
+    resultingState,
+  });
+  if (proof) return proof;
+
+  return validateAdminLeafCoupling({
+    currentExtensions,
+    resultingExtensions,
+    resultingMemberAccounts: getGroupMemberPubkeys(resultingState),
+  });
+}
+
+/**
  * Authenticates a Commit against one exact parent, then applies the shared
  * parent-relative authorization/component gate. A stamped own Commit is
  * already authenticated and authorized and therefore uses its recorded child
- * instead of being replayed — but it still passes the legality gate (WR-03).
+ * instead of being replayed. That child still passes the full
+ * {@link validateCommitLegality} gate when the commit's proposals can be
+ * rebuilt off the wire, and every proposal-independent legality check
+ * ({@link validateLegalityWithoutProposals}) when they cannot (WR-03).
  */
 export async function resolveCandidateParent(params: {
   ciphersuite: CiphersuiteImpl;
@@ -157,7 +235,7 @@ export async function resolveCandidateParent(params: {
     // child must not skip the legality gate — the recorded state may come
     // from a persisted edge written by a build that never enforced it. The
     // proposals are rebuilt off the wire for the full check; when that is
-    // impossible, the proposal-free 0x8009 profile/changed-leaf check runs.
+    // impossible, every proposal-independent legality check still runs.
     const result: ProcessMessageResult & { kind: "newState" } = {
       kind: "newState",
       newState: known.state,
@@ -175,10 +253,7 @@ export async function resolveCandidateParent(params: {
             proposals: rebuilt.proposals,
             committerLeafIndex: rebuilt.committerLeafIndex,
           })
-        : validateCommitAccountIdentityProofs({
-            parentState: parent,
-            resultingState: known.state,
-          });
+        : validateLegalityWithoutProposals(parent, known.state);
     } catch {
       return { kind: "deferred", reason: "temporary_refusal" };
     }
@@ -459,7 +534,8 @@ export class ForkRecovery<TEnvelope> {
         // `ProposalRef`) and runs `validateCommitLegality` on the recorded
         // child. When that reconstruction is not possible (a `PrivateMessage`
         // commit, or a reference the parent snapshot no longer stages) it runs
-        // the proposal-free `0x8009` profile/changed-leaf check instead.
+        // every proposal-independent legality check instead: component rules
+        // 1-2, the `0x8009` check, and admin-leaf coupling (WR-03).
         const knownAtThisParent =
           known !== undefined &&
           known.parentTag === bytesToHex(state.confirmationTag);

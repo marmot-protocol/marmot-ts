@@ -1,244 +1,232 @@
 ---
 phase: 08-groupcontext-profile-requirement-legality-seam-extension
-reviewed: 2026-09-15T00:00:00Z
+reviewed: 2026-09-15T20:00:00Z
 depth: standard
 files_reviewed: 30
 files_reviewed_list:
   - .changeset/account-identity-proof-v2.md
   - docs/client/best-practices.md
-  - src/client/group/marmot-group.ts
+  - src/__tests__/exports.test.ts
+  - src/__tests__/helpers/account-identity-proof-fixtures.ts
+  - src/__tests__/helpers/engine-seam-fixtures.ts
+  - src/client/__tests__/join-account-identity-proof.test.ts
+  - src/client/__tests__/unsupported-profile-groups.test.ts
   - src/client/group-registry.ts
   - src/client/group/__tests__/invite.test.ts
   - src/client/group/__tests__/marmot-group.test.ts
+  - src/client/group/marmot-group.ts
   - src/client/session/group-session.ts
-  - src/client/__tests__/join-account-identity-proof.test.ts
-  - src/client/__tests__/unsupported-profile-groups.test.ts
-  - src/core/components/account-identity-proof.ts
-  - src/core/components/index.ts
-  - src/core/components/integrity.ts
+  - src/core/__tests__/group.test.ts
   - src/core/components/__tests__/account-identity-proof.test.ts
   - src/core/components/__tests__/integrity.test.ts
   - src/core/components/__tests__/tree-diff.test.ts
+  - src/core/components/account-identity-proof.ts
+  - src/core/components/index.ts
+  - src/core/components/integrity.ts
   - src/core/components/tree-diff.ts
-  - src/core/__tests__/group.test.ts
+  - src/engine/__tests__/account-identity-proof-seams.test.ts
+  - src/engine/__tests__/group-engine.test.ts
+  - src/engine/__tests__/standalone-add-admission.test.ts
+  - src/engine/__tests__/unsupported-profile.test.ts
   - src/engine/admin-policy.ts
   - src/engine/fork-recovery.ts
   - src/engine/group-engine.ts
   - src/engine/ingest-disposition.ts
   - src/engine/ingest.ts
-  - src/engine/__tests__/account-identity-proof-seams.test.ts
-  - src/engine/__tests__/group-engine.test.ts
-  - src/engine/__tests__/standalone-add-admission.test.ts
-  - src/engine/__tests__/unsupported-profile.test.ts
   - src/engine/types.ts
-  - src/__tests__/exports.test.ts
-  - src/__tests__/helpers/account-identity-proof-fixtures.ts
-  - src/__tests__/helpers/engine-seam-fixtures.ts
 findings:
   critical: 1
-  warning: 6
-  info: 4
+  warning: 4
+  info: 6
   total: 11
 status: issues_found
 ---
 
-# Phase 8: Code Review Report
+# Phase 8: Code Review Report (re-review, iteration 2)
 
-**Reviewed:** 2026-09-15T00:00:00Z
+**Reviewed:** 2026-09-15T20:00:00Z
 **Depth:** standard
 **Files Reviewed:** 30
 **Status:** issues_found
 
 ## Summary
 
-This review covers the Phase 8 diff (`092fec7..HEAD`). The phase adds four things:
-- the `0x8009` profile-drift and changed-leaf proof check in `validateCommitLegality`
-- pre-apply Add-proof admission in the admin callback, the send path and `#sweepResult`
-- the `unsupported-profile` gates at send, ingest and session
-- a new `profileSupport` getter on the engine, session and group
+This is a re-review of the Phase 8 diff after the fix commits `30986e0..bcd2c19` (CR-01, WR-01..WR-06). I checked each fix against the prior finding, the code around it, and `refs/mdk`.
 
-The core pieces are sound:
-- `diffChangedLeaves` and `validateCommitAccountIdentityProofs` are pure, never throw, and correctly check both the parent and resulting profiles.
-- The direct inbound commit seam (`ingest.ts`) and the send seams (`#assertStagedCommitLegal`, `#prepareOutboundCommitProposals`) now agree.
+**Correctly closed** — none of these is re-raised:
+- **CR-01 (sweep path):** `#sweepResult` now runs `validateCommitLegality` before `recordCommit`.
+- **WR-02:** the `"admin-policy"` fallback label in the sweep.
+- **WR-06:** the up-front `profileSupport` gate in `MarmotGroupEngine.ingest()`, and the auto-commit guard.
+- **WR-05 core:** pruning staged invalid Adds from `createCommit` input. Own-commit stamps and explicit `proposalRefs` stay consistent with it.
+- **WR-01 (replay seam):** the `rejected` projection on the replay seam is correct for the envelopes it covers.
 
-Seam parity is still incomplete, which is the defect class this phase was meant to close:
-- **Pool sweep (`#sweepResult`) skips commit legality.** It was edited in this phase to add Add-proof admission, but it still never runs `validateCommitLegality` on commits. It grows illegal commits into the persisted history tree and reports them as `processed` (accepted). That edge then wins tree-fed branch selection and blocks adoption of legal branches (CR-01).
-- **Replay and tree-fed seams mislabel rejections.** A commit dropped there reaches consumers as `skipped/past-epoch`, or produces no result at all. The structured `violation` added to `ParentResolution` is read only by tests, yet the changeset claims the rejection is "identical" on those seams (WR-01).
-- **Some paths skip the check or break under it:**
-  - own-commit stamps bypass legality on replay and tree-fed convergence (WR-03)
-  - the `acceptAll` fallback skips Add admission entirely (WR-04)
-  - a staged invalid Add proposal permanently blocks every local commit (WR-05)
-  - direct engine `ingest()` on an unsupported group still decrypts witness envelopes, and can throw out of the generator (WR-06)
+**Partially closed, or regressions introduced:**
+- **WR-04 (BLOCKER, CR-01 below).** The fix kept the "permissive admin-policy fallback" when `getMarmotGroupView` is `null`. In that state every inbound commit from any member is authorized. The state is reachable through a legal admin commit, and the fix's own regression test builds exactly that state. MDK decodes admin policy independently and rejects the malformed bytes that cause it. This is new evidence for the half of WR-04 the fixer deliberately declined.
+- **CR-01 fallback (WR-01).** Tree-fed fallback drops a whole leaf-tip candidate. A legal interior prefix of an illegal tip is never considered, although MDK would score it as a tip. The changeset's "falls back to the best remaining legal branch" is therefore not accurate.
+- **CR-01 fallback (WR-02).** `authentication_mismatch` is mapped to `invalid`, so a local-only replay failure excludes the top branch and adopts the runner-up. The fix's own rationale says this must not happen.
+- **WR-01 fix (WR-03).** A new `!rep` branch applies a rewind but drops its state notifications and `selectedTerminal` on the floor.
+- **WR-03 fix (WR-04).** When proposals cannot be rebuilt, the fix quietly falls back to a partial gate and still returns `resolved`.
 
 ## Critical Issues
 
-### CR-01: Pool sweep (`#sweepResult`) applies commits with no commit-legality check — illegal `0x8009` commits are persisted into the fork tree and yielded as `processed`
+### CR-01: Admin authorization is bypassed for every inbound commit whenever the group-data view fails to decode (WR-04 fix kept `acceptAll` for commits); the state is reachable via a legal admin commit that MDK rejects
 
-**File:** `src/engine/group-engine.ts:1835-1904` (commit branch at 1892-1903)
+**Files:**
+- `src/engine/group-engine.ts:3217-3241`
+- `src/core/client-state.ts:262-290`
+- `src/core/components/integrity.ts:212-238`
+- `src/engine/__tests__/standalone-add-admission.test.ts:457-485`
 
-**Issue:** Every other commit seam runs `validateCommitLegality` after `processMessage` and before an edge is created:
-- inbound: `ingest.ts:806`
-- replay: `fork-recovery.ts:139`
-- tree-fed: `group-engine.ts:2983` via `resolveCandidateParent`
-- send: `group-engine.ts:1041/1124`
+**Issue:** When `getMarmotGroupView(state)` is `null`, `#createAdminVerificationCallback` returns a callback that only checks Add proofs and otherwise returns `acceptAll(incoming)`, for `commit` kinds too. Inbound commit authorization lives only in this callback: `validateCommitLegality` checks integrity, the proof check, disband legality and admin-leaf coupling, but never who the committer is.
 
-`#sweepResult` does not. It calls `this.#tree.recordCommit(tag, message, result.newState)` and returns `{ kind: "processed" }` as soon as the admin callback accepts. Phase 8 touched this function (it swapped `acceptAll` for the admin callback for D-09 symmetry) but left out the commit-legality step. The admin callback only checks Add KeyPackage proofs and admin authorization. So each of these passes the sweep:
-- a commit that drops the `0x8009` requirement (`dropAccountIdentityProofRequirement`)
-- a commit whose update-path leaf carries a forged proof
-- any component-integrity, disband-legality or admin-leaf-coupling violation
+In that state, every seam accepts any member's commit: inbound `ingest.ts:569`, the sweep, replay and tree-fed. For example:
+- a non-admin's `AppDataUpdate` rewriting `0x8002` admin-policy to name itself admin,
+- a non-admin's `Remove` of other members.
 
-Concrete path: a sibling branch's second commit is encrypted under the first sibling's exporter secret. It fails to peel against canonical and retained states (`ingest.ts:447-463`), so it is pooled as `decryptFailure`. `#sweepTree` (`group-engine.ts:1771`) then peels it against the fork node and hands it to `#sweepResult`. That function records the illegal edge into the persisted `GroupHistoryTree`, and the consumer sees disposition `accepted`. Direct ingest of the same commit yields `rejected` / `account-identity-proof`.
+Rule 3 passes the first because it is backed by the commit's own op. Admin-leaf coupling only checks for orphaned admins.
 
-The damage is not only a wrong label:
-- `#reconvergeFromTree` (`group-engine.ts:2840-2848`) scores tree tips *before* validating them. The illegal branch is usually deeper, so it wins `selectCanonicalBranch`. `#treeResolution` then refuses it and returns `undefined`, and the pass ends.
-- There is no fallback to the runner-up. A legal competing branch that should beat the current tip is never adopted, on this pass or any later one, because the illegal edge stays in the persisted tree.
-- This client ends up on a different branch from spec-conformant peers (MDK) that dropped the illegal commit.
+**How the state is reached:**
+- `getMarmotGroupView` wraps *every* optional component decode (avatar, encrypted-media, retention, lifecycle) in one `try`/`catch → null` (`client-state.ts:265-290`). One malformed optional component therefore disables the admin gate.
+- `validateAppComponentIntegrity` never validates component bytes, so an admin's `AppDataUpdate` writing `0xff` to `0x8007` is legal on every marmot-ts seam.
+- The WR-04 regression test builds exactly this: `expect(getMarmotGroupView(adminEpoch2!)).toBeNull()` right after a malformed-avatar commit. That test then only checks the Add-proof path.
 
-The seam-parity tests (`account-identity-proof-seams.test.ts`) never reach this path. The "replay" rows deliver a commit that decrypts against retained state, so it goes through `forkPool`/`resolveFork`. The "tree-fed" rows inject edges with `history.recordEdge`, never through `#sweepTree`.
+MDK is safe in both respects:
+- It rejects that commit. `validate_app_component_update` decodes `GROUP_AVATAR_URL_COMPONENT_ID` and the other known ids (`refs/mdk/crates/cgka-engine/src/app_components.rs:1630-1660`). It is reached from `validate_current_profile_group_context(..., "resulting group state")` (`:825`) and from standalone `AppDataUpdate` admission (`:1687`).
+- Its admin set comes from `admins_of_group`, which decodes only the admin-policy bytes (`:188-193`). An undecodable avatar can never widen commit authorization.
 
-**Fix:** Run the same shared adapter in the sweep before the edge is recorded, using the captured proposals:
+**Result:** after one buggy or malicious admin write, marmot-ts peers accept privilege escalation by any member. MDK peers reject those commits, and the group forks.
+
+The WR-04 fixer declined "reject commits for lack of admin data" as out of scope. The reachability path and the MDK divergence above are the new evidence.
+
+**Fix:** Derive admin authorization from the admin-policy component alone, independent of the aggregate view, and fail closed when it is present but undecodable:
 ```ts
-const captured = capture.take();
-if (result.kind === "newState") {
-  if (result.actionTaken === "reject") { /* existing */ }
-  if (isCommit) {
-    let violation: CommitIntegrityViolation | undefined;
-    try {
-      violation = validateCommitLegality({
-        parentState: state,
-        resultingState: result.newState,
-        proposals: captured.proposals,
-        committerLeafIndex: captured.committerLeafIndex,
-      });
-    } catch {
-      return undefined; // keep pooled, mirror resolveCandidateParent's deferred
-    }
-    if (violation)
-      return {
-        kind: "rejected", result, envelope, message,
-        reason: violation.reason,
-        proofReason: violation.proofReason,
-        leafIndex: violation.leafIndex,
-      };
+#createAdminVerificationCallback(state: ClientState = this.state): IncomingMessageCallback {
+  let adminPubkeys: string[] | undefined;
+  try {
+    adminPubkeys = getAdminPolicy(state.groupContext.extensions);
+  } catch {
+    // Undecodable admin policy: keep Add-proof admission, refuse every commit.
+    return (incoming) =>
+      incoming.kind === "proposal"
+        ? validateAddProposalAccountIdentityProofs([incoming.proposal], this.ciphersuite.id) ? "reject" : "accept"
+        : "reject";
   }
-  // ...recordCommit / updateSnapshot
+  return createAdminCommitPolicyCallback({
+    ratchetTree: state.ratchetTree,
+    adminPubkeys: adminPubkeys ?? [],
+    ciphersuiteId: this.ciphersuite.id,
+    onUnverifiableCommit: "retry",
+  });
 }
 ```
-Better still, route the sweep's commit branch through `resolveCandidateParent` so there is one implementation. Also make `#reconvergeFromTree` validate candidates before scoring, or retry with the next-best candidate when `#treeResolution` returns `undefined`, so an invalid edge already persisted by an older build cannot pin selection. Add a seam-matrix row that delivers the second sibling commit live, so it reaches `#sweepTree`.
+Also port MDK's `validate_app_component_update` into `validateAppComponentIntegrity` Rule 3: decode every *known* component id's resulting bytes, and reject `component-integrity` on failure. That removes the reachable corrupt state on all seams. Add a test where a non-admin commits an admin-policy `AppDataUpdate` after a malformed-avatar epoch.
 
 ## Warnings
 
-### WR-01: Replay and tree-fed seams drop illegal commits without the `account-identity-proof` label; `ParentResolution.violation` is test-only, and the changeset overclaims
+### WR-01: Tree-fed fallback excludes whole leaf tips, so a legal prefix of an illegal branch is never a candidate (MDK would score it)
 
-**File:** `src/engine/fork-recovery.ts:129-150, 378`; `src/engine/ingest.ts:1017-1025`; `src/engine/group-engine.ts:2995-3002`; `.changeset/account-identity-proof-v2.md:23-27`
+**Files:** `src/engine/group-engine.ts:2948-2960`, `src/engine/tree-convergence.ts:87-108`, `.changeset/account-identity-proof-v2.md:23-29`
 
-**Issue:** `resolveCandidateParent` now computes a structured `violation`, and even re-runs `validateAddProposalAccountIdentityProofs` to produce one. No production caller reads it:
-- `#buildBranches` does `if (resolution.kind !== "resolved") continue;` (fork-recovery.ts:378).
-- `#treeResolution` logs only `parentResolution.kind` (group-engine.ts:2996-2999).
+**Issue:** `buildTreeBranchSet` enumerates only nodes with no children. When `#treeResolution` returns `invalid` for tip `T`, the loop removes `T` entirely. Say `T`'s chain is `root → A (legal) → B (illegal) = T`. Node `A` is a legal depth-1 branch that MDK would keep as a tip, because it drops only `B` (`InvalidAgainstCandidateState`). It never enters `remaining`, so selection may:
+- adopt a runner-up that `A` should beat, or
+- return because the current tip now wins.
 
-What consumers actually see:
-- **Replay:** an illegal past-epoch commit comes out of `ingest.ts:1018-1024` as `skipped` / `past-epoch`, which `ingest-disposition.ts:43-44` maps to `stale(alreadyApplied)`.
-- **Tree-fed:** no result is emitted at all.
-- **Inbound:** the same commit is `rejected` / `account-identity-proof`, mapped to `stale(authorizationFailed)`.
+The CR-01 regression test (`account-identity-proof-seams.test.ts:417-480`) hides this:
+- The illegal branch is `sib1 → alt2 → illegal3`. `alt2` is a legal depth-2 interior node, tied on depth with the winning `legal2`.
+- MDK would break that tie between `alt2` and `legal2` on committer or digest. marmot-ts never considers `alt2`, so the test passes only when `legal2` happens to win that tie.
 
-That is a differently-labeled seam. The changeset nonetheless says such commits "are rejected identically on send …, inbound ingest …, pool replay, and tree-fed convergence". The only place labels match is a return value that exists for tests (`account-identity-proof-seams.test.ts:216-227`).
+The changeset's "falls back to the best remaining legal branch" is not what the code does.
 
-**Fix:** Either surface the violation, or correct the changeset. To surface it, propagate rejected resolutions out of `ForkRecovery.resolveFork`, e.g. `rejected: { message, violation }[]`. Then have `ingest.ts` yield `{ kind: "rejected", reason: violation.reason, proofReason, leafIndex }` for those pool entries instead of `past-epoch`, and log or audit the violation in `#treeResolution`. Otherwise, reword the changeset to "dropped (not adopted)" for replay and tree-fed, and delete the dead `violation` field.
+**Fix:** Have `#treeResolution` report the index of the first invalid link, e.g. `{ kind: "invalid", validPrefixTag }`, where `validPrefixTag` is that link's parent tag. On `invalid`, replace the candidate with one whose `id`/`tipEpoch`/`tipDigest` describe `validPrefixTag`, rather than filtering it out. Skip the replacement if that prefix is the root or already a candidate. Add a test where the hidden interior node wins the tiebreak.
 
-### WR-02: Pool sweep labels an admin-policy rejection with `reason: undefined`, while direct ingest labels it `"admin-policy"`
+### WR-02: A local-only replay failure (`authentication_mismatch`) is treated as permanently `invalid`, excluding the top branch and adopting a runner-up
 
-**File:** `src/engine/group-engine.ts:1878-1890`
+**Files:** `src/engine/group-engine.ts:3119-3137`, `src/engine/fork-recovery.ts:207-209`, `src/engine/admin-policy.ts:123-127`, `src/engine/history-tree.ts:349-362, 432-440`
 
-**Issue:** Direct ingest uses `reason: violation?.reason ?? "admin-policy"` (`ingest.ts:624, 794`). The sweep returns `reason: violation?.reason`. So a non-admin commit that the sweep rejects reaches consumers with no `reason`, while the same commit through direct ingest gets `"admin-policy"`. The audit path (`group-engine.ts:2334`) hides the gap with its own `??` fallback, but `RejectedIngestResult.reason` consumers see the difference.
+**Issue:** `#treeResolution` maps every non-`resolved`, non-`deferred` `ParentResolution` to `invalid`. `resolveCandidateParent` returns `authentication_mismatch` for *any* throw out of `processMessage`, which includes failures that say nothing about the commit's validity:
+- **Unstamped own commits.** `ownCommitStampOf` returns `undefined` for a `legacy` bare-bytes record (older builds; `recordCommit` only upgrades a record when it is re-confirmed). `processMessage` cannot replay one's own UpdatePath commit (see the RFC 9420 note at `fork-recovery.ts:153-158`).
+- **The "retry" throw.** `createAdminCommitPolicyCallback` throws `"unverifiable commit sender"` when `onUnverifiableCommit === "retry"`, and that surfaces as `authentication_mismatch`.
 
-**Fix:** `reason: violation?.reason ?? "admin-policy"` in `#sweepResult`. Ideally put the "callback rejected, derive label" logic in one helper shared by `ingest.ts` (two sites), `#sweepResult` and `resolveCandidateParent`.
+Before the fix these ended the pass. Now the branch is excluded and the loop adopts a runner-up. The fix's own comment (`group-engine.ts:2938-2940`) says a non-permanent refusal must not do this, because "adopting a runner-up now would be a switch spec-conformant peers do not make". The result is local divergence from peers that can validate the excluded branch.
 
-### WR-03: Own-commit stamps skip the new `0x8009` legality check on replay and tree-fed convergence, contradicting the CR-04 and `#treeResolution` contracts
+**Fix:** Map `authentication_mismatch` to `deferred` in `#treeResolution`. Reserve `invalid` for `rejected` (a real legality or admin verdict) and for a confirmation-tag mismatch. If a stored edge must be classified as unauthenticatable, compare the tree edge's `senderLeafIndex` to our own leaf, so an unstamped own commit is treated as `deferred`, not `invalid`.
 
-**File:** `src/engine/fork-recovery.ts:99-109, 352-373`; `src/engine/group-engine.ts:2982-2994`
+### WR-03: WR-01 fix's `!rep` branch applies a recovered rewind but surfaces none of its state notifications or its selected terminal
 
-**Issue:** When `known` matches the parent tag, `resolveCandidateParent` returns `resolved` immediately, before `validateCommitLegality`. The CR-04 comment (fork-recovery.ts:352-363) says reusing a recorded state "must NOT also skip the legality gate" and that proposals are "read off the wire instead". No such reconstruction exists. `#treeResolution` also passes `known` whenever `ownCommitStampOf(childTag)` is set, while its docstring (2933-2941) promises that persisted edges written by pre-upgrade builds are re-validated.
+**Files:** `src/engine/ingest.ts:985-1030`; consumers `src/engine/group-engine.ts:1610-1629`, `src/client/group/marmot-group.ts:1280-1281`
 
-The consequence: an own commit persisted by a Phase 7 build carries a stamp but was never checked for changed-leaf proofs or profile drift. It is adopted on fork recovery and tree-fed convergence without the Phase 8 check. Inbound peers would reject the same commit.
+**Issue:** When every `retainedPool` entry is refused, `livePool` is empty. The rewind still happens (`ctx.resolveFork` already applied it via `#applyForkResolution`), carried by `encrypted` or `ours` material. However, the `!rep` branch yields nothing for it. Two things depend on that yield:
+- **Notifications.** `MarmotGroupEngine.ingest()` emits `appliedNotifications` only from a `processed`/`removed` result's `notifications` (`group-engine.ts:1610-1629`). The winner chain's notifications (member added/removed, epoch advanced, `selfRemoved`) are recorded in the ledger but never delivered.
+- **Disband realization.** It runs only on `result.kind === "processed" && result.selectedTerminal` (`marmot-group.ts:1280`). A rewind onto a selected terminal is not realized in this ingest call.
 
-**Fix:** Keep `known` for the state shortcut, but still run the non-replay part of the gate. `validateCommitAccountIdentityProofs({ parentState: parent, resultingState: known.state })` needs no proposals. Run it, and run the full `validateCommitLegality` when proposals can be rebuilt from a `PublicMessage` commit, before returning `resolved`. Otherwise, fix the comments so they no longer claim a check that does not exist.
+Removal is still caught by the trailing `#realizeRemovalIfNeeded()`, but nothing else is. Before the fix `retainedPool[0]` always existed, so this is a regression.
 
-### WR-04: `acceptAll` fallback in `#createAdminVerificationCallback` bypasses all pre-apply Add admission on inbound, sweep, replay and tree-fed
+**Fix:** In the `!rep` case, mirror `#reconvergeFromTree`, which also has no envelope:
+```ts
+if (!rep) {
+  for (const group of groupWithdrawnNotificationsByCommit(resolution.notifications ?? []))
+    yield { kind: "appliedNotifications", commitDigest: group.commitDigest, notifications: group.withdrawn };
+}
+```
+Handle `selectedTerminal` too, e.g. by having the client run `realizeDisbandIfNeeded()` after the loop the same way it re-asserts removal. Add a test where the only pooled candidate is refused but `encrypted` material carries the winning branch.
 
-**File:** `src/engine/group-engine.ts:3079-3091`; affects `src/engine/ingest.ts:563`, `group-engine.ts:1856, 2987`, and `fork-recovery.ts` via `adminCallback`
+### WR-04: WR-03 fix silently downgrades the own-commit shortcut to a partial gate and still returns `resolved`
 
-**Issue:** Phase 8 moved Add-proof admission for standalone proposals *into* the admin callback (`admin-policy.ts:49-59`). `#createAdminVerificationCallback` returns `acceptAll` whenever `getMarmotGroupView(state)` is `null`. That happens when any optional group component fails to decode (`client-state.ts:262-274` swallows the error), which does not affect the `0x8009` profile classification. In that state:
-- an inbound standalone Add with no proof is staged and yielded as `processed`, while send throws `AccountIdentityProofError` (`group-engine.ts:936-944`)
-- an inbound commit-embedded bad Add is caught only after apply by the tree diff, labeled with a `leafIndex` that pre-apply rejections omit
+**File:** `src/engine/fork-recovery.ts:166-190`
 
-This is the "check on one seam only" class again.
+**Issue:** When `proposalsFromPublicCommit` returns `undefined`, only `validateCommitAccountIdentityProofs` runs. That happens for a PrivateMessage commit, a non-member sender, or a `ProposalRef` missing from `parent.unappliedProposals`, for example a snapshot taken before a proposal was staged onto it. In that case these checks are all skipped:
+- component-integrity,
+- disband-legality,
+- admin-leaf coupling,
 
-**Fix:** Do not tie proof admission to group-data availability. When `groupData` is null, return a callback that still enforces `validateAddProposalAccountIdentityProofs` for both `proposal` and `commit` kinds, and rejects commits for lack of admin data. Alternatively, run the Add check in `withCapturedProposals`'s caller independently of the admin policy.
+yet the result is `resolved` and the edge is adopted. The CR-04/WR-03 comment at `:446-456` and the fix report both describe this as "the legality gate", and the persisted pre-upgrade edge it exists to catch is exactly the one this downgrade lets through. A recorded child with an illegal dictionary rewrite whose ref cannot be resolved is still grandfathered in.
 
-### WR-05: A staged invalid Add proposal permanently blocks every local commit, including `selfUpdate` and the self_remove auto-commit
-
-**File:** `src/engine/group-engine.ts:1193-1212`
-
-**Issue:** `#prepareOutboundCommitProposals` validates the whole `state.unappliedProposals` set and throws `CommitLegalityError` on the first bad Add. `createCommit` always bundles every unapplied proposal by reference, and nothing prunes `unappliedProposals`. So once an invalid Add is staged, every `commit`, `selfUpdate` and `#maybeAutoCommitSelfRemoves` throws for the rest of the epoch.
-
-A remote commit that references the proposal is also rejected by every marmot-ts peer. In an all-marmot-ts group the epoch can therefore never advance. Ways such a proposal reaches canonical state:
-- persisted state from the Phase 7 build, whose inbound proposal path used `acceptAll`
-- a rewind onto a tree snapshot staged before the upgrade
-- the WR-04 fallback
-
-The changeset has no recovery story for this.
-
-**Fix:** Filter bad Add proposals out of the state passed to `createCommit` rather than refusing the commit, e.g. `{ ...state, unappliedProposals: Object.fromEntries(entries.filter(valid)) }`. Also purge them from canonical state at hydration or load, mirroring MDK's discard of invalid standalone proposals. Add a test with a pre-staged proof-less Add followed by `selfUpdate()`.
-
-### WR-06: Direct engine `ingest()` on an unsupported-profile group still decrypts refused envelopes and can throw out of the generator
-
-**File:** `src/engine/group-engine.ts:1550-1613, 1720-1742, 2098`
-
-**Issue:** The D-11 gate in `ingestEnvelopes` returns early, but `#ingestWithPool` and `ingest()` continue:
-- `#sweepTree()` runs over any pooled entries.
-- `#reconvergeFromTree([...envelopes, ...pool])` calls `#gatherTreeWitnesses`, which peels the *refused* envelopes and runs `processMessage` on them against tree snapshots (`collectWitnessesAt`). The docs state "nothing is decrypted or applied".
-- `#maybeAutoCommitSelfRemoves()` calls `this.send(...)`, which throws `UnsupportedGroupProfileError`. For a stored unsupported group whose persisted `unappliedProposals` are all self_removes with this client elected, the exception escapes the generator after the skipped results were yielded.
-
-`GroupSession.ingest` hides this for client callers, but the engine gate is documented as "authoritative for direct engine callers" (`group-session.ts:747-749`). `MarmotGroup.#settleAndDrive` also reaches `engine.driveConvergence()` → `ingest()` without passing through the session ingest gate.
-
-**Fix:** In `MarmotGroupEngine.ingest()`, check `this.profileSupport` up front, next to `#disbandHydrated`. Yield `skipped` / `unsupported-profile` for every envelope and return before `#ingestWithPool`, the sweep, reconvergence and auto-commit. At minimum, make `#maybeAutoCommitSelfRemoves` return `undefined` when the profile is unsupported.
+**Fix:** Fail closed when proposals cannot be rebuilt, returning `{ kind: "deferred", reason: "temporary_refusal" }`, or run `validateAppComponentIntegrity` with an empty op list (any dictionary change then fails). At minimum, log or audit the downgrade and correct the comment so it no longer claims the full gate.
 
 ## Info
 
-### IN-01: `withCapturedProposals` docstring now contradicts the code it wraps
+### IN-01: `withCapturedProposals` docstring still forbids validation inside `inner` (carried forward, unfixed)
 
-**File:** `src/engine/admin-policy.ts:149-162`
+**File:** `src/engine/admin-policy.ts:160-162`
+**Issue:** The docstring still says "No validation logic may be added inside this wrapper or inside `inner`", while `inner` performs Add-proof validation (lines 49-67). WR-04's fallback callback in `group-engine.ts:3229-3240` adds another such `inner`.
+**Fix:** Reword it: pre-apply checks that need no resulting `GroupContext` are allowed in `inner`.
 
-**Issue:** The docstring says "No validation logic may be added inside this wrapper or inside `inner`". `inner` is now `createAdminCommitPolicyCallback`, which in Phase 8 performs Add-proof validation for both callback kinds (lines 49-67). The docstring and D-08/D-09 disagree, which will mislead the next maintainer.
+### IN-02: Send path reports the same bad Add with two error types (carried forward, unfixed)
 
-**Fix:** Reword it: pre-apply checks that need no resulting `GroupContext` (e.g. KeyPackage proofs) are allowed in `inner`; resulting-state checks are not.
+**File:** `src/engine/group-engine.ts:936-944` vs `1009-1013, 1228-1232`
+**Issue:** `send({kind:"proposal"})` throws `AccountIdentityProofError`. `send({kind:"commit"})` throws `CommitLegalityError` for a by-value Add and, since WR-05, also for an explicit `proposalRefs` Add.
+**Fix:** Throw one error type that carries the structured violation.
 
-### IN-02: The send path reports the same bad Add with two different error types
+### IN-03: The rejection-label derivation is now duplicated in six places (carried forward, grown)
 
-**File:** `src/engine/group-engine.ts:936-944` vs `1208-1212`
+**File:**
+- `src/engine/ingest.ts:614-631, 785-801, 967-981`
+- `src/engine/group-engine.ts:1924-1936, 3126-3131`
+- `src/engine/fork-recovery.ts:211-220`
 
-**Issue:** `send({kind:"proposal"})` throws `AccountIdentityProofError` (no `violation`), while `send({kind:"commit"})` with the same Add throws `CommitLegalityError` with `violation.reason === "account-identity-proof"`. This is documented in the changeset, but it is a label mismatch within the send seam itself, so callers need two `instanceof` branches.
+**Issue:** Each site re-runs `validateAddProposalAccountIdentityProofs` and/or applies `?? "admin-policy"` to guess why the callback rejected. The WR-01 and WR-02 fixes added two more copies.
+**Fix:** Have the callback factory record its rejection reason through the capture side channel, and share one `rejectedFromCallback()` helper.
 
-**Fix:** Consider using `validateAddProposalAccountIdentityProofs` in the proposal case too, and throwing a single error type that carries the structured violation.
+### IN-04: `#settleAndDrive` calls `disband()` with no profile guard (carried forward, unfixed)
 
-### IN-03: The rejection label is re-derived after the fact in four places instead of carried from the callback's decision
+**File:** `src/client/group/marmot-group.ts:1076-1080`
+**Issue:** `resumePendingDisband` skips unsupported groups, but `#settleAndDrive` does not. For an unsupported group with a pending disband request, `disband()` catches the refused `requestDisband` and returns `rejected/legality` rather than a profile-typed refusal. Engine `send()` still checks the disband gate before the profile gate (`group-engine.ts:852` vs `869-871`).
+**Fix:** Add the `profileSupport` guard in `#settleAndDrive`, and order the profile gate first in `send()`.
 
-**File:** `src/engine/ingest.ts:608-611, 779-782`; `src/engine/group-engine.ts:1879-1882`; `src/engine/fork-recovery.ts:133-136`
+### IN-05: Sweep legality `catch` does not "keep it pooled", and sweep rejections skip content dedup
 
-**Issue:** Each site re-runs `validateAddProposalAccountIdentityProofs` on the captured proposals to guess why the callback rejected. The labels are right only as long as the callback's check order (Add proof first) matches this re-derivation. The copies have already drifted once (WR-02).
+**File:** `src/engine/group-engine.ts:1953-1956, 1964-1972, 1833-1834`
+**Issue:** `entry.triedTags.add(tag)` runs before `#sweepResult`. Returning `undefined` from the `catch` therefore never retries that node, so the entry eventually leaves as `unreadable`. The comment "Mirrors resolveCandidateParent's `deferred`" is inaccurate, although the validator is non-throwing, so the path is nearly dead. Separately, sweep `rejected` results never call dedup `remember`, unlike every rejection in `ingest.ts` (`619, 794, 825, 973`). A re-wrapped copy therefore re-enters the pool and is rejected again.
+**Fix:** Delete the `catch` or correct its comment, and remember rejected sweep messages in the engine's content dedup.
 
-**Fix:** Have the admin callback factory record its rejection reason in a side channel, e.g. `withCapturedProposals` returning `lastRejection`, and share one `rejectedFromCallback(...)` helper.
+### IN-06: Pruned invalid staged Adds are dropped silently
 
-### IN-04: Unsupported-group guards are inconsistent across the disband paths
-
-**File:** `src/client/group/marmot-group.ts:1078-1082` vs `1087-1098`; `src/engine/group-engine.ts:852, 869-871`
-
-**Issue:** `resumePendingDisband` skips unsupported groups, but `#settleAndDrive` calls `disband()` under the same condition with no profile guard. Separately, engine `send()` checks `#disbandRequest?.status === "pending"` (throws `DisbandingError`) before the profile gate. An unsupported group with a pending disband therefore throws `DisbandingError`, not the documented `UnsupportedGroupProfileError`.
-
-**Fix:** Add the `profileSupport` guard in `#settleAndDrive`, and either move the profile gate ahead of the disband gate in `send()` or document the precedence.
+**File:** `src/engine/group-engine.ts:1214, 2131-2133, 3257-3268`
+**Issue:** `withoutInvalidStagedAdds` removes proposals from the commit without a log line or audit event. The changeset does not mention that a local commit may now omit a staged Add. The fix report also says the WR-03 regression test was never run against unfixed code.
+**Fix:** Log or audit the pruned proposal refs, note the behavior in the changeset, and confirm the WR-03 seam row fails on `b5e0111^`.
 
 ---
 
-_Reviewed: 2026-09-15T00:00:00Z_
+_Reviewed: 2026-09-15T20:00:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_

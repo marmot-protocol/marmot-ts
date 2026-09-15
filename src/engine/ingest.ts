@@ -162,8 +162,13 @@ export interface IngestContext<TEnvelope> {
    * up the new `unappliedProposals`.
    */
   recordProposalStaged(state: ClientState): void;
-  /** Builds the admin-verification callback against the current state. */
-  createAdminCallback(): IncomingMessageCallback;
+  /**
+   * Builds the admin-verification callback against `state` — the exact parent
+   * the message is about to be processed on (CR-01). Never build it once and
+   * reuse it across messages: a commit earlier in the batch can change the
+   * admin set or the ratchet tree the next one must be authorized against.
+   */
+  createAdminCallback(state: ClientState): IncomingMessageCallback;
   /** Resolves a fork and applies the rewind (state + lifecycle) on success. */
   resolveFork(
     forkEpoch: number,
@@ -561,12 +566,13 @@ export async function* ingestEnvelopes<TEnvelope>(
     nonCommits.length,
   );
 
-  // Shared across the non-commit and commit loops below: `withCapturedProposals`
-  // is documented as safe to reuse one `callback`/`take()` pair across a loop of
-  // several messages, so one admin-callback wrapper serves both loops rather
-  // than constructing two independent wrapped callbacks over the same admin
-  // policy.
-  const capture = withCapturedProposals(ctx.createAdminCallback());
+  // CR-01: the admin callback is rebuilt for EVERY message from the state that
+  // message is processed on. A callback built once per batch captures the
+  // pre-batch admin set and ratchet tree by value, so a commit applied earlier
+  // in this batch (a demotion, a promotion, a leaf reassignment) would not
+  // change the verdict for the next one — accepting a same-batch demoted
+  // admin's commit that a peer receiving it separately rejects. Mirrors MDK,
+  // which authorizes against the `MlsGroup` each commit is staged on.
 
   for (const { envelope, message } of nonCommits) {
     try {
@@ -587,9 +593,10 @@ export async function* ingestEnvelopes<TEnvelope>(
         continue;
       }
 
-      // Clear any proposals left buffered from a prior message in this loop
-      // before processing this one (withCapturedProposals contract).
-      capture.take();
+      const parentForAuth = ctx.getState();
+      const capture = withCapturedProposals(
+        ctx.createAdminCallback(parentForAuth),
+      );
 
       const result = await processMessage({
         context: {
@@ -597,7 +604,7 @@ export async function* ingestEnvelopes<TEnvelope>(
           authService: marmotAuthService,
           externalPsks: {},
         },
-        state: ctx.getState(),
+        state: parentForAuth,
         message,
         callback: capture.callback,
       });
@@ -759,9 +766,12 @@ export async function* ingestEnvelopes<TEnvelope>(
     );
 
     try {
-      // Clear any proposals left buffered from a prior message in this loop
-      // before processing this one (withCapturedProposals contract).
-      capture.take();
+      // CR-01: authorize against this commit's own parent — the state after
+      // every earlier commit in this batch was applied.
+      const parentForAuth = ctx.getState();
+      const capture = withCapturedProposals(
+        ctx.createAdminCallback(parentForAuth),
+      );
 
       const result = await processMessage({
         context: {
@@ -769,7 +779,7 @@ export async function* ingestEnvelopes<TEnvelope>(
           authService: marmotAuthService,
           externalPsks: {},
         },
-        state: ctx.getState(),
+        state: parentForAuth,
         message,
         callback: capture.callback,
       });

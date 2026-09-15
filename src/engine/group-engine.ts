@@ -2484,7 +2484,8 @@ export class MarmotGroupEngine<TEnvelope> {
           evidence,
         ),
       recordProposalStaged: (state) => this.#recordProposalStaged(state),
-      createAdminCallback: () => this.#createAdminVerificationCallback(),
+      createAdminCallback: (state) =>
+        this.#createAdminVerificationCallback(state),
       resolveFork: (forkEpoch, pool, encrypted, witnessEnvelopes) =>
         this.#resolveFork(forkEpoch, pool, encrypted, witnessEnvelopes),
       recordDeliveredAppPayload: (

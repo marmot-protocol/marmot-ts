@@ -3166,7 +3166,27 @@ export class MarmotGroupEngine<TEnvelope> {
     state: ClientState = this.state,
   ): IncomingMessageCallback {
     const groupData = getMarmotGroupView(state);
-    if (!groupData) return acceptAll;
+    if (!groupData) {
+      // WR-04: Add-proof admission is a membership-identity check, not an
+      // admin-policy one, so it must not depend on whether the optional
+      // group-data component decoded. Without admin data the admin gate keeps
+      // its existing permissive fallback, but a standalone or commit-embedded
+      // Add with a missing/invalid 0x8009 proof is still refused before apply
+      // — the same verdict send and the admin callback give.
+      const ciphersuiteId = this.ciphersuite.id;
+      return (incoming) => {
+        const proposals =
+          incoming.kind === "proposal"
+            ? [incoming.proposal]
+            : incoming.proposals;
+        return validateAddProposalAccountIdentityProofs(
+          proposals,
+          ciphersuiteId,
+        )
+          ? "reject"
+          : acceptAll(incoming);
+      };
+    }
 
     return createAdminCommitPolicyCallback({
       ratchetTree: state.ratchetTree,

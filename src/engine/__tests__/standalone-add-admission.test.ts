@@ -11,6 +11,7 @@
  */
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
+  appDataUpdateProposalType,
   type CiphersuiteImpl,
   createCommit,
   createProposal,
@@ -24,8 +25,11 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { forgeKeyPackage } from "../../__tests__/helpers/account-identity-proof-fixtures.js";
+import { buildAdmin1PerspectiveChain } from "../../__tests__/helpers/engine-seam-fixtures.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { MemoryAuditSink } from "../../audit/index.js";
+import { getMarmotGroupView } from "../../core/client-state.js";
+import { GROUP_AVATAR_URL_COMPONENT_ID } from "../../core/components/ids.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import {
@@ -384,5 +388,70 @@ describe("standalone Add admission (GRP-04, D-08/D-09)", () => {
       }),
     );
     expect(rejectionReasons(audit)).toContain("account_identity_proof");
+  });
+
+  it("WR-04: inbound standalone Add with a forged proof is still rejected when the group-data view is unreadable", async () => {
+    const { impl, ctx, admin2Epoch1, adminEpoch1 } =
+      await fourPartyEpoch1Group();
+    const peeler = testPeeler(impl);
+
+    // admin2 writes malformed bytes into the optional avatar component with
+    // no Marmot gates. The 0x8009 profile is untouched, but
+    // getMarmotGroupView now fails to decode and returns null — the state
+    // that used to make the engine fall back to an accept-all callback.
+    const corrupt = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [
+        {
+          proposalType: appDataUpdateProposalType,
+          appDataUpdate: {
+            componentId: GROUP_AVATAR_URL_COMPONENT_ID,
+            operation: "update",
+            update: new Uint8Array([0xff]),
+          },
+        },
+      ],
+    });
+    const [adminEpoch2] = await buildAdmin1PerspectiveChain(ctx, adminEpoch1, [
+      corrupt.commit,
+    ]);
+    expect(getMarmotGroupView(adminEpoch2!)).toBeNull();
+
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch2!,
+      ciphersuite: impl,
+      peeler,
+    });
+    expect(engine.profileSupport).toEqual({ kind: "supported" });
+
+    const forged = await forgeKeyPackage({
+      account: testAccount(11),
+      ciphersuiteImpl: impl,
+      proof: "tampered",
+    });
+    const { message } = await createProposal({
+      context: ctx,
+      state: corrupt.newState,
+      wireAsPublicMessage: true,
+      proposal: {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: forged.publicPackage },
+      },
+    });
+    const envelope = await peeler.wrapGroupMessage(message, corrupt.newState);
+
+    const results = await ingestAll(engine, envelope);
+
+    expect(results).toContainEqual(
+      expect.objectContaining({
+        kind: "rejected",
+        reason: "account-identity-proof",
+        proofReason: "invalid-proof",
+      }),
+    );
+    expect(Object.keys(engine.state.unappliedProposals)).toHaveLength(0);
   });
 });

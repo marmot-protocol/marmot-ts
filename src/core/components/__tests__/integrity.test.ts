@@ -9,18 +9,36 @@
 import {
   appDataUpdateProposalType,
   ClientState,
+  createCommit,
+  defaultCryptoProvider,
   defaultProposalTypes,
+  getCiphersuiteImpl,
   GroupContextExtension,
   makeAppDataDictionaryExtension,
   nodeTypes,
+  type CiphersuiteImpl,
+  type LeafIndex,
   type Proposal,
   type ProposalAppDataUpdate,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
+import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
+import {
+  dropAccountIdentityProofRequirement,
+  forgeKeyPackage,
+} from "../../../__tests__/helpers/account-identity-proof-fixtures.js";
+import { marmotAuthService } from "../../auth-service.js";
 import { createCredential } from "../../credential.js";
+import { getPubkeyLeafNodeIndexes } from "../../group-members.js";
+import { createSimpleGroup } from "../../group.js";
+import { generateKeyPackage } from "../../key-package.js";
 import { BinaryWriter } from "../../binary.js";
 import { encodeComponentsList } from "../app-components-list.js";
+import {
+  validateKeyPackageAccountIdentityProof,
+  validateLeafAccountIdentityProof,
+} from "../account-identity-proof.js";
 import {
   adminPolicyEntry,
   appComponentsEntry,
@@ -40,8 +58,56 @@ import {
   collectAppDataUpdateOps,
   validateAdminLeafCoupling,
   validateAppComponentIntegrity,
+  validateAddProposalAccountIdentityProofs,
+  validateCommitAccountIdentityProofs,
   validateCommitLegality,
 } from "../integrity.js";
+
+const SUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
+
+/** A 2-party group at epoch 1: admin (creator, leaf 0) + member (leaf 1). */
+async function twoPartyEpoch1Group() {
+  const adminAccount = testAccount(6);
+  const memberAccount = testAccount(9);
+  const impl = await getCiphersuiteImpl(SUITE, defaultCryptoProvider);
+  const ctx = { cipherSuite: impl, authService: marmotAuthService };
+
+  const adminKp = await generateKeyPackage({
+    credential: createCredential(adminAccount.pubkey),
+    signer: adminAccount.signer,
+    ciphersuiteImpl: impl,
+  });
+  const { clientState: adminEpoch0 } = await createSimpleGroup(
+    adminKp,
+    impl,
+    "Integrity Test",
+    { adminPubkeys: [adminAccount.pubkey] },
+  );
+
+  const memberKp = await generateKeyPackage({
+    credential: createCredential(memberAccount.pubkey),
+    signer: memberAccount.signer,
+    ciphersuiteImpl: impl,
+  });
+  const add = await createCommit({
+    context: ctx,
+    state: adminEpoch0,
+    wireAsPublicMessage: false,
+    extraProposals: [
+      {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: memberKp.publicPackage },
+      },
+    ],
+    ratchetTreeExtension: true,
+  });
+
+  return { impl, ctx, adminAccount, memberAccount, adminEpoch1: add.newState };
+}
+
+function ctxFor(impl: CiphersuiteImpl) {
+  return { cipherSuite: impl, authService: marmotAuthService };
+}
 
 // Confirmed valid x-only secp256k1 pubkeys (on-curve), matching the constants
 // already used elsewhere in this test suite (e.g. group-engine.test.ts).
@@ -394,6 +460,257 @@ describe("validateAdminLeafCoupling", () => {
   });
 });
 
+describe("validateCommitAccountIdentityProofs (D-01/D-02/D-03)", () => {
+  it("returns undefined for an honest Add of a core-generated KeyPackage", async () => {
+    const { impl, ctx, adminEpoch1 } = await twoPartyEpoch1Group();
+    const extraAccount = testAccount(1);
+    const extraKp = await generateKeyPackage({
+      credential: createCredential(extraAccount.pubkey),
+      signer: extraAccount.signer,
+      ciphersuiteImpl: impl,
+    });
+    const addCommit = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: extraKp.publicPackage },
+        },
+      ],
+    });
+
+    const violation = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState: addCommit.newState,
+    });
+    expect(violation).toBeUndefined();
+  });
+
+  it("returns undefined for an honest self-update (D-03: no prior-leaf identity comparison)", async () => {
+    const { impl, ctx, adminEpoch1 } = await twoPartyEpoch1Group();
+    const selfUpdate = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    const violation = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState: selfUpdate.newState,
+    });
+    expect(violation).toBeUndefined();
+  });
+
+  it("returns account-identity-proof/missing-requirement (no leafIndex) for a commit that drops the 0x8009 requirement", async () => {
+    const { impl, ctx, adminEpoch1 } = await twoPartyEpoch1Group();
+    const dropRequirement = dropAccountIdentityProofRequirement(adminEpoch1);
+    const commit = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [dropRequirement],
+    });
+
+    const violation = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState: commit.newState,
+    });
+    expect(violation?.reason).toBe("account-identity-proof");
+    expect(violation?.proofReason).toBe("missing-requirement");
+    expect(violation?.leafIndex).toBeUndefined();
+    void impl;
+  });
+
+  it("returns account-identity-proof/invalid-proof with the added leaf's MLS index for a tampered-proof Add", async () => {
+    const { impl, ctx, adminEpoch1 } = await twoPartyEpoch1Group();
+    const badAccount = testAccount(1);
+    const badKp = await forgeKeyPackage({
+      account: badAccount,
+      ciphersuiteImpl: impl,
+      proof: "tampered",
+    });
+    const commit = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: badKp.publicPackage },
+        },
+      ],
+    });
+    const [badLeafIndex] = getPubkeyLeafNodeIndexes(
+      commit.newState,
+      badAccount.pubkey,
+    );
+    expect(badLeafIndex).toBeDefined();
+
+    const violation = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState: commit.newState,
+    });
+    expect(violation?.reason).toBe("account-identity-proof");
+    expect(violation?.proofReason).toBe("invalid-proof");
+    expect(violation?.leafIndex).toBe(badLeafIndex);
+    // Diagnostics-privacy: no pubkey hex in the detail string.
+    expect(violation?.detail).not.toMatch(/[0-9a-f]{64}/i);
+  });
+
+  it("returns the same proofReason validateLeafAccountIdentityProof itself throws for a missing-proof Add", async () => {
+    const { impl, ctx, adminEpoch1 } = await twoPartyEpoch1Group();
+    const badAccount = testAccount(1);
+    const badKp = await forgeKeyPackage({
+      account: badAccount,
+      ciphersuiteImpl: impl,
+      proof: "missing",
+    });
+    const commit = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: badKp.publicPackage },
+        },
+      ],
+    });
+
+    let expectedReason: string | undefined;
+    try {
+      validateLeafAccountIdentityProof(
+        badKp.publicPackage.leafNode,
+        commit.newState.groupContext.cipherSuite,
+      );
+    } catch (err) {
+      expectedReason = (err as { reason?: string }).reason;
+    }
+    expect(expectedReason).toBeDefined();
+
+    const violation = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState: commit.newState,
+    });
+    expect(violation?.reason).toBe("account-identity-proof");
+    expect(violation?.proofReason).toBe(expectedReason);
+  });
+
+  it("returns undefined for a removal-only commit (removed leaf is blanked, never validated)", async () => {
+    const { impl, ctx, adminEpoch1, memberAccount } =
+      await twoPartyEpoch1Group();
+    const [memberLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      memberAccount.pubkey,
+    );
+    const removeCommit = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.remove,
+          remove: { removed: memberLeafIndex as LeafIndex },
+        },
+      ],
+    });
+
+    const violation = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState: removeCommit.newState,
+    });
+    expect(violation).toBeUndefined();
+    void impl;
+  });
+});
+
+describe("validateAddProposalAccountIdentityProofs (D-08/D-09)", () => {
+  it("returns undefined for a valid Add, accepting a bare Proposal", async () => {
+    const { impl, adminAccount } = await twoPartyEpoch1Group();
+    const goodKp = await generateKeyPackage({
+      credential: createCredential(adminAccount.pubkey),
+      signer: adminAccount.signer,
+      ciphersuiteImpl: impl,
+    });
+    const proposal: Proposal = {
+      proposalType: defaultProposalTypes.add,
+      add: { keyPackage: goodKp.publicPackage },
+    };
+    expect(
+      validateAddProposalAccountIdentityProofs([proposal], impl.id),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for a valid Add, accepting a ProposalWithSender", async () => {
+    const { impl, adminAccount } = await twoPartyEpoch1Group();
+    const goodKp = await generateKeyPackage({
+      credential: createCredential(adminAccount.pubkey),
+      signer: adminAccount.signer,
+      ciphersuiteImpl: impl,
+    });
+    const proposalWithSender = {
+      proposal: {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: goodKp.publicPackage },
+      } as Proposal,
+      senderLeafIndex: 0,
+    };
+    expect(
+      validateAddProposalAccountIdentityProofs([proposalWithSender], impl.id),
+    ).toBeUndefined();
+  });
+
+  it("ignores non-Add proposals", async () => {
+    const { impl } = await twoPartyEpoch1Group();
+    const removeProposal: Proposal = {
+      proposalType: defaultProposalTypes.remove,
+      remove: { removed: 0 as LeafIndex },
+    };
+    expect(
+      validateAddProposalAccountIdentityProofs([removeProposal], impl.id),
+    ).toBeUndefined();
+  });
+
+  it("returns a violation whose proofReason matches validateKeyPackageAccountIdentityProof's own throw, and omits leafIndex", async () => {
+    const { impl } = await twoPartyEpoch1Group();
+    const badAccount = testAccount(1);
+    const badKp = await forgeKeyPackage({
+      account: badAccount,
+      ciphersuiteImpl: impl,
+      proof: "tampered",
+    });
+
+    let expectedReason: string | undefined;
+    try {
+      validateKeyPackageAccountIdentityProof(badKp.publicPackage, impl.id);
+    } catch (err) {
+      expectedReason = (err as { reason?: string }).reason;
+    }
+    expect(expectedReason).toBeDefined();
+
+    const proposal: Proposal = {
+      proposalType: defaultProposalTypes.add,
+      add: { keyPackage: badKp.publicPackage },
+    };
+    const violation = validateAddProposalAccountIdentityProofs(
+      [proposal],
+      impl.id,
+    );
+    expect(violation?.reason).toBe("account-identity-proof");
+    expect(violation?.proofReason).toBe(expectedReason);
+    expect(violation?.leafIndex).toBeUndefined();
+  });
+});
+
 describe("validateCommitLegality", () => {
   function fakeClientState(
     extensions: GroupContextExtension[],
@@ -410,11 +727,16 @@ describe("validateCommitLegality", () => {
   }
 
   it("derives requiredIds from the PARENT state, not the resulting one (Pitfall 2 regression guard)", () => {
-    // Parent: app_components only requires GROUP_PROFILE_COMPONENT_ID; the
-    // retention component has state but is not (yet) required.
+    // Parent: app_components only requires GROUP_PROFILE_COMPONENT_ID (plus
+    // the current-profile 0x8009 requirement, so this fixture stays inside
+    // the D-01a profile check added in this plan); the retention component
+    // has state but is not (yet) required.
     const parentState = fakeClientState(
       dict(
-        appComponentsEntry([GROUP_PROFILE_COMPONENT_ID]),
+        appComponentsEntry([
+          GROUP_PROFILE_COMPONENT_ID,
+          ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+        ]),
         componentEntry(
           GROUP_MESSAGE_RETENTION_COMPONENT_ID,
           new Uint8Array([1]),
@@ -431,6 +753,7 @@ describe("validateCommitLegality", () => {
       dict(
         appComponentsEntry([
           GROUP_PROFILE_COMPONENT_ID,
+          ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
           GROUP_MESSAGE_RETENTION_COMPONENT_ID,
         ]),
       ),
@@ -442,6 +765,7 @@ describe("validateCommitLegality", () => {
         APP_COMPONENTS_COMPONENT_ID,
         encodeComponentsList([
           GROUP_PROFILE_COMPONENT_ID,
+          ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
           GROUP_MESSAGE_RETENTION_COMPONENT_ID,
         ]),
       ),
@@ -486,6 +810,7 @@ describe("validateCommitLegality", () => {
 
   it("returns undefined for a benign commit that changes nothing in the dictionary and removes no member", () => {
     const extensions = dict(
+      appComponentsEntry([ACCOUNT_IDENTITY_PROOF_COMPONENT_ID]),
       adminPolicyEntry([ADMIN_PUBKEY]),
       componentEntry(GROUP_PROFILE_COMPONENT_ID, new Uint8Array([1])),
     );
@@ -540,6 +865,154 @@ describe("validateCommitLegality", () => {
     expect(violation!).toEqual({
       reason: "component-integrity",
       detail: "current app_components component did not decode",
+    });
+  });
+
+  it("D-07: 0x8009 data in the resulting GroupContext still reports component-integrity (Phase 7 expectations hold)", () => {
+    // makeAppComponentsExtension refuses a 0x8009 data entry via its own
+    // builder guard, so this fixture is built directly with ts-mls's builder
+    // to bypass it and exercise the integrity-layer guard through the full
+    // validateCommitLegality adapter (not just validateAppComponentIntegrity
+    // in isolation).
+    const parentState = fakeClientState(
+      dict(appComponentsEntry([GROUP_PROFILE_COMPONENT_ID])),
+      [ADMIN_PUBKEY],
+    );
+    const resultingExtensions = [
+      makeAppDataDictionaryExtension(
+        buildAppDataDictionary([
+          appComponentsEntry([GROUP_PROFILE_COMPONENT_ID]),
+          componentEntry(
+            ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+            new Uint8Array(104),
+          ),
+        ]),
+      ),
+    ] as GroupContextExtension[];
+    const resultingState = fakeClientState(resultingExtensions, [ADMIN_PUBKEY]);
+
+    const violation = validateCommitLegality({
+      parentState,
+      resultingState,
+      proposals: [
+        updateOp(
+          APP_COMPONENTS_COMPONENT_ID,
+          encodeComponentsList([GROUP_PROFILE_COMPONENT_ID]),
+        ),
+      ],
+    });
+    expect(violation?.reason).toBe("component-integrity");
+  });
+
+  it("D-07: reports account-identity-proof (not admin-leaf-coupling) when a commit both adds a tampered-proof member and de-leafs an admin", async () => {
+    const adminAccount = testAccount(6);
+    const admin2Account = testAccount(0);
+    const impl = await getCiphersuiteImpl(SUITE, defaultCryptoProvider);
+    const ctx = ctxFor(impl);
+
+    const adminKp = await generateKeyPackage({
+      credential: createCredential(adminAccount.pubkey),
+      signer: adminAccount.signer,
+      ciphersuiteImpl: impl,
+    });
+    const { clientState: adminEpoch0 } = await createSimpleGroup(
+      adminKp,
+      impl,
+      "D-07 Ordering Test",
+      { adminPubkeys: [adminAccount.pubkey, admin2Account.pubkey] },
+    );
+    const admin2Kp = await generateKeyPackage({
+      credential: createCredential(admin2Account.pubkey),
+      signer: admin2Account.signer,
+      ciphersuiteImpl: impl,
+    });
+    const addAdmin2 = await createCommit({
+      context: ctx,
+      state: adminEpoch0,
+      wireAsPublicMessage: false,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: admin2Kp.publicPackage },
+        },
+      ],
+      ratchetTreeExtension: true,
+    });
+    const adminEpoch1 = addAdmin2.newState;
+    const [admin2LeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      admin2Account.pubkey,
+    );
+    expect(admin2LeafIndex).toBeDefined();
+
+    const badAccount = testAccount(1);
+    const badKp = await forgeKeyPackage({
+      account: badAccount,
+      ciphersuiteImpl: impl,
+      proof: "tampered",
+    });
+    const violatingProposals: Proposal[] = [
+      {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: badKp.publicPackage },
+      },
+      {
+        proposalType: defaultProposalTypes.remove,
+        remove: { removed: admin2LeafIndex as LeafIndex },
+      },
+    ];
+    const violatingCommit = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: violatingProposals,
+    });
+
+    const violation = validateCommitLegality({
+      parentState: adminEpoch1,
+      resultingState: violatingCommit.newState,
+      proposals: violatingProposals,
+      committerLeafIndex: 0,
+    });
+    expect(violation?.reason).toBe("account-identity-proof");
+  });
+
+  it("returns a violation instead of throwing when the RESULTING app_components bytes do not decode", () => {
+    const duplicateIds = new BinaryWriter()
+      .vector([
+        new BinaryWriter().uint16(GROUP_PROFILE_COMPONENT_ID).build(),
+        new BinaryWriter().uint16(GROUP_PROFILE_COMPONENT_ID).build(),
+      ])
+      .build();
+
+    const parentState = fakeClientState(
+      dict(
+        appComponentsEntry([
+          GROUP_PROFILE_COMPONENT_ID,
+          ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+        ]),
+      ),
+      [ADMIN_PUBKEY],
+    );
+    const resultingState = fakeClientState(
+      dict(componentEntry(APP_COMPONENTS_COMPONENT_ID, duplicateIds)),
+      [ADMIN_PUBKEY],
+    );
+
+    let violation: ReturnType<typeof validateCommitLegality>;
+    expect(() => {
+      violation = validateCommitLegality({
+        parentState,
+        resultingState,
+        proposals: [updateOp(APP_COMPONENTS_COMPONENT_ID, duplicateIds)],
+      });
+    }).not.toThrow();
+    expect(violation!).toEqual({
+      reason: "account-identity-proof",
+      detail:
+        "resulting GroupContext is outside the current account identity proof profile (invalid-dictionary)",
+      proofReason: "invalid-dictionary",
     });
   });
 });

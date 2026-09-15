@@ -53,6 +53,7 @@ import {
 import {
   ACCOUNT_IDENTITY_PROOF_COMPONENT,
   ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+  APP_COMPONENTS_COMPONENT_ID,
   SAFE_AAD_COMPONENT_ID,
 } from "../ids.js";
 import {
@@ -61,6 +62,7 @@ import {
   assertCurrentGroupAccountIdentityProofProfile,
   assertNoAccountIdentityProofComponent,
   classifyGroupAccountIdentityProofProfile,
+  getGroupProfileSupport,
   hasAccountIdentityProofMaterial,
   mlsSignatureSchemeForCiphersuite,
   produceAccountIdentityProof,
@@ -945,6 +947,73 @@ describe("assertCurrentGroupAccountIdentityProofProfile", () => {
         assertCurrentGroupAccountIdentityProofProfile(NEITHER_GROUP_EXTENSIONS),
       ),
     ).toBe("missing-requirement");
+  });
+});
+
+describe("getGroupProfileSupport", () => {
+  it("current profile -> supported", () => {
+    expect(getGroupProfileSupport(CURRENT_GROUP_EXTENSIONS)).toEqual({
+      kind: "supported",
+    });
+  });
+
+  it("legacy profile -> unsupported legacy-group", () => {
+    expect(getGroupProfileSupport(LEGACY_GROUP_EXTENSIONS)).toEqual({
+      kind: "unsupported",
+      proofReason: "legacy-group",
+    });
+  });
+
+  it("mixed profile -> unsupported mixed-profile", () => {
+    expect(getGroupProfileSupport(MIXED_GROUP_EXTENSIONS)).toEqual({
+      kind: "unsupported",
+      proofReason: "mixed-profile",
+    });
+  });
+
+  it("a group whose app_components omits 0x8009 -> unsupported missing-requirement", () => {
+    expect(getGroupProfileSupport(NEITHER_GROUP_EXTENSIONS)).toEqual({
+      kind: "unsupported",
+      proofReason: "missing-requirement",
+    });
+  });
+
+  it("a GroupContext dictionary carrying a 0x8009 entry -> unsupported invalid-location", () => {
+    const dictionaryWithProofData = makeAppDataDictionaryExtension(
+      buildAppDataDictionary([
+        componentEntry(
+          ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+          hexToBytes(VECTOR_COMPONENT_HEX),
+        ),
+      ]),
+    );
+    expect(getGroupProfileSupport([dictionaryWithProofData])).toEqual({
+      kind: "unsupported",
+      proofReason: "invalid-location",
+    });
+  });
+
+  it("undecodable app_components bytes -> unsupported invalid-dictionary, never throws", () => {
+    const duplicateIds = new BinaryWriter()
+      .vector([
+        new BinaryWriter().uint16(0x8003).build(),
+        new BinaryWriter().uint16(0x8003).build(),
+      ])
+      .build();
+    const malformed: GroupContextExtension[] = [
+      makeAppComponentsExtension([
+        componentEntry(APP_COMPONENTS_COMPONENT_ID, duplicateIds),
+      ]),
+    ];
+
+    let result: ReturnType<typeof getGroupProfileSupport>;
+    expect(() => {
+      result = getGroupProfileSupport(malformed);
+    }).not.toThrow();
+    expect(result!).toEqual({
+      kind: "unsupported",
+      proofReason: "invalid-dictionary",
+    });
   });
 });
 

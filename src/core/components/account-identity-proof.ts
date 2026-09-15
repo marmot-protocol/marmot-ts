@@ -687,3 +687,41 @@ export function assertCurrentGroupAccountIdentityProofProfile(
       );
   }
 }
+
+/**
+ * The result of a non-throwing classification of whether a GroupContext's
+ * extensions support the current account-identity-proof profile.
+ */
+export type GroupProfileSupport =
+  | { kind: "supported" }
+  | { kind: "unsupported"; proofReason: AccountIdentityProofRejectReason };
+
+/**
+ * Non-throwing wrapper over {@link assertCurrentGroupAccountIdentityProofProfile}
+ * (D-01a, D-11): returns `{ kind: "supported" }` when `extensions` classify as
+ * the current profile, or `{ kind: "unsupported", proofReason }` otherwise —
+ * `proofReason` is the caught `AccountIdentityProofError.reason`
+ * (`legacy-group`, `mixed-profile`, or `missing-requirement`), or
+ * `"invalid-dictionary"` for any other thrown value.
+ *
+ * Never throws. Two call sites rely on that: `validateCommitLegality`'s D-01a
+ * profile check (the sibling commit-legality module), which must stay
+ * non-throwing so fork-recovery and tree-fed convergence (neither of which
+ * wrap the call) can map a violation instead of aborting, and the D-11
+ * load-time classifier that marks a stored group's profile without breaking
+ * `Promise.all`-batched loading of every other group.
+ *
+ * @see refs/mdk/crates/cgka-engine/src/account_identity_proof.rs `protocol_profile_of_group_extensions`
+ */
+export function getGroupProfileSupport(
+  extensions: GroupContextExtension[],
+): GroupProfileSupport {
+  try {
+    assertCurrentGroupAccountIdentityProofProfile(extensions);
+    return { kind: "supported" };
+  } catch (err) {
+    if (err instanceof AccountIdentityProofError)
+      return { kind: "unsupported", proofReason: err.reason };
+    return { kind: "unsupported", proofReason: "invalid-dictionary" };
+  }
+}

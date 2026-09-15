@@ -2,6 +2,7 @@
 import {
   appDataUpdateProposalType,
   ClientState,
+  defaultProposalTypes,
   getAppDataDictionary,
   GroupContextExtension,
   Proposal,
@@ -16,6 +17,14 @@ import {
   AppComponentId,
 } from "./ids.js";
 import { bytesEqual } from "./bytes.js";
+import {
+  AccountIdentityProofError,
+  getGroupProfileSupport,
+  validateKeyPackageAccountIdentityProof,
+  validateLeafAccountIdentityProof,
+  type AccountIdentityProofRejectReason,
+} from "./account-identity-proof.js";
+import { diffChangedLeaves } from "./tree-diff.js";
 import {
   classifyDisbandCommit,
   type DisbandClassification,
@@ -36,7 +45,10 @@ import {
 
 /** The reason a commit was found to violate a ported MDK commit-legality rule. */
 export type CommitIntegrityViolationReason =
-  "component-integrity" | "admin-leaf-coupling" | "disband-legality";
+  | "component-integrity"
+  | "admin-leaf-coupling"
+  | "disband-legality"
+  | "account-identity-proof";
 
 /**
  * A typed, non-throwing violation returned by {@link validateAppComponentIntegrity},
@@ -45,10 +57,23 @@ export type CommitIntegrityViolationReason =
  * `detail` is a diagnostic string naming component ids and counts only — never
  * raw pubkeys or other protocol-sensitive material (diagnostics-privacy rule,
  * see foundation/errors.md). The protocol-visible signal is `reason`.
+ *
+ * `proofReason` and `leafIndex` are populated only for `reason:
+ * "account-identity-proof"` violations (D-06), by
+ * {@link validateCommitAccountIdentityProofs} and
+ * {@link validateAddProposalAccountIdentityProofs}. Both are pubkey-free:
+ * `proofReason` is the caught {@link AccountIdentityProofError.reason} literal
+ * and `leafIndex` is the failing leaf's true MLS tree leaf index (`./tree-diff.js`
+ * `diffChangedLeaves`'s `leafIndex` — never the member-enumeration index
+ * `validateGroupMemberAccountIdentityProofs` uses internally). `leafIndex` is
+ * omitted for a profile-drift violation (no single leaf is at fault) and for a
+ * pre-apply Add-proposal violation (the leaf has no tree position yet).
  */
 export interface CommitIntegrityViolation {
   reason: CommitIntegrityViolationReason;
   detail: string;
+  proofReason?: AccountIdentityProofRejectReason;
+  leafIndex?: number;
 }
 
 /**
@@ -295,11 +320,162 @@ export function validateAdminLeafCoupling(args: {
 }
 
 /**
+ * Ported from `validate_staged_commit_account_identity_proofs` (D-01, D-02,
+ * D-03): rejects a commit that drifts the GroupContext account-identity-proof
+ * profile away from `"current"`, or that carries an invalid `0x8009` proof on
+ * any new or re-signed member leaf. Pure and non-throwing.
+ *
+ * Two checks, in order:
+ * (a) **Profile drift (D-01a).** Both `parentState` and `resultingState` must
+ *     classify as the current profile ({@link getGroupProfileSupport}). Both
+ *     are checked — not just the resulting one — so a commit can never
+ *     "fix" an already-drifted parent into passing; the profile must already
+ *     have been, and remain, current.
+ * (b) **Changed-leaf proof validity (D-01b, D-02, D-03).** Every entry
+ *     {@link diffChangedLeaves} reports between the two ratchet trees — every
+ *     non-blank leaf that is new (Add) or re-signed (Update proposal, or the
+ *     committer's own update-path leaf) — is validated with
+ *     {@link validateLeafAccountIdentityProof} against the RESULTING epoch's
+ *     ciphersuite. Unchanged leaves are trusted and never re-validated (D-01).
+ *     Per D-03, this checks proof validity only (support, data, signer,
+ *     ciphersuite/scheme, signature key, signature) — it does NOT compare a
+ *     changed leaf's identity against the member's prior leaf; that check is
+ *     Phase 9 (UPD-01..03).
+ *
+ * Every thrown `AccountIdentityProofError` (or any other unexpected throw) is
+ * caught and mapped to a typed violation, never left to escape — fork-recovery
+ * and tree-fed convergence call {@link validateCommitLegality} unwrapped.
+ * `detail` never contains a pubkey or other credential bytes (D-06,
+ * diagnostics-privacy rule).
+ *
+ * @see refs/mdk/crates/cgka-engine/src/account_identity_proof.rs `validate_staged_commit_account_identity_proofs`
+ * @see refs/marmot/app-components/account-identity-proof-v2.md "Validation"
+ */
+export function validateCommitAccountIdentityProofs(args: {
+  parentState: ClientState;
+  resultingState: ClientState;
+}): CommitIntegrityViolation | undefined {
+  const parentSupport = getGroupProfileSupport(
+    args.parentState.groupContext.extensions,
+  );
+  if (parentSupport.kind === "unsupported") {
+    return {
+      reason: "account-identity-proof",
+      detail: `parent GroupContext is outside the current account identity proof profile (${parentSupport.proofReason})`,
+      proofReason: parentSupport.proofReason,
+    };
+  }
+
+  const resultingSupport = getGroupProfileSupport(
+    args.resultingState.groupContext.extensions,
+  );
+  if (resultingSupport.kind === "unsupported") {
+    return {
+      reason: "account-identity-proof",
+      detail: `resulting GroupContext is outside the current account identity proof profile (${resultingSupport.proofReason})`,
+      proofReason: resultingSupport.proofReason,
+    };
+  }
+
+  const changedLeaves = diffChangedLeaves(
+    args.parentState.ratchetTree,
+    args.resultingState.ratchetTree,
+  );
+  for (const { leafIndex, leaf } of changedLeaves) {
+    try {
+      validateLeafAccountIdentityProof(
+        leaf,
+        args.resultingState.groupContext.cipherSuite,
+      );
+    } catch (err) {
+      if (err instanceof AccountIdentityProofError) {
+        return {
+          reason: "account-identity-proof",
+          detail: `member leaf ${leafIndex} account identity proof invalid (${err.reason})`,
+          proofReason: err.reason,
+          leafIndex,
+        };
+      }
+      return {
+        reason: "account-identity-proof",
+        detail: `member leaf ${leafIndex} account identity proof validation failed`,
+        leafIndex,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Ported from `validate_standalone_proposal_account_identity_proof` (Add
+ * branch; D-08/D-09): validates the `0x8009` proof of every Add proposal's
+ * `KeyPackage` against `ciphersuite`, pure and non-throwing. Used pre-apply by
+ * the standalone-proposal admission seams (`src/engine/admin-policy.ts`
+ * inbound, `src/engine/group-engine.ts` local propose path) so a bad Add
+ * never reaches the queued-proposal state in the first place — the commit-time
+ * tree diff in {@link validateCommitAccountIdentityProofs} still catches it
+ * after apply if either admission gate is bypassed, since both call the same
+ * underlying {@link validateKeyPackageAccountIdentityProof}.
+ *
+ * Accepts both bare `Proposal` and `ProposalWithSender` items (normalizes
+ * each first) and ignores every non-Add proposal kind. Returns on the first
+ * failing Add; `leafIndex` is always omitted (the KeyPackage has no tree
+ * position yet, pre-apply).
+ *
+ * @see refs/mdk/crates/cgka-engine/src/app_components.rs `validate_membership_proposal`
+ */
+export function validateAddProposalAccountIdentityProofs(
+  proposals: readonly (Proposal | ProposalWithSender)[],
+  ciphersuite: number,
+): CommitIntegrityViolation | undefined {
+  const normalized = proposals.map((item) =>
+    "proposal" in item ? item.proposal : item,
+  );
+  for (let position = 0; position < normalized.length; position++) {
+    const proposal = normalized[position]!;
+    if (proposal.proposalType !== defaultProposalTypes.add) continue;
+    if (!("add" in proposal)) continue;
+    try {
+      validateKeyPackageAccountIdentityProof(
+        proposal.add.keyPackage,
+        ciphersuite,
+      );
+    } catch (err) {
+      if (err instanceof AccountIdentityProofError) {
+        return {
+          reason: "account-identity-proof",
+          detail: `Add proposal ${position} KeyPackage account identity proof invalid (${err.reason})`,
+          proofReason: err.reason,
+        };
+      }
+      return {
+        reason: "account-identity-proof",
+        detail: `Add proposal ${position} KeyPackage account identity proof validation failed`,
+      };
+    }
+  }
+  return undefined;
+}
+
+/**
  * The single shared seam adapter for commit legality: derives every argument
- * {@link validateAppComponentIntegrity} and {@link validateAdminLeafCoupling}
- * need from `parentState`/`resultingState`/`proposals`, so no seam re-derives
- * them independently (the mdk#707 bug class — "a guard that exists on one
- * seam only is a documented bug").
+ * {@link validateAppComponentIntegrity}, {@link validateCommitAccountIdentityProofs},
+ * {@link classifyDisbandCommit}, and {@link validateAdminLeafCoupling} need
+ * from `parentState`/`resultingState`/`proposals`, so no seam re-derives them
+ * independently (the mdk#707 bug class — "a guard that exists on one seam
+ * only is a documented bug").
+ *
+ * Runs four checks, in this fixed order (D-07):
+ * 1. `validateAppComponentIntegrity` — component-integrity (WIRE-03).
+ * 2. `validateCommitAccountIdentityProofs` — account-identity-proof profile
+ *    drift and changed-leaf proof validity (D-01/D-02/D-03). Runs before
+ *    disband/admin-leaf-coupling reasoning, so an invalid identity blocks a
+ *    commit before any admin-set reasoning does. `0x8009` data appearing in
+ *    the GroupContext dictionary itself still reports `component-integrity`
+ *    (rejected earlier by step 1), so Phase 7 expectations hold.
+ * 3. `classifyDisbandCommit` — disband-legality.
+ * 4. `validateAdminLeafCoupling` — admin-leaf-coupling (CONV-01).
  *
  * Stays pure: reads two `ClientState` values, performs no I/O, and calls
  * nothing from `src/engine` or `src/client`.
@@ -308,6 +484,9 @@ export function validateAdminLeafCoupling(args: {
  * throw on send (D-02), `rejected` with the violation's `reason` on inbound
  * (D-03), or drop the candidate edge on convergence/replay (D-04/D-09). This
  * adapter itself is seam-agnostic.
+ *
+ * @see refs/mdk/crates/cgka-engine/src/account_identity_proof.rs `validate_staged_commit_account_identity_proofs`
+ * @see refs/marmot/app-components/account-identity-proof-v2.md "Validation"
  */
 export function validateCommitLegality(args: {
   parentState: ClientState;
@@ -353,6 +532,12 @@ export function validateCommitLegality(args: {
     requiredIds,
   });
   if (integrityViolation) return integrityViolation;
+
+  const accountIdentityProofViolation = validateCommitAccountIdentityProofs({
+    parentState: args.parentState,
+    resultingState: args.resultingState,
+  });
+  if (accountIdentityProofViolation) return accountIdentityProofViolation;
 
   const disband: DisbandClassification = classifyDisbandCommit({
     parentState: args.parentState,

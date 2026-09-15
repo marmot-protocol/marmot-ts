@@ -20,11 +20,11 @@ import {
 } from "ts-mls";
 
 import { encodeComponentsList } from "../../core/components/app-components-list.js";
+import { produceAccountIdentityProof } from "../../core/components/account-identity-proof.js";
 import {
+  getAppComponents,
   makeLeafAppComponentsExtension,
-  produceAccountIdentityProof,
-} from "../../core/components/account-identity-proof.js";
-import { getAppComponents } from "../../core/components/dictionary.js";
+} from "../../core/components/dictionary.js";
 import {
   ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
   APP_COMPONENTS_COMPONENT_ID,

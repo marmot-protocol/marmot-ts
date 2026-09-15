@@ -7,6 +7,7 @@ import type {
   ProcessMessageResult,
   Proposal,
 } from "ts-mls";
+import type { AccountIdentityProofRejectReason } from "../core/components/account-identity-proof.js";
 
 /** Immutable timing identity for one bounded convergence collection pass. */
 export interface ConvergencePassState {
@@ -179,7 +180,16 @@ export type RejectedIngestResult<TEnvelope> = {
     | "admin-policy"
     | "component-integrity"
     | "admin-leaf-coupling"
-    | "disband-legality";
+    | "disband-legality"
+    | "account-identity-proof";
+  /** Pubkey-free sub-reason for `reason: "account-identity-proof"` (D-06). */
+  proofReason?: AccountIdentityProofRejectReason;
+  /**
+   * Pubkey-free failing leaf's true MLS tree leaf index for `reason:
+   * "account-identity-proof"` (D-06). Omitted for a profile-drift violation
+   * or a pre-apply Add-proposal violation, which have no single leaf.
+   */
+  leafIndex?: number;
 };
 
 /** An envelope skipped without processing. */

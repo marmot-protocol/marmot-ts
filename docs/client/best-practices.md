@@ -75,6 +75,17 @@ if (legacy.length > 0)
 
 Groups whose `GroupContext` still requires the legacy `0xf2f1` proof extension, or that never required `0x8009` at all, are outside the current profile: they cannot be joined, they do not interoperate with v2 peers, and they must be recreated.
 
+A group you already had stored before this cut still **loads**: `client.groups.loadAll()` and `client.groups.get(...)` never throw for it, and it stays listed alongside your current-profile groups. Check `group.profileSupport` to find one — it reports `{ kind: "unsupported", proofReason }`, with `proofReason` one of `legacy-group`, `mixed-profile`, or `missing-requirement`. Every send on such a group throws `UnsupportedGroupProfileError` (`reason: "unsupported-profile"`, exported from `@internet-privacy/marmot-ts/engine`), and every inbound event for it is yielded from `group.ingest()` as skipped with reason `unsupported-profile` (a `stale` disposition, category `unsupported_required_feature`) — nothing is decrypted or applied. Nothing is deleted or published automatically, so it is up to you to find and remove these groups; call `group.destroy()` on each one you no longer need:
+
+```ts
+const groups = await client.groups.loadAll();
+for (const group of groups) {
+  if (group.profileSupport.kind === "unsupported") {
+    await group.destroy();
+  }
+}
+```
+
 ## Next steps
 
 - **[MarmotClient](/client/marmot-client)** — lifecycle, managers, multi-account

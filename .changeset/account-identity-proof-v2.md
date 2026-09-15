@@ -20,6 +20,20 @@ requires `0x8009`.
   advertise/require the legacy `0xf2f1` extension.
 - Joining a group that requires the legacy `0xf2f1` extension, or that does not require
   `0x8009`, throws `AccountIdentityProofError`.
+- Commits whose resulting epoch drops the `0x8009` requirement, or that add or re-sign a
+  member leaf without a valid `0x8009` proof, are rejected identically on send
+  (`CommitLegalityError`, `violation.reason === "account-identity-proof"` plus `proofReason` /
+  `leafIndex`), inbound ingest (`rejected`, same reason), pool replay, and tree-fed
+  convergence.
+- `createAdminCommitPolicyCallback` now rejects an Add with no proof material. Standalone Add
+  proposals are validated before they are staged: inbound yields `rejected` with
+  `account-identity-proof`, and local `send({ kind: "proposal" })` throws
+  `AccountIdentityProofError`. An admin-callback rejection caused by an invalid Add proof is
+  reported as `account-identity-proof` instead of `admin-policy`.
+- `SkippedIngestResult.reason` gains `"unsupported-profile"`; exhaustive switches must handle
+  it.
+- Stored groups outside the current profile load but refuse all traffic (this supersedes the
+  earlier "load untouched" behavior).
 - The following 15 legacy runtime exports are removed: `ACCOUNT_IDENTITY_PROOF_EVENT_KIND`,
   `ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE`, `accountIdentityProofEventId`,
   `accountIdentityProofEventJson`, `accountIdentityProofSignatureFromSignedEvent`,
@@ -45,6 +59,17 @@ requires `0x8009`.
   kind-30443 events stay discoverable on relays (peers' invites that pick them fail), and
   `selectForWelcome` still offers them as Welcome candidates. Call `purge()` on them to
   publish the NIP-09 deletion.
+- `diffChangedLeaves`, `getGroupProfileSupport`, `validateAddProposalAccountIdentityProofs`,
+  and `validateCommitAccountIdentityProofs` — the tree-diff and profile/proof primitives
+  behind the legality-seam extension above.
+- The `GroupProfileSupport` type, and a `profileSupport` getter on `MarmotGroup`,
+  `GroupSession`, and `MarmotGroupEngine` reporting `{ kind: "supported" }` or
+  `{ kind: "unsupported", proofReason }` for a group's current GroupContext.
+- `UnsupportedGroupProfileError` (exported from `@internet-privacy/marmot-ts/engine`), thrown
+  by every outbound send on a group outside the current profile.
+- Optional `proofReason` / `leafIndex` fields on `CommitIntegrityViolation` and
+  `RejectedIngestResult`, populated for `reason: "account-identity-proof"`.
 
 See "Migrating to account identity proof v2 (0x8009)" in `docs/client/best-practices.md` for
-the republish/purge path and the rest of the migration story.
+the republish/purge path and the rest of the migration story, including how to find and
+`destroy()` a stored group outside the current profile.

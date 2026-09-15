@@ -20,6 +20,8 @@ import {
   defaultProposalTypes,
   encode,
   mlsMessageEncoder,
+  nodeTypes,
+  processMessage,
 } from "ts-mls";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -40,6 +42,7 @@ import { getMarmotGroupView } from "../../core/client-state.js";
 import {
   AccountIdentityProofError,
   validateKeyPackageAccountIdentityProof,
+  validateLeafAccountIdentityProof,
 } from "../../core/components/account-identity-proof.js";
 import { commitDigest } from "../../core/convergence.js";
 import { createAdminCommitPolicyCallback } from "../admin-policy.js";
@@ -497,5 +500,323 @@ describe("GRP-02 seam parity: Add whose leaf has no proof (D-04, D-08)", () => {
         resolution.kind === "rejected" ? resolution.violation : undefined,
       ),
     ).toEqual(expected);
+  });
+});
+
+describe("GRP-02 seam parity: update-path leaf with an invalid proof (D-04, D-02, D-03)", () => {
+  it("fixture sanity: forgedLeafIndex is a number and the forged leaf's own proof is invalid-proof", async () => {
+    const { impl, adminEpoch1, forgedLeafIndex } = await seamGroup({
+      forgedMember: "tampered",
+    });
+    expect(typeof forgedLeafIndex).toBe("number");
+    const node = adminEpoch1.ratchetTree[forgedLeafIndex! * 2];
+    expect(node?.nodeType).toBe(nodeTypes.leaf);
+    if (node?.nodeType !== nodeTypes.leaf)
+      throw new Error("expected a leaf node at the forged member's index");
+    let caughtReason: string | undefined;
+    try {
+      validateLeafAccountIdentityProof(node.leaf, impl.id);
+    } catch (err) {
+      if (err instanceof AccountIdentityProofError) caughtReason = err.reason;
+    }
+    expect(caughtReason).toBe("invalid-proof");
+  });
+
+  it("send: refuses with CommitLegalityError, epoch unchanged", async () => {
+    const { impl, forgedEpoch1, forgedLeafIndex } = await seamGroup({
+      forgedMember: "tampered",
+    });
+    const engine = new MarmotGroupEngine({
+      state: forgedEpoch1!,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+    const beforeEpoch = Number(engine.state.groupContext.epoch);
+
+    let caught: CommitLegalityError | undefined;
+    try {
+      await engine.send({ kind: "selfUpdate" });
+    } catch (err) {
+      caught = err as CommitLegalityError;
+    }
+
+    expect(caught?.name).toBe("CommitLegalityError");
+    expect(project(caught?.violation)).toEqual({
+      reason: "account-identity-proof",
+      proofReason: "invalid-proof",
+      leafIndex: forgedLeafIndex,
+    });
+    expect(Number(engine.state.groupContext.epoch)).toBe(beforeEpoch);
+  });
+
+  it("inbound: yields exactly one rejected result, epoch unchanged", async () => {
+    const { impl, ctx, forgedEpoch1, adminEpoch1, forgedLeafIndex } =
+      await seamGroup({ forgedMember: "tampered" });
+    const peeler = testPeeler(impl);
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler,
+    });
+
+    const forgedSelfUpdate = await createCommit({
+      context: ctx,
+      state: forgedEpoch1!,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const envelope = await peeler.wrapGroupMessage(
+      forgedSelfUpdate.commit,
+      forgedEpoch1!,
+    );
+
+    const beforeEpoch = Number(engine.state.groupContext.epoch);
+    const results = await ingestAll(engine, envelope);
+    const rejected = results.filter((r) => r.kind === "rejected");
+
+    expect(rejected).toHaveLength(1);
+    expect(project(rejected[0])).toEqual({
+      reason: "account-identity-proof",
+      proofReason: "invalid-proof",
+      leafIndex: forgedLeafIndex,
+    });
+    expect(Number(engine.state.groupContext.epoch)).toBe(beforeEpoch);
+  });
+
+  it("replay: drops the candidate edge, tip unchanged; admin1's own benign commit is unaffected by the unchanged forged leaf (D-01)", async () => {
+    const {
+      impl,
+      ctx,
+      adminPubkey,
+      forgedEpoch1,
+      adminEpoch1,
+      forgedLeafIndex,
+    } = await seamGroup({ forgedMember: "tampered" });
+    const rootSnapshot = snapshot(adminEpoch1);
+    const peeler = testPeeler(impl);
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler,
+    });
+
+    // admin1's own empty commit re-signs only admin1's own leaf; the forged
+    // member's leaf is untouched (byte-identical signature across the
+    // commit), so per D-01 it is trusted and never re-validated -- this
+    // commit must succeed even though the group already contains an invalid
+    // forged leaf from the raw founding commit.
+    const own = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (own.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    engine.confirmPublished(own.pending);
+    const ownTag = bytesToHex(engine.state.confirmationTag);
+
+    const forgedSelfUpdate = await createCommit({
+      context: ctx,
+      state: forgedEpoch1!,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const violatingDigest = bytesToHex(
+      commitDigest(encode(mlsMessageEncoder, forgedSelfUpdate.commit)),
+    );
+    const envelope = await peeler.wrapGroupMessage(
+      forgedSelfUpdate.commit,
+      forgedEpoch1!,
+    );
+
+    const results = await ingestAll(engine, envelope);
+    expect(results.some((r) => r.kind === "processed")).toBe(false);
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTag);
+
+    const recordedDigests = engine.history
+      .tags()
+      .map((tag) => engine.history.node(tag)?.edge?.commitDigest)
+      .filter((d): d is Uint8Array => d !== undefined)
+      .map((d) => bytesToHex(d));
+    expect(recordedDigests).not.toContain(violatingDigest);
+
+    const resolution = await resolveCandidateParent({
+      ciphersuite: impl,
+      parent: rootSnapshot,
+      message: forgedSelfUpdate.commit,
+      callback: adminCallbackFor(rootSnapshot, impl),
+    });
+    expect(resolution.kind).toBe("rejected");
+    expect(
+      project(
+        resolution.kind === "rejected" ? resolution.violation : undefined,
+      ),
+    ).toEqual({
+      reason: "account-identity-proof",
+      proofReason: "invalid-proof",
+      leafIndex: forgedLeafIndex,
+    });
+  });
+
+  it("tree-fed: abandons the switch, tip unchanged", async () => {
+    const {
+      impl,
+      ctx,
+      adminPubkey,
+      adminEpoch1,
+      admin2Epoch1,
+      forgedEpoch1,
+      forgedLeafIndex,
+    } = await seamGroup({ forgedMember: "tampered" });
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+    const rootTag = bytesToHex(adminEpoch1.confirmationTag);
+
+    const sent = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (sent.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    engine.confirmPublished(sent.pending);
+    const ownTag = bytesToHex(engine.state.confirmationTag);
+
+    // sib1: the forged member's own proposal-less self-update -- the only
+    // way to get an invalid proof onto an update-path leaf (Pitfall 2): it
+    // carries the SAME forged proof forward, but re-signed (byte-different),
+    // so D-02's tree-diff flags it as changed.
+    const sib1Commit = await createCommit({
+      context: ctx,
+      state: forgedEpoch1!,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    // admin2 raw-processes sib1 with an accept-all callback (processMessage's
+    // default when no callback is supplied) to reach the epoch sib2 commits
+    // from -- admin2 is a genuinely different leaf than the forged member,
+    // so this replay does not hit the RFC 9420 own-committer constraint.
+    const admin2AfterSib1 = await processMessage({
+      context: {
+        cipherSuite: impl,
+        authService: ctx.authService,
+        externalPsks: {},
+      },
+      state: admin2Epoch1,
+      message: sib1Commit.commit,
+    });
+    if (admin2AfterSib1.kind !== "newState")
+      throw new Error("expected newState");
+
+    const sib2Commit = await createCommit({
+      context: ctx,
+      state: admin2AfterSib1.newState,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    const [sib1State, sib2State] = await buildAdmin1PerspectiveChain(
+      ctx,
+      snapshot(adminEpoch1),
+      [sib1Commit.commit, sib2Commit.commit],
+    );
+    const sib1Tag = bytesToHex(sib1State!.confirmationTag);
+    engine.history.recordEdge(
+      edgeFromReplay(rootTag, sib1Commit.commit, sib1State!),
+    );
+    engine.history.recordEdge(
+      edgeFromReplay(sib1Tag, sib2Commit.commit, sib2State!),
+    );
+    expect(engine.history.tips().length).toBe(2);
+
+    await engine.reconvergeFromHistory();
+
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTag);
+    expect(engine.lifecycle).toBe("Stable");
+
+    const rootSnapshot = snapshot(adminEpoch1);
+    const resolution = await resolveCandidateParent({
+      ciphersuite: impl,
+      parent: rootSnapshot,
+      message: sib1Commit.commit,
+      callback: adminCallbackFor(rootSnapshot, impl),
+    });
+    expect(resolution.kind).toBe("rejected");
+    expect(
+      project(
+        resolution.kind === "rejected" ? resolution.violation : undefined,
+      ),
+    ).toEqual({
+      reason: "account-identity-proof",
+      proofReason: "invalid-proof",
+      leafIndex: forgedLeafIndex,
+    });
+  });
+
+  it("control: a legal two-deep sibling branch on the same forged-member group does switch on tree-fed re-convergence", async () => {
+    const { impl, ctx, adminPubkey, adminEpoch1, admin2Epoch1 } =
+      await seamGroup({ forgedMember: "tampered" });
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+    const rootTag = bytesToHex(adminEpoch1.confirmationTag);
+
+    const sent = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (sent.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    engine.confirmPublished(sent.pending);
+
+    // Same fixture group as the rows above (a forged member is present), but
+    // this branch never touches the forged leaf -- proving the abandonment
+    // in the rows above is caused by the proof gate, not by branch selection
+    // or replay mismatch (Pitfall 3).
+    const sib1Commit = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const sib2Commit = await createCommit({
+      context: ctx,
+      state: sib1Commit.newState,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    const [sib1State, sib2State] = await buildAdmin1PerspectiveChain(
+      ctx,
+      snapshot(adminEpoch1),
+      [sib1Commit.commit, sib2Commit.commit],
+    );
+    const sib1Tag = bytesToHex(sib1State!.confirmationTag);
+    engine.history.recordEdge(
+      edgeFromReplay(rootTag, sib1Commit.commit, sib1State!),
+    );
+    engine.history.recordEdge(
+      edgeFromReplay(sib1Tag, sib2Commit.commit, sib2State!),
+    );
+
+    await engine.reconvergeFromHistory();
+
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(
+      bytesToHex(sib2State!.confirmationTag),
+    );
+    expect(Number(engine.state.groupContext.epoch)).toBe(3);
   });
 });

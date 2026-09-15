@@ -5,8 +5,8 @@ milestone_name: Account identity proof v2
 current_phase: 8
 current_phase_name: GroupContext Profile Requirement & Legality-Seam Extension
 status: verifying
-stopped_at: Completed 07-08-PLAN.md (Phase 07 complete)
-last_updated: "2026-09-14T20:27:06.229Z"
+stopped_at: Phase 8 context gathered
+last_updated: "2026-09-15T14:31:43.964Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 07 complete, transitioned to Phase 8
 progress:
@@ -312,10 +312,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-14T20:22:00.293Z
-Stopped at: Completed 07-08-PLAN.md (Phase 07 complete)
+Last session: 2026-09-15T14:31:43.954Z
+Stopped at: Phase 8 context gathered
 Resume file:
 
-None
+.planning/phases/08-groupcontext-profile-requirement-legality-seam-extension/08-CONTEXT.md
 
 - Roadmap is ready. Plan the first v2.0 phase with `/gsd-plan-phase 6` (research-phase not recommended for Phase 6 — pure codec work against an already-verified spec vector).

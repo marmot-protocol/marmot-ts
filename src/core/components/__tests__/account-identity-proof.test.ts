@@ -986,6 +986,33 @@ describe("hasAccountIdentityProofMaterial", () => {
       false,
     );
   });
+
+  it("reports KeyPackage-level material for a KeyPackage, independent of its leaf (WR-01)", () => {
+    const bareLeaf = makeLeaf({ extensions: [] });
+    const keyPackageWith = (extensions: CustomExtension[]) =>
+      ({
+        cipherSuite: 1,
+        leafNode: bareLeaf,
+        extensions,
+      }) as unknown as KeyPackage;
+
+    expect(
+      hasAccountIdentityProofMaterial(
+        keyPackageWith([legacyExtension(new Uint8Array([1]))]),
+      ),
+    ).toBe(true);
+    expect(
+      hasAccountIdentityProofMaterial(keyPackageWith([VECTOR_LEAF_DICTIONARY])),
+    ).toBe(true);
+    expect(hasAccountIdentityProofMaterial(keyPackageWith([]))).toBe(false);
+    // A proof-bearing leaf does not make the KeyPackage-level list report material.
+    expect(
+      hasAccountIdentityProofMaterial({
+        ...keyPackageWith([]),
+        leafNode: VECTOR_LEAF,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("assertNoAccountIdentityProofComponent (PROOF-06, D-08)", () => {

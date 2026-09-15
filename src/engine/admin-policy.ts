@@ -43,8 +43,16 @@ export function createAdminCommitPolicyCallback(args: {
       if (proposal.proposalType !== defaultProposalTypes.add) continue;
       if (!("add" in proposal)) continue;
       const keyPackage = proposal.add.keyPackage;
-      // KNOWN GAP (D-06): Adds without proof material are skipped here; Phase 8 (GRP-02/GRP-04) closes it.
-      if (!hasAccountIdentityProofMaterial(keyPackage.leafNode)) continue;
+      // Proof material at the KeyPackage level (legacy 0xf2f1 or a misplaced 0x8009) counts as
+      // material, so it always reaches the validator and is rejected exactly as the invite
+      // seam (`proposeInviteUser`) rejects it — no send/inbound asymmetry (mdk#707).
+      // KNOWN GAP (D-06): only Adds with no proof material anywhere (neither the KeyPackage
+      // nor its leaf) are skipped here; Phase 8 (GRP-02/GRP-04) closes it.
+      if (
+        !hasAccountIdentityProofMaterial(keyPackage) &&
+        !hasAccountIdentityProofMaterial(keyPackage.leafNode)
+      )
+        continue;
       try {
         validateKeyPackageAccountIdentityProof(keyPackage, ciphersuiteId);
       } catch {

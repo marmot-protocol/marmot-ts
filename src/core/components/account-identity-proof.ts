@@ -482,21 +482,28 @@ export function validateLeafAccountIdentityProof(
 }
 
 /**
- * True iff `leaf` carries any account-identity-proof material at all: the legacy `0xf2f1`
- * extension, a `0x8009` dictionary entry, or a dictionary that fails to decode (fail closed
- * — an undecodable dictionary might be hiding proof material). Does not itself validate the
- * material; use {@link validateLeafAccountIdentityProof} for that.
+ * True iff `holder`'s own extension list carries any account-identity-proof material at all:
+ * the legacy `0xf2f1` extension, a `0x8009` dictionary entry, or a dictionary that fails to
+ * decode (fail closed — an undecodable dictionary might be hiding proof material). Does not
+ * itself validate the material; use {@link validateLeafAccountIdentityProof} or
+ * {@link validateKeyPackageAccountIdentityProof} for that.
+ *
+ * Accepts a LeafNode or a KeyPackage. It only inspects `holder.extensions`, so for a
+ * KeyPackage it reports KeyPackage-level (misplaced or legacy) material, not material on the
+ * embedded leaf — check `keyPackage.leafNode` separately.
  */
-export function hasAccountIdentityProofMaterial(leaf: LeafNode): boolean {
+export function hasAccountIdentityProofMaterial(holder: {
+  readonly extensions: readonly { extensionType: number }[];
+}): boolean {
   if (
-    leaf.extensions.some(
+    holder.extensions.some(
       (ext) =>
         ext.extensionType === LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE,
     )
   )
     return true;
 
-  for (const ext of dictionaryExtensionsOf(leaf.extensions)) {
+  for (const ext of dictionaryExtensionsOf(holder.extensions)) {
     let entries: RawDictionaryEntry[];
     try {
       entries = readDictionaryEntries(ext.extensionData);

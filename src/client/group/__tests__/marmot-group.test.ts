@@ -21,8 +21,13 @@ import {
   SerializedClientState,
 } from "../../../core/client-state.js";
 import {
+  ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+  AccountIdentityProofError,
+  buildAppDataDictionary,
+  componentEntry,
   makeLeafAppComponentsExtension,
   produceAccountIdentityProof,
+  validateKeyPackageAccountIdentityProof,
 } from "../../../core/components/index.js";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
@@ -672,6 +677,91 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     });
 
     expect(callback(incoming as never)).toBe("reject");
+  });
+
+  it("rejects an Add whose proof material is only at the KeyPackage level, matching the invite seam (WR-01)", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+
+    const account = testAccount(6);
+    const mlsKey = new Uint8Array(32).fill(0xcd);
+    const proof = await produceAccountIdentityProof({
+      signer: account.signer,
+      accountIdentity: hexToBytes(account.pubkey),
+      mlsSignatureKey: mlsKey,
+      ciphersuite: impl.id,
+      createdAt: 1700000000,
+    });
+
+    // The leaf itself carries no proof material at all.
+    const bareLeaf = {
+      credential: createCredential(account.pubkey),
+      signaturePublicKey: mlsKey,
+      extensions: [],
+    };
+    const addCommit = (keyPackageExtensions: unknown[]) => ({
+      kind: "commit" as const,
+      senderLeafIndex: 0,
+      proposals: [
+        {
+          proposal: {
+            proposalType: defaultProposalTypes.add,
+            add: {
+              keyPackage: {
+                cipherSuite: impl.id,
+                leafNode: bareLeaf,
+                extensions: keyPackageExtensions,
+              },
+            },
+          },
+          senderLeafIndex: 0,
+        },
+      ],
+    });
+
+    // With an empty ratchet tree the sender lookup after the proof gate is
+    // unverifiable, and "retry" makes that path throw instead of returning. So a
+    // returned "reject" can only come from the proof gate itself.
+    const callback = createAdminCommitPolicyCallback({
+      ratchetTree: [] as never,
+      adminPubkeys: [account.pubkey],
+      ciphersuiteId: impl.id,
+      onUnverifiableCommit: "retry",
+    });
+
+    // Legacy 0xf2f1 extension at the KeyPackage level.
+    const legacyAtKeyPackage = addCommit([
+      { extensionType: 0xf2f1, extensionData: new Uint8Array([1]) },
+    ]);
+    expect(callback(legacyAtKeyPackage as never)).toBe("reject");
+
+    // A 0x8009 dictionary entry misplaced at the KeyPackage level.
+    const proofAtKeyPackage = addCommit([
+      makeAppDataDictionaryExtension(
+        buildAppDataDictionary([
+          componentEntry(ACCOUNT_IDENTITY_PROOF_COMPONENT_ID, proof),
+        ]),
+      ),
+    ]);
+    expect(callback(proofAtKeyPackage as never)).toBe("reject");
+
+    // Both KeyPackages are rejected by the invite seam's validator too.
+    for (const incoming of [legacyAtKeyPackage, proofAtKeyPackage]) {
+      expect(() =>
+        validateKeyPackageAccountIdentityProof(
+          incoming.proposals[0]!.proposal.add.keyPackage as never,
+          impl.id,
+        ),
+      ).toThrow(AccountIdentityProofError);
+    }
+
+    // Control: with no proof material anywhere the Add is skipped by the proof gate
+    // (documented D-06 gap) and evaluation proceeds to the sender check.
+    expect(() => callback(addCommit([]) as never)).toThrow(
+      "unverifiable commit sender",
+    );
   });
 
   it("accepts non-admin self-update commits (no proposals) (MIP-02)", async () => {

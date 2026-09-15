@@ -1004,6 +1004,13 @@ export class MarmotGroupEngine<TEnvelope> {
                 `Proposal reference not found in unappliedProposals: ${ref}`,
               );
             }
+            // WR-05: an explicitly selected staged Add with an invalid proof
+            // is refused rather than silently dropped from the commit.
+            const refViolation = validateAddProposalAccountIdentityProofs(
+              [proposalWithSender],
+              this.ciphersuite.id,
+            );
+            if (refViolation) throw new CommitLegalityError(refViolation);
           }
         }
 
@@ -1029,7 +1036,8 @@ export class MarmotGroupEngine<TEnvelope> {
             cipherSuite: this.ciphersuite,
             authService: marmotAuthService,
           },
-          state: this.state,
+          // WR-05: staged invalid Adds pruned, so never bundled by reference.
+          state: prepared.commitState,
           ...commitOptions,
         });
 
@@ -1114,7 +1122,8 @@ export class MarmotGroupEngine<TEnvelope> {
             cipherSuite: this.ciphersuite,
             authService: marmotAuthService,
           },
-          state: this.state,
+          // WR-05: staged invalid Adds pruned, so never bundled by reference.
+          state: prepared.commitState,
           // Handshake content is wired as MLS PublicMessage (see wire-format.ts).
           wireAsPublicMessage: true,
           ratchetTreeExtension: true,
@@ -1184,14 +1193,27 @@ export class MarmotGroupEngine<TEnvelope> {
     committedWithSenders: ProposalWithSender[];
     committer: string;
     priority: CommitOrderingPriority;
+    /**
+     * The state `createCommit` must build from: `state` with any staged Add
+     * proposal carrying an invalid `0x8009` proof pruned from
+     * `unappliedProposals` (WR-05), so it is never bundled by reference.
+     */
+    commitState: ClientState;
   } {
     const actorLeaf = state.privatePath.leafIndex as LeafIndex;
     const actorPubkey = getCredentialPubkey(
       getCredentialFromLeafIndex(state.ratchetTree, actorLeaf),
     );
 
+    // WR-05: `createCommit` bundles every unapplied proposal by reference, so
+    // refusing the commit over a staged invalid Add would block every local
+    // commit (including selfUpdate and the self_remove auto-commit) for the
+    // rest of the epoch. Such a proposal can only be staged by an older build
+    // or a rewind onto a pre-upgrade snapshot; it is dropped from the commit
+    // instead, mirroring MDK's discard of invalid standalone proposals.
+    const commitState = withoutInvalidStagedAdds(state, this.ciphersuite.id);
     const referenced: ProposalWithSender[] = Object.values(
-      state.unappliedProposals,
+      commitState.unappliedProposals,
     );
     const localByValue: ProposalWithSender[] = byValueProposals.map(
       (proposal) => ({ proposal, senderLeafIndex: Number(actorLeaf) }),
@@ -1199,14 +1221,12 @@ export class MarmotGroupEngine<TEnvelope> {
     const committedWithSenders = [...referenced, ...localByValue];
 
     // D-08/D-04: pre-apply Add-proof symmetry with the inbound admin
-    // callback -- validates the exact committed union (by-reference unapplied
-    // proposals plus this call's by-value proposals) before createCommit, so
-    // a raw Add smuggled in via extraProposals or a staged unapplied
-    // reference is refused with the identical structured violation the
-    // inbound seam uses. #assertStagedCommitLegal remains the post-apply
-    // backstop.
+    // callback -- a raw Add this call passes by value is refused with the
+    // identical structured violation the inbound seam uses (staged references
+    // were already pruned above). #assertStagedCommitLegal remains the
+    // post-apply backstop.
     const addViolation = validateAddProposalAccountIdentityProofs(
-      committedWithSenders,
+      localByValue,
       this.ciphersuite.id,
     );
     if (addViolation) throw new CommitLegalityError(addViolation);
@@ -1252,6 +1272,7 @@ export class MarmotGroupEngine<TEnvelope> {
       committedWithSenders,
       committer: actorPubkey,
       priority: nonAdminShape.authorized ? "ordinary" : "privileged",
+      commitState,
     };
   }
 
@@ -2078,7 +2099,11 @@ export class MarmotGroupEngine<TEnvelope> {
     if (!mayPrepareLocalCommit(this.#lifecycle)) return undefined;
 
     const state = this.#state;
-    const unapplied = Object.values(state.unappliedProposals);
+    // WR-05: a staged invalid Add is pruned from every local commit, so it
+    // must not turn an otherwise self_remove-only set into a "mixed" one.
+    const unapplied = Object.values(
+      withoutInvalidStagedAdds(state, this.ciphersuite.id).unappliedProposals,
+    );
     if (unapplied.length === 0) return undefined;
 
     // createCommit bundles ALL unapplied proposals by reference, so only
@@ -3195,6 +3220,24 @@ export class MarmotGroupEngine<TEnvelope> {
       onUnverifiableCommit: "retry",
     });
   }
+}
+
+/**
+ * WR-05: `state` with every staged Add proposal whose KeyPackage lacks a valid
+ * `0x8009` proof removed from `unappliedProposals`, so `createCommit` never
+ * bundles it by reference. Returns `state` itself when nothing is pruned.
+ */
+function withoutInvalidStagedAdds(
+  state: ClientState,
+  ciphersuiteId: number,
+): ClientState {
+  const entries = Object.entries(state.unappliedProposals);
+  const admissible = entries.filter(
+    ([, staged]) =>
+      !validateAddProposalAccountIdentityProofs([staged], ciphersuiteId),
+  );
+  if (admissible.length === entries.length) return state;
+  return { ...state, unappliedProposals: Object.fromEntries(admissible) };
 }
 
 function finiteAuditNumber(value: number): number {

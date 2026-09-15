@@ -19,6 +19,7 @@ import {
   defaultProposalTypes,
   getCiphersuiteImpl,
   joinGroup,
+  processMessage,
   type Proposal,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
@@ -28,7 +29,11 @@ import { forgeKeyPackage } from "../../__tests__/helpers/account-identity-proof-
 import { buildAdmin1PerspectiveChain } from "../../__tests__/helpers/engine-seam-fixtures.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { MemoryAuditSink } from "../../audit/index.js";
-import { getMarmotGroupView } from "../../core/client-state.js";
+import {
+  deserializeClientState,
+  getMarmotGroupView,
+  serializeClientState,
+} from "../../core/client-state.js";
 import { GROUP_AVATAR_URL_COMPONENT_ID } from "../../core/components/ids.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
@@ -388,6 +393,65 @@ describe("standalone Add admission (GRP-04, D-08/D-09)", () => {
       }),
     );
     expect(rejectionReasons(audit)).toContain("account_identity_proof");
+  });
+
+  it("WR-05: a pre-staged proof-less Add does not block selfUpdate or commit, and is never bundled", async () => {
+    const { impl, ctx, adminPubkey, admin2Epoch1, adminEpoch1 } =
+      await fourPartyEpoch1Group();
+    const peeler = testPeeler(impl);
+
+    const forged = await forgeKeyPackage({
+      account: testAccount(11),
+      ciphersuiteImpl: impl,
+      proof: "missing",
+    });
+    const { message } = await createProposal({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      proposal: {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: forged.publicPackage },
+      },
+    });
+    // Staged with no Marmot gates, as an older build's accept-all inbound
+    // proposal path (or a rewind onto a pre-upgrade snapshot) would leave it.
+    const staged = await processMessage({
+      context: {
+        cipherSuite: impl,
+        authService: ctx.authService,
+        externalPsks: {},
+      },
+      state: adminEpoch1,
+      message,
+    });
+    if (staged.kind !== "newState") throw new Error("expected newState");
+    expect(Object.keys(staged.newState.unappliedProposals)).toHaveLength(1);
+    const clone = () =>
+      deserializeClientState(serializeClientState(staged.newState));
+
+    const updater = new MarmotGroupEngine({
+      state: clone(),
+      ciphersuite: impl,
+      peeler,
+    });
+    const update = await updater.send({ kind: "selfUpdate" });
+    if (update.kind !== "selfUpdate") throw new Error("expected selfUpdate");
+    expect(update.pending.ownCommitStamp?.consumedProposalRefs).toHaveLength(0);
+
+    const committer = new MarmotGroupEngine({
+      state: clone(),
+      ciphersuite: impl,
+      peeler,
+    });
+    const commit = await committer.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (commit.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    expect(commit.pending.ownCommitStamp?.consumedProposalRefs).toHaveLength(0);
   });
 
   it("WR-04: inbound standalone Add with a forged proof is still rejected when the group-data view is unreadable", async () => {

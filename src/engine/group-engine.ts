@@ -1889,6 +1889,43 @@ export class MarmotGroupEngine<TEnvelope> {
           proofReason: violation?.proofReason,
         };
       }
+      if (isCommit) {
+        // CR-01: the same shared WIRE-03/CONV-01 legality adapter every other
+        // commit seam runs (ingest.ts, fork-recovery.ts `resolveCandidateParent`,
+        // the send path) — after processMessage, before the edge is grown
+        // into the persisted tree. Without it an illegal commit that only
+        // decrypts on a fork node would be recorded and reported `processed`,
+        // and its edge would then pin tree-fed branch selection.
+        let violation: CommitIntegrityViolation | undefined;
+        try {
+          violation = validateCommitLegality({
+            parentState: state,
+            resultingState: result.newState,
+            proposals: captured.proposals,
+            committerLeafIndex: captured.committerLeafIndex,
+          });
+        } catch {
+          // Mirrors resolveCandidateParent's `deferred`: keep it pooled.
+          return undefined;
+        }
+        if (violation) {
+          log(
+            "sweep commit rejected at node %s reason:%s detail:%s",
+            tag,
+            violation.reason,
+            violation.detail,
+          );
+          return {
+            kind: "rejected",
+            result,
+            envelope,
+            message,
+            reason: violation.reason,
+            proofReason: violation.proofReason,
+            leafIndex: violation.leafIndex,
+          };
+        }
+      }
       try {
         if (isCommit) {
           // Grow this fork into the tree (capture it, off node `tag`).
@@ -2837,15 +2874,35 @@ export class MarmotGroupEngine<TEnvelope> {
         }))
       : set.candidates;
 
-    const winner = selectCanonicalBranch(
-      Number(this.#state.groupContext.epoch),
-      candidates,
-      this.#policy,
-    );
-    if (!winner || winner.id === currentTipTag) return;
-
-    const resolution = await this.#treeResolution(set.rootTag, winner.id);
-    if (!resolution) return;
+    // CR-01: select among ADOPTABLE branches only. A candidate whose chain
+    // holds a permanently invalid link (an illegal edge persisted by an older
+    // build, say) is excluded and selection re-runs over the rest, mirroring
+    // MDK, which drops a commit invalid against its candidate state
+    // (`InvalidAgainstCandidateState`) before branches are scored, so it can
+    // never win. A temporary refusal (`deferred`) still ends the pass: the
+    // top branch may become adoptable later, and adopting a runner-up now
+    // would be a switch spec-conformant peers do not make.
+    let remaining = candidates;
+    let selected:
+      | {
+          winner: BranchCandidate;
+          resolution: Extract<ForkResolution, { outcome: "recovered" }>;
+        }
+      | undefined;
+    while (selected === undefined) {
+      const winner = selectCanonicalBranch(
+        Number(this.#state.groupContext.epoch),
+        remaining,
+        this.#policy,
+      );
+      if (!winner || winner.id === currentTipTag) return;
+      const outcome = await this.#treeResolution(set.rootTag, winner.id);
+      if (outcome.kind === "deferred") return;
+      if (outcome.kind === "resolved")
+        selected = { winner, resolution: outcome.resolution };
+      else remaining = remaining.filter((c) => c.id !== winner.id);
+    }
+    const { winner, resolution } = selected;
 
     const forkEpoch = this.#tree.epochOf(set.rootTag) ?? winner.forkEpoch;
     const applied = this.#applyForkResolution(forkEpoch, resolution);
@@ -2935,19 +2992,30 @@ export class MarmotGroupEngine<TEnvelope> {
    * `validateCommitLegality`, so adopting it without re-checking would be
    * grandfathering a violation the send/inbound/replay seams would all now
    * refuse. Fails closed: any link that cannot be re-validated abandons the
-   * whole switch (returns `undefined`), leaving the current tip in place. The
-   * accepted consequence (D-04/D-09) is that such a branch becomes
-   * unselectable and, if it was the only candidate, the group stays on its
-   * current tip. Returns `undefined` if any snapshot or commit is missing.
+   * whole switch, leaving the current tip in place.
+   *
+   * Returns `invalid` when a link is permanently unadoptable (illegal, fails
+   * to authenticate against its stored parent, non-framed, or replays to a
+   * different confirmation tag) — the caller excludes that branch and
+   * re-selects (CR-01). Returns `deferred` when the chain cannot be assessed
+   * right now (a missing snapshot/commit, or a temporary refusal) — the
+   * caller ends the pass without adopting anything.
    */
   async #treeResolution(
     rootTag: string,
     winnerTipTag: string,
-  ): Promise<Extract<ForkResolution, { outcome: "recovered" }> | undefined> {
+  ): Promise<
+    | {
+        kind: "resolved";
+        resolution: Extract<ForkResolution, { outcome: "recovered" }>;
+      }
+    | { kind: "invalid" }
+    | { kind: "deferred" }
+  > {
     const fullPath = this.#tree.path(winnerTipTag);
-    if (!fullPath) return undefined;
+    if (!fullPath) return { kind: "deferred" };
     const rootIndex = fullPath.indexOf(rootTag);
-    if (rootIndex < 0) return undefined;
+    if (rootIndex < 0) return { kind: "deferred" };
     const segment = fullPath.slice(rootIndex);
 
     const winnerChain: ChainLink[] = [];
@@ -2955,11 +3023,11 @@ export class MarmotGroupEngine<TEnvelope> {
       const parent = await this.#tree.stateAt(segment[i - 1]);
       const child = await this.#tree.stateAt(segment[i]);
       const message = await this.#tree.commitMessageOf(segment[i]);
-      if (!parent || !child || !message) return undefined;
+      if (!parent || !child || !message) return { kind: "deferred" };
       winnerChain.push({ parent, message, child });
     }
     const winnerTip = await this.#tree.stateAt(winnerTipTag);
-    if (!winnerTip) return undefined;
+    if (!winnerTip) return { kind: "deferred" };
 
     // D-04/D-09: re-derive and re-validate every link's commit legality
     // before adopting this winner chain, so a persisted tree edge written by
@@ -2977,7 +3045,7 @@ export class MarmotGroupEngine<TEnvelope> {
           "tree-fed re-convergence: abandoning winner chain — link %s has a non-framed stored message",
           childTag,
         );
-        return undefined;
+        return { kind: "invalid" };
       }
       const stamp = await this.#tree.ownCommitStampOf(childTag);
       const parentResolution = await resolveCandidateParent({
@@ -2994,11 +3062,13 @@ export class MarmotGroupEngine<TEnvelope> {
       });
       if (parentResolution.kind !== "resolved") {
         this.#log()(
-          "tree-fed re-convergence: deferring winner chain — link %s parent resolution:%s",
+          "tree-fed re-convergence: abandoning winner chain — link %s parent resolution:%s",
           childTag,
           parentResolution.kind,
         );
-        return undefined;
+        return parentResolution.kind === "deferred"
+          ? { kind: "deferred" }
+          : { kind: "invalid" };
       }
       const replayed = parentResolution.result;
 
@@ -3010,21 +3080,24 @@ export class MarmotGroupEngine<TEnvelope> {
           "tree-fed re-convergence: abandoning winner chain — link %s replayed to a different confirmationTag than the stored snapshot",
           childTag,
         );
-        return undefined;
+        return { kind: "invalid" };
       }
     }
 
     return {
-      outcome: "recovered",
-      winnerTip,
-      winnerChain,
-      edges: [],
-      result: {
-        kind: "newState",
-        newState: winnerTip,
-        actionTaken: "accept",
-        consumed: [],
-        aad: new Uint8Array(),
+      kind: "resolved",
+      resolution: {
+        outcome: "recovered",
+        winnerTip,
+        winnerChain,
+        edges: [],
+        result: {
+          kind: "newState",
+          newState: winnerTip,
+          actionTaken: "accept",
+          consumed: [],
+          aad: new Uint8Array(),
+        },
       },
     };
   }

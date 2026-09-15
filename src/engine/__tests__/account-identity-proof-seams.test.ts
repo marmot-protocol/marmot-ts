@@ -297,6 +297,167 @@ describe("GRP-02 seam parity: commit that drops the 0x8009 requirement (D-04)", 
       ),
     ).toEqual(expected);
   });
+
+  it("pool sweep: rejects a live second sibling commit that only decrypts on a retained fork node, records no edge (CR-01)", async () => {
+    const { impl, ctx, adminPubkey, admin2Epoch1, adminEpoch1 } =
+      await seamGroup();
+    const peeler = testPeeler(impl);
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler,
+    });
+
+    // Two own commits, so the one-deep sibling branch loses pool replay and
+    // is only retained in the history tree as a fork node.
+    for (let i = 0; i < 2; i++) {
+      const own = await engine.send({
+        kind: "commit",
+        actorPubkey: adminPubkey,
+        extraProposals: [],
+      });
+      if (own.kind !== "groupEvolution")
+        throw new Error("expected groupEvolution");
+      engine.confirmPublished(own.pending);
+    }
+    const ownTag = bytesToHex(engine.state.confirmationTag);
+
+    const sib1Commit = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const sib1Envelope = await peeler.wrapGroupMessage(
+      sib1Commit.commit,
+      admin2Epoch1,
+    );
+    const sib2Commit = await createCommit({
+      context: ctx,
+      state: sib1Commit.newState,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [
+        dropAccountIdentityProofRequirement(sib1Commit.newState),
+      ],
+    });
+    // Wrapped under the sibling branch's epoch-2 exporter secret: no
+    // canonical or retained state can peel it, so it is pooled and only
+    // `#sweepTree` (peeling against the sib1 fork node) can reach it.
+    const sib2Envelope = await peeler.wrapGroupMessage(
+      sib2Commit.commit,
+      sib1Commit.newState,
+    );
+    const digestOf = (m: typeof sib1Commit.commit) =>
+      bytesToHex(commitDigest(encode(mlsMessageEncoder, m)));
+    const recordedDigests = () =>
+      engine.history
+        .tags()
+        .map((tag) => engine.history.node(tag)?.edge?.commitDigest)
+        .filter((d): d is Uint8Array => d !== undefined)
+        .map((d) => bytesToHex(d));
+
+    await ingestAll(engine, sib1Envelope);
+    expect(recordedDigests()).toContain(digestOf(sib1Commit.commit));
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTag);
+
+    const results = await ingestAll(engine, sib2Envelope);
+    const rejected = results.filter((r) => r.kind === "rejected");
+
+    expect(results.some((r) => r.kind === "processed")).toBe(false);
+    expect(rejected).toHaveLength(1);
+    expect(project(rejected[0])).toEqual(expected);
+    expect(recordedDigests()).not.toContain(digestOf(sib2Commit.commit));
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTag);
+  });
+
+  it("tree-fed: falls back to the next-best legal branch when the top-scoring candidate is illegal (CR-01)", async () => {
+    const { impl, ctx, adminPubkey, admin2Epoch1, adminEpoch1 } =
+      await seamGroup();
+    const engine = new MarmotGroupEngine({
+      state: adminEpoch1,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+    const rootTag = bytesToHex(adminEpoch1.confirmationTag);
+
+    const sent = await engine.send({
+      kind: "commit",
+      actorPubkey: adminPubkey,
+      extraProposals: [],
+    });
+    if (sent.kind !== "groupEvolution")
+      throw new Error("expected groupEvolution");
+    engine.confirmPublished(sent.pending);
+
+    // Legal branch L: sib1 -> legal2 (depth 2). Illegal branch I: sib1 ->
+    // alt2 -> illegal3 (depth 3, deepest, so it scores highest). Both beat
+    // the one-deep own branch; only L is adoptable.
+    const sib1Commit = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const legal2Commit = await createCommit({
+      context: ctx,
+      state: snapshot(sib1Commit.newState),
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const alt2Commit = await createCommit({
+      context: ctx,
+      state: snapshot(sib1Commit.newState),
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+    const illegal3Commit = await createCommit({
+      context: ctx,
+      state: alt2Commit.newState,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [
+        dropAccountIdentityProofRequirement(alt2Commit.newState),
+      ],
+    });
+
+    const [sib1State, legal2State] = await buildAdmin1PerspectiveChain(
+      ctx,
+      snapshot(adminEpoch1),
+      [sib1Commit.commit, legal2Commit.commit],
+    );
+    const [, alt2State, illegal3State] = await buildAdmin1PerspectiveChain(
+      ctx,
+      snapshot(adminEpoch1),
+      [sib1Commit.commit, alt2Commit.commit, illegal3Commit.commit],
+    );
+    const sib1Tag = bytesToHex(sib1State!.confirmationTag);
+    const alt2Tag = bytesToHex(alt2State!.confirmationTag);
+    engine.history.recordEdge(
+      edgeFromReplay(rootTag, sib1Commit.commit, sib1State!),
+    );
+    engine.history.recordEdge(
+      edgeFromReplay(sib1Tag, legal2Commit.commit, legal2State!),
+    );
+    engine.history.recordEdge(
+      edgeFromReplay(sib1Tag, alt2Commit.commit, alt2State!),
+    );
+    engine.history.recordEdge(
+      edgeFromReplay(alt2Tag, illegal3Commit.commit, illegal3State!),
+    );
+    expect(engine.history.tips().length).toBe(3);
+
+    await engine.reconvergeFromHistory();
+
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(
+      bytesToHex(legal2State!.confirmationTag),
+    );
+    expect(engine.lifecycle).toBe("Stable");
+  });
 });
 
 describe("GRP-02 seam parity: Add whose leaf has no proof (D-04, D-08)", () => {

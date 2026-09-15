@@ -2608,7 +2608,8 @@ export class MarmotGroupEngine<TEnvelope> {
       pool: candidates.map(({ message }) => message),
       currentState: this.#state,
       retained: this.#retained,
-      adminCallback: this.#createAdminVerificationCallback(),
+      adminCallbackFor: (parent) =>
+        this.#createAdminVerificationCallback(parent),
       terminalCandidates,
       knownCandidates: new Map(
         candidates.map(({ evidence, resultingState }) => [
@@ -2646,7 +2647,8 @@ export class MarmotGroupEngine<TEnvelope> {
       witnessEnvelopes: [...this.#delivered.envelopes(), ...witnessEnvelopes],
       currentState: this.state,
       retained: this.#retained,
-      adminCallback: this.#createAdminVerificationCallback(),
+      adminCallbackFor: (parent) =>
+        this.#createAdminVerificationCallback(parent),
       terminalCandidates: new Map(
         [...this.#disbandCandidates.values()].map(({ evidence }) => [
           bytesToHex(evidence.commitDigest),
@@ -3179,7 +3181,6 @@ export class MarmotGroupEngine<TEnvelope> {
     witnessEnvelopes: TEnvelope[],
   ): Promise<Map<string, AppWitness[]>> {
     const forkEpoch = this.#tree.epochOf(set.rootTag) ?? 0;
-    const callback = this.#createAdminVerificationCallback();
     const byTip = new Map<string, AppWitness[]>();
     for (const candidate of set.candidates) {
       const path = this.#tree.path(candidate.id);
@@ -3198,7 +3199,8 @@ export class MarmotGroupEngine<TEnvelope> {
           ciphersuite: this.ciphersuite,
           state,
           witnessEnvelopes,
-          callback,
+          // CR-02: built from the node state itself, like every other seam.
+          callback: this.#createAdminVerificationCallback(state),
         }))
           if (
             isWitnessEligible(

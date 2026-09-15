@@ -709,7 +709,7 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
       pool: [sibling.commit],
       currentState: s3,
       retained,
-      adminCallback: acceptAll,
+      adminCallbackFor: () => acceptAll,
     });
 
     expect(resolution.outcome).not.toBe("skip");

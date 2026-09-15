@@ -351,7 +351,7 @@ export class ForkRecovery<TEnvelope> {
     pool: MlsMessage[],
     encrypted: TEnvelope[],
     witnessEnvelopes: TEnvelope[],
-    callback: IncomingMessageCallback,
+    adminCallbackFor: (parent: ClientState) => IncomingMessageCallback,
     knownNextStates: ReadonlyMap<string, KnownNextState> = new Map(),
     terminalCandidates: ReadonlyMap<
       string,
@@ -369,17 +369,21 @@ export class ForkRecovery<TEnvelope> {
     const rejectedByDigest = new Map<string, RejectedForkCandidate>();
     const resolvedDigests = new Set<string>();
 
-    // WIRE-03/CONV-01 (D-04/D-09): wrap the callback once so the commit's own
-    // proposals are captured for validateCommitLegality at the point a
-    // candidate edge would be created — the same shared adapter the inbound
-    // seam (ingest.ts) uses, so neither seam can drift from the other.
+    // CR-02: the admin callback is built from the exact node being explored,
+    // never once per resolution. A candidate at fork epoch N is authorized
+    // against the admin set and ratchet tree of ITS parent — not the canonical
+    // tip, which may sit epochs later on another branch where the committer was
+    // demoted or its leaf index reassigned. This is the same parent
+    // `#treeResolution` and the pool sweep already use, and the one MDK stages
+    // each replayed commit on (`require_admin_for_staged_commit`), so the
+    // replay seam cannot refuse an edge the tree-fed seam would adopt.
     const witnessesAt = (state: ClientState): Promise<AppWitness[]> =>
       collectWitnessesAt({
         peeler: this.#peeler,
         ciphersuite: this.#ciphersuite,
         state,
         witnessEnvelopes,
-        callback,
+        callback: adminCallbackFor(state),
       });
 
     const candidatesAt = async (
@@ -461,7 +465,7 @@ export class ForkRecovery<TEnvelope> {
           ciphersuite: this.#ciphersuite,
           parent: state,
           message,
-          callback,
+          callback: adminCallbackFor(state),
           known: knownAtThisParent ? known : undefined,
         });
         if (resolution.kind === "deferred") {
@@ -598,7 +602,12 @@ export class ForkRecovery<TEnvelope> {
     witnessEnvelopes?: TEnvelope[];
     currentState: ClientState;
     retained: RetainedView;
-    adminCallback: IncomingMessageCallback;
+    /**
+     * Builds the admin-verification callback for one explored parent state
+     * (CR-02). Invoked per node, so every candidate commit is authorized
+     * against its own parent rather than the caller's current tip.
+     */
+    adminCallbackFor: (parent: ClientState) => IncomingMessageCallback;
     terminalCandidates?: ReadonlyMap<string, DisbandCandidateEvidence>;
     knownCandidates?: ReadonlyMap<string, KnownNextState>;
   }): Promise<ForkResolution> {
@@ -609,7 +618,7 @@ export class ForkRecovery<TEnvelope> {
       witnessEnvelopes = [],
       currentState,
       retained,
-      adminCallback,
+      adminCallbackFor,
       terminalCandidates = new Map(),
       knownCandidates = new Map(),
     } = params;
@@ -669,7 +678,7 @@ export class ForkRecovery<TEnvelope> {
         [...ours, ...pool],
         encrypted,
         witnessEnvelopes,
-        adminCallback,
+        adminCallbackFor,
         knownNextStates,
         terminalCandidates,
       );

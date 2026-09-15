@@ -32,6 +32,12 @@ requires `0x8009`.
   `account-identity-proof`, and local `send({ kind: "proposal" })` throws
   `AccountIdentityProofError`. An admin-callback rejection caused by an invalid Add proof is
   reported as `account-identity-proof` instead of `admin-policy`.
+- `ForkRecovery.resolveFork` (`@internet-privacy/marmot-ts/engine`) takes
+  `adminCallbackFor: (parent) => IncomingMessageCallback` instead of a single
+  `adminCallback`. It is invoked for every explored parent state, so each fork candidate is
+  authorized against its own parent rather than the current canonical tip. Inbound ingest
+  likewise authorizes every message against the state it is processed on, so a commit from an
+  admin demoted earlier in the same batch is rejected.
 - `SkippedIngestResult.reason` gains `"unsupported-profile"`; exhaustive switches must handle
   it.
 - Stored groups outside the current profile load but refuse all traffic (this supersedes the

@@ -953,7 +953,7 @@ describe("CONV-04 short-circuit re-validates persisted own-path commits (CR-04)"
       pool: [rival.commit],
       currentState: violatingState,
       retained,
-      adminCallback: acceptAll,
+      adminCallbackFor: () => acceptAll,
     });
 
     expect(resolution.outcome).not.toBe("skip");
@@ -1062,7 +1062,7 @@ describe("CONV-04 short-circuit re-validates persisted own-path commits (CR-04)"
       pool: [rival.commit],
       currentState: ours.newState,
       retained,
-      adminCallback: rejectOurLeaf,
+      adminCallbackFor: () => rejectOurLeaf,
     });
 
     const edges = resolution.outcome === "skip" ? [] : resolution.edges;

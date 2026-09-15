@@ -510,7 +510,10 @@ describe("commit-legality seams (WIRE-03/CONV-01) — inbound vs replay parity",
     // No branch was ever adopted: the violating commit never becomes
     // canonical, and our own already-confirmed commit is still the live tip.
     expect(results.some((r) => r.kind === "processed")).toBe(false);
-    expect(results.some((r) => r.kind === "skipped")).toBe(true);
+    // WR-01: labeled identically to the direct inbound seam, not past-epoch.
+    const rejected = results.filter((r) => r.kind === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.reason).toBe("component-integrity");
     expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTag);
     expect(Number(engine.state.groupContext.epoch)).toBe(2);
 

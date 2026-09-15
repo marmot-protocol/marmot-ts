@@ -21,10 +21,12 @@ requires `0x8009`.
 - Joining a group that requires the legacy `0xf2f1` extension, or that does not require
   `0x8009`, throws `AccountIdentityProofError`.
 - Commits whose resulting epoch drops the `0x8009` requirement, or that add or re-sign a
-  member leaf without a valid `0x8009` proof, are rejected identically on send
-  (`CommitLegalityError`, `violation.reason === "account-identity-proof"` plus `proofReason` /
-  `leafIndex`), inbound ingest (`rejected`, same reason), pool replay, and tree-fed
-  convergence.
+  member leaf without a valid `0x8009` proof, are refused on every legality seam with the
+  same structured verdict (`reason: "account-identity-proof"` plus `proofReason` /
+  `leafIndex`): send throws `CommitLegalityError`; inbound ingest, fork-recovery pool replay,
+  and the ingestion-pool sweep yield `rejected` with that reason; tree-fed convergence has no
+  triggering envelope, so it never adopts a branch containing such a commit and falls back
+  to the best remaining legal branch.
 - `createAdminCommitPolicyCallback` now rejects an Add with no proof material. Standalone Add
   proposals are validated before they are staged: inbound yields `rejected` with
   `account-identity-proof`, and local `send({ kind: "proposal" })` throws

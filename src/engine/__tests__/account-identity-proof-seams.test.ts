@@ -204,6 +204,11 @@ describe("GRP-02 seam parity: commit that drops the 0x8009 requirement (D-04)", 
 
     const results = await ingestAll(engine, violatingEnvelope);
     expect(results.some((r) => r.kind === "processed")).toBe(false);
+    // WR-01: the replay seam yields the same labeled `rejected` result as
+    // the inbound seam, not `skipped`/`past-epoch`.
+    const rejected = results.filter((r) => r.kind === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(project(rejected[0])).toEqual(expected);
     expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTag);
 
     const recordedDigests = engine.history
@@ -578,6 +583,9 @@ describe("GRP-02 seam parity: Add whose leaf has no proof (D-04, D-08)", () => {
 
     const results = await ingestAll(engine, violatingEnvelope);
     expect(results.some((r) => r.kind === "processed")).toBe(false);
+    const rejected = results.filter((r) => r.kind === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(project(rejected[0])).toEqual(expected);
     expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTag);
 
     const resolution = await resolveCandidateParent({
@@ -794,6 +802,13 @@ describe("GRP-02 seam parity: update-path leaf with an invalid proof (D-04, D-02
 
     const results = await ingestAll(engine, envelope);
     expect(results.some((r) => r.kind === "processed")).toBe(false);
+    const rejected = results.filter((r) => r.kind === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(project(rejected[0])).toEqual({
+      reason: "account-identity-proof",
+      proofReason: "invalid-proof",
+      leafIndex: forgedLeafIndex,
+    });
     expect(bytesToHex(engine.state.confirmationTag)).toBe(ownTag);
 
     const recordedDigests = engine.history

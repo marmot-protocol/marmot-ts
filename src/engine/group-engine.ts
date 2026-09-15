@@ -2644,10 +2644,13 @@ export class MarmotGroupEngine<TEnvelope> {
         error_kinds:
           resolution.outcome === "skip" ? ["candidate_state_unavailable"] : [],
       });
-      return { outcome: resolution.outcome };
+      return { outcome: resolution.outcome, rejected: resolution.rejected };
     }
 
-    return this.#applyForkResolution(forkEpoch, resolution);
+    return {
+      ...this.#applyForkResolution(forkEpoch, resolution),
+      rejected: resolution.rejected,
+    };
   }
 
   /**
@@ -3062,10 +3065,19 @@ export class MarmotGroupEngine<TEnvelope> {
           : undefined,
       });
       if (parentResolution.kind !== "resolved") {
+        // WR-01: a tree-fed refusal has no triggering envelope to yield a
+        // `rejected` result on, so the structured verdict is logged here.
+        const violation =
+          parentResolution.kind === "rejected"
+            ? parentResolution.violation
+            : undefined;
         this.#log()(
-          "tree-fed re-convergence: abandoning winner chain — link %s parent resolution:%s",
+          "tree-fed re-convergence: abandoning winner chain — link %s parent resolution:%s reason:%s proofReason:%s leafIndex:%s",
           childTag,
           parentResolution.kind,
+          violation?.reason ?? "admin-policy",
+          violation?.proofReason,
+          violation?.leafIndex,
         );
         return parentResolution.kind === "deferred"
           ? { kind: "deferred" }

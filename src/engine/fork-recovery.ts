@@ -79,9 +79,23 @@ export type ParentResolution =
   | {
       kind: "rejected";
       reason: "authorization_or_components";
+      /** The `processMessage` result the refusal was decided on. */
+      result: ProcessMessageResult;
       violation?: CommitIntegrityViolation;
     }
   | { kind: "deferred"; reason: "temporary_refusal" };
+
+/**
+ * A pooled candidate commit that authenticated against its parent but was
+ * refused there (admin policy or commit legality) and never resolved on any
+ * explored node (WR-01). Surfaced so the ingest seam can label it `rejected`
+ * with the same reason as direct inbound ingest, instead of `past-epoch`.
+ */
+export interface RejectedForkCandidate {
+  message: MlsMessage;
+  result: ProcessMessageResult;
+  violation?: CommitIntegrityViolation;
+}
 
 /**
  * Authenticates a Commit against one exact parent, then applies the shared
@@ -130,6 +144,7 @@ export async function resolveCandidateParent(params: {
     return {
       kind: "rejected",
       reason: "authorization_or_components",
+      result,
       violation: validateAddProposalAccountIdentityProofs(
         capturedCommit.proposals,
         ciphersuite.id,
@@ -146,6 +161,7 @@ export async function resolveCandidateParent(params: {
       return {
         kind: "rejected",
         reason: "authorization_or_components",
+        result,
         violation,
       };
   } catch {
@@ -165,6 +181,8 @@ interface BuiltBranches {
    * Feeds the full-fork history tree so abandoned branches are retained.
    */
   edges: EdgeSnapshot[];
+  /** Pool candidates refused at their parent and never resolved (WR-01). */
+  rejected: RejectedForkCandidate[];
 }
 
 /** The outcome of resolving a fork; the caller applies state/lifecycle changes. */
@@ -184,6 +202,8 @@ export type ForkResolution =
         score: BranchScore;
       };
       selectedTerminal?: DisbandCandidateEvidence;
+      /** Pool candidates refused at their parent (WR-01). */
+      rejected?: RejectedForkCandidate[];
     }
   | {
       outcome: "superseded";
@@ -197,8 +217,10 @@ export type ForkResolution =
         score: BranchScore;
       };
       selectedTerminal?: DisbandCandidateEvidence;
+      /** Pool candidates refused at their parent (WR-01). */
+      rejected?: RejectedForkCandidate[];
     }
-  | { outcome: "skip" };
+  | { outcome: "skip"; rejected?: RejectedForkCandidate[] };
 
 /** Inputs needed to access retained history during fork resolution. */
 export interface RetainedView {
@@ -274,6 +296,10 @@ export class ForkRecovery<TEnvelope> {
     const chains = new Map<BranchCandidate, ChainLink[]>();
     const edges: EdgeSnapshot[] = [];
     let counter = 0;
+    // WR-01: refusals keyed by commit digest; a digest that resolves at any
+    // explored node is not reported as rejected.
+    const rejectedByDigest = new Map<string, RejectedForkCandidate>();
+    const resolvedDigests = new Set<string>();
 
     // WIRE-03/CONV-01 (D-04/D-09): wrap the callback once so the commit's own
     // proposals are captured for validateCommitLegality at the point a
@@ -375,7 +401,18 @@ export class ForkRecovery<TEnvelope> {
           branchDeferred = true;
           continue;
         }
+        const digestHex = bytesToHex(this.#commitDigestOf(message));
+        if (resolution.kind === "rejected") {
+          if (!rejectedByDigest.has(digestHex))
+            rejectedByDigest.set(digestHex, {
+              message,
+              result: resolution.result,
+              violation: resolution.violation,
+            });
+          continue;
+        }
         if (resolution.kind !== "resolved") continue;
+        resolvedDigests.add(digestHex);
         const next = resolution.result;
         const tag = bytesToHex(next.newState.confirmationTag);
         if (seen.has(tag)) {
@@ -475,7 +512,10 @@ export class ForkRecovery<TEnvelope> {
       [],
       [],
     );
-    return { branches, tips, chains, edges };
+    const rejected = [...rejectedByDigest]
+      .filter(([digest]) => !resolvedDigests.has(digest))
+      .map(([, candidate]) => candidate);
+    return { branches, tips, chains, edges, rejected };
   }
 
   /**
@@ -556,16 +596,17 @@ export class ForkRecovery<TEnvelope> {
       });
     }
 
-    const { branches, tips, chains, edges } = await this.#buildBranches(
-      root,
-      [...ours, ...pool],
-      encrypted,
-      witnessEnvelopes,
-      adminCallback,
-      knownNextStates,
-      terminalCandidates,
-    );
-    if (branches.length === 0) return { outcome: "skip" };
+    const { branches, tips, chains, edges, rejected } =
+      await this.#buildBranches(
+        root,
+        [...ours, ...pool],
+        encrypted,
+        witnessEnvelopes,
+        adminCallback,
+        knownNextStates,
+        terminalCandidates,
+      );
+    if (branches.length === 0) return { outcome: "skip", rejected };
 
     const winner = selectCanonicalBranch(
       currentTipEpoch,
@@ -573,7 +614,8 @@ export class ForkRecovery<TEnvelope> {
       this.#policy,
     );
     const winnerTip = winner ? tips.get(winner) : undefined;
-    if (!winner || !winnerTip) return { outcome: "superseded", edges };
+    if (!winner || !winnerTip)
+      return { outcome: "superseded", edges, rejected };
 
     const winnerScore = scoreBranch(winner, this.#policy);
     const runner = branches
@@ -613,6 +655,7 @@ export class ForkRecovery<TEnvelope> {
         winnerTip,
         decision,
         selectedTerminal,
+        rejected,
       };
 
     return {
@@ -622,6 +665,7 @@ export class ForkRecovery<TEnvelope> {
       edges,
       decision,
       selectedTerminal,
+      rejected,
       result: {
         kind: "newState",
         newState: winnerTip,

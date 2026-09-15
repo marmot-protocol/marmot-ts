@@ -34,6 +34,7 @@ import { getCredentialPubkey } from "../core/credential.js";
 import { type DeferredReason, deferredReasons } from "../core/inbound.js";
 import { classifyLateCommit } from "../core/retained-history.js";
 import { withCapturedProposals } from "./admin-policy.js";
+import type { RejectedForkCandidate } from "./fork-recovery.js";
 import { contentDedupId } from "./message-dedup.js";
 import type { RetainedHistoryStore } from "./retained-store.js";
 import {
@@ -105,8 +106,13 @@ export type AppliedForkResolution<TEnvelope> =
       withdrawnNotifications: StateNotification[];
       /** Present only when canonical selection chose authenticated disband evidence. */
       selectedTerminal?: DisbandCandidateEvidence;
+      /**
+       * Pooled candidates refused against their parent (WR-01), reported as
+       * `rejected` rather than `past-epoch`.
+       */
+      rejected?: RejectedForkCandidate[];
     }
-  | { outcome: "superseded" | "skip" };
+  | { outcome: "superseded" | "skip"; rejected?: RejectedForkCandidate[] };
 
 /**
  * The engine-facing surface the ingest pipeline drives. State and lifecycle
@@ -937,17 +943,61 @@ export async function* ingestEnvelopes<TEnvelope>(
         decryptFailed,
         envelopes,
       );
+      // WR-01: a pool candidate refused at its own parent (admin policy or
+      // commit legality) is reported `rejected` with the same reason labels
+      // as the direct inbound commit seam above — never `past-epoch`, which
+      // would claim it was already applied.
+      const rejectedByDigest = new Map<string, RejectedForkCandidate>();
+      for (const candidate of resolution.rejected ?? [])
+        rejectedByDigest.set(
+          bytesToHex(
+            commitDigest(encode(mlsMessageEncoder, candidate.message)),
+          ),
+          candidate,
+        );
+      const livePool: typeof retainedPool = [];
+      for (const p of retainedPool) {
+        const refused = rejectedByDigest.get(
+          bytesToHex(commitDigest(encode(mlsMessageEncoder, p.message))),
+        );
+        if (!refused) {
+          livePool.push(p);
+          continue;
+        }
+        const reason = refused.violation?.reason ?? "admin-policy";
+        log(
+          "fork candidate envelope:%s rejected reason:%s",
+          envelopeLabel(p.envelope),
+          reason,
+        );
+        ctx.dedup.remember(p.message);
+        yield {
+          kind: "rejected",
+          result: refused.result,
+          envelope: p.envelope,
+          message: p.message,
+          reason,
+          proofReason: refused.violation?.proofReason,
+          leafIndex: refused.violation?.leafIndex,
+        };
+      }
+
       if (resolution.outcome === "recovered") {
         log(
           "convergence rewound to canonical branch – epoch:%d",
           ctx.getState().groupContext.epoch,
         );
-        const rep = retainedPool[0];
+        const rep = livePool[0];
         // The canonical branch we rewound onto may itself have removed us; the
         // winning tip is now live state, so report `removed` rather than
         // `processed` (member-departure.md). The rewind's `invalidated`
         // retractions below are still reported — they are independent.
-        if (ctx.getState().groupActiveState.kind === "removedFromGroup") {
+        if (!rep) {
+          // Every triggering candidate was refused; the rewind was carried by
+          // other material, so there is no envelope to report it on.
+        } else if (
+          ctx.getState().groupActiveState.kind === "removedFromGroup"
+        ) {
           // D-10/D-12: attribute the derived notifications (including
           // `selfRemoved`) to the winning branch's OWN tip commit, not
           // `rep.message` (which is merely the first forkPool entry that
@@ -978,11 +1028,11 @@ export async function* ingestEnvelopes<TEnvelope>(
             selectedTerminal: resolution.selectedTerminal,
           };
         }
-        for (let i = 1; i < retainedPool.length; i++)
+        for (let i = 1; i < livePool.length; i++)
           yield {
             kind: "skipped",
-            envelope: retainedPool[i].envelope,
-            message: retainedPool[i].message,
+            envelope: livePool[i].envelope,
+            message: livePool[i].message,
             reason: "past-epoch",
           };
         // D-11: withdrawn state notifications are yielded BEFORE the
@@ -1015,7 +1065,7 @@ export async function* ingestEnvelopes<TEnvelope>(
           };
         }
       } else {
-        for (const p of retainedPool)
+        for (const p of livePool)
           yield {
             kind: "skipped",
             envelope: p.envelope,

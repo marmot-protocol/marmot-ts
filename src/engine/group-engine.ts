@@ -47,8 +47,10 @@ import {
 } from "../core/components/dictionary.js";
 import {
   type CommitIntegrityViolation,
+  validateAddProposalAccountIdentityProofs,
   validateCommitLegality,
 } from "../core/components/integrity.js";
+import { validateKeyPackageAccountIdentityProof } from "../core/components/account-identity-proof.js";
 import {
   APP_COMPONENTS_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
@@ -99,7 +101,10 @@ import {
 import { framedContentType } from "./wire-format.js";
 import { logger } from "../utils/debug.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
-import { createAdminCommitPolicyCallback } from "./admin-policy.js";
+import {
+  createAdminCommitPolicyCallback,
+  withCapturedProposals,
+} from "./admin-policy.js";
 import { DeliveredPayloadLedger } from "./delivered-payloads.js";
 import {
   type ChainLink,
@@ -877,6 +882,20 @@ export class MarmotGroupEngine<TEnvelope> {
       }
 
       case "proposal": {
+        // D-09: validates any raw Add proposal before createProposal, so a
+        // hand-built ProposalAction returning an Add cannot bypass
+        // proposeInviteUser's own check -- throws the same
+        // AccountIdentityProofError either way.
+        if (
+          intent.proposal.proposalType === defaultProposalTypes.add &&
+          "add" in intent.proposal
+        ) {
+          validateKeyPackageAccountIdentityProof(
+            intent.proposal.add.keyPackage,
+            this.ciphersuite.id,
+          );
+        }
+
         const { message, newState } = await createProposal({
           context: {
             cipherSuite: this.ciphersuite,
@@ -1131,6 +1150,20 @@ export class MarmotGroupEngine<TEnvelope> {
       (proposal) => ({ proposal, senderLeafIndex: Number(actorLeaf) }),
     );
     const committedWithSenders = [...referenced, ...localByValue];
+
+    // D-08/D-04: pre-apply Add-proof symmetry with the inbound admin
+    // callback -- validates the exact committed union (by-reference unapplied
+    // proposals plus this call's by-value proposals) before createCommit, so
+    // a raw Add smuggled in via extraProposals or a staged unapplied
+    // reference is refused with the identical structured violation the
+    // inbound seam uses. #assertStagedCommitLegal remains the post-apply
+    // backstop.
+    const addViolation = validateAddProposalAccountIdentityProofs(
+      committedWithSenders,
+      this.ciphersuite.id,
+    );
+    if (addViolation) throw new CommitLegalityError(addViolation);
+
     const committedProposals = committedWithSenders.map((p) => p.proposal);
     const extraProposals = [...byValueProposals];
 
@@ -1767,6 +1800,16 @@ export class MarmotGroupEngine<TEnvelope> {
     )
       return undefined;
     const isCommit = framedContentType(message) === contentTypes.commit;
+    // D-09 symmetry: an invalid standalone Add must never be staged into a
+    // non-canonical fork snapshot either, so the admin callback (which now
+    // validates both commit-embedded and standalone Adds) runs for BOTH
+    // framed-message kinds here, not just commits. withCapturedProposals is a
+    // pure side channel -- see its docstring; no validation logic is added by
+    // wrapping it.
+    const capture = withCapturedProposals(
+      this.#createAdminVerificationCallback(state),
+    );
+    capture.take();
     let result: ProcessMessageResult;
     try {
       result = await processMessage({
@@ -1777,17 +1820,28 @@ export class MarmotGroupEngine<TEnvelope> {
         },
         state,
         message,
-        callback: isCommit
-          ? this.#createAdminVerificationCallback(state)
-          : acceptAll,
+        callback: capture.callback,
       });
     } catch {
       return undefined; // decrypted but not processable against this node
     }
+    const captured = capture.take();
 
     if (result.kind === "newState") {
-      if (result.actionTaken === "reject")
-        return { kind: "rejected", result, envelope, message };
+      if (result.actionTaken === "reject") {
+        const violation = validateAddProposalAccountIdentityProofs(
+          captured.proposals,
+          this.ciphersuite.id,
+        );
+        return {
+          kind: "rejected",
+          result,
+          envelope,
+          message,
+          reason: violation?.reason,
+          proofReason: violation?.proofReason,
+        };
+      }
       try {
         if (isCommit) {
           // Grow this fork into the tree (capture it, off node `tag`).

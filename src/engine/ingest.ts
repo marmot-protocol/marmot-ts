@@ -2,7 +2,6 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { Debugger } from "debug";
 import {
-  acceptAll,
   type CiphersuiteImpl,
   type ClientState,
   contentTypes,
@@ -20,7 +19,10 @@ import {
 
 import { verifyApplicationRumorAuthorship } from "../core/application-rumor.js";
 import { marmotAuthService } from "../core/auth-service.js";
-import { validateCommitLegality } from "../core/components/integrity.js";
+import {
+  validateAddProposalAccountIdentityProofs,
+  validateCommitLegality,
+} from "../core/components/integrity.js";
 import { classifyDisbandCommit } from "../core/components/disband-validation.js";
 import {
   type CommitOrderingKey,
@@ -529,6 +531,13 @@ export async function* ingestEnvelopes<TEnvelope>(
     nonCommits.length,
   );
 
+  // Shared across the non-commit and commit loops below: `withCapturedProposals`
+  // is documented as safe to reuse one `callback`/`take()` pair across a loop of
+  // several messages, so one admin-callback wrapper serves both loops rather
+  // than constructing two independent wrapped callbacks over the same admin
+  // policy.
+  const capture = withCapturedProposals(ctx.createAdminCallback());
+
   for (const { envelope, message } of nonCommits) {
     try {
       if (
@@ -548,6 +557,10 @@ export async function* ingestEnvelopes<TEnvelope>(
         continue;
       }
 
+      // Clear any proposals left buffered from a prior message in this loop
+      // before processing this one (withCapturedProposals contract).
+      capture.take();
+
       const result = await processMessage({
         context: {
           cipherSuite: ctx.ciphersuite,
@@ -556,8 +569,39 @@ export async function* ingestEnvelopes<TEnvelope>(
         },
         state: ctx.getState(),
         message,
-        callback: acceptAll,
+        callback: capture.callback,
       });
+
+      const captured = capture.take();
+
+      if (result.kind === "newState" && result.actionTaken === "reject") {
+        // D-09: a standalone Add proposal with a missing or invalid 0x8009
+        // proof is refused here before it is staged. Only the ratchet
+        // advance (result.newState) is applied -- ts-mls never stages a
+        // rejected proposal's effect, mirroring the application-message
+        // branch's ratchet-advance-only handling below -- and
+        // recordProposalStaged is deliberately never called.
+        const violation = validateAddProposalAccountIdentityProofs(
+          captured.proposals,
+          ctx.ciphersuite.id,
+        );
+        ctx.setState(result.newState);
+        ctx.dedup.remember(message);
+        log(
+          "proposal envelope:%s rejected reason:%s",
+          envelopeLabel(envelope),
+          violation?.reason ?? "admin-policy",
+        );
+        yield {
+          kind: "rejected",
+          result,
+          envelope,
+          message,
+          reason: violation?.reason ?? "admin-policy",
+          proofReason: violation?.proofReason,
+        };
+        continue;
+      }
 
       if (result.kind === "newState") {
         log(
@@ -627,8 +671,6 @@ export async function* ingestEnvelopes<TEnvelope>(
   }
 
   commits = sortPeeledCommits(commits);
-
-  const capture = withCapturedProposals(ctx.createAdminCallback());
 
   const forkPool: {
     envelope: TEnvelope;
@@ -706,9 +748,18 @@ export async function* ingestEnvelopes<TEnvelope>(
 
       if (result.kind === "newState") {
         if (result.actionTaken === "reject") {
+          // D-05: an admin-callback rejection caused by an Add-proof failure
+          // is labeled identically to every other Add-proof rejection seam
+          // (account-identity-proof + proofReason), not the generic
+          // admin-policy reason.
+          const addViolation = validateAddProposalAccountIdentityProofs(
+            capturedCommit.proposals,
+            ctx.ciphersuite.id,
+          );
           log(
-            "commit envelope:%s rejected by admin policy",
+            "commit envelope:%s rejected by admin policy reason:%s",
             envelopeLabel(envelope),
+            addViolation?.reason ?? "admin-policy",
           );
           ctx.dedup.remember(message);
           yield {
@@ -716,7 +767,8 @@ export async function* ingestEnvelopes<TEnvelope>(
             result,
             envelope,
             message,
-            reason: "admin-policy",
+            reason: addViolation?.reason ?? "admin-policy",
+            proofReason: addViolation?.proofReason,
           };
           continue;
         }
@@ -747,6 +799,8 @@ export async function* ingestEnvelopes<TEnvelope>(
             envelope,
             message,
             reason: violation.reason,
+            proofReason: violation.proofReason,
+            leafIndex: violation.leafIndex,
           };
           continue;
         }

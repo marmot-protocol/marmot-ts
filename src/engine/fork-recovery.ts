@@ -17,7 +17,11 @@ import {
 } from "ts-mls";
 
 import { marmotAuthService } from "../core/auth-service.js";
-import { validateCommitLegality } from "../core/components/integrity.js";
+import {
+  type CommitIntegrityViolation,
+  validateAddProposalAccountIdentityProofs,
+  validateCommitLegality,
+} from "../core/components/integrity.js";
 import {
   type AppWitness,
   type BranchCandidate,
@@ -72,7 +76,11 @@ export type ParentResolution =
       result: ProcessMessageResult & { kind: "newState" };
     }
   | { kind: "authentication_mismatch" }
-  | { kind: "rejected"; reason: "authorization_or_components" }
+  | {
+      kind: "rejected";
+      reason: "authorization_or_components";
+      violation?: CommitIntegrityViolation;
+    }
   | { kind: "deferred"; reason: "temporary_refusal" };
 
 /**
@@ -119,17 +127,27 @@ export async function resolveCandidateParent(params: {
   }
   const capturedCommit = capture.take();
   if (result.kind !== "newState" || result.actionTaken === "reject")
-    return { kind: "rejected", reason: "authorization_or_components" };
+    return {
+      kind: "rejected",
+      reason: "authorization_or_components",
+      violation: validateAddProposalAccountIdentityProofs(
+        capturedCommit.proposals,
+        ciphersuite.id,
+      ),
+    };
   try {
-    if (
-      validateCommitLegality({
-        parentState: parent,
-        resultingState: result.newState,
-        proposals: capturedCommit.proposals,
-        committerLeafIndex: capturedCommit.committerLeafIndex,
-      })
-    )
-      return { kind: "rejected", reason: "authorization_or_components" };
+    const violation = validateCommitLegality({
+      parentState: parent,
+      resultingState: result.newState,
+      proposals: capturedCommit.proposals,
+      committerLeafIndex: capturedCommit.committerLeafIndex,
+    });
+    if (violation)
+      return {
+        kind: "rejected",
+        reason: "authorization_or_components",
+        violation,
+      };
   } catch {
     return { kind: "deferred", reason: "temporary_refusal" };
   }

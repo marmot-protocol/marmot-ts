@@ -46,8 +46,14 @@ requires `0x8009`.
   payload does not decode for a known component are `rejected` with `component-integrity`
   before they are staged or applied (`validatePreApplyProposals`, exported from
   `@internet-privacy/marmot-ts/engine`).
-- `SkippedIngestResult.reason` gains `"unsupported-profile"`; exhaustive switches must handle
-  it.
+- Widened unions — an exhaustive `switch` (for example one with a `never` default) must handle
+  the new members:
+  - `SkippedIngestResult.reason` gains `"unsupported-profile"`.
+  - `RejectedIngestResult.reason` gains `"account-identity-proof"`.
+  - The exported `CommitIntegrityViolationReason` gains `"account-identity-proof"`.
+- `ingest()` can now yield `kind: "rejected"` for a standalone proposal (an invalid Add, or
+  an AppDataUpdate whose payload does not decode), not only for a commit. Do not assume a
+  `rejected` result carries a commit; inspect `message` if the distinction matters.
 - Stored groups outside the current profile load but refuse all traffic (this supersedes the
   earlier "load untouched" behavior).
 - The following 15 legacy runtime exports are removed: `ACCOUNT_IDENTITY_PROOF_EVENT_KIND`,

@@ -834,6 +834,12 @@ export class GroupSession<
       for (const reconciled of await this.#reconcile(mapped)) yield reconciled;
     }
 
+    // WR-01: a pool-replay rewind can select disband evidence with no
+    // `processed` result to carry it (every triggering envelope was refused).
+    // The engine still records the selection, so persist it from engine state
+    // exactly as `driveConvergence` does. Idempotent once the tombstone exists.
+    if (this.#engine.selectedDisbandEvidence)
+      await this.persistSelectedDisband(this.#engine.selectedDisbandEvidence);
     await this.save();
   }
 

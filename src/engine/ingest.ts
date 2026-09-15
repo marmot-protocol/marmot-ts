@@ -1003,8 +1003,22 @@ export async function* ingestEnvelopes<TEnvelope>(
         // `processed` (member-departure.md). The rewind's `invalidated`
         // retractions below are still reported — they are independent.
         if (!rep) {
-          // Every triggering candidate was refused; the rewind was carried by
-          // other material, so there is no envelope to report it on.
+          // WR-01: every triggering candidate was refused; the rewind was
+          // carried by other material, so there is no envelope to report it
+          // on. Surface the applied chain's notifications envelope-free, as
+          // the tree-fed rewind path (`#reconvergeFromTree`) does — otherwise
+          // they are ledger-recorded but never delivered. A selected terminal
+          // has no result to ride either; the engine records it
+          // (`selectedDisbandEvidence`) and the session layer realizes it from
+          // that state.
+          for (const group of groupWithdrawnNotificationsByCommit(
+            resolution.notifications ?? [],
+          ))
+            yield {
+              kind: "appliedNotifications",
+              commitDigest: group.commitDigest,
+              notifications: group.withdrawn,
+            };
         } else if (
           ctx.getState().groupActiveState.kind === "removedFromGroup"
         ) {

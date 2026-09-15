@@ -1293,6 +1293,10 @@ export class MarmotGroup<
     // (D-12). Idempotent: a no-op unless canonical state is the tombstone and
     // realization has not happened yet.
     await this.#realizeRemovalIfNeeded();
+    // WR-01: the same state-derived re-assert for a selected disband that
+    // reached no `processed` result (the session persisted it from engine
+    // state). Idempotent: a no-op unless a tombstone awaits notification.
+    await this.realizeDisbandIfNeeded();
 
     if (this.session.historyTree.size !== historySizeBefore)
       this.emit("historyChanged", this);

@@ -18,6 +18,7 @@ import {
   defaultProposalTypes,
   getCiphersuiteImpl,
   type CiphersuiteImpl,
+  selfRemoveProposalType,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
@@ -340,6 +341,60 @@ describe("unsupported-profile gates (D-11)", () => {
     expect((results[0] as { message?: unknown }).message).toBeUndefined();
     expect(engine.state.confirmationTag).toEqual(beforeTag);
     expect(Number(engine.state.groupContext.epoch)).toBe(beforeEpoch);
+  });
+
+  it("WR-06: direct engine ingest refuses up front — no peel, no sweep, and no auto-commit throw for a staged self_remove", async () => {
+    const { impl, neitherState } = await unsupportedProfileGroup();
+    const peeler = testPeeler(impl);
+    let peelCalls = 0;
+    const countingPeeler: GroupPeeler<NostrEvent> = {
+      ...peeler,
+      async peelGroupMessages(envelopes, state) {
+        peelCalls++;
+        return peeler.peelGroupMessages(envelopes, state);
+      },
+    };
+
+    // A persisted pending self_remove from the member (leaf 1) that this
+    // client (leaf 0) is the elected committer for. Before WR-06 the
+    // post-batch auto-commit called send(), which threw
+    // UnsupportedGroupProfileError out of the ingest generator.
+    const stateWithSelfRemove = {
+      ...neitherState,
+      unappliedProposals: {
+        staged: {
+          proposal: { proposalType: selfRemoveProposalType },
+          senderLeafIndex: 1,
+        },
+      },
+    };
+    const engine = new MarmotGroupEngine({
+      state: stateWithSelfRemove,
+      ciphersuite: impl,
+      peeler: countingPeeler,
+    });
+
+    const senderState = deserializeClientState(
+      serializeClientState(neitherState),
+    );
+    const { message } = await createApplicationMessage({
+      context: { cipherSuite: impl, authService: marmotAuthService },
+      state: senderState,
+      message: new TextEncoder().encode("hello"),
+    });
+    const envelope = await peeler.wrapGroupMessage(message, senderState);
+
+    const results = [];
+    for await (const r of engine.ingest([envelope])) results.push(r);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      kind: "skipped",
+      envelope,
+      reason: "unsupported-profile",
+    });
+    expect(peelCalls).toBe(0);
+    expect(engine.lifecycle).toBe("Stable");
   });
 
   it("control: a supported-profile engine still sends an application message and ingests normally", async () => {

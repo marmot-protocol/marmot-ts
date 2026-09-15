@@ -1546,6 +1546,30 @@ export class MarmotGroupEngine<TEnvelope> {
     options?: { maxRetries?: number },
   ): AsyncGenerator<DispositionedIngestResult<TEnvelope>> {
     await this.#disbandHydrated;
+    // WR-06 (D-11): the authoritative gate for direct engine callers (and
+    // `driveConvergence`). Refuse every envelope before the pool re-feed, the
+    // tree sweep, tree-fed re-convergence (whose witness gathering would peel
+    // and process these refused envelopes), and the self_remove auto-commit
+    // (whose send() would throw out of this generator). The same gate inside
+    // `ingestEnvelopes` stays as the pipeline-level backstop.
+    const profileSupport = this.profileSupport;
+    if (profileSupport.kind === "unsupported") {
+      for (const envelope of envelopes) {
+        this.#emitIngestEntry(envelope);
+        const skipped: IngestResult<TEnvelope> = {
+          kind: "skipped",
+          envelope,
+          reason: "unsupported-profile",
+        };
+        const dispositioned = {
+          ...skipped,
+          disposition: ingestResultDisposition(skipped),
+        };
+        this.#emitIngestOutcome(dispositioned);
+        yield dispositioned;
+      }
+      return;
+    }
     if (!mayApplyRetainedInbound(this.#lifecycle)) {
       this.#retainedPassInput.push(...envelopes);
       return;
@@ -2097,6 +2121,9 @@ export class MarmotGroupEngine<TEnvelope> {
     AutoCommitIngestResult<TEnvelope> | undefined
   > {
     if (!mayPrepareLocalCommit(this.#lifecycle)) return undefined;
+    // WR-06: send() refuses every intent for a group outside the current
+    // profile, so an elected auto-commit would only throw.
+    if (this.profileSupport.kind === "unsupported") return undefined;
 
     const state = this.#state;
     // WR-05: a staged invalid Add is pruned from every local commit, so it

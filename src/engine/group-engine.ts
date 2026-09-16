@@ -1737,7 +1737,20 @@ export class MarmotGroupEngine<TEnvelope> {
     // for any pending self_remove proposals, build and stage a self_remove-only
     // commit (B6, member-departure.md). It is surfaced as an `autoCommit` result;
     // the layer that owns the transport publishes it (publish-before-apply).
-    const auto = await this.#maybeAutoCommitSelfRemoves();
+    // WR-01: an auto-commit failure must never abort the public ingest()
+    // generator after results have already been yielded — the caller's
+    // trailing save() (`GroupSession.ingest`) would be skipped and the rest of
+    // the batch lost. The client layer already treats a failed auto-commit as
+    // retry-on-next-ingest, so log and continue.
+    let auto: AutoCommitIngestResult<TEnvelope> | undefined;
+    try {
+      auto = await this.#maybeAutoCommitSelfRemoves();
+    } catch (error) {
+      this.#log()(
+        "auto-commit of staged self_remove proposals failed: %o",
+        error,
+      );
+    }
     if (auto) {
       const dispositioned = {
         ...auto,
@@ -2215,6 +2228,11 @@ export class MarmotGroupEngine<TEnvelope> {
     // WR-06: send() refuses every intent for a group outside the current
     // profile, so an elected auto-commit would only throw.
     if (this.profileSupport.kind === "unsupported") return undefined;
+    // WR-01: send() also throws DisbandingError while a disband request is
+    // pending, and publishFailed() restores Stable while LEAVING the request
+    // pending — so without this, any inbound self_remove arriving after a
+    // failed disband publish throws out of the public ingest() generator.
+    if (this.#disbandRequest?.status === "pending") return undefined;
 
     const state = this.#state;
     // WR-05/CR-02: a staged inadmissible proposal is pruned from every local
@@ -2233,8 +2251,20 @@ export class MarmotGroupEngine<TEnvelope> {
     if (!unapplied.every((p) => isSelfRemoveProposal(p.proposal)))
       return undefined;
 
-    const groupData = getMarmotGroupView(state);
-    const adminPubkeys = groupData?.adminPubkeys ?? [];
+    // WR-01: read ONLY the admin policy, exactly as the inbound admin gate
+    // does (`#createAdminVerificationCallback`). `getMarmotGroupView` decodes
+    // every cosmetic component inside one try and returns null if ANY of them
+    // is malformed — which would compute `anyLeaverIsActiveAdmin` against an
+    // EMPTY admin set, letting this client elect itself to commit an ADMIN's
+    // self_remove. `member-departure.md` forbids that, and every peer's
+    // inbound gate refuses it.
+    let adminPubkeys: string[];
+    try {
+      adminPubkeys = getAdminPolicy(state.groupContext.extensions) ?? [];
+    } catch {
+      // A departure cannot be authorized without a readable admin policy.
+      return undefined;
+    }
 
     const leaverLeafIndices: number[] = [];
     let anyLeaverIsActiveAdmin = false;

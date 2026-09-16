@@ -1628,6 +1628,20 @@ export class MarmotGroupEngine<TEnvelope> {
   /**
    * Ingests transport envelopes and applies MLS messages to group state.
    *
+   * WR-04 — terminal facts after an envelope-free rewind: most results name
+   * their triggering envelope, but a rewind driven entirely by pool replay or
+   * by the persisted history tree has none. Such a rewind reports itself as
+   * `appliedNotifications` results, which now carry `selectedTerminal` and
+   * `removedFromGroup` so a consumer building its own transport can see a
+   * disband selection or its own removal without reaching into engine state.
+   *
+   * A rewind that produced NO notifications yields no result at all, so those
+   * two facts have nothing to ride on. Consumers that must not miss them —
+   * rather than merely observe them — should re-read
+   * {@link selectedDisbandEvidence} and `state.groupActiveState` after fully
+   * draining this generator. The client layer (`MarmotGroup`,
+   * `GroupSession`) already does exactly that.
+   *
    * @yields DispositionedIngestResult - processing result plus inbound
    *   {@link Disposition}.
    */
@@ -3115,6 +3129,10 @@ export class MarmotGroupEngine<TEnvelope> {
       // Tree-fed adoption has no transport envelope to carry notifications on.
       // Surface each commit's already-recorded notifications as its own named
       // result before any later withdrawal can retract the same identity.
+      // WR-04: a tree-fed switch never has a triggering envelope, so these are
+      // the only results it can carry the rewind's terminal facts on.
+      const removedFromGroup =
+        this.#state.groupActiveState.kind === "removedFromGroup";
       for (const group of groupWithdrawnNotificationsByCommit(
         applied.notifications ?? [],
       )) {
@@ -3122,6 +3140,8 @@ export class MarmotGroupEngine<TEnvelope> {
           kind: "appliedNotifications",
           commitDigest: group.commitDigest,
           notifications: group.withdrawn,
+          selectedTerminal: applied.selectedTerminal,
+          removedFromGroup,
         };
       }
       // D-11: withdrawn state notifications are yielded BEFORE the

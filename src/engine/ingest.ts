@@ -1009,10 +1009,18 @@ export async function* ingestEnvelopes<TEnvelope>(
           // carried by other material, so there is no envelope to report it
           // on. Surface the applied chain's notifications envelope-free, as
           // the tree-fed rewind path (`#reconvergeFromTree`) does — otherwise
-          // they are ledger-recorded but never delivered. A selected terminal
-          // has no result to ride either; the engine records it
-          // (`selectedDisbandEvidence`) and the session layer realizes it from
-          // that state.
+          // they are ledger-recorded but never delivered.
+          //
+          // WR-04: the two terminal facts the sibling branches below carry —
+          // a selected disband and a rewind onto our own removal tombstone —
+          // ride along on each result, so a direct `./engine` consumer sees
+          // them without having to re-read engine state. The client layer
+          // still realizes both from state (`selectedDisbandEvidence`,
+          // `groupActiveState`), which is what covers the case where the
+          // rewind produced no notifications at all and therefore yields
+          // nothing here.
+          const removedFromGroup =
+            ctx.getState().groupActiveState.kind === "removedFromGroup";
           for (const group of groupWithdrawnNotificationsByCommit(
             resolution.notifications ?? [],
           ))
@@ -1020,6 +1028,8 @@ export async function* ingestEnvelopes<TEnvelope>(
               kind: "appliedNotifications",
               commitDigest: group.commitDigest,
               notifications: group.withdrawn,
+              selectedTerminal: resolution.selectedTerminal,
+              removedFromGroup,
             };
         } else if (
           ctx.getState().groupActiveState.kind === "removedFromGroup"

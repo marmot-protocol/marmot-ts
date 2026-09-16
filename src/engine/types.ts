@@ -352,6 +352,21 @@ export type AppliedNotificationsIngestResult = {
   kind: "appliedNotifications";
   commitDigest: Uint8Array;
   notifications: StateNotification[];
+  /**
+   * WR-04: authenticated terminal evidence, when the envelope-free rewind
+   * that produced this result selected a disband. The envelope-carrying
+   * rewind branches report this on {@link ProcessedIngestResult}; without it
+   * here, a direct `./engine` consumer building its own transport saw a
+   * rewind onto a disband as nothing but a notification stream.
+   */
+  selectedTerminal?: DisbandCandidateEvidence;
+  /**
+   * WR-04: true when the envelope-free rewind adopted a tip on which this
+   * client is the `removedFromGroup` tombstone. The envelope-carrying path
+   * reports that as {@link RemovedIngestResult}, which has no envelope-free
+   * counterpart.
+   */
+  removedFromGroup?: boolean;
 };
 
 /** A previously withdrawn branch commit has become canonical again. */

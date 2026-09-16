@@ -91,6 +91,21 @@ requires `0x8009`.
   by every outbound send on a group outside the current profile.
 - Optional `proofReason` / `leafIndex` fields on `CommitIntegrityViolation` and
   `RejectedIngestResult`, populated for `reason: "account-identity-proof"`.
+- Optional `selectedTerminal` / `removedFromGroup` fields on
+  `AppliedNotificationsIngestResult`, populated by the envelope-free rewind paths (pool
+  replay and tree-fed re-convergence) so a direct `@internet-privacy/marmot-ts/engine`
+  consumer can observe a disband selection or its own removal without re-reading engine
+  state. A rewind that produced no notifications still yields no result at all, so a
+  consumer that must not miss those facts should re-read `selectedDisbandEvidence` and
+  `state.groupActiveState` after draining `ingest()`.
+- `validatePreApplyProposals` takes an optional third argument — the parent epoch's required
+  app-component ids, via the new `requiredComponentIdsOf` — and now enforces the rest of
+  MDK's AppDataUpdate batch rules: at most one operation per component id, `app_components`
+  (`0x1`) is never removable, Remove legality is measured against the resulting required
+  list, and any update to `0x2` (safe_aad) or `0x8009` (leaf-only account identity proof) is
+  refused. `createAdminCommitPolicyCallback` takes a matching optional `requiredIds`. Both
+  default to the previous behavior when omitted, and the same gate now also runs on the
+  outbound commit and proposal seams, where `send()` throws `CommitLegalityError`.
 
 See "Migrating to account identity proof v2 (0x8009)" in `docs/client/best-practices.md` for
 the republish/purge path and the rest of the migration story, including how to find and

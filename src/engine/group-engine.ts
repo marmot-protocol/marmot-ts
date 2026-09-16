@@ -945,6 +945,23 @@ export class MarmotGroupEngine<TEnvelope> {
           );
         }
 
+        // CR-02: the rest of the pre-apply gate — AppDataUpdate payloads and
+        // the component ids no proposal may write. Previously only Adds were
+        // checked here, so a locally built AppDataUpdate proposal whose
+        // payload does not decode was wrapped and published, then bundled by
+        // reference into the next commit, which every peer then refused.
+        // `requiredIds` is deliberately omitted: a standalone proposal is
+        // judged on its own, exactly as MDK's
+        // `validate_standalone_app_data_update` does, so a Remove that is only
+        // legal alongside an un-require in the same commit is not refused here.
+        // The Add branch above runs first, so an invalid Add still throws
+        // AccountIdentityProofError — the documented error for this seam.
+        const proposalViolation = validatePreApplyProposals(
+          [intent.proposal],
+          this.ciphersuite.id,
+        );
+        if (proposalViolation) throw new CommitLegalityError(proposalViolation);
+
         const { message, newState } = await createProposal({
           context: {
             cipherSuite: this.ciphersuite,
@@ -1207,13 +1224,17 @@ export class MarmotGroupEngine<TEnvelope> {
       getCredentialFromLeafIndex(state.ratchetTree, actorLeaf),
     );
 
-    // WR-05: `createCommit` bundles every unapplied proposal by reference, so
-    // refusing the commit over a staged invalid Add would block every local
-    // commit (including selfUpdate and the self_remove auto-commit) for the
-    // rest of the epoch. Such a proposal can only be staged by an older build
-    // or a rewind onto a pre-upgrade snapshot; it is dropped from the commit
-    // instead, mirroring MDK's discard of invalid standalone proposals.
-    const commitState = withoutInvalidStagedAdds(state, this.ciphersuite.id);
+    // WR-05/CR-02: `createCommit` bundles every unapplied proposal by
+    // reference, so refusing the commit over a staged inadmissible proposal
+    // would block every local commit (including selfUpdate and the
+    // self_remove auto-commit) for the rest of the epoch. Such a proposal can
+    // only be staged by an older build or a rewind onto a pre-upgrade
+    // snapshot; it is dropped from the commit instead, mirroring MDK's
+    // discard of invalid standalone proposals.
+    const commitState = withoutInadmissibleStagedProposals(
+      state,
+      this.ciphersuite.id,
+    );
     const referenced: ProposalWithSender[] = Object.values(
       commitState.unappliedProposals,
     );
@@ -1249,6 +1270,23 @@ export class MarmotGroupEngine<TEnvelope> {
         senderLeafIndex: Number(actorLeaf),
       });
     }
+
+    // CR-02: the SAME pre-apply payload gate every inbound seam runs, on the
+    // exact proposal union `createCommit` will bundle (staged references +
+    // by-value + the D-05 splice). Without it the send path published — and,
+    // via confirmPublished, locally applied and recorded into retained history
+    // and the fork tree — commits that its own ingest and every conformant
+    // peer reject: permanent divergence with no error surfaced. That is the
+    // mdk#707 "a guard that exists on one seam only" class this phase closes
+    // inbound. Staged proposals were pruned above, so a violation here is
+    // attributable either to what this call supplied or to a batch-level rule
+    // (for example a duplicate component id) that pruning must not decide.
+    const payloadViolation = validatePreApplyProposals(
+      committedWithSenders,
+      this.ciphersuite.id,
+      requiredComponentIdsOf(state),
+    );
+    if (payloadViolation) throw new CommitLegalityError(payloadViolation);
 
     const authorization = decideCommitAuthorization({
       actorPubkey,
@@ -2129,10 +2167,12 @@ export class MarmotGroupEngine<TEnvelope> {
     if (this.profileSupport.kind === "unsupported") return undefined;
 
     const state = this.#state;
-    // WR-05: a staged invalid Add is pruned from every local commit, so it
-    // must not turn an otherwise self_remove-only set into a "mixed" one.
+    // WR-05/CR-02: a staged inadmissible proposal is pruned from every local
+    // commit, so it must not turn an otherwise self_remove-only set into a
+    // "mixed" one.
     const unapplied = Object.values(
-      withoutInvalidStagedAdds(state, this.ciphersuite.id).unappliedProposals,
+      withoutInadmissibleStagedProposals(state, this.ciphersuite.id)
+        .unappliedProposals,
     );
     if (unapplied.length === 0) return undefined;
 
@@ -3310,18 +3350,32 @@ export class MarmotGroupEngine<TEnvelope> {
 }
 
 /**
- * WR-05: `state` with every staged Add proposal whose KeyPackage lacks a valid
- * `0x8009` proof removed from `unappliedProposals`, so `createCommit` never
- * bundles it by reference. Returns `state` itself when nothing is pruned.
+ * WR-05/CR-02: `state` with every staged proposal that would not pass
+ * pre-apply admission removed from `unappliedProposals`, so `createCommit`
+ * never bundles it by reference. Returns `state` itself when nothing is pruned.
+ *
+ * Covers both an Add whose KeyPackage lacks a valid `0x8009` proof and an
+ * `AppDataUpdate` whose payload does not decode (or that targets an id no
+ * commit may write). Such a proposal can only be staged by an older build or a
+ * rewind onto a pre-upgrade snapshot; refusing the commit over it would block
+ * every local commit — including `selfUpdate` and the `self_remove`
+ * auto-commit — for the rest of the epoch, so it is dropped instead, mirroring
+ * MDK's discard of invalid standalone proposals.
+ *
+ * Each staged proposal is validated ALONE and with no `requiredIds`, which is
+ * exactly MDK's standalone-admission semantics. Batch-level verdicts (a
+ * duplicate component id spanning two staged proposals, or a Remove of a
+ * still-required component) are deliberately NOT evaluated here — pruning on
+ * one would silently delete a proposal that is individually valid. Those are
+ * caught by the batch check in {@link MarmotGroupEngine.#prepareOutboundCommitProposals}.
  */
-function withoutInvalidStagedAdds(
+function withoutInadmissibleStagedProposals(
   state: ClientState,
   ciphersuiteId: number,
 ): ClientState {
   const entries = Object.entries(state.unappliedProposals);
   const admissible = entries.filter(
-    ([, staged]) =>
-      !validateAddProposalAccountIdentityProofs([staged], ciphersuiteId),
+    ([, staged]) => !validatePreApplyProposals([staged], ciphersuiteId),
   );
   if (admissible.length === entries.length) return state;
   return { ...state, unappliedProposals: Object.fromEntries(admissible) };

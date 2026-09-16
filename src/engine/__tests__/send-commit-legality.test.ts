@@ -625,13 +625,19 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
     expect(engine.lifecycle).toBe("Stable");
   });
   it("rejects a non-admin selfUpdate consuming its staged admin-only proposal by reference", async () => {
-    const { impl, memberEpoch1 } = await twoAdminGroup();
+    const { impl, adminPubkey, admin2Pubkey, memberEpoch1 } =
+      await twoAdminGroup();
     const engine = new MarmotGroupEngine({
       state: memberEpoch1,
       ciphersuite: impl,
       peeler: testPeeler(impl),
     });
 
+    // CR-02: the payload must DECODE — the send seam now runs the same
+    // pre-apply payload gate as inbound, so an undecodable admin-policy blob
+    // is refused at proposal creation. This row is about authorization, not
+    // payload validity, so it stages a well-formed admin-policy update exactly
+    // as the admin rows below do.
     const staged = await engine.send({
       kind: "proposal",
       proposal: {
@@ -639,7 +645,7 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
         appDataUpdate: {
           componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
           operation: "update",
-          update: new Uint8Array([0, 1]),
+          update: encodeAdminPolicyV1([adminPubkey, admin2Pubkey]),
         },
       },
     });

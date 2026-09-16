@@ -108,6 +108,7 @@ import { logger } from "../utils/debug.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
 import {
   createAdminCommitPolicyCallback,
+  requiredComponentIdsOf,
   validatePreApplyProposals,
   withCapturedProposals,
 } from "./admin-policy.js";
@@ -1925,6 +1926,7 @@ export class MarmotGroupEngine<TEnvelope> {
         const violation = validatePreApplyProposals(
           captured.proposals,
           this.ciphersuite.id,
+          requiredComponentIdsOf(state),
         );
         return {
           kind: "rejected",
@@ -3301,6 +3303,8 @@ export class MarmotGroupEngine<TEnvelope> {
       adminPubkeys: adminPubkeys ?? [],
       ciphersuiteId,
       onUnverifiableCommit: "retry",
+      // CR-01: removal legality is judged against this parent's required list.
+      requiredIds: requiredComponentIdsOf(state),
     });
   }
 }

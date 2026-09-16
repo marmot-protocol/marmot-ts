@@ -93,8 +93,15 @@ export interface AppDataUpdateOp {
  * adapter). This is the single adapter every seam uses so the proposal → op
  * mapping is never re-implemented seam-locally.
  *
- * Preserves commit order and does not deduplicate — a component id may legally
- * carry more than one `AppDataUpdate` op in a single commit.
+ * Preserves commit order and does not deduplicate. Note that a legal commit
+ * never carries more than one `AppDataUpdate` op for the same component id —
+ * `validatePreApplyProposals` (`src/engine/admin-policy.ts`) rejects a
+ * duplicate id before apply, matching MDK's `seen` set in
+ * `validate_app_data_update_batch_against`. This adapter stays
+ * duplicate-tolerant anyway because it is a pure mapping run on the
+ * already-admitted batch, and because rule 3 of
+ * {@link validateAppComponentIntegrity} must stay well-defined even for a
+ * batch that reached it without pre-apply admission.
  */
 export function collectAppDataUpdateOps(
   proposals: readonly Proposal[],

@@ -54,6 +54,7 @@ import {
   serializeClientState,
 } from "../core/client-state.js";
 import {
+  requiredComponentIdsOf,
   validatePreApplyProposals,
   withCapturedProposals,
 } from "./admin-policy.js";
@@ -293,6 +294,7 @@ export async function resolveCandidateParent(params: {
       violation: validatePreApplyProposals(
         capturedCommit.proposals,
         ciphersuite.id,
+        requiredComponentIdsOf(parent),
       ),
     };
   try {

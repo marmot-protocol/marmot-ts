@@ -31,6 +31,7 @@ import { getCredentialPubkey } from "../core/credential.js";
 import { type DeferredReason, deferredReasons } from "../core/inbound.js";
 import { classifyLateCommit } from "../core/retained-history.js";
 import {
+  requiredComponentIdsOf,
   validatePreApplyProposals,
   withCapturedProposals,
 } from "./admin-policy.js";
@@ -795,6 +796,7 @@ export async function* ingestEnvelopes<TEnvelope>(
           const addViolation = validatePreApplyProposals(
             capturedCommit.proposals,
             ctx.ciphersuite.id,
+            requiredComponentIdsOf(parentForAuth),
           );
           log(
             "commit envelope:%s rejected by admin policy reason:%s",

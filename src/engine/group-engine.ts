@@ -3075,6 +3075,16 @@ export class MarmotGroupEngine<TEnvelope> {
           resolution: Extract<ForkResolution, { outcome: "recovered" }>;
         }
       | undefined;
+    // WR-03: every node on the current tip's own path. `buildTreeBranchSet`
+    // picks `rootTag` as the SHALLOWEST fork point across all competing tips,
+    // so with two or more competing tips the segment `rootTag → T` for a tip
+    // `T` whose own LCA with the current tip is deeper passes through nodes
+    // that are ALSO on the current tip's path. `#treeResolution` reports the
+    // last valid node of a partly-illegal branch, which can be one of those
+    // shared ancestors — and `winner.id === currentTipTag` below does not
+    // catch it, because an ancestor is not the tip. Admitting it would rewind
+    // canonical state BACKWARDS along our own path: a switch no peer makes.
+    const onCurrentPath = new Set(this.#tree.path(currentTipTag) ?? []);
     while (selected === undefined) {
       const winner = selectCanonicalBranch(
         Number(this.#state.groupContext.epoch),
@@ -3089,7 +3099,8 @@ export class MarmotGroupEngine<TEnvelope> {
       else {
         remaining = remaining.filter((c) => c.id !== winner.id);
         const prefix =
-          outcome.lastValidTag === undefined
+          outcome.lastValidTag === undefined ||
+          onCurrentPath.has(outcome.lastValidTag)
             ? undefined
             : this.#treePrefixCandidate(winner, outcome.lastValidTag);
         if (prefix && !remaining.some((c) => c.id === prefix.id))

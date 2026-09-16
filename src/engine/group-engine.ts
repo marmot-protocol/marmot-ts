@@ -709,6 +709,16 @@ export class MarmotGroupEngine<TEnvelope> {
   /** Persist irreversible intent, then prepare its exact candidate against this epoch. */
   async requestDisband(): Promise<SendResult<TEnvelope> | undefined> {
     await this.#disbandHydrated;
+    // CR-04/D-11: refuse BEFORE any durable side effect — this method persists
+    // an irreversible pending disband request before it prepares a candidate,
+    // so checking only at #sendInner would leave a group outside the current
+    // profile with a persisted intent it can never publish.
+    //
+    // Only the profile half: the removedFromGroup case is answered a few lines
+    // below by durably failing the request (`NoLongerMember`) and returning
+    // `undefined`, which is this seam's deliberate disposition and must not be
+    // converted into a throw.
+    this.#assertOutboundProfileSupported();
     if (!this.#lifecycleStore)
       throw new Error(
         "A durable lifecycleStore is required to request disbanding",
@@ -804,6 +814,9 @@ export class MarmotGroupEngine<TEnvelope> {
   /** Atomically enables lifecycle-v1 for a legacy group when every leaf supports it. */
   async enableGroupDisbanding(): Promise<SendResult<TEnvelope> | undefined> {
     await this.#disbandHydrated;
+    // CR-04: this seam had NO removed-from-group refusal at all, and no
+    // profile refusal, because it reaches #sendInner directly.
+    this.#assertOutboundIntentAllowed();
     const required =
       getAppComponents(this.#state.groupContext.extensions) ?? [];
     const lifecycle = getGroupLifecycle(this.#state.groupContext.extensions);
@@ -848,29 +861,60 @@ export class MarmotGroupEngine<TEnvelope> {
     });
   }
 
-  /** Executes a local send intent and returns the wrapped transport envelope. */
-  async send(intent: SendIntent): Promise<SendResult<TEnvelope>> {
-    await this.#disbandHydrated;
-    if (this.#disbandRequest?.status === "pending") throw new DisbandingError();
-    // D-14: once canonical state is the removedFromGroup tombstone, no
-    // outbound intent may proceed — checked before the audit `send_entry`
-    // emit and before #sendInner, mirroring the `mayPrepareLocalCommit` throw
-    // style below. Canonical state is serialized/persisted, so this also
-    // blocks a fresh `send()` on a freshly-constructed engine after a
-    // restart, not just within the process that observed the removal.
+  /**
+   * CR-04/D-11: the profile refusal, in ONE place.
+   *
+   * Every outbound intent kind is refused for a group outside the current
+   * account identity proof profile — this client never validated that group's
+   * members under the current profile, so nothing is sent.
+   *
+   * Split out from {@link #assertOutboundIntentAllowed} because
+   * `requestDisband` needs THIS half without the membership half: it answers a
+   * removed-from-group state by durably failing the irreversible request
+   * (`NoLongerMember`) and returning `undefined`, which is a deliberately
+   * different disposition from throwing. Sharing one method for both policies
+   * would have silently overridden that.
+   */
+  #assertOutboundProfileSupported(): void {
+    const profileSupport = this.profileSupport;
+    if (profileSupport.kind === "unsupported")
+      throw new UnsupportedGroupProfileError(profileSupport.proofReason);
+  }
+
+  /**
+   * CR-04: the two universal outbound refusals for seams that throw on both.
+   *
+   * D-14: once canonical state is the removedFromGroup tombstone, no outbound
+   * intent may proceed. Canonical state is serialized/persisted, so this also
+   * blocks a send on a freshly-constructed engine after a restart, not just
+   * within the process that observed the removal.
+   *
+   * D-11: see {@link #assertOutboundProfileSupported}.
+   *
+   * Called from `send()` (before any audit emit), from the top of
+   * `#sendInner` (the path EVERY outbound intent actually funnels through),
+   * and from `enableGroupDisbanding`, which had neither refusal. Previously
+   * both lived inline in `send()` alone, which `requestDisband` and
+   * `enableGroupDisbanding` bypass by calling `#sendInner` directly — so a
+   * legacy or mixed-profile group could still build, wrap and publish a
+   * disband commit.
+   */
+  #assertOutboundIntentAllowed(): void {
     if (this.#state.groupActiveState.kind === "removedFromGroup") {
       throw new Error(
         "Cannot send: this client has been removed from the group.",
       );
     }
-    // D-11: every outbound intent kind is refused, before any audit emit, for
-    // a group outside the current account identity proof profile — this
-    // client never validated that group's members under the current profile,
-    // so nothing is sent. `send()` is the single choke point for every intent
-    // kind; no per-case checks are added in `#sendInner`.
-    const profileSupport = this.profileSupport;
-    if (profileSupport.kind === "unsupported")
-      throw new UnsupportedGroupProfileError(profileSupport.proofReason);
+    this.#assertOutboundProfileSupported();
+  }
+
+  /** Executes a local send intent and returns the wrapped transport envelope. */
+  async send(intent: SendIntent): Promise<SendResult<TEnvelope>> {
+    await this.#disbandHydrated;
+    if (this.#disbandRequest?.status === "pending") throw new DisbandingError();
+    // Refused before the audit `send_entry` emit, so a refused intent leaves
+    // no trace of having been attempted.
+    this.#assertOutboundIntentAllowed();
     const intentKind = auditSendIntentKind(intent);
     this.#emitAudit({ type: "send_entry", intent_kind: intentKind });
     try {
@@ -900,6 +944,12 @@ export class MarmotGroupEngine<TEnvelope> {
   }
 
   async #sendInner(intent: SendIntent): Promise<SendResult<TEnvelope>> {
+    // CR-04: every outbound intent funnels through here — `send()`,
+    // `requestDisband()` and `enableGroupDisbanding()` alike — so this is the
+    // one place that can honestly claim to gate them all. `send()` also calls
+    // this before its audit emit; the repeat is a cheap pure check, not a
+    // second copy of the policy.
+    this.#assertOutboundIntentAllowed();
     switch (intent.kind) {
       case "applicationMessage": {
         const { newState, message } = await createApplicationMessage({

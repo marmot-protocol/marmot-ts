@@ -1075,19 +1075,24 @@ export class MarmotGroup<
       if (result.kind === "removed") await this.#realizeRemovalIfNeeded();
     }
     await this.realizeDisbandIfNeeded();
-    if (
-      this.lifecycle === groupLifecycleStates.stable &&
-      (await this.session.disbandRequest())?.status === "pending"
-    )
-      await this.disband();
+    // CR-04: routed through the single resume seam rather than repeating its
+    // predicate, so the profile gate (D-12) and the already-disbanded check
+    // cannot be present on one resume path and missing on the other.
+    await this.resumePendingDisband();
     if (resumed.length === 0) await this.#drainOutbound();
   }
 
-  /** Resumes a durable terminal intent after hydration when preparation is eligible. */
+  /**
+   * Resumes a durable terminal intent after hydration when preparation is
+   * eligible. Also the single seam `#settleAndDrive` uses to resume a pending
+   * request mid-session, so both resume paths share one predicate.
+   */
   async resumePendingDisband(): Promise<void> {
-    // D-12: nothing is published automatically for a group outside the
-    // current account identity proof profile — `disband()` would call
-    // `session`/`engine.send`, which throws `UnsupportedGroupProfileError`.
+    // D-12: nothing is published automatically for a group outside the current
+    // account identity proof profile. `MarmotGroupEngine.requestDisband` now
+    // refuses such a group itself (CR-04), before it persists or prepares
+    // anything; this early return keeps the refusal from surfacing to callers
+    // as a `rejected` DisbandResult for work they never asked for.
     if (this.profileSupport.kind === "unsupported") return;
     if (
       this.status !== "disbanded" &&

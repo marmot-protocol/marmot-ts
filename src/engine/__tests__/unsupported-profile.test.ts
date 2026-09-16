@@ -397,6 +397,52 @@ describe("unsupported-profile gates (D-11)", () => {
     expect(engine.lifecycle).toBe("Stable");
   });
 
+  it("CR-04: refuses requestDisband before it persists any irreversible intent", async () => {
+    const { impl, neitherState } = await unsupportedProfileGroup();
+    const audit = new MemoryAuditSink();
+    // No lifecycleStore: the profile refusal must fire BEFORE the
+    // "durable lifecycleStore is required" check and before any persistence,
+    // so a refused group is never left holding an unpublishable intent.
+    const engine = new MarmotGroupEngine({
+      state: neitherState,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+      audit,
+      auditContext: { engineId: "test-engine" },
+    });
+    const beforeTag = engine.state.confirmationTag;
+
+    await expect(engine.requestDisband()).rejects.toMatchObject({
+      name: "UnsupportedGroupProfileError",
+      reason: "unsupported-profile",
+      proofReason: "missing-requirement",
+    } satisfies Partial<UnsupportedGroupProfileError>);
+
+    expect(await engine.disbandRequest()).toBeUndefined();
+    expect(sendEntryCount(audit)).toBe(0);
+    expect(engine.state.confirmationTag).toEqual(beforeTag);
+    expect(engine.lifecycle).toBe("Stable");
+  });
+
+  it("CR-04: refuses enableGroupDisbanding, which reaches #sendInner directly", async () => {
+    const { impl, neitherState } = await unsupportedProfileGroup();
+    const engine = new MarmotGroupEngine({
+      state: neitherState,
+      ciphersuite: impl,
+      peeler: testPeeler(impl),
+    });
+    const beforeTag = engine.state.confirmationTag;
+
+    await expect(engine.enableGroupDisbanding()).rejects.toMatchObject({
+      name: "UnsupportedGroupProfileError",
+      reason: "unsupported-profile",
+      proofReason: "missing-requirement",
+    } satisfies Partial<UnsupportedGroupProfileError>);
+
+    expect(engine.state.confirmationTag).toEqual(beforeTag);
+    expect(engine.lifecycle).toBe("Stable");
+  });
+
   it("control: a supported-profile engine still sends an application message and ingests normally", async () => {
     const { impl, state } = await supportedGroup();
     const peeler = testPeeler(impl);

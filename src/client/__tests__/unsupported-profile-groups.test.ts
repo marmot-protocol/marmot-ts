@@ -218,6 +218,23 @@ describe("stored groups outside the account identity proof profile (D-11, D-12)"
     expect(mockNetwork.events.length).toBe(beforeEvents);
   });
 
+  it("CR-04: rejects disband() and enableDisbanding() on an unsupported group, publishing nothing", async () => {
+    // Both reach the engine through `#sendInner`, not `send()`, so before
+    // CR-04 they built, wrapped and published a real commit on a group D-11
+    // says must refuse all traffic.
+    await client.groups.loadAll();
+    const neither = await client.groups.get(neitherId);
+    const beforeEvents = mockNetwork.events.length;
+
+    expect(await neither.disband()).toMatchObject({ kind: "rejected" });
+    expect(await neither.enableDisbanding()).toMatchObject({
+      kind: "rejected",
+    });
+
+    expect(mockNetwork.events.length).toBe(beforeEvents);
+    expect(neither.status).not.toBe("disbanded");
+  });
+
   it("yields a skipped unsupported-profile result (stale disposition) for an inbound event on an unsupported group", async () => {
     await client.groups.loadAll();
     const mixed = await client.groups.get(mixedId);

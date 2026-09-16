@@ -16,11 +16,13 @@
  */
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
+  type ClientState,
   createCommit,
   defaultProposalTypes,
   encode,
   mlsMessageEncoder,
   nodeTypes,
+  type Proposal,
   processMessage,
 } from "ts-mls";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -92,6 +94,213 @@ function lowerTipDigestTag(
   return [...tags].sort((a, b) =>
     digestOf(a) < digestOf(b) ? -1 : digestOf(a) > digestOf(b) ? 1 : 0,
   )[0]!;
+}
+
+/** How many fresh fixtures to try before giving up on a digest ordering. */
+const ORDERING_ATTEMPTS = 32;
+
+/**
+ * Two competing tips: the engine's own one-deep branch, and `sib1 -> sib2`
+ * where `sib2` is made illegal by `sib2Proposals`. `sib1` is therefore the
+ * illegal branch's legal prefix, and ties the own branch at depth 1.
+ */
+async function twoTipFixture(
+  sib2Proposals: (parent: ClientState) => Proposal[],
+) {
+  const { impl, ctx, adminPubkey, admin2Epoch1, adminEpoch1 } =
+    await seamGroup();
+  const engine = new MarmotGroupEngine({
+    state: adminEpoch1,
+    ciphersuite: impl,
+    peeler: testPeeler(impl),
+  });
+  const rootTag = bytesToHex(adminEpoch1.confirmationTag);
+
+  const sent = await engine.send({
+    kind: "commit",
+    actorPubkey: adminPubkey,
+    extraProposals: [],
+  });
+  if (sent.kind !== "groupEvolution")
+    throw new Error("expected groupEvolution");
+  engine.confirmPublished(sent.pending);
+  const ownTag = bytesToHex(engine.state.confirmationTag);
+
+  const sib1Commit = await createCommit({
+    context: ctx,
+    state: admin2Epoch1,
+    wireAsPublicMessage: true,
+    ratchetTreeExtension: true,
+    extraProposals: [],
+  });
+  const sib2Commit = await createCommit({
+    context: ctx,
+    state: sib1Commit.newState,
+    wireAsPublicMessage: true,
+    ratchetTreeExtension: true,
+    extraProposals: sib2Proposals(sib1Commit.newState),
+  });
+
+  const [sib1State, sib2State] = await buildAdmin1PerspectiveChain(
+    ctx,
+    snapshot(adminEpoch1),
+    [sib1Commit.commit, sib2Commit.commit],
+  );
+  const sib1Tag = bytesToHex(sib1State!.confirmationTag);
+  engine.history.recordEdge(
+    edgeFromReplay(rootTag, sib1Commit.commit, sib1State!),
+  );
+  engine.history.recordEdge(
+    edgeFromReplay(sib1Tag, sib2Commit.commit, sib2State!),
+  );
+
+  return {
+    impl,
+    engine,
+    ownTag,
+    sib1Tag,
+    sib1State: sib1State!,
+    sib2State: sib2State!,
+    sib2Commit,
+  };
+}
+
+/**
+ * WR-07: {@link twoTipFixture}, rebuilt until `sib1`'s edge digest sorts BELOW
+ * the own tip's.
+ *
+ * The structural tiebreak between two equal-depth, witness-free candidates is
+ * the lower tip digest, and the fixture's digests derive from freshly
+ * generated key material — so which tip wins varies per run. Asserting the
+ * tiebreak outcome recomputed from those same digests made the WR-02 rows
+ * pass on every run where `ownTag` happened to sort lower, because that
+ * expectation coincides exactly with the PRE-fix behaviour (stay on our own
+ * tip). Forcing the ordering makes the expected winner `sib1`, which the
+ * pre-fix engine never adopts, so the row fails deterministically without the
+ * legal-prefix candidate.
+ */
+async function twoTipFixtureWithLowerSibling(
+  sib2Proposals: (parent: ClientState) => Proposal[],
+) {
+  for (let attempt = 0; attempt < ORDERING_ATTEMPTS; attempt++) {
+    const fixture = await twoTipFixture(sib2Proposals);
+    if (
+      lowerTipDigestTag(fixture.engine, fixture.ownTag, fixture.sib1Tag) ===
+      fixture.sib1Tag
+    )
+      return fixture;
+  }
+  throw new Error(
+    `no fixture in ${ORDERING_ATTEMPTS} attempts put the sibling tip digest below the own tip digest`,
+  );
+}
+
+/**
+ * Three tips: the one-deep own branch, legal branch L (`sib1 -> legal2`), and
+ * illegal branch I (`sib1 -> alt2 -> illegal3`). I is deepest so it scores
+ * highest, but only its legal prefix `alt2` is adoptable — and that ties L's
+ * tip `legal2` at depth 2.
+ */
+async function threeTipFixture() {
+  const { impl, ctx, adminPubkey, admin2Epoch1, adminEpoch1 } =
+    await seamGroup();
+  const engine = new MarmotGroupEngine({
+    state: adminEpoch1,
+    ciphersuite: impl,
+    peeler: testPeeler(impl),
+  });
+  const rootTag = bytesToHex(adminEpoch1.confirmationTag);
+
+  const sent = await engine.send({
+    kind: "commit",
+    actorPubkey: adminPubkey,
+    extraProposals: [],
+  });
+  if (sent.kind !== "groupEvolution")
+    throw new Error("expected groupEvolution");
+  engine.confirmPublished(sent.pending);
+
+  const sib1Commit = await createCommit({
+    context: ctx,
+    state: admin2Epoch1,
+    wireAsPublicMessage: true,
+    ratchetTreeExtension: true,
+    extraProposals: [],
+  });
+  const legal2Commit = await createCommit({
+    context: ctx,
+    state: snapshot(sib1Commit.newState),
+    wireAsPublicMessage: true,
+    ratchetTreeExtension: true,
+    extraProposals: [],
+  });
+  const alt2Commit = await createCommit({
+    context: ctx,
+    state: snapshot(sib1Commit.newState),
+    wireAsPublicMessage: true,
+    ratchetTreeExtension: true,
+    extraProposals: [],
+  });
+  const illegal3Commit = await createCommit({
+    context: ctx,
+    state: alt2Commit.newState,
+    wireAsPublicMessage: true,
+    ratchetTreeExtension: true,
+    extraProposals: [dropAccountIdentityProofRequirement(alt2Commit.newState)],
+  });
+
+  const [sib1State, legal2State] = await buildAdmin1PerspectiveChain(
+    ctx,
+    snapshot(adminEpoch1),
+    [sib1Commit.commit, legal2Commit.commit],
+  );
+  const [, alt2State, illegal3State] = await buildAdmin1PerspectiveChain(
+    ctx,
+    snapshot(adminEpoch1),
+    [sib1Commit.commit, alt2Commit.commit, illegal3Commit.commit],
+  );
+  const sib1Tag = bytesToHex(sib1State!.confirmationTag);
+  const alt2Tag = bytesToHex(alt2State!.confirmationTag);
+  const legal2Tag = bytesToHex(legal2State!.confirmationTag);
+  engine.history.recordEdge(
+    edgeFromReplay(rootTag, sib1Commit.commit, sib1State!),
+  );
+  engine.history.recordEdge(
+    edgeFromReplay(sib1Tag, legal2Commit.commit, legal2State!),
+  );
+  engine.history.recordEdge(
+    edgeFromReplay(sib1Tag, alt2Commit.commit, alt2State!),
+  );
+  engine.history.recordEdge(
+    edgeFromReplay(alt2Tag, illegal3Commit.commit, illegal3State!),
+  );
+
+  return {
+    engine,
+    legal2Tag,
+    alt2Tag,
+    illegal3State: illegal3State!,
+  };
+}
+
+/**
+ * WR-07: {@link threeTipFixture}, rebuilt until branch I's legal prefix
+ * (`alt2`) sorts below branch L's tip (`legal2`). The expected winner is then
+ * `alt2`, which the pre-fix engine never scores at all — it would adopt
+ * `legal2` as the only depth-2 candidate.
+ */
+async function threeTipFixtureWithLowerPrefix() {
+  for (let attempt = 0; attempt < ORDERING_ATTEMPTS; attempt++) {
+    const fixture = await threeTipFixture();
+    if (
+      lowerTipDigestTag(fixture.engine, fixture.legal2Tag, fixture.alt2Tag) ===
+      fixture.alt2Tag
+    )
+      return fixture;
+  }
+  throw new Error(
+    `no fixture in ${ORDERING_ATTEMPTS} attempts put the legal prefix digest below the rival tip digest`,
+  );
 }
 
 /**
@@ -252,70 +461,27 @@ describe("GRP-02 seam parity: commit that drops the 0x8009 requirement (D-04)", 
   });
 
   it("tree-fed: abandons the switch, tip unchanged", async () => {
-    const { impl, ctx, adminPubkey, admin2Epoch1, adminEpoch1 } =
-      await seamGroup();
-    const engine = new MarmotGroupEngine({
-      state: adminEpoch1,
-      ciphersuite: impl,
-      peeler: testPeeler(impl),
-    });
-    const rootTag = bytesToHex(adminEpoch1.confirmationTag);
-
-    const sent = await engine.send({
-      kind: "commit",
-      actorPubkey: adminPubkey,
-      extraProposals: [],
-    });
-    if (sent.kind !== "groupEvolution")
-      throw new Error("expected groupEvolution");
-    engine.confirmPublished(sent.pending);
-    const ownTag = bytesToHex(engine.state.confirmationTag);
-
-    const sib1Commit = await createCommit({
-      context: ctx,
-      state: admin2Epoch1,
-      wireAsPublicMessage: true,
-      ratchetTreeExtension: true,
-      extraProposals: [],
-    });
-    const sib2Commit = await createCommit({
-      context: ctx,
-      state: sib1Commit.newState,
-      wireAsPublicMessage: true,
-      ratchetTreeExtension: true,
-      extraProposals: [
-        dropAccountIdentityProofRequirement(sib1Commit.newState),
-      ],
-    });
-
-    const [sib1State, sib2State] = await buildAdmin1PerspectiveChain(
-      ctx,
-      snapshot(adminEpoch1),
-      [sib1Commit.commit, sib2Commit.commit],
-    );
-    const sib1Tag = bytesToHex(sib1State!.confirmationTag);
-    engine.history.recordEdge(
-      edgeFromReplay(rootTag, sib1Commit.commit, sib1State!),
-    );
-    engine.history.recordEdge(
-      edgeFromReplay(sib1Tag, sib2Commit.commit, sib2State!),
-    );
+    const { impl, engine, ownTag, sib1Tag, sib1State, sib2State, sib2Commit } =
+      await twoTipFixtureWithLowerSibling((parent) => [
+        dropAccountIdentityProofRequirement(parent),
+      ]);
     expect(engine.history.tips().length).toBe(2);
 
     await engine.reconvergeFromHistory();
 
     // The illegal sib2 link is never adopted. Its legal prefix (sib1) stays a
-    // scored candidate at the own branch's depth (WR-02, matching MDK), so the
-    // lower tip digest decides between the two.
+    // scored candidate at the own branch's depth (WR-02, matching MDK).
+    // WR-07: sib1's digest is forced below the own tip's, so adopting sib1 is
+    // the ONLY outcome that satisfies this row — the pre-fix engine, which
+    // never scores the prefix, stays on its own tip and fails here.
     expect(bytesToHex(engine.state.confirmationTag)).not.toBe(
-      bytesToHex(sib2State!.confirmationTag),
+      bytesToHex(sib2State.confirmationTag),
     );
-    expect(bytesToHex(engine.state.confirmationTag)).toBe(
-      lowerTipDigestTag(engine, ownTag, sib1Tag),
-    );
+    expect(bytesToHex(engine.state.confirmationTag)).not.toBe(ownTag);
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(sib1Tag);
     expect(engine.lifecycle).toBe("Stable");
 
-    const sib1Snapshot = snapshot(sib1State!);
+    const sib1Snapshot = snapshot(sib1State);
     const resolution = await resolveCandidateParent({
       ciphersuite: impl,
       parent: sib1Snapshot,
@@ -442,99 +608,25 @@ describe("GRP-02 seam parity: commit that drops the 0x8009 requirement (D-04)", 
   });
 
   it("tree-fed: falls back to the next-best legal branch when the top-scoring candidate is illegal (CR-01)", async () => {
-    const { impl, ctx, adminPubkey, admin2Epoch1, adminEpoch1 } =
-      await seamGroup();
-    const engine = new MarmotGroupEngine({
-      state: adminEpoch1,
-      ciphersuite: impl,
-      peeler: testPeeler(impl),
-    });
-    const rootTag = bytesToHex(adminEpoch1.confirmationTag);
-
-    const sent = await engine.send({
-      kind: "commit",
-      actorPubkey: adminPubkey,
-      extraProposals: [],
-    });
-    if (sent.kind !== "groupEvolution")
-      throw new Error("expected groupEvolution");
-    engine.confirmPublished(sent.pending);
-
     // Legal branch L: sib1 -> legal2 (depth 2). Illegal branch I: sib1 ->
     // alt2 -> illegal3 (depth 3, deepest, so it scores highest). Both beat
-    // the one-deep own branch; only L is adoptable.
-    const sib1Commit = await createCommit({
-      context: ctx,
-      state: admin2Epoch1,
-      wireAsPublicMessage: true,
-      ratchetTreeExtension: true,
-      extraProposals: [],
-    });
-    const legal2Commit = await createCommit({
-      context: ctx,
-      state: snapshot(sib1Commit.newState),
-      wireAsPublicMessage: true,
-      ratchetTreeExtension: true,
-      extraProposals: [],
-    });
-    const alt2Commit = await createCommit({
-      context: ctx,
-      state: snapshot(sib1Commit.newState),
-      wireAsPublicMessage: true,
-      ratchetTreeExtension: true,
-      extraProposals: [],
-    });
-    const illegal3Commit = await createCommit({
-      context: ctx,
-      state: alt2Commit.newState,
-      wireAsPublicMessage: true,
-      ratchetTreeExtension: true,
-      extraProposals: [
-        dropAccountIdentityProofRequirement(alt2Commit.newState),
-      ],
-    });
-
-    const [sib1State, legal2State] = await buildAdmin1PerspectiveChain(
-      ctx,
-      snapshot(adminEpoch1),
-      [sib1Commit.commit, legal2Commit.commit],
-    );
-    const [, alt2State, illegal3State] = await buildAdmin1PerspectiveChain(
-      ctx,
-      snapshot(adminEpoch1),
-      [sib1Commit.commit, alt2Commit.commit, illegal3Commit.commit],
-    );
-    const sib1Tag = bytesToHex(sib1State!.confirmationTag);
-    const alt2Tag = bytesToHex(alt2State!.confirmationTag);
-    engine.history.recordEdge(
-      edgeFromReplay(rootTag, sib1Commit.commit, sib1State!),
-    );
-    engine.history.recordEdge(
-      edgeFromReplay(sib1Tag, legal2Commit.commit, legal2State!),
-    );
-    engine.history.recordEdge(
-      edgeFromReplay(sib1Tag, alt2Commit.commit, alt2State!),
-    );
-    engine.history.recordEdge(
-      edgeFromReplay(alt2Tag, illegal3Commit.commit, illegal3State!),
-    );
+    // the one-deep own branch; only I's legal prefix and L are adoptable.
+    const { engine, legal2Tag, alt2Tag, illegal3State } =
+      await threeTipFixtureWithLowerPrefix();
     expect(engine.history.tips().length).toBe(3);
 
     await engine.reconvergeFromHistory();
 
     // illegal3 is never adopted, and neither is the one-deep own branch.
     // Branch I's legal prefix (alt2) ties branch L's tip (legal2) at depth 2
-    // (WR-02, matching MDK), so the lower tip digest decides between them.
+    // (WR-02, matching MDK). WR-07: alt2's digest is forced below legal2's, so
+    // adopting alt2 is the ONLY outcome that satisfies this row — the pre-fix
+    // engine, which never scores the prefix, adopts legal2 and fails here.
     expect(bytesToHex(engine.state.confirmationTag)).not.toBe(
-      bytesToHex(illegal3State!.confirmationTag),
+      bytesToHex(illegal3State.confirmationTag),
     );
-    expect(bytesToHex(engine.state.confirmationTag)).toBe(
-      lowerTipDigestTag(
-        engine,
-        bytesToHex(legal2State!.confirmationTag),
-        alt2Tag,
-      ),
-    );
+    expect(bytesToHex(engine.state.confirmationTag)).not.toBe(legal2Tag);
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(alt2Tag);
     expect(engine.lifecycle).toBe("Stable");
   });
 
@@ -750,68 +842,25 @@ describe("GRP-02 seam parity: Add whose leaf has no proof (D-04, D-08)", () => {
   });
 
   it("tree-fed: abandons the switch, tip unchanged", async () => {
-    const { impl, ctx, adminPubkey, admin2Epoch1, adminEpoch1 } =
-      await seamGroup();
-    const engine = new MarmotGroupEngine({
-      state: adminEpoch1,
-      ciphersuite: impl,
-      peeler: testPeeler(impl),
-    });
-    const rootTag = bytesToHex(adminEpoch1.confirmationTag);
-
-    const sent = await engine.send({
-      kind: "commit",
-      actorPubkey: adminPubkey,
-      extraProposals: [],
-    });
-    if (sent.kind !== "groupEvolution")
-      throw new Error("expected groupEvolution");
-    engine.confirmPublished(sent.pending);
-    const ownTag = bytesToHex(engine.state.confirmationTag);
-
-    const sib1Commit = await createCommit({
-      context: ctx,
-      state: admin2Epoch1,
-      wireAsPublicMessage: true,
-      ratchetTreeExtension: true,
-      extraProposals: [],
-    });
-    const sib2Commit = await createCommit({
-      context: ctx,
-      state: sib1Commit.newState,
-      wireAsPublicMessage: true,
-      ratchetTreeExtension: true,
-      extraProposals: [addProposal()],
-    });
-
-    const [sib1State, sib2State] = await buildAdmin1PerspectiveChain(
-      ctx,
-      snapshot(adminEpoch1),
-      [sib1Commit.commit, sib2Commit.commit],
-    );
-    const sib1Tag = bytesToHex(sib1State!.confirmationTag);
-    engine.history.recordEdge(
-      edgeFromReplay(rootTag, sib1Commit.commit, sib1State!),
-    );
-    engine.history.recordEdge(
-      edgeFromReplay(sib1Tag, sib2Commit.commit, sib2State!),
-    );
+    const { impl, engine, ownTag, sib1Tag, sib1State, sib2State, sib2Commit } =
+      await twoTipFixtureWithLowerSibling(() => [addProposal()]);
     expect(engine.history.tips().length).toBe(2);
 
     await engine.reconvergeFromHistory();
 
     // The illegal sib2 link is never adopted. Its legal prefix (sib1) stays a
-    // scored candidate at the own branch's depth (WR-02, matching MDK), so the
-    // lower tip digest decides between the two.
+    // scored candidate at the own branch's depth (WR-02, matching MDK).
+    // WR-07: sib1's digest is forced below the own tip's, so adopting sib1 is
+    // the ONLY outcome that satisfies this row — the pre-fix engine, which
+    // never scores the prefix, stays on its own tip and fails here.
     expect(bytesToHex(engine.state.confirmationTag)).not.toBe(
-      bytesToHex(sib2State!.confirmationTag),
+      bytesToHex(sib2State.confirmationTag),
     );
-    expect(bytesToHex(engine.state.confirmationTag)).toBe(
-      lowerTipDigestTag(engine, ownTag, sib1Tag),
-    );
+    expect(bytesToHex(engine.state.confirmationTag)).not.toBe(ownTag);
+    expect(bytesToHex(engine.state.confirmationTag)).toBe(sib1Tag);
     expect(engine.lifecycle).toBe("Stable");
 
-    const sib1Snapshot = snapshot(sib1State!);
+    const sib1Snapshot = snapshot(sib1State);
     const resolution = await resolveCandidateParent({
       ciphersuite: impl,
       parent: sib1Snapshot,

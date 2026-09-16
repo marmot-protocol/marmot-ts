@@ -415,8 +415,9 @@ export class GroupSession<
     const results: DispositionedIngestResult[] = [];
     for (const result of await this.#engine.driveConvergence())
       results.push(...(await this.#reconcile(mapEngineIngestResult(result))));
-    if (this.#engine.selectedDisbandEvidence)
-      await this.persistSelectedDisband(this.#engine.selectedDisbandEvidence);
+    await this.#persistSelectedDisbandIfPossible(
+      this.#engine.selectedDisbandEvidence,
+    );
     await this.save();
     return results;
   }
@@ -465,6 +466,37 @@ export class GroupSession<
   async hydrateLifecycleEvidence(): Promise<void> {
     await this.#terminalHydrated;
     await this.#engine.disbandRequest();
+  }
+
+  /**
+   * WR-02: the guarded, best-effort form of {@link persistSelectedDisband}
+   * that every internal caller uses.
+   *
+   * `persistSelectedDisband` THROWS without a `lifecycleStore`, and that store
+   * is optional in both `GroupSessionOptions` and `MarmotGroupOptions` — while
+   * `#selectedDisbandEvidence` is set by the engine for any inbound disband
+   * commit that wins selection, store or no store. Calling it unguarded at the
+   * end of `ingest` therefore threw for every store-less session, after
+   * results had been yielded and BEFORE `save()`, so the batch persisted
+   * nothing and the next ingest repeated it.
+   *
+   * The engine getter is never cleared, so this is re-entered on every
+   * subsequent ingest for the life of the group; the `#terminalTombstone`
+   * check makes that an explicit early return rather than relying on the one
+   * buried inside `persistSelectedDisband`.
+   */
+  async #persistSelectedDisbandIfPossible(
+    evidence: DisbandCandidateEvidence | undefined,
+  ): Promise<void> {
+    if (!evidence) return;
+    await this.#terminalHydrated;
+    if (this.#terminalTombstone || !this.lifecycleStore) return;
+    try {
+      await this.persistSelectedDisband(evidence);
+    } catch (error) {
+      // Terminal evidence stays in engine state, so the next pass retries.
+      this.#onHistoryError?.(error as Error);
+    }
   }
 
   /**
@@ -792,8 +824,8 @@ export class GroupSession<
     for await (const result of this.#engine.ingest(rest, options)) {
       const mapped = mapEngineIngestResult(result);
 
-      if (mapped.kind === "processed" && mapped.selectedTerminal)
-        await this.persistSelectedDisband(mapped.selectedTerminal);
+      if (mapped.kind === "processed")
+        await this.#persistSelectedDisbandIfPossible(mapped.selectedTerminal);
 
       if (
         mapped.kind === "processed" &&
@@ -838,8 +870,9 @@ export class GroupSession<
     // `processed` result to carry it (every triggering envelope was refused).
     // The engine still records the selection, so persist it from engine state
     // exactly as `driveConvergence` does. Idempotent once the tombstone exists.
-    if (this.#engine.selectedDisbandEvidence)
-      await this.persistSelectedDisband(this.#engine.selectedDisbandEvidence);
+    await this.#persistSelectedDisbandIfPossible(
+      this.#engine.selectedDisbandEvidence,
+    );
     await this.save();
   }
 

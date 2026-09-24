@@ -141,6 +141,7 @@ describe("exports", () => {
         "calculateKeyPackageRef",
         "canTransitionLifecycle",
         "canonicalizeMimeType",
+        "classifyChangedLeaf",
         "classifyDisbandCommit",
         "classifyGroupAccountIdentityProofProfile",
         "classifyLateCommit",

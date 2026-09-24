@@ -839,16 +839,47 @@ export async function* ingestEnvelopes<TEnvelope>(
           committerLeafIndex: capturedCommit.committerLeafIndex,
         });
         if (legalityOutcome.kind === "undecidable") {
-          // Phase 9 (D-03/D-04): this commit's changed leaves could not be
-          // attributed to its proposals or committer, so account-identity
-          // authorization cannot be evaluated against this candidate parent
-          // yet. Per refs/marmot/foundation/errors.md (lines 63-68) this is a
-          // deferral, not a rejection — the input stays retryable (no
-          // dedup.remember) and canonical state must not advance (no
-          // ctx.setState). Retry is bounded by the existing pool limits
-          // (maxSize plus source-epoch expiry against maxRewindCommits); the
-          // engine's ingest loop already pools any `kind: "deferred"` result,
-          // so no new retry mechanism is introduced here.
+          // WR-02: `capturedCommit` holds this commit's COMPLETE proposal list
+          // — the ts-mls callback fired during the `processMessage` that just
+          // returned `newState`. So an undecidable verdict on this seam means
+          // the classification input WAS genuinely captured and the only
+          // missing piece is the committer: ts-mls leaves `committerLeafIndex`
+          // undefined for every non-`member` sender type. No future protocol
+          // bytes can give a commit a member sender it never had, so deferring
+          // is not "retry once more arrives" — it is a permanent hold. The
+          // envelope is pooled and re-ingested, every pass re-defers and sets
+          // `#lastPassUnresolved`, which derives `convergenceStatus =
+          // Resolving` and therefore gates ALL local outbound work until
+          // source-epoch eviction. `foundation/errors.md`'s deferral rule is
+          // for inputs that COULD become processable; a structurally
+          // unattributable committer never can, so this fails closed as a
+          // terminal rejection — the same disposition the Update-admission
+          // seam already gives an unresolvable sender.
+          if (capturedCommit.committerLeafIndex === undefined) {
+            log(
+              "commit envelope:%s rejected reason:account-identity-proof detail:%s",
+              envelopeLabel(envelope),
+              legalityOutcome.detail,
+            );
+            ctx.dedup.remember(message);
+            yield {
+              kind: "rejected",
+              result,
+              envelope,
+              message,
+              reason: "account-identity-proof",
+              proofReason: "unattributable-leaf",
+            };
+            continue;
+          }
+          // A committer IS known, so this undecidable came from incomplete
+          // classification rather than an unattributable sender. That can
+          // still clear, so it keeps the deferral idiom (D-03/D-04): the input
+          // stays retryable (no dedup.remember) and canonical state must not
+          // advance (no ctx.setState). Retry is bounded by the existing pool
+          // limits (maxSize plus source-epoch expiry against
+          // maxRewindCommits); the engine's ingest loop already pools any
+          // `kind: "deferred"` result, so no new retry mechanism is introduced.
           const deferredReason = deferredReasons.unjudgeableIdentity;
           log(
             "commit envelope:%s deferred reason:%s detail:%s",

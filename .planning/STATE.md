@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Account identity proof v2
-current_phase: 08
-current_phase_name: GroupContext Profile Requirement & Legality-Seam Extension
+current_phase: 09
+current_phase_name: self-update-replacement-leaf-identity-binding
 status: executing
 stopped_at: Phase 9 context gathered
-last_updated: "2026-09-24T16:09:54.247Z"
-last_activity: 2026-09-15
-last_activity_desc: Phase 08 execution started
+last_updated: "2026-09-24T16:44:11.401Z"
+last_activity: 2026-09-24
+last_activity_desc: Phase 09 execution started
 progress:
   total_phases: 6
   completed_phases: 3
-  total_plans: 13
+  total_plans: 17
   completed_plans: 13
   percent: 50
 ---
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-11)
 
 **Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
-**Current focus:** Phase 08 — GroupContext Profile Requirement & Legality-Seam Extension
+**Current focus:** Phase 09 — self-update-replacement-leaf-identity-binding
 
 ## Current Position
 
-Phase: 08 (GroupContext Profile Requirement & Legality-Seam Extension) — EXECUTING
-Plan: 4 of 4
-Status: Ready to execute
-Last activity: 2026-09-15 — Phase 08 execution started
+Phase: 09 (self-update-replacement-leaf-identity-binding) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 09
+Last activity: 2026-09-24 — Phase 09 execution started
 
 Progress: [░░░░░░░░░░] 0%
 

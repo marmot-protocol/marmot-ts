@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Account identity proof v2
-current_phase: 09
-current_phase_name: self-update-replacement-leaf-identity-binding
+current_phase: 10
+current_phase_name: Founding Group Creation via Welcome
 status: executing
-stopped_at: Phase 9 context gathered
-last_updated: "2026-09-24T16:44:11.401Z"
+stopped_at: Phase 9 complete (verified + code-reviewed + fixes applied)
+last_updated: "2026-09-24T19:00:49.145Z"
 last_activity: 2026-09-24
-last_activity_desc: Phase 09 execution started
+last_activity_desc: Phase 09 complete, transitioned to Phase 10
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 17
-  completed_plans: 13
-  percent: 50
+  completed_plans: 17
+  percent: 67
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-09-11)
 
 ## Current Position
 
-Phase: 09 (self-update-replacement-leaf-identity-binding) — EXECUTING
-Plan: 1 of 4
+Phase: 10 — Founding Group Creation via Welcome
+Plan: Not started
 Status: Executing Phase 09
-Last activity: 2026-09-24 — Phase 09 execution started
+Last activity: 2026-09-24 — Phase 09 complete, transitioned to Phase 10
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -39,7 +39,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:**
 
-- Total plans completed: 62
+- Total plans completed: 66
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -57,7 +57,7 @@ Progress: [░░░░░░░░░░] 0%
 | 06 | 1 | - | - |
 | 07 | 8 | - | - |
 | 08 | 0 | - | - |
-| 09 | 0 | - | - |
+| 09 | 4 | - | - |
 | 10 | 0 | - | - |
 | 11 | 0 | - | - |
 
@@ -297,6 +297,9 @@ None yet.
 
 - [Resolved in 03-03]: CONV-04 verify-first ran; Assumption A1 was falsified for one of the two D-16 properties (own-commit replay) and fixed narrowly in `fork-recovery.ts` — see 03-03-SUMMARY.md "CONV-04 verdict"
 - Pre-existing (from 03-01): src/__tests__/exports.test.ts snapshot stale + pnpm lint fails on refs/mdk/target/ noise — logged in phase deferred-items.md, not fixed in 03-02
+- [Phase 09]: one unreproduced single-test failure during the fix pass (`1 failed | 1249 passed`), never identified (output was `tail`-truncated), not reproduced across 14 consecutive green runs. Not proven unrelated — see 09 deferred-items.md D-09-07
+- [Phase 09]: `resolveCandidateParent`'s replay branch still defers a non-member-sender commit forever (sibling of the fixed WR-02, which only covered `ingest.ts`) — see 09 deferred-items.md D-09-01. Fails closed on authorization, open on liveness; low-urgency because adopted v1 defines no legitimate non-member-sender commit path
+- [Phase 09]: CR-01's change from permanent-deferral to accept on the proposal-less convergence path is a design judgment tests cannot prove — owner sign-off suggested (D-09-08)
 
 ### Roadmap Evolution
 
@@ -326,10 +329,12 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-24T15:21:37.378Z
-Stopped at: Phase 9 context gathered
+Last session: 2026-09-24T18:10:02Z
+Stopped at: Phase 9 complete — executed, verified (8/8 must-haves), code-reviewed, review fixes applied
 Resume file:
 
-.planning/phases/09-self-update-replacement-leaf-identity-binding/09-CONTEXT.md
+.planning/phases/09-self-update-replacement-leaf-identity-binding/09-VERIFICATION.md
 
-- Roadmap is ready. Plan the first v2.0 phase with `/gsd-plan-phase 6` (research-phase not recommended for Phase 6 — pure codec work against an already-verified spec vector).
+- Phase 9 shipped 4/4 plans in 4 sequential waves. Verification passed 4/4 roadmap success criteria and 8/8 must-haves. Code review found 1 Critical + 4 Warning; all fixed and committed, plus a promoted Info-severity positive-control test (the missing control was why the Critical shipped green). Suite: 111 files / 1250 tests.
+- Open items carried forward: `.planning/phases/09-self-update-replacement-leaf-identity-binding/deferred-items.md` (D-09-01 WR-02 replay-branch sibling, D-09-05 no coverage on WR-02's terminal branch, D-09-07 unreproduced flake, D-09-08 CR-01 contract sign-off).
+- Next: Phase 10 (Founding Group Creation via Welcome). Start with `/gsd-discuss-phase 10`.

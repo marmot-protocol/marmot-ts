@@ -51,9 +51,9 @@ Shared `src/core` primitive per `foundation/authorization-proofs.md`; the accoun
 Validation-only: ts-mls self-update carries the leaf signature key and proof forward; no key-rotation API this milestone.
 
 - [x] **UPD-01**: An Update proposal or committer update-path leaf whose `BasicCredential` identity differs from the member's prior account identity is rejected on every seam
-- [ ] **UPD-02**: A replacement leaf whose `0x8009` proof does not bind that leaf's resulting signature key (stale or reused proof) is rejected
-- [ ] **UPD-03**: A commit that removes `0x8009` support or data from a non-blank member leaf is rejected
-- [ ] **UPD-04**: A standalone Update proposal is re-checked for proof validity and identity equality at admission, before it is queued
+- [x] **UPD-02**: A replacement leaf whose `0x8009` proof does not bind that leaf's resulting signature key (stale or reused proof) is rejected
+- [x] **UPD-03**: A commit that removes `0x8009` support or data from a non-blank member leaf is rejected
+- [x] **UPD-04**: A standalone Update proposal is re-checked for proof validity and identity equality at admission, before it is queued
 
 ### Founding creation via Welcome (FOUND)
 
@@ -120,9 +120,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GRP-03 | Phase 8 | Complete |
 | GRP-04 | Phase 8 | Complete |
 | UPD-01 | Phase 9 | Complete |
-| UPD-02 | Phase 9 | Pending |
-| UPD-03 | Phase 9 | Pending |
-| UPD-04 | Phase 9 | Pending |
+| UPD-02 | Phase 9 | Complete |
+| UPD-03 | Phase 9 | Complete |
+| UPD-04 | Phase 9 | Complete |
 | FOUND-01 | Phase 10 | Pending |
 | FOUND-02 | Phase 10 | Pending |
 | FOUND-03 | Phase 10 | Pending |

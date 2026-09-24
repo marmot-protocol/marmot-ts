@@ -6,10 +6,19 @@ import { bytesEqual } from "./bytes.js";
 /**
  * A single non-blank leaf in a resulting ratchet tree that is new or was
  * re-signed relative to a parent tree, paired with its true MLS leaf index.
+ *
+ * `parentLeaf` is the prior occupant of the same MLS leaf index in the parent
+ * tree (Phase 9, UPD-01): the leaf a caller compares this changed leaf's
+ * account identity against. It is `undefined` exactly when the parent node at
+ * that index was absent or not a leaf — a brand-new or previously-blank slot
+ * — meaning there is no prior identity to preserve (an Add into a freed slot
+ * legitimately has a different identity than whoever occupied the slot
+ * before it was removed).
  */
 export interface ChangedLeaf {
   leafIndex: number;
   leaf: LeafNode;
+  parentLeaf?: LeafNode;
 }
 
 /**
@@ -63,7 +72,11 @@ export function diffChangedLeaves(
       before && before.nodeType === nodeTypes.leaf ? before.leaf : undefined;
     if (beforeLeaf && bytesEqual(beforeLeaf.signature, after.leaf.signature))
       continue;
-    changed.push({ leafIndex: nodeIndex / 2, leaf: after.leaf });
+    changed.push({
+      leafIndex: nodeIndex / 2,
+      leaf: after.leaf,
+      parentLeaf: beforeLeaf,
+    });
   }
   return changed;
 }

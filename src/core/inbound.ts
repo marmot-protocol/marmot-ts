@@ -76,6 +76,15 @@ export const deferredReasons = {
   groupBusy: "group_busy",
   /** Local admission capacity is full; retry without transport redelivery. */
   capacity: "capacity",
+  /**
+   * A commit's changed leaves could not be attributed to its proposals or
+   * committer, so account-identity authorization cannot be evaluated against
+   * this candidate parent yet (Phase 9, D-03/D-04). Per
+   * `refs/marmot/foundation/errors.md` (lines 63-68), a Commit whose
+   * authorization cannot be evaluated against a candidate parent remains
+   * deferred; only failed authorization is terminal.
+   */
+  unjudgeableIdentity: "unjudgeable_identity",
 } as const;
 
 /** A deferred-input reason. */

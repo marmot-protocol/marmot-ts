@@ -30,6 +30,7 @@ import {
 import {
   type AppDataUpdateOp,
   type CommitIntegrityViolation,
+  type CommitLegalityOutcome,
   validateAdminLeafCoupling,
   validateAppComponentIntegrity,
   validateCommitAccountIdentityProofs,
@@ -156,15 +157,26 @@ function proposalsFromPublicCommit(
  *    never dropped) and the leaf-only `0x8009` guard. Rule 3 — every changed
  *    entry is backed by one of this commit's own AppDataUpdates — needs those
  *    proposals, so every resulting entry is treated as backed;
- * 2. the `0x8009` profile and changed-leaf proof check;
- * 3. admin-leaf coupling.
+ * 2. the `0x8009` profile and changed-leaf proof check, called with NO
+ *    `classification` (Phase 9, D-03): with neither this commit's proposals
+ *    nor a committer index available, no changed leaf can be attributed to
+ *    an Add, an Update sender, or the committer, so ANY changed leaf makes
+ *    this step `undecidable` rather than `legal` or a terminal violation —
+ *    authorization simply cannot be evaluated against this candidate parent
+ *    without more information, and per `refs/marmot/foundation/errors.md`
+ *    (lines 63-68) that is a deferral, not a rejection. A `violation` here
+ *    still returns immediately; an `undecidable` outcome is remembered and
+ *    step 3 still runs, so a definite admin-leaf-coupling violation still
+ *    outranks it (mirrors {@link validateCommitLegality}'s own precedence);
+ * 3. admin-leaf coupling — the remembered undecidable detail from step 2, if
+ *    any, is returned only after this step finds no violation.
  *
  * Disband legality classifies the commit's own proposals and cannot run here.
  */
 function validateLegalityWithoutProposals(
   parentState: ClientState,
   resultingState: ClientState,
-): CommitIntegrityViolation | undefined {
+): CommitLegalityOutcome {
   const currentExtensions = parentState.groupContext.extensions;
   const resultingExtensions = resultingState.groupContext.extensions;
   let requiredIds: readonly AppComponentId[];
@@ -172,8 +184,11 @@ function validateLegalityWithoutProposals(
     requiredIds = getAppComponents(currentExtensions) ?? [];
   } catch {
     return {
-      reason: "component-integrity",
-      detail: "current app_components component did not decode",
+      kind: "violation",
+      violation: {
+        reason: "component-integrity",
+        detail: "current app_components component did not decode",
+      },
     };
   }
 
@@ -198,19 +213,33 @@ function validateLegalityWithoutProposals(
     appDataUpdateOps: backedOps,
     requiredIds,
   });
-  if (integrity) return integrity;
+  if (integrity) return { kind: "violation", violation: integrity };
 
-  const proof = validateCommitAccountIdentityProofs({
+  // No `classification` supplied: this commit's proposals cannot be rebuilt
+  // off the wire, so any changed leaf is structurally undecidable (D-03). A
+  // violation here still returns immediately; an undecidable outcome is
+  // remembered so the admin-leaf-coupling check below still runs and can
+  // outrank it with a definite violation (mirrors validateCommitLegality).
+  const proofOutcome = validateCommitAccountIdentityProofs({
     parentState,
     resultingState,
   });
-  if (proof) return proof;
+  if (proofOutcome.kind === "violation") return proofOutcome;
+  const undecidableDetail =
+    proofOutcome.kind === "undecidable" ? proofOutcome.detail : undefined;
 
-  return validateAdminLeafCoupling({
+  const couplingViolation = validateAdminLeafCoupling({
     currentExtensions,
     resultingExtensions,
     resultingMemberAccounts: getGroupMemberPubkeys(resultingState),
   });
+  if (couplingViolation)
+    return { kind: "violation", violation: couplingViolation };
+
+  if (undecidableDetail !== undefined)
+    return { kind: "undecidable", detail: undecidableDetail };
+
+  return { kind: "legal" };
 }
 
 /**
@@ -245,9 +274,9 @@ export async function resolveCandidateParent(params: {
       aad: new Uint8Array(),
     };
     const rebuilt = proposalsFromPublicCommit(parent, message);
-    let violation: CommitIntegrityViolation | undefined;
+    let outcome: CommitLegalityOutcome;
     try {
-      violation = rebuilt
+      outcome = rebuilt
         ? validateCommitLegality({
             parentState: parent,
             resultingState: known.state,
@@ -258,14 +287,19 @@ export async function resolveCandidateParent(params: {
     } catch {
       return { kind: "deferred", reason: "temporary_refusal" };
     }
-    if (violation)
-      return {
-        kind: "rejected",
-        reason: "authorization_or_components",
-        result,
-        violation,
-      };
-    return { kind: "resolved", result };
+    switch (outcome.kind) {
+      case "legal":
+        return { kind: "resolved", result };
+      case "violation":
+        return {
+          kind: "rejected",
+          reason: "authorization_or_components",
+          result,
+          violation: outcome.violation,
+        };
+      case "undecidable":
+        return { kind: "deferred", reason: "temporary_refusal" };
+    }
   }
 
   const capture = withCapturedProposals(callback);
@@ -298,23 +332,28 @@ export async function resolveCandidateParent(params: {
       ),
     };
   try {
-    const violation = validateCommitLegality({
+    const outcome = validateCommitLegality({
       parentState: parent,
       resultingState: result.newState,
       proposals: capturedCommit.proposals,
       committerLeafIndex: capturedCommit.committerLeafIndex,
     });
-    if (violation)
-      return {
-        kind: "rejected",
-        reason: "authorization_or_components",
-        result,
-        violation,
-      };
+    switch (outcome.kind) {
+      case "legal":
+        return { kind: "resolved", result };
+      case "violation":
+        return {
+          kind: "rejected",
+          reason: "authorization_or_components",
+          result,
+          violation: outcome.violation,
+        };
+      case "undecidable":
+        return { kind: "deferred", reason: "temporary_refusal" };
+    }
   } catch {
     return { kind: "deferred", reason: "temporary_refusal" };
   }
-  return { kind: "resolved", result };
 }
 
 /** Candidate branches plus their reached tip states and applied chains. */

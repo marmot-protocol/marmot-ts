@@ -11,6 +11,7 @@ import {
 
 import { getAdminPolicy, getAppComponents } from "./dictionary.js";
 import { getGroupMemberPubkeys } from "../group-members.js";
+import { getCredentialPubkey } from "../credential.js";
 import {
   ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
   APP_COMPONENTS_COMPONENT_ID,
@@ -25,6 +26,10 @@ import {
   type AccountIdentityProofRejectReason,
 } from "./account-identity-proof.js";
 import { diffChangedLeaves } from "./tree-diff.js";
+import {
+  classifyChangedLeaf,
+  type ChangedLeafClassificationInput,
+} from "./leaf-replacement.js";
 import {
   classifyDisbandCommit,
   type DisbandClassification,
@@ -75,6 +80,34 @@ export interface CommitIntegrityViolation {
   proofReason?: AccountIdentityProofRejectReason;
   leafIndex?: number;
 }
+
+/**
+ * The tri-state result of {@link validateCommitAccountIdentityProofs} and
+ * {@link validateCommitLegality} (Phase 9, D-03): a commit's legality against a
+ * candidate parent is not always a yes/no answer.
+ *
+ * - `legal` — every check passed; the commit may be applied.
+ * - `violation` — a definite, terminal rejection. The calling seam decides its
+ *   own disposition for this (throw, `rejected`, or drop the candidate edge)
+ *   — this type stays seam-agnostic.
+ * - `undecidable` — authorization could not be evaluated against this
+ *   candidate parent (most commonly: a changed leaf could not be attributed
+ *   to any Add, Update proposal, or the committer, because the caller had no
+ *   proposal list or committer index to classify it with). Per
+ *   `refs/marmot/foundation/errors.md` (lines 63-68), a Commit whose
+ *   authorization cannot be evaluated against a candidate parent MUST map to
+ *   the seam's own deferral idiom — never to a terminal rejection. `detail`
+ *   is a pubkey-free diagnostic string (D-06).
+ *
+ * A definite `violation` always outranks `undecidable`: every producer of
+ * this union checks every changed leaf before reporting `undecidable`, so a
+ * commit that is provably illegal is rejected rather than pooled, even when
+ * it also carries an unattributable leaf.
+ */
+export type CommitLegalityOutcome =
+  | { kind: "legal" }
+  | { kind: "violation"; violation: CommitIntegrityViolation }
+  | { kind: "undecidable"; detail: string };
 
 /**
  * A single `AppDataUpdate` operation extracted from a commit's proposals, in
@@ -328,11 +361,15 @@ export function validateAdminLeafCoupling(args: {
 
 /**
  * Ported from `validate_staged_commit_account_identity_proofs` (D-01, D-02,
- * D-03): rejects a commit that drifts the GroupContext account-identity-proof
- * profile away from `"current"`, or that carries an invalid `0x8009` proof on
- * any new or re-signed member leaf. Pure and non-throwing.
+ * D-03), extended in Phase 9 (UPD-01) with replacement-leaf identity binding.
+ * Rejects a commit that drifts the GroupContext account-identity-proof
+ * profile away from `"current"`, that carries an invalid `0x8009` proof on
+ * any new or re-signed member leaf, or that replaces an existing member's
+ * leaf with one bound to a different account identity. Pure and non-throwing
+ * — returns a {@link CommitLegalityOutcome} rather than throwing or returning
+ * `undefined`.
  *
- * Two checks, in order:
+ * Three checks, in order:
  * (a) **Profile drift (D-01a).** Both `parentState` and `resultingState` must
  *     classify as the current profile ({@link getGroupProfileSupport}). Both
  *     are checked — not just the resulting one — so a commit can never
@@ -344,32 +381,65 @@ export function validateAdminLeafCoupling(args: {
  *     committer's own update-path leaf) — is validated with
  *     {@link validateLeafAccountIdentityProof} against the RESULTING epoch's
  *     ciphersuite. Unchanged leaves are trusted and never re-validated (D-01).
- *     Per D-03, this checks proof validity only (support, data, signer,
- *     ciphersuite/scheme, signature key, signature) — it does NOT compare a
- *     changed leaf's identity against the member's prior leaf; that check is
- *     Phase 9 (UPD-01..03).
+ *     This runs BEFORE bucket classification for every changed leaf, so
+ *     UPD-02/UPD-03 keep reporting their existing proof reasons regardless of
+ *     which bucket the leaf falls into.
+ * (c) **Replacement-leaf identity binding (UPD-01, D-01/D-02/D-03).** Each
+ *     changed leaf is classified with {@link classifyChangedLeaf} against
+ *     `args.classification` (when supplied):
+ *       - `add` — a new member in a freed slot legitimately carries a
+ *         different identity than whoever occupied the slot before removal;
+ *         no prior-identity comparison runs (D-01).
+ *       - `update-proposal` / `committer-update-path` — a genuine replacement
+ *         of an existing member's leaf. Its {@link ChangedLeaf.parentLeaf} MUST
+ *         be defined (a replacement always has a prior occupant); if it is
+ *         not, or if `getCredentialPubkey` throws for either leaf, this is a
+ *         fail-closed violation. Otherwise the replacement leaf's account
+ *         identity is compared against the prior leaf's; a mismatch is a
+ *         terminal `member-identity-changed` violation (UPD-01) — per
+ *         account-identity-proof-v2.md, a change of account identity is not a
+ *         self-update.
+ *       - `unattributable` — the changed leaf matches no Add, no Update
+ *         sender, and is not the committer's own leaf, with full
+ *         classification information available: fail closed as
+ *         `unattributable-leaf` (D-02).
+ *       - `undecidable` — classification information was incomplete (no
+ *         `args.classification`, or an undefined `committerLeafIndex` with no
+ *         matching proposal). This does NOT return immediately: the loop
+ *         continues, because a definite violation elsewhere in the commit
+ *         must always outrank an undecidable leaf (D-03) — otherwise a
+ *         provably illegal commit could be pooled and retried until it ages
+ *         out instead of being rejected. The first undecidable leaf's detail
+ *         is remembered and returned only if the whole loop completes with no
+ *         violation.
  *
  * Every thrown `AccountIdentityProofError` (or any other unexpected throw) is
  * caught and mapped to a typed violation, never left to escape — fork-recovery
  * and tree-fed convergence call {@link validateCommitLegality} unwrapped.
- * `detail` never contains a pubkey or other credential bytes (D-06,
- * diagnostics-privacy rule).
+ * Every `detail` string this function builds names only the numeric
+ * `leafIndex` and a reason literal — never credential bytes, account
+ * identity, pubkey hex, or `err.message` (D-06, diagnostics-privacy rule).
  *
- * @see refs/mdk/crates/cgka-engine/src/account_identity_proof.rs `validate_staged_commit_account_identity_proofs`
+ * @see refs/mdk/crates/cgka-engine/src/account_identity_proof.rs `validate_staged_commit_account_identity_proofs`, `validate_leaf_account_identity_proof_for_member`
  * @see refs/marmot/app-components/account-identity-proof-v2.md "Validation"
+ * @see refs/marmot/foundation/errors.md lines 63-68 (deferred vs terminal authorization_failed)
  */
 export function validateCommitAccountIdentityProofs(args: {
   parentState: ClientState;
   resultingState: ClientState;
-}): CommitIntegrityViolation | undefined {
+  classification?: ChangedLeafClassificationInput;
+}): CommitLegalityOutcome {
   const parentSupport = getGroupProfileSupport(
     args.parentState.groupContext.extensions,
   );
   if (parentSupport.kind === "unsupported") {
     return {
-      reason: "account-identity-proof",
-      detail: `parent GroupContext is outside the current account identity proof profile (${parentSupport.proofReason})`,
-      proofReason: parentSupport.proofReason,
+      kind: "violation",
+      violation: {
+        reason: "account-identity-proof",
+        detail: `parent GroupContext is outside the current account identity proof profile (${parentSupport.proofReason})`,
+        proofReason: parentSupport.proofReason,
+      },
     };
   }
 
@@ -378,9 +448,12 @@ export function validateCommitAccountIdentityProofs(args: {
   );
   if (resultingSupport.kind === "unsupported") {
     return {
-      reason: "account-identity-proof",
-      detail: `resulting GroupContext is outside the current account identity proof profile (${resultingSupport.proofReason})`,
-      proofReason: resultingSupport.proofReason,
+      kind: "violation",
+      violation: {
+        reason: "account-identity-proof",
+        detail: `resulting GroupContext is outside the current account identity proof profile (${resultingSupport.proofReason})`,
+        proofReason: resultingSupport.proofReason,
+      },
     };
   }
 
@@ -388,7 +461,11 @@ export function validateCommitAccountIdentityProofs(args: {
     args.parentState.ratchetTree,
     args.resultingState.ratchetTree,
   );
-  for (const { leafIndex, leaf } of changedLeaves) {
+
+  let undecidableDetail: string | undefined;
+
+  for (const entry of changedLeaves) {
+    const { leafIndex, leaf } = entry;
     try {
       validateLeafAccountIdentityProof(
         leaf,
@@ -397,21 +474,94 @@ export function validateCommitAccountIdentityProofs(args: {
     } catch (err) {
       if (err instanceof AccountIdentityProofError) {
         return {
-          reason: "account-identity-proof",
-          detail: `member leaf ${leafIndex} account identity proof invalid (${err.reason})`,
-          proofReason: err.reason,
-          leafIndex,
+          kind: "violation",
+          violation: {
+            reason: "account-identity-proof",
+            detail: `member leaf ${leafIndex} account identity proof invalid (${err.reason})`,
+            proofReason: err.reason,
+            leafIndex,
+          },
         };
       }
       return {
-        reason: "account-identity-proof",
-        detail: `member leaf ${leafIndex} account identity proof validation failed`,
-        leafIndex,
+        kind: "violation",
+        violation: {
+          reason: "account-identity-proof",
+          detail: `member leaf ${leafIndex} account identity proof validation failed`,
+          leafIndex,
+        },
       };
+    }
+
+    const classification = classifyChangedLeaf(entry, args.classification);
+    switch (classification.kind) {
+      case "add":
+        continue;
+      case "update-proposal":
+      case "committer-update-path": {
+        if (entry.parentLeaf === undefined) {
+          return {
+            kind: "violation",
+            violation: {
+              reason: "account-identity-proof",
+              detail: `member leaf ${leafIndex} replacement leaf has no prior occupant`,
+              proofReason: "unattributable-leaf",
+              leafIndex,
+            },
+          };
+        }
+        let replacementPubkey: string;
+        let priorPubkey: string;
+        try {
+          replacementPubkey = getCredentialPubkey(leaf.credential);
+          priorPubkey = getCredentialPubkey(entry.parentLeaf.credential);
+        } catch {
+          return {
+            kind: "violation",
+            violation: {
+              reason: "account-identity-proof",
+              detail: `member leaf ${leafIndex} replacement leaf credential did not decode`,
+              proofReason: "invalid-credential",
+              leafIndex,
+            },
+          };
+        }
+        if (replacementPubkey !== priorPubkey) {
+          return {
+            kind: "violation",
+            violation: {
+              reason: "account-identity-proof",
+              detail: `member leaf ${leafIndex} replacement leaf changed account identity`,
+              proofReason: "member-identity-changed",
+              leafIndex,
+            },
+          };
+        }
+        continue;
+      }
+      case "unattributable":
+        return {
+          kind: "violation",
+          violation: {
+            reason: "account-identity-proof",
+            detail: `member leaf ${leafIndex} changed leaf is not attributable to any Add, Update proposal, or the committer`,
+            proofReason: "unattributable-leaf",
+            leafIndex,
+          },
+        };
+      case "undecidable":
+        if (undecidableDetail === undefined) {
+          undecidableDetail = `member leaf ${leafIndex} changed leaf could not be classified against this commit's proposals`;
+        }
+        continue;
     }
   }
 
-  return undefined;
+  if (undecidableDetail !== undefined) {
+    return { kind: "undecidable", detail: undecidableDetail };
+  }
+
+  return { kind: "legal" };
 }
 
 /**
@@ -474,23 +624,35 @@ export function validateAddProposalAccountIdentityProofs(
  * only is a documented bug").
  *
  * Runs four checks, in this fixed order (D-07):
- * 1. `validateAppComponentIntegrity` — component-integrity (WIRE-03).
+ * 1. `validateAppComponentIntegrity` — component-integrity (WIRE-03). A
+ *    violation here returns immediately.
  * 2. `validateCommitAccountIdentityProofs` — account-identity-proof profile
- *    drift and changed-leaf proof validity (D-01/D-02/D-03). Runs before
- *    disband/admin-leaf-coupling reasoning, so an invalid identity blocks a
- *    commit before any admin-set reasoning does. `0x8009` data appearing in
- *    the GroupContext dictionary itself still reports `component-integrity`
- *    (rejected earlier by step 1), so Phase 7 expectations hold.
+ *    drift, changed-leaf proof validity, and replacement-leaf identity
+ *    binding (D-01/D-02/D-03, UPD-01). Runs before disband/admin-leaf-coupling
+ *    reasoning, so an invalid identity blocks a commit before any admin-set
+ *    reasoning does. `0x8009` data appearing in the GroupContext dictionary
+ *    itself still reports `component-integrity` (rejected earlier by step
+ *    1), so Phase 7 expectations hold. A `violation` here returns
+ *    immediately; an `undecidable` outcome (Phase 9, D-03) is NOT returned
+ *    yet — it is remembered and checks 3-4 still run, so a definite
+ *    violation there still outranks it (the same precedence rule this
+ *    function's own changed-leaf loop enforces internally).
  * 3. `classifyDisbandCommit` — disband-legality.
  * 4. `validateAdminLeafCoupling` — admin-leaf-coupling (CONV-01).
+ *
+ * The remembered undecidable detail from step 2, if any, is returned only
+ * after steps 3-4 both find no violation.
  *
  * Stays pure: reads two `ClientState` values, performs no I/O, and calls
  * nothing from `src/engine` or `src/client`.
  *
- * Each calling seam supplies its own disposition for a returned violation:
- * throw on send (D-02), `rejected` with the violation's `reason` on inbound
- * (D-03), or drop the candidate edge on convergence/replay (D-04/D-09). This
- * adapter itself is seam-agnostic.
+ * Returns a {@link CommitLegalityOutcome}. Each calling seam supplies its own
+ * disposition: `violation` throws on send (D-02), yields `rejected` with the
+ * violation's `reason` on inbound (D-03), or drops the candidate edge on
+ * convergence/replay (D-04/D-09); `undecidable` MUST map to that seam's own
+ * existing deferral idiom, never to a terminal rejection (Phase 9, D-03,
+ * `refs/marmot/foundation/errors.md` lines 63-68). This adapter itself is
+ * seam-agnostic.
  *
  * @see refs/mdk/crates/cgka-engine/src/account_identity_proof.rs `validate_staged_commit_account_identity_proofs`
  * @see refs/marmot/app-components/account-identity-proof-v2.md "Validation"
@@ -500,7 +662,7 @@ export function validateCommitLegality(args: {
   resultingState: ClientState;
   proposals: readonly (Proposal | ProposalWithSender)[];
   committerLeafIndex?: number;
-}): CommitIntegrityViolation | undefined {
+}): CommitLegalityOutcome {
   const proposalsWithSenders: ProposalWithSender[] = args.proposals.map(
     (item) =>
       "proposal" in item
@@ -527,8 +689,11 @@ export function validateCommitLegality(args: {
       getAppComponents(args.parentState.groupContext.extensions) ?? [];
   } catch {
     return {
-      reason: "component-integrity",
-      detail: "current app_components component did not decode",
+      kind: "violation",
+      violation: {
+        reason: "component-integrity",
+        detail: "current app_components component did not decode",
+      },
     };
   }
 
@@ -538,13 +703,28 @@ export function validateCommitLegality(args: {
     appDataUpdateOps,
     requiredIds,
   });
-  if (integrityViolation) return integrityViolation;
+  if (integrityViolation)
+    return { kind: "violation", violation: integrityViolation };
 
-  const accountIdentityProofViolation = validateCommitAccountIdentityProofs({
+  const accountIdentityProofOutcome = validateCommitAccountIdentityProofs({
     parentState: args.parentState,
     resultingState: args.resultingState,
+    classification: {
+      proposals: proposalsWithSenders,
+      committerLeafIndex: args.committerLeafIndex,
+    },
   });
-  if (accountIdentityProofViolation) return accountIdentityProofViolation;
+  if (accountIdentityProofOutcome.kind === "violation")
+    return accountIdentityProofOutcome;
+  // A definite violation elsewhere in the commit still outranks an
+  // undecidable identity outcome (Phase 9, D-03): remember it and keep
+  // running disband/admin-leaf-coupling instead of returning immediately, so
+  // a commit that is provably illegal on one of those grounds is rejected
+  // rather than pooled.
+  const undecidableDetail =
+    accountIdentityProofOutcome.kind === "undecidable"
+      ? accountIdentityProofOutcome.detail
+      : undefined;
 
   const disband: DisbandClassification = classifyDisbandCommit({
     parentState: args.parentState,
@@ -553,13 +733,23 @@ export function validateCommitLegality(args: {
     committerLeafIndex: args.committerLeafIndex,
   });
   if (disband.kind === "violation")
-    return { reason: "disband-legality", detail: disband.detail };
+    return {
+      kind: "violation",
+      violation: { reason: "disband-legality", detail: disband.detail },
+    };
 
   const resultingMemberAccounts = getGroupMemberPubkeys(args.resultingState);
 
-  return validateAdminLeafCoupling({
+  const adminLeafCouplingViolation = validateAdminLeafCoupling({
     currentExtensions: args.parentState.groupContext.extensions,
     resultingExtensions: args.resultingState.groupContext.extensions,
     resultingMemberAccounts,
   });
+  if (adminLeafCouplingViolation)
+    return { kind: "violation", violation: adminLeafCouplingViolation };
+
+  if (undecidableDetail !== undefined)
+    return { kind: "undecidable", detail: undecidableDetail };
+
+  return { kind: "legal" };
 }

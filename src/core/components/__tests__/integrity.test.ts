@@ -25,6 +25,7 @@ import {
   type ProposalAppDataUpdate,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
+import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import {
@@ -39,6 +40,10 @@ import { getPubkeyLeafNodeIndexes } from "../../group-members.js";
 import { createSimpleGroup } from "../../group.js";
 import { generateKeyPackage } from "../../key-package.js";
 import { BinaryWriter } from "../../binary.js";
+import {
+  AUTHORIZATION_PROOF_LENGTH,
+  decodeAuthorizationProof,
+} from "../../authorization-proof.js";
 import { encodeComponentsList } from "../app-components-list.js";
 import {
   validateKeyPackageAccountIdentityProof,
@@ -49,6 +54,7 @@ import {
   appComponentsEntry,
   buildAppDataDictionary,
   componentEntry,
+  getComponentData,
   makeAppComponentsExtension,
 } from "../dictionary.js";
 import {
@@ -1769,5 +1775,178 @@ describe("validateUpdateProposalAccountIdentityProofs (UPD-04, D-09/D-10)", () =
         impl.id,
       ),
     ).toBeUndefined();
+  });
+});
+
+/**
+ * UPD-02 (09-04 Task 1): a replacement leaf whose `0x8009` proof does not
+ * bind that leaf's resulting signature key. Ratified by named tests, per
+ * D-07 -- no new production code. UPD-02 is already enforced by
+ * {@link validateCommitAccountIdentityProofs}'s changed-leaf proof-validity
+ * check (step (b), refs/marmot/app-components/account-identity-proof-v2.md
+ * "Production and reuse" -- `mls_signature_key` is a signed tag, so the
+ * proof's event id depends on the key it was produced for).
+ */
+describe("UPD-02: replacement leaf whose 0x8009 proof does not bind its resulting signature key", () => {
+  it("Test 1: a stale proof -- validly signed, but over a different MLS signature key -- is rejected as invalid-proof, carrying the leaf's MLS index", async () => {
+    const { impl, memberAccount, adminEpoch1 } = await twoPartyEpoch1Group();
+    const [memberLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      memberAccount.pubkey,
+    );
+    expect(memberLeafIndex).toBeDefined();
+
+    const staleKp = await forgeKeyPackage({
+      account: memberAccount,
+      ciphersuiteImpl: impl,
+      proof: "stale",
+    });
+    const resultingState = spliceLeafAtIndex(
+      adminEpoch1,
+      memberLeafIndex!,
+      staleKp.publicPackage.leafNode,
+    );
+
+    const outcome = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState,
+      // The proof check (step (b)) runs before classification (step (c))
+      // for every changed leaf, so the bucket this classification assigns
+      // is not load-bearing here -- any bucket produces the same result,
+      // because the loop never reaches classifyChangedLeaf for this leaf.
+      classification: { proposals: [], committerLeafIndex: memberLeafIndex },
+    });
+    expect(outcome.kind).toBe("violation");
+    if (outcome.kind !== "violation") throw new Error("expected a violation");
+    expect(outcome.violation.reason).toBe("account-identity-proof");
+    expect(outcome.violation.proofReason).toBe("invalid-proof");
+    expect(outcome.violation.leafIndex).toBe(memberLeafIndex);
+  });
+
+  it("Test 2: the stale proof's envelope decodes cleanly as a well-formed 104-byte proof, so the rejection comes from signature verification, not a decode failure", async () => {
+    const { impl, memberAccount } = await twoPartyEpoch1Group();
+    const staleKp = await forgeKeyPackage({
+      account: memberAccount,
+      ciphersuiteImpl: impl,
+      proof: "stale",
+    });
+    const leaf = staleKp.publicPackage.leafNode;
+
+    const raw = getComponentData(
+      leaf.extensions as unknown as GroupContextExtension[],
+      ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+    );
+    expect(raw).toBeDefined();
+    expect(raw!.length).toBe(AUTHORIZATION_PROOF_LENGTH);
+
+    // Decodes cleanly as a well-formed envelope: signerPubkey is the real
+    // account's identity, since the stale proof was validly signed by the
+    // real account -- only the MLS signature key it was bound to differs
+    // from the leaf's actual signature key.
+    const decoded = decodeAuthorizationProof(raw!);
+    expect(decoded.signerPubkey).toEqual(hexToBytes(memberAccount.pubkey));
+
+    // The rejection is attributable to signature verification (validator
+    // step 11), not to a decode failure (step 9, which would surface as
+    // invalid-dictionary) or a signer mismatch (step 10, identity-mismatch).
+    let caughtReason: string | undefined;
+    try {
+      validateLeafAccountIdentityProof(leaf, impl.id);
+    } catch (err) {
+      caughtReason = (err as { reason?: string }).reason;
+    }
+    expect(caughtReason).toBe("invalid-proof");
+  });
+
+  it("Test 3 (D-08): the stale-proof rejection is byte-identical in reason and proofReason to a tampered-proof rejection", async () => {
+    const { impl, memberAccount, adminEpoch1 } = await twoPartyEpoch1Group();
+    const [memberLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      memberAccount.pubkey,
+    );
+    expect(memberLeafIndex).toBeDefined();
+
+    const staleKp = await forgeKeyPackage({
+      account: memberAccount,
+      ciphersuiteImpl: impl,
+      proof: "stale",
+    });
+    const staleState = spliceLeafAtIndex(
+      adminEpoch1,
+      memberLeafIndex!,
+      staleKp.publicPackage.leafNode,
+    );
+    const staleOutcome = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState: staleState,
+    });
+
+    const tamperedKp = await forgeKeyPackage({
+      account: memberAccount,
+      ciphersuiteImpl: impl,
+      proof: "tampered",
+    });
+    const tamperedState = spliceLeafAtIndex(
+      adminEpoch1,
+      memberLeafIndex!,
+      tamperedKp.publicPackage.leafNode,
+    );
+    const tamperedOutcome = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState: tamperedState,
+    });
+
+    expect(staleOutcome.kind).toBe("violation");
+    expect(tamperedOutcome.kind).toBe("violation");
+    if (
+      staleOutcome.kind !== "violation" ||
+      tamperedOutcome.kind !== "violation"
+    )
+      throw new Error("expected both outcomes to be violations");
+
+    // D-08: the 104-byte envelope (signer_pubkey, created_at, signature)
+    // stores no MLS signature key -- the key is a signed input, recoverable
+    // only by reconstructing the event -- so a stale proof is
+    // cryptographically indistinguishable from a corrupt one, and both
+    // correctly surface as invalid-proof. Reporting UPD-02 more precisely
+    // would require a wire-format change, out of scope for this milestone.
+    // This test documents that indistinguishability rather than hiding it.
+    expect(staleOutcome.violation.reason).toBe(
+      tamperedOutcome.violation.reason,
+    );
+    expect(staleOutcome.violation.proofReason).toBe(
+      tamperedOutcome.violation.proofReason,
+    );
+    expect(staleOutcome.violation.proofReason).toBe("invalid-proof");
+  });
+
+  it("Test 4 (positive control): a leaf whose proof genuinely matches its own signature key returns legal, so Test 1 is not passing for an unrelated reason", async () => {
+    const { impl, ctx, adminAccount, adminEpoch1 } =
+      await twoPartyEpoch1Group();
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
+    );
+    expect(adminLeafIndex).toBeDefined();
+
+    // A genuine self-update: the resulting leaf's proof is bound to its own
+    // freshly-generated signature key, the honest counterpart to Test 1's
+    // stale-key fixture.
+    const selfUpdate = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    expectLegal(
+      validateCommitAccountIdentityProofs({
+        parentState: adminEpoch1,
+        resultingState: selfUpdate.newState,
+        classification: { proposals: [], committerLeafIndex: adminLeafIndex },
+      }),
+    );
+    void impl;
   });
 });

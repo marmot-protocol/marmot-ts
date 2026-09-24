@@ -41,15 +41,23 @@ export interface ChangedLeafClassificationInput {
  *    at all. This is NOT inferred from an empty `proposals` array — a
  *    legitimate proposal-less self-update commit has an empty list and a
  *    defined committer, and must stay decidable.
- * 2. Add bucket: matches if any proposal normalizes to an Add whose
+ * 2. Add bucket: matches only if the changed leaf's slot was genuinely freed
+ *    AND any proposal normalizes to an Add whose
  *    `add.keyPackage.leafNode.signature` is byte-equal ({@link bytesEqual})
  *    to `changed.leaf.signature`. Matched by signature bytes, never by leaf
  *    index — a Remove+Add commit reuses a freed slot, so the index is
- *    worthless for this bucket and the signature is exact. This bucket
- *    performs no prior-identity comparison downstream: a new member in a
- *    freed slot legitimately has a different identity than whoever occupied
- *    the slot before removal. Checked first, so an Add proposal is never
- *    shadowed by an incidental index match against `committerLeafIndex`.
+ *    worthless for identifying WHICH Add this is, and the signature is exact.
+ *    The slot counts as freed when `changed.parentLeaf` is `undefined` (the
+ *    parent tree held no leaf there) or this same commit carries a Remove of
+ *    `changed.leafIndex`. That precondition is load-bearing (WR-04): this
+ *    bucket performs no prior-identity comparison downstream — a new member in
+ *    a freed slot legitimately has a different identity than whoever occupied
+ *    the slot before removal — so without it, a persisted/corrupted resulting
+ *    state that seats an Add's leaf over a STILL-OCCUPIED slot would skip the
+ *    identity check altogether (fail-open). Such a leaf now falls through to
+ *    `unattributable`/`undecidable` instead. Checked first, so an Add proposal
+ *    is never shadowed by an incidental index match against
+ *    `committerLeafIndex`.
  * 3. Update-proposal bucket: matches if any proposal is an Update with a
  *    defined `senderLeafIndex` numerically equal to `changed.leafIndex`.
  * 4. Committer bucket: matches if `input.committerLeafIndex` is defined and
@@ -74,17 +82,40 @@ export function classifyChangedLeaf(
 ): ChangedLeafClassification {
   if (input === undefined) return { kind: "undecidable" };
 
-  for (const item of input.proposals) {
-    const proposal = item.proposal;
-    if (proposal.proposalType !== defaultProposalTypes.add) continue;
-    if (!("add" in proposal)) continue;
-    if (
-      bytesEqual(
-        proposal.add.keyPackage.leafNode.signature,
-        changed.leaf.signature,
-      )
-    ) {
-      return { kind: "add" };
+  // WR-04: an Add may only claim a changed leaf whose slot was genuinely
+  // vacated — either the parent tree held no leaf at that index at all, or
+  // this same commit removes its prior occupant. Matching on signature bytes
+  // alone let a STORED resulting state seat an Add over a still-occupied slot
+  // and thereby skip the prior-occupant identity comparison entirely. That is
+  // unreachable for a resulting state ts-mls computed (an Add is only ever
+  // placed at a blank leaf), so no legitimate commit changes disposition here,
+  // but it is reachable on the two paths that feed a PERSISTED resulting state
+  // into this classifier — the known-state short-circuit and
+  // `#treeResolution`'s stamped links — which is exactly the pre-upgrade
+  // persisted edge this phase refuses to grandfather. An Add matching by
+  // signature into a still-occupied, un-removed slot now falls through to
+  // `unattributable`/`undecidable` instead: fail closed.
+  const slotFreed =
+    changed.parentLeaf === undefined ||
+    input.proposals.some(
+      (item) =>
+        item.proposal.proposalType === defaultProposalTypes.remove &&
+        "remove" in item.proposal &&
+        Number(item.proposal.remove.removed) === changed.leafIndex,
+    );
+  if (slotFreed) {
+    for (const item of input.proposals) {
+      const proposal = item.proposal;
+      if (proposal.proposalType !== defaultProposalTypes.add) continue;
+      if (!("add" in proposal)) continue;
+      if (
+        bytesEqual(
+          proposal.add.keyPackage.leafNode.signature,
+          changed.leaf.signature,
+        )
+      ) {
+        return { kind: "add" };
+      }
     }
   }
 

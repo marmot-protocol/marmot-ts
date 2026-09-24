@@ -196,13 +196,36 @@ function validateLegalityWithoutProposals(
   // removal), so rules 1-2 and the leaf-only guard are the only integrity
   // checks that can fire. 0x8009 is never synthesized, so a dictionary that
   // carries it is still reported.
-  const resulting = getAppDataDictionary(resultingExtensions) ?? [];
+  // WR-03: `getAppDataDictionary` throws on malformed bytes or a duplicate
+  // component id, and those bytes are attacker-influenceable (an admin can
+  // land an AppDataUpdate writing arbitrary bytes to a component id). Left
+  // unguarded, the throw escaped this helper's documented non-throwing
+  // contract and was swallowed by `resolveCandidateParent`'s blanket `catch`
+  // into a silent, never-clearing `deferred` — while the SAME class of
+  // malformed bytes reaching `getAppComponents` directly above became a typed
+  // `component-integrity` rejection. Map it to that same typed violation so
+  // one malformed dictionary cannot receive two different dispositions.
+  let resultingDictionary: ReturnType<typeof getAppDataDictionary>;
+  let currentDictionary: ReturnType<typeof getAppDataDictionary>;
+  try {
+    resultingDictionary = getAppDataDictionary(resultingExtensions);
+    currentDictionary = getAppDataDictionary(currentExtensions);
+  } catch {
+    return {
+      kind: "violation",
+      violation: {
+        reason: "component-integrity",
+        detail: "app_data_dictionary did not decode",
+      },
+    };
+  }
+  const resulting = resultingDictionary ?? [];
   const backedOps: AppDataUpdateOp[] = resulting
     .filter(
       (entry) => entry.componentId !== ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
     )
     .map((entry) => ({ componentId: entry.componentId, data: entry.data }));
-  for (const entry of getAppDataDictionary(currentExtensions) ?? []) {
+  for (const entry of currentDictionary ?? []) {
     if (entry.componentId === ACCOUNT_IDENTITY_PROOF_COMPONENT_ID) continue;
     if (!resulting.some((r) => r.componentId === entry.componentId))
       backedOps.push({ componentId: entry.componentId, data: undefined });

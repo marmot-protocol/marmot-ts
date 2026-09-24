@@ -198,8 +198,24 @@ export function validateAppComponentIntegrity(args: {
 }): CommitIntegrityViolation | undefined {
   // Read the raw dictionary generically (not the typed accessors in
   // dictionary.ts) so unknown component ids participate in the diff.
-  const current = getAppDataDictionary(args.currentExtensions);
-  const resulting = getAppDataDictionary(args.resultingExtensions);
+  //
+  // WR-03: `getAppDataDictionary` throws on malformed bytes or a duplicate
+  // component id. This validator is documented as typed and non-throwing, and
+  // the convergence/replay seams reach it through `validateCommitLegality`
+  // without wrapping the call, so an escaping throw aborted the ingest
+  // generator instead of producing a verdict. Map it to the same typed
+  // violation the sibling `getAppComponents` decode failure already produces.
+  let current: ReturnType<typeof getAppDataDictionary>;
+  let resulting: ReturnType<typeof getAppDataDictionary>;
+  try {
+    current = getAppDataDictionary(args.currentExtensions);
+    resulting = getAppDataDictionary(args.resultingExtensions);
+  } catch {
+    return {
+      reason: "component-integrity",
+      detail: "app_data_dictionary did not decode",
+    };
+  }
 
   // Rule 1: the app_data_dictionary extension itself may never be dropped.
   if (current !== undefined && resulting === undefined) {

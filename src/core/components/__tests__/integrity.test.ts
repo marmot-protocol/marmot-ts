@@ -9,11 +9,14 @@
 import {
   appDataUpdateProposalType,
   ClientState,
+  contentTypes,
   createCommit,
+  createUpdateProposal,
   defaultCryptoProvider,
   defaultProposalTypes,
   getCiphersuiteImpl,
   GroupContextExtension,
+  joinGroup,
   makeAppDataDictionaryExtension,
   nodeTypes,
   type CiphersuiteImpl,
@@ -28,6 +31,7 @@ import {
   dropAccountIdentityProofRequirement,
   forgeKeyPackage,
   spliceLeafAtIndex,
+  stripLeafAccountIdentityProof,
 } from "../../../__tests__/helpers/account-identity-proof-fixtures.js";
 import { marmotAuthService } from "../../auth-service.js";
 import { createCredential } from "../../credential.js";
@@ -64,6 +68,7 @@ import {
   validateAddProposalAccountIdentityProofs,
   validateCommitAccountIdentityProofs,
   validateCommitLegality,
+  validateUpdateProposalAccountIdentityProofs,
 } from "../integrity.js";
 
 const SUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
@@ -1544,5 +1549,225 @@ describe("validateCommitLegality", () => {
         "resulting GroupContext is outside the current account identity proof profile (invalid-dictionary)",
       proofReason: "invalid-dictionary",
     });
+  });
+});
+
+/** A 2-party group at epoch 1, with the member's own post-join `ClientState` (not just the admin's view). */
+async function twoPartyEpoch1GroupWithMemberJoin() {
+  const adminAccount = testAccount(6);
+  const memberAccount = testAccount(9);
+  const impl = await getCiphersuiteImpl(SUITE, defaultCryptoProvider);
+  const ctx = { cipherSuite: impl, authService: marmotAuthService };
+
+  const adminKp = await generateKeyPackage({
+    credential: createCredential(adminAccount.pubkey),
+    signer: adminAccount.signer,
+    ciphersuiteImpl: impl,
+  });
+  const { clientState: adminEpoch0 } = await createSimpleGroup(
+    adminKp,
+    impl,
+    "Integrity Update Test",
+    { adminPubkeys: [adminAccount.pubkey] },
+  );
+
+  const memberKp = await generateKeyPackage({
+    credential: createCredential(memberAccount.pubkey),
+    signer: memberAccount.signer,
+    ciphersuiteImpl: impl,
+  });
+  const add = await createCommit({
+    context: ctx,
+    state: adminEpoch0,
+    wireAsPublicMessage: false,
+    extraProposals: [
+      {
+        proposalType: defaultProposalTypes.add,
+        add: { keyPackage: memberKp.publicPackage },
+      },
+    ],
+    ratchetTreeExtension: true,
+  });
+
+  const memberEpoch1 = await joinGroup({
+    context: ctx,
+    welcome: add.welcome!.welcome!,
+    keyPackage: memberKp.publicPackage,
+    privateKeys: memberKp.privatePackage,
+    ratchetTree: undefined,
+  });
+
+  return {
+    impl,
+    ctx,
+    adminAccount,
+    memberAccount,
+    adminEpoch1: add.newState,
+    memberEpoch1,
+  };
+}
+
+describe("validateUpdateProposalAccountIdentityProofs (UPD-04, D-09/D-10)", () => {
+  it("Test 1: returns undefined for an honest Update proposal built by a current member from their own state", async () => {
+    const { impl, ctx, memberAccount, adminEpoch1, memberEpoch1 } =
+      await twoPartyEpoch1GroupWithMemberJoin();
+    const [memberLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      memberAccount.pubkey,
+    );
+    expect(memberLeafIndex).toBeDefined();
+
+    const { message } = await createUpdateProposal({
+      context: ctx,
+      state: memberEpoch1,
+      wireAsPublicMessage: true,
+    });
+    if (message.publicMessage?.content.contentType !== contentTypes.proposal)
+      throw new Error("expected a proposal-framed message");
+    const updateProposal: Proposal = message.publicMessage.content.proposal;
+
+    expect(
+      validateUpdateProposalAccountIdentityProofs(
+        [{ proposal: updateProposal, senderLeafIndex: memberLeafIndex }],
+        adminEpoch1.ratchetTree,
+        impl.id,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("Test 2: returns a violation with proofReason unattributable-leaf when senderLeafIndex is undefined", async () => {
+    const { impl, adminAccount, adminEpoch1 } = await twoPartyEpoch1Group();
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
+    );
+    const adminNode = adminEpoch1.ratchetTree[adminLeafIndex! * 2];
+    if (adminNode?.nodeType !== nodeTypes.leaf)
+      throw new Error("expected a leaf node at the admin's index");
+
+    const updateProposal: Proposal = {
+      proposalType: defaultProposalTypes.update,
+      update: { leafNode: adminNode.leaf },
+    };
+
+    const violation = validateUpdateProposalAccountIdentityProofs(
+      [{ proposal: updateProposal, senderLeafIndex: undefined }],
+      adminEpoch1.ratchetTree,
+      impl.id,
+    );
+    expect(violation?.reason).toBe("account-identity-proof");
+    expect(violation?.proofReason).toBe("unattributable-leaf");
+    expect(violation?.leafIndex).toBeUndefined();
+  });
+
+  it("Test 3: returns a violation with proofReason unattributable-leaf when senderLeafIndex points at a blank or out-of-range leaf", async () => {
+    const { impl, adminAccount, adminEpoch1 } = await twoPartyEpoch1Group();
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
+    );
+    const adminNode = adminEpoch1.ratchetTree[adminLeafIndex! * 2];
+    if (adminNode?.nodeType !== nodeTypes.leaf)
+      throw new Error("expected a leaf node at the admin's index");
+
+    const updateProposal: Proposal = {
+      proposalType: defaultProposalTypes.update,
+      update: { leafNode: adminNode.leaf },
+    };
+
+    const violation = validateUpdateProposalAccountIdentityProofs(
+      [{ proposal: updateProposal, senderLeafIndex: 999 }],
+      adminEpoch1.ratchetTree,
+      impl.id,
+    );
+    expect(violation?.reason).toBe("account-identity-proof");
+    expect(violation?.proofReason).toBe("unattributable-leaf");
+  });
+
+  it("Test 4: returns a violation carrying the thrown proof reason when the Update's leaf has no 0x8009 support or data", async () => {
+    const { impl, adminAccount, adminEpoch1 } = await twoPartyEpoch1Group();
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
+    );
+    const adminNode = adminEpoch1.ratchetTree[adminLeafIndex! * 2];
+    if (adminNode?.nodeType !== nodeTypes.leaf)
+      throw new Error("expected a leaf node at the admin's index");
+
+    const strippedLeaf = stripLeafAccountIdentityProof(adminNode.leaf);
+    const updateProposal: Proposal = {
+      proposalType: defaultProposalTypes.update,
+      update: { leafNode: strippedLeaf },
+    };
+
+    const violation = validateUpdateProposalAccountIdentityProofs(
+      [{ proposal: updateProposal, senderLeafIndex: adminLeafIndex }],
+      adminEpoch1.ratchetTree,
+      impl.id,
+    );
+    expect(violation?.reason).toBe("account-identity-proof");
+    expect(violation?.proofReason).toBe("missing-support");
+    expect(violation?.leafIndex).toBeUndefined();
+  });
+
+  it("Test 5: returns a violation with proofReason member-identity-changed when the Update's leaf credential identity differs from the resolved sender's identity", async () => {
+    const { impl, adminAccount, memberAccount, adminEpoch1 } =
+      await twoPartyEpoch1Group();
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
+    );
+    const [memberLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      memberAccount.pubkey,
+    );
+    const memberNode = adminEpoch1.ratchetTree[memberLeafIndex! * 2];
+    if (memberNode?.nodeType !== nodeTypes.leaf)
+      throw new Error("expected a leaf node at the member's index");
+
+    // The proposal names admin as the sender, but carries member's own
+    // genuine (validly-proofed) leaf — a fabricated identity swap.
+    const updateProposal: Proposal = {
+      proposalType: defaultProposalTypes.update,
+      update: { leafNode: memberNode.leaf },
+    };
+
+    const violation = validateUpdateProposalAccountIdentityProofs(
+      [{ proposal: updateProposal, senderLeafIndex: adminLeafIndex }],
+      adminEpoch1.ratchetTree,
+      impl.id,
+    );
+    expect(violation?.reason).toBe("account-identity-proof");
+    expect(violation?.proofReason).toBe("member-identity-changed");
+    expect(violation?.leafIndex).toBeUndefined();
+  });
+
+  it("Test 6: ignores every non-Update proposal kind, including Add and AppDataUpdate, and accepts bare Proposal items as well as ProposalWithSender", async () => {
+    const { impl, adminEpoch1 } = await twoPartyEpoch1Group();
+    const strangerAccount = testAccount(2);
+    const strangerKp = await generateKeyPackage({
+      credential: createCredential(strangerAccount.pubkey),
+      signer: strangerAccount.signer,
+      ciphersuiteImpl: impl,
+    });
+    const addProposal: Proposal = {
+      proposalType: defaultProposalTypes.add,
+      add: { keyPackage: strangerKp.publicPackage },
+    };
+    const appDataUpdateProposal: Proposal = {
+      proposalType: appDataUpdateProposalType,
+      appDataUpdate: {
+        componentId: GROUP_PROFILE_COMPONENT_ID,
+        operation: "remove",
+      },
+    };
+
+    expect(
+      validateUpdateProposalAccountIdentityProofs(
+        [addProposal, { proposal: appDataUpdateProposal, senderLeafIndex: 0 }],
+        adminEpoch1.ratchetTree,
+        impl.id,
+      ),
+    ).toBeUndefined();
   });
 });

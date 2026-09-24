@@ -35,7 +35,12 @@ proof-class-agnostic 104-byte `MarmotAuthorizationProof` primitive, reproducing 
 Phase 7 complete (2026-09-14) — KeyPackage leaves carry the `0x8009` account identity proof (spec vector byte-exact),
 signed with the client's own `EventSigner`; invite, admin Add, and join-via-Welcome seams validate it; the legacy
 `0xf2f1` module and exports are deleted with no fallback; stored legacy KeyPackages are flagged `nonCurrent`.
-Next: Phase 8 (GroupContext profile requirement + legality-seam extension).
+Phase 8 complete (2026-09-15) — every group requires `0x8009` in its GroupContext, enforced identically across
+create, invite, join, inbound ingest, and convergence, closing the recurring seam-asymmetry defect class.
+Phase 9 complete (2026-09-24) — a replacement leaf (self-update or committer update-path) must preserve the
+member's account identity and keep `0x8009` bound to the leaf's resulting signature key, on every legality seam;
+standalone Update proposals are re-checked at admission. Validation-only — no new key-rotation API.
+Next: Phase 10 (founding Current-profile group creation via Welcome only).
 
 ## Current Milestone: v2.0 Account identity proof v2
 
@@ -101,6 +106,8 @@ shelved audit/closure phases, 999.7 invite-only client mode; multi-device (MDEV-
 - ✓ AUTHZ-01..05 shared `MarmotAuthorizationProof` envelope primitive in `src/core` (104-byte codec, `created_at` range, x-only signer check, NIP-01 + BIP-340 verify, strict external-signer produce) — v2.0 _(Validated in Phase 6: Shared Authorization-Proof Envelope Primitive)_
 - ✓ PROOF-02..06 `0x8009` account identity proof component (kind-450 template/producer on the spec vector, leaf advertisement + single dictionary entry, leaf/KeyPackage/tree validators, wrong-container rejection) — v2.0 _(Validated in Phase 7: Account Identity Proof Component (0x8009) + Legacy Clean Cut)_
 - ✓ CUT-01 / CUT-02 legacy `0xf2f1` never emitted, exports removed, and any `0xf2f1`-carrying/requiring KeyPackage, leaf, or group rejected — v2.0 _(Validated in Phase 7: Account Identity Proof Component (0x8009) + Legacy Clean Cut)_
+- ✓ GRP-01..04 GroupContext `app_components` requires `0x8009`, `0x8009` data in GroupContext rejected, enforced identically on create, invite, join, inbound, and convergence seams — v2.0 _(Validated in Phase 8: GroupContext Profile Requirement & Legality-Seam Extension)_
+- ✓ UPD-01..04 replacement-leaf identity binding (prior-occupant identity preserved, proof bound to the resulting signature key, `0x8009` non-removable from a non-blank leaf, standalone Update re-checked at admission) — v2.0 _(Validated in Phase 9: Self-Update / Replacement-Leaf Identity Binding)_
 
 ### Active
 
@@ -110,8 +117,8 @@ shelved audit/closure phases, 999.7 invite-only client mode; multi-device (MDEV-
 
 - [x] Account identity proof as app component `0x8009`, byte-exact with the spec vector and MDK Current profile _(Phase 7)_
 - [x] Legacy `0xf2f1` proof profile removed and rejected everywhere (clean cut) _(Phase 7)_
-- [ ] GroupContext requires `0x8009`; profile enforced on every legality seam
-- [ ] Self-update / replacement-leaf identity and proof binding rules
+- [x] GroupContext requires `0x8009`; profile enforced on every legality seam _(Phase 8)_
+- [x] Self-update / replacement-leaf identity and proof binding rules _(Phase 9)_
 - [ ] Current-profile founding group creation via Welcome only
 
 ### Out of Scope
@@ -192,4 +199,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-_Last updated: 2026-09-14 — Phase 7 (Account Identity Proof Component (0x8009) + Legacy Clean Cut) complete_
+_Last updated: 2026-09-24 — Phase 9 (Self-Update / Replacement-Leaf Identity Binding) complete_

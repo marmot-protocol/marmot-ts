@@ -145,7 +145,7 @@ signature key, on every legality seam. Validation-only this milestone; no new ke
 3. A commit that removes `0x8009` support or data from a non-blank member leaf is rejected.
 4. A standalone Update proposal is re-checked for proof validity and identity equality at admission, before it is queued.
 
-**Plans**: 2/4 plans executed
+**Plans**: 3/4 plans executed
 
 Plans:
 **Wave 1**
@@ -158,7 +158,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 09-03-PLAN.md — UPD-04: standalone Update admission validator wired into the inbound admin-policy and local propose seams (wave 3)
+- [x] 09-03-PLAN.md — UPD-04: standalone Update admission validator wired into the inbound admin-policy and local propose seams (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -224,7 +224,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 3.1 → 4 → 4.1 → 5 → 6
 | 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 1/1 | Complete    | 2026-09-12 |
 | 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 8/8 | Complete    | 2026-09-14 |
 | 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 4/4 | Complete   | 2026-09-15 |
-| 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 2/4 | In Progress|  |
+| 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 3/4 | In Progress|  |
 | 10. Founding Group Creation via Welcome                    | v2.0      | 0/TBD           | Not started | -          |
 | 11. Interop Fixtures, Exports Snapshot & QA Gate           | v2.0      | 0/TBD           | Not started | -          |
 

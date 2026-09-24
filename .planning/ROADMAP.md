@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: Shared Authorization-Proof Envelope Primitive** - Pure 104-byte `MarmotAuthorizationProof` codec, `created_at` range check, and BIP-340/external-signer verification, independent of any proof class (completed 2026-09-12)
 - [x] **Phase 7: Account Identity Proof Component (0x8009) + Legacy Clean Cut** - Kind-450 proof-class module, KeyPackage/leaf negotiation, and full removal of the legacy `0xf2f1` extension with no fallback (completed 2026-09-14)
 - [x] **Phase 8: GroupContext Profile Requirement & Legality-Seam Extension** - `0x8009` required on every group and enforced identically across create, invite, join, inbound, and convergence seams (completed 2026-09-15)
-- [ ] **Phase 9: Self-Update / Replacement-Leaf Identity Binding** - Leaf replacement preserves account identity and keeps the proof bound to the new signature key
+- [x] **Phase 9: Self-Update / Replacement-Leaf Identity Binding** - Leaf replacement preserves account identity and keeps the proof bound to the new signature key (completed 2026-09-24)
 - [ ] **Phase 10: Founding Group Creation via Welcome** - Current-profile group creation merges the founding Add locally and delivers membership via independently-retryable Welcomes only
 - [ ] **Phase 11: Interop Fixtures, Exports Snapshot & QA Gate** - Rust-signed fixture verification, exports snapshot, and a green six-runtime suite
 
@@ -145,7 +145,7 @@ signature key, on every legality seam. Validation-only this milestone; no new ke
 3. A commit that removes `0x8009` support or data from a non-blank member leaf is rejected.
 4. A standalone Update proposal is re-checked for proof validity and identity equality at admission, before it is queued.
 
-**Plans**: 3/4 plans executed
+**Plans**: 4/4 plans complete
 
 Plans:
 **Wave 1**
@@ -162,7 +162,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 09-04-PLAN.md — UPD-02/UPD-03 named regression tests (no new validator code), exports snapshot, full-suite gate (wave 4)
+- [x] 09-04-PLAN.md — UPD-02/UPD-03 named regression tests (no new validator code), exports snapshot, full-suite gate (wave 4)
 
 ### Phase 10: Founding Group Creation via Welcome
 
@@ -224,7 +224,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 3.1 → 4 → 4.1 → 5 → 6
 | 6. Shared Authorization-Proof Envelope Primitive           | v2.0      | 1/1 | Complete    | 2026-09-12 |
 | 7. Account Identity Proof Component (0x8009) + Clean Cut   | v2.0      | 8/8 | Complete    | 2026-09-14 |
 | 8. GroupContext Profile Requirement & Legality-Seam Ext.   | v2.0      | 4/4 | Complete   | 2026-09-15 |
-| 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 3/4 | In Progress|  |
+| 9. Self-Update / Replacement-Leaf Identity Binding         | v2.0      | 4/4 | Complete   | 2026-09-24 |
 | 10. Founding Group Creation via Welcome                    | v2.0      | 0/TBD           | Not started | -          |
 | 11. Interop Fixtures, Exports Snapshot & QA Gate           | v2.0      | 0/TBD           | Not started | -          |
 

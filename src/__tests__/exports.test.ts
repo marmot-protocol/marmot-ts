@@ -328,6 +328,7 @@ describe("exports", () => {
         "validateGroupMemberAccountIdentityProofs",
         "validateKeyPackageAccountIdentityProof",
         "validateLeafAccountIdentityProof",
+        "validateUpdateProposalAccountIdentityProofs",
         "varintSize",
         "verifyApplicationRumorAuthorship",
         "verifyAuthorizationProof",

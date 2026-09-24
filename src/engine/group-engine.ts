@@ -50,6 +50,7 @@ import {
   type CommitLegalityOutcome,
   validateAddProposalAccountIdentityProofs,
   validateCommitLegality,
+  validateUpdateProposalAccountIdentityProofs,
 } from "../core/components/integrity.js";
 import {
   getGroupProfileSupport,
@@ -994,6 +995,32 @@ export class MarmotGroupEngine<TEnvelope> {
             intent.proposal.add.keyPackage,
             this.ciphersuite.id,
           );
+        }
+
+        // UPD-04/D-09: `SendIntent` accepts any raw `Proposal`, so without
+        // this branch a hand-built Update proposal reaches `createProposal`
+        // unchecked -- neither the Add branch above nor
+        // `validatePreApplyProposals` below inspects Updates. A locally built
+        // standalone Update's sender is always the local client itself (no
+        // resolution ambiguity), so this passes the local leaf index
+        // directly. Throws the same `CommitLegalityError` the
+        // `validatePreApplyProposals` gate below throws, since the validator
+        // returns a structured violation rather than throwing itself.
+        if (
+          intent.proposal.proposalType === defaultProposalTypes.update &&
+          "update" in intent.proposal
+        ) {
+          const updateViolation = validateUpdateProposalAccountIdentityProofs(
+            [
+              {
+                proposal: intent.proposal,
+                senderLeafIndex: Number(this.state.privatePath.leafIndex),
+              },
+            ],
+            this.state.ratchetTree,
+            this.ciphersuite.id,
+          );
+          if (updateViolation) throw new CommitLegalityError(updateViolation);
         }
 
         // CR-02: the rest of the pre-apply gate — AppDataUpdate payloads and
@@ -3473,10 +3500,19 @@ export class MarmotGroupEngine<TEnvelope> {
     } catch {
       // An undecodable admin policy cannot prove any committer is an admin, so
       // every commit is refused (fail closed; MDK's `admins_of_group` error
-      // propagates the same way). Proposals still get pre-apply admission.
+      // propagates the same way). Proposals still get pre-apply admission,
+      // including the UPD-04/D-09 standalone Update gate -- otherwise a group
+      // whose admin-policy bytes do not decode would admit an unvalidated
+      // standalone Update, exactly the seam-asymmetry class this phase exists
+      // to close (T-09-17).
       return (incoming) =>
         incoming.kind === "commit" ||
-        validatePreApplyProposals([incoming.proposal], ciphersuiteId)
+        validatePreApplyProposals([incoming.proposal], ciphersuiteId) ||
+        validateUpdateProposalAccountIdentityProofs(
+          [incoming.proposal],
+          state.ratchetTree,
+          ciphersuiteId,
+        )
           ? "reject"
           : "accept";
     }

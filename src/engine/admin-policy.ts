@@ -35,6 +35,7 @@ import {
 import {
   type CommitIntegrityViolation,
   validateAddProposalAccountIdentityProofs,
+  validateUpdateProposalAccountIdentityProofs,
 } from "../core/components/integrity.js";
 import { decodeMessageRetentionV1 } from "../core/components/message-retention.js";
 import { decodeNostrRoutingV1 } from "../core/components/nostr-routing.js";
@@ -286,11 +287,19 @@ export function createAdminCommitPolicyCallback(args: {
 
   return (incoming) => {
     if (incoming.kind === "proposal") {
-      // Add proofs (D-09) and known-component AppDataUpdate payloads (CR-03)
-      // are validated here. Standalone Update admission is deferred to
-      // Phase 9 (D-10) -- a bad Update leaf is still caught at commit time by
-      // the tree-diff adapter.
-      return validatePreApplyProposals([incoming.proposal], ciphersuiteId)
+      // Add proofs, known-component AppDataUpdate payloads (CR-03), and
+      // standalone Update proof + identity (UPD-04, D-09/D-10) are all
+      // validated here, so a bad standalone proposal never reaches
+      // unappliedProposals. A bad Update leaf that bypasses this gate (or the
+      // local propose gate in `group-engine.ts`) is still caught at commit
+      // time by the tree-diff adapter (`validateCommitAccountIdentityProofs`)
+      // as defence in depth.
+      return validatePreApplyProposals([incoming.proposal], ciphersuiteId) ||
+        validateUpdateProposalAccountIdentityProofs(
+          [incoming.proposal],
+          ratchetTree,
+          ciphersuiteId,
+        )
         ? "reject"
         : "accept";
     }

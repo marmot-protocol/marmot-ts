@@ -20,7 +20,10 @@ import {
 import { verifyApplicationRumorAuthorship } from "../core/application-rumor.js";
 import { getGroupProfileSupport } from "../core/components/account-identity-proof.js";
 import { marmotAuthService } from "../core/auth-service.js";
-import { validateCommitLegality } from "../core/components/integrity.js";
+import {
+  validateCommitLegality,
+  validateUpdateProposalAccountIdentityProofs,
+} from "../core/components/integrity.js";
 import { classifyDisbandCommit } from "../core/components/disband-validation.js";
 import {
   type CommitOrderingKey,
@@ -613,16 +616,24 @@ export async function* ingestEnvelopes<TEnvelope>(
       const captured = capture.take();
 
       if (result.kind === "newState" && result.actionTaken === "reject") {
-        // D-09: a standalone Add proposal with a missing or invalid 0x8009
-        // proof is refused here before it is staged. Only the ratchet
-        // advance (result.newState) is applied -- ts-mls never stages a
-        // rejected proposal's effect, mirroring the application-message
-        // branch's ratchet-advance-only handling below -- and
-        // recordProposalStaged is deliberately never called.
-        const violation = validatePreApplyProposals(
-          captured.proposals,
-          ctx.ciphersuite.id,
-        );
+        // D-09/D-10 (UPD-04): a standalone Add proposal with a missing or
+        // invalid 0x8009 proof, OR a standalone Update proposal with an
+        // unresolvable sender / invalid proof / changed account identity, is
+        // refused here before it is staged. Only the ratchet advance
+        // (result.newState) is applied -- ts-mls never stages a rejected
+        // proposal's effect, mirroring the application-message branch's
+        // ratchet-advance-only handling below -- and recordProposalStaged is
+        // deliberately never called. Re-derives the specific violation (not
+        // just the accept/reject verdict the callback already made) so the
+        // result and audit trail carry the real account-identity-proof
+        // reason/proofReason rather than the generic admin-policy fallback.
+        const violation =
+          validatePreApplyProposals(captured.proposals, ctx.ciphersuite.id) ??
+          validateUpdateProposalAccountIdentityProofs(
+            captured.proposals,
+            parentForAuth.ratchetTree,
+            ctx.ciphersuite.id,
+          );
         ctx.setState(result.newState);
         ctx.dedup.remember(message);
         log(

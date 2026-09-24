@@ -4,7 +4,9 @@ import {
   ClientState,
   defaultProposalTypes,
   getAppDataDictionary,
+  getCredentialFromLeafIndex,
   GroupContextExtension,
+  type LeafIndex,
   Proposal,
   ProposalWithSender,
 } from "ts-mls";
@@ -609,6 +611,139 @@ export function validateAddProposalAccountIdentityProofs(
       return {
         reason: "account-identity-proof",
         detail: `Add proposal ${position} KeyPackage account identity proof validation failed`,
+      };
+    }
+  }
+  return undefined;
+}
+
+/** Narrowing cast to ts-mls's `LeafIndex` branded type, matching `src/engine/admin-policy.ts`'s local helper. */
+function toLeafIndex(index: number): LeafIndex {
+  return index as LeafIndex;
+}
+
+/**
+ * The Update branch of `validate_standalone_proposal_account_identity_proof`
+ * (UPD-04, D-09/D-10) — the sibling of {@link validateAddProposalAccountIdentityProofs}
+ * for standalone Update proposals. Pure and non-throwing. Used pre-apply by
+ * the same two standalone-proposal admission seams (`src/engine/admin-policy.ts`
+ * inbound, `src/engine/group-engine.ts` local propose path) so a bad Update —
+ * an unattributable sender, an invalid `0x8009` proof, or a replacement leaf
+ * bound to a different account identity — never reaches the queued-proposal
+ * state. The commit-time tree diff in
+ * {@link validateCommitAccountIdentityProofs} still catches a bad Update
+ * after apply if either admission gate is bypassed; both entry points enforce
+ * the same rule.
+ *
+ * Deliberately returns `CommitIntegrityViolation | undefined`, NOT the
+ * {@link CommitLegalityOutcome} tri-state: per D-10, pre-apply admission is
+ * branch-independent — there is no candidate parent whose later arrival could
+ * make an unresolvable-sender Update proposal judgeable, so there is no
+ * deferral case here (unlike {@link validateCommitAccountIdentityProofs}'s
+ * `undecidable` outcome, which exists because a commit MAY later become
+ * classifiable against a different candidate parent).
+ *
+ * Accepts both bare `Proposal` and `ProposalWithSender` items (normalizes
+ * each first) and ignores every non-Update proposal kind. Returns on the
+ * first failing Update, in this order:
+ * 1. the sender must be attributable — a normalized item with an undefined
+ *    `senderLeafIndex` is rejected as `unattributable-leaf` (D-10 rejects
+ *    rather than defers, matching `admin-policy.ts`'s self_remove
+ *    sender-resolution template);
+ * 2. the sender's CURRENT identity is resolved via
+ *    `getCredentialFromLeafIndex(ratchetTree, senderLeafIndex)` +
+ *    {@link getCredentialPubkey}; any throw (a blank or out-of-range leaf, a
+ *    non-basic credential) is also `unattributable-leaf`;
+ * 3. the replacement leaf's own `0x8009` proof is validated with
+ *    {@link validateLeafAccountIdentityProof}; an `AccountIdentityProofError`
+ *    carries its `reason` as `proofReason`, any other throw omits it;
+ * 4. the replacement leaf's credential identity is compared against the
+ *    resolved sender identity; a throw is `invalid-credential`, a mismatch is
+ *    `member-identity-changed` — the same literal the commit-time path uses
+ *    for the same spec rule (account-identity-proof-v2.md "a change of
+ *    account identity is not a self-update"), so the two admission points
+ *    cannot report the same violation differently.
+ *
+ * `leafIndex` is omitted throughout (D-06): the proposal has not been
+ * applied, so the replacement leaf has no tree position yet, matching the Add
+ * sibling's documented convention. Every `detail` string names only the
+ * positional proposal index and the reason — never a pubkey, credential
+ * bytes, or `err.message`.
+ *
+ * @see refs/mdk/crates/cgka-engine/src/account_identity_proof.rs `validate_standalone_proposal_account_identity_proof`
+ * @see refs/marmot/app-components/account-identity-proof-v2.md "Lifecycle, authorization, and removal"
+ */
+export function validateUpdateProposalAccountIdentityProofs(
+  proposals: readonly (Proposal | ProposalWithSender)[],
+  ratchetTree: ClientState["ratchetTree"],
+  ciphersuite: number,
+): CommitIntegrityViolation | undefined {
+  const normalized: ProposalWithSender[] = proposals.map((item) =>
+    "proposal" in item ? item : { proposal: item, senderLeafIndex: undefined },
+  );
+  for (let position = 0; position < normalized.length; position++) {
+    const { proposal, senderLeafIndex } = normalized[position]!;
+    if (proposal.proposalType !== defaultProposalTypes.update) continue;
+    if (!("update" in proposal)) continue;
+
+    if (senderLeafIndex === undefined) {
+      return {
+        reason: "account-identity-proof",
+        detail: `Update proposal ${position} has no attributable sender`,
+        proofReason: "unattributable-leaf",
+      };
+    }
+
+    let senderPubkey: string;
+    try {
+      senderPubkey = getCredentialPubkey(
+        getCredentialFromLeafIndex(
+          ratchetTree,
+          toLeafIndex(Number(senderLeafIndex)),
+        ),
+      );
+    } catch {
+      return {
+        reason: "account-identity-proof",
+        detail: `Update proposal ${position} sender leaf could not be resolved`,
+        proofReason: "unattributable-leaf",
+      };
+    }
+
+    try {
+      validateLeafAccountIdentityProof(proposal.update.leafNode, ciphersuite);
+    } catch (err) {
+      if (err instanceof AccountIdentityProofError) {
+        return {
+          reason: "account-identity-proof",
+          detail: `Update proposal ${position} replacement leaf account identity proof invalid (${err.reason})`,
+          proofReason: err.reason,
+        };
+      }
+      return {
+        reason: "account-identity-proof",
+        detail: `Update proposal ${position} replacement leaf account identity proof validation failed`,
+      };
+    }
+
+    let replacementPubkey: string;
+    try {
+      replacementPubkey = getCredentialPubkey(
+        proposal.update.leafNode.credential,
+      );
+    } catch {
+      return {
+        reason: "account-identity-proof",
+        detail: `Update proposal ${position} replacement leaf credential did not decode`,
+        proofReason: "invalid-credential",
+      };
+    }
+
+    if (replacementPubkey !== senderPubkey) {
+      return {
+        reason: "account-identity-proof",
+        detail: `Update proposal ${position} replacement leaf changed account identity`,
+        proofReason: "member-identity-changed",
       };
     }
   }

@@ -468,7 +468,7 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
       ).toBe("reject");
     });
 
-    it("D-09/D-10: a standalone Add with a valid proof is accepted; a standalone Update is unaffected", async () => {
+    it("D-09/D-10: a standalone Add with a valid proof is accepted; a standalone Update with no resolvable sender is rejected (Phase 9 closes the D-10 deferral)", async () => {
       const account = testAccount(6);
       const callback = buildCallback(account);
 
@@ -489,8 +489,12 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
         } as never),
       ).toBe("accept");
 
-      // D-10: standalone Update admission is deferred to Phase 9; any
-      // non-Add proposal kind keeps the existing blanket "accept" here.
+      // UPD-04/D-10 (Phase 9): standalone Update admission is no longer
+      // deferred to a later commit. This bare-object proposal carries no
+      // `senderLeafIndex` (it is passed as a raw `Proposal`, not a
+      // `ProposalWithSender`), so `validateUpdateProposalAccountIdentityProofs`
+      // rejects it outright as an unresolvable sender rather than accepting
+      // it blanket, per D-10's reject-on-unresolvable-sender rule.
       expect(
         callback({
           kind: "proposal",
@@ -499,7 +503,7 @@ describe("MarmotGroupEngine admin verification (MIP-03)", () => {
             update: {},
           },
         } as never),
-      ).toBe("accept");
+      ).toBe("reject");
     });
 
     it("withCapturedProposals: captures a standalone proposal with committerLeafIndex undefined", async () => {

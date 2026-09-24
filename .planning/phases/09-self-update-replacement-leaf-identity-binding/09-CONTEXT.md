@@ -209,25 +209,33 @@ Covers UPD-01..04. **Validation-only: no new key-rotation API, no producer chang
 ### Rust reference
 
 - `refs/mdk/crates/cgka-engine/src/account_identity_proof.rs`:
-  - `validate_leaf_account_identity_proof_for_member` (line 536) — the exact UPD-01 model: resolve the member id from
+  - `validate_leaf_account_identity_proof_for_member` (line 523) — the exact UPD-01 model: resolve the member id from
     the leaf, validate the proof, then compare against `expected_member_id`.
-  - `validate_staged_commit_account_identity_proofs` (line 552) — the three-bucket structure D-01 mirrors: Adds,
+  - `validate_staged_commit_account_identity_proofs` (line 539) — the three-bucket structure D-01 mirrors: Adds,
     `update_proposals` (expected id from `member_id_of_sender`), and `update_path_leaf_node` (expected id = the
     committer).
-  - `validate_standalone_proposal_account_identity_proof` (line 615) — the **Update branch** is UPD-04's model,
+  - `validate_standalone_proposal_account_identity_proof` (line 602) — the **Update branch** is UPD-04's model,
     including the reject-on-unresolvable-sender behaviour of D-10. Its docstring states the rationale: "a
     syntactically valid MLS proposal must not sit pending until a later Commit discovers that its leaf proof or
     profile is invalid."
 
 ### Upstream submodule check (2026-09-24)
 
-- `refs/marmot` is **2 commits behind** (`26fa6a6` encrypted NIP-88 polls, `27cd326` group reports / dismissal labels /
+**DONE at plan start — both submodules fast-forwarded and the pointer bump committed as `c2c17ac`
+(`chore(refs): fast-forward marmot and mdk submodules`). Line numbers above are post-bump. Do not re-run the sweep.**
+
+- `refs/marmot` was **2 commits behind**, now at `26fa6a6` (encrypted NIP-88 polls, group reports / dismissal labels /
   admin deletion). The diff touches `features/content-moderation.md`, `foundation/application-messages.md`,
   `foundation/registries.md`, `features/README.md`, `layout.md` — **none touch proof, leaf, or update semantics.**
-- `refs/mdk` is far behind (~193 commits shown; mostly marmot-app, transport, recovery, and Android binding work).
-  Nothing observed in `account_identity_proof.rs`.
-- Per CLAUDE.md, fast-forward both and commit the pointer bump as its own `chore(refs):` commit at plan start, then
-  re-check `account_identity_proof.rs` for drift before implementing.
+- `refs/mdk` was **124 commits behind**, now at `4f1a906b`. Overwhelmingly marmot-app, transport, recovery and Android
+  binding work.
+- **Correction to the pre-bump note:** `account_identity_proof.rs` **is** touched upstream, by exactly one commit —
+  `7bd34342` ("Adopt pinned rust-nostr fork in production transport"). The change is **cosmetic, not semantic**: its
+  hunks are confined to the `AccountIdentityProofRequest` impl's import paths and the `mod tests` helper
+  (`nostr::Keys` → `nostr::prelude::Keys`). **All three functions this phase models are outside every changed hunk** —
+  their bodies are unchanged; only their line numbers shifted (536→523, 552→539, 615→602, corrected above).
+  **No design decision in this document is affected.** The three-bucket model of D-01 and the reject-on-unresolvable-sender
+  behaviour of D-10 both still match the reference exactly.
 
 ### Prior phases
 

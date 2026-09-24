@@ -148,10 +148,20 @@ signature key, on every legality seam. Validation-only this milestone; no new ke
 **Plans**: 4 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 09-01-PLAN.md — Additive foundations: `ChangedLeaf.parentLeaf`, the D-01 three-bucket changed-leaf classifier, the new deferred/reject reason literals, and replacement-leaf fixtures (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 09-02-PLAN.md — UPD-01: `CommitLegalityOutcome` tri-state, prior-leaf identity enforcement, and all six seam mappings as one compile unit (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 09-03-PLAN.md — UPD-04: standalone Update admission validator wired into the inbound admin-policy and local propose seams (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 09-04-PLAN.md — UPD-02/UPD-03 named regression tests (no new validator code), exports snapshot, full-suite gate (wave 4)
 
 ### Phase 10: Founding Group Creation via Welcome

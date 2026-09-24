@@ -3533,13 +3533,22 @@ export class MarmotGroupEngine<TEnvelope> {
  * pre-apply admission removed from `unappliedProposals`, so `createCommit`
  * never bundles it by reference. Returns `state` itself when nothing is pruned.
  *
- * Covers both an Add whose KeyPackage lacks a valid `0x8009` proof and an
+ * Covers an Add whose KeyPackage lacks a valid `0x8009` proof, an
  * `AppDataUpdate` whose payload does not decode (or that targets an id no
- * commit may write). Such a proposal can only be staged by an older build or a
- * rewind onto a pre-upgrade snapshot; refusing the commit over it would block
- * every local commit — including `selfUpdate` and the `self_remove`
- * auto-commit — for the rest of the epoch, so it is dropped instead, mirroring
- * MDK's discard of invalid standalone proposals.
+ * commit may write), and — WR-01 — an Update whose replacement leaf fails the
+ * same account-identity gate the standalone Update-admission seam applies.
+ * Such a proposal can only be staged by an older build or a rewind onto a
+ * pre-upgrade snapshot; refusing the commit over it would block every local
+ * commit — including `selfUpdate` and the `self_remove` auto-commit — for the
+ * rest of the epoch, so it is dropped instead, mirroring MDK's discard of
+ * invalid standalone proposals.
+ *
+ * Omitting Updates here was a live deadlock, not a cosmetic gap: Phase 9 made
+ * a proof-invalid staged Update commit-blocking POST-apply in
+ * {@link MarmotGroupEngine.#assertStagedCommitLegal}, while `createCommit`
+ * went on bundling it by reference — so every `send({kind:"commit"})` and
+ * `send({kind:"selfUpdate"})` threw `CommitLegalityError` for the rest of an
+ * epoch that only a commit could end.
  *
  * Each staged proposal is validated ALONE and with no `requiredIds`, which is
  * exactly MDK's standalone-admission semantics. Batch-level verdicts (a
@@ -3554,7 +3563,13 @@ function withoutInadmissibleStagedProposals(
 ): ClientState {
   const entries = Object.entries(state.unappliedProposals);
   const admissible = entries.filter(
-    ([, staged]) => !validatePreApplyProposals([staged], ciphersuiteId),
+    ([, staged]) =>
+      !validatePreApplyProposals([staged], ciphersuiteId) &&
+      !validateUpdateProposalAccountIdentityProofs(
+        [staged],
+        state.ratchetTree,
+        ciphersuiteId,
+      ),
   );
   if (admissible.length === entries.length) return state;
   return { ...state, unappliedProposals: Object.fromEntries(admissible) };

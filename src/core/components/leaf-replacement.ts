@@ -25,6 +25,20 @@ export type ChangedLeafClassification =
 export interface ChangedLeafClassificationInput {
   proposals: readonly ProposalWithSender[];
   committerLeafIndex: number | undefined;
+  /**
+   * Whether `proposals` is this commit's COMPLETE proposal list. Defaults to
+   * `true`; every seam that replays or builds a commit has the full list.
+   *
+   * Set to `false` only by callers that hold a partial list — currently just
+   * `validateLegalityWithoutProposals` (`src/engine/fork-recovery.ts`), which
+   * can recover the committer index off the wire but not the proposals. The
+   * distinction is load-bearing (CR-01): "matches no proposal" only justifies
+   * the terminal `unattributable` verdict when the proposals were actually in
+   * hand. With an incomplete list, a legitimately added member's leaf matches
+   * nothing merely because its Add is missing, so it must stay `undecidable`
+   * rather than terminally reject an otherwise legal commit.
+   */
+  proposalsComplete?: boolean;
 }
 
 /**
@@ -35,12 +49,14 @@ export interface ChangedLeafClassificationInput {
  * D-02/D-03 fallthrough outcomes.
  *
  * Evaluated in this exact order:
- * 1. If `input` is `undefined`, return `undecidable` immediately (D-03): this
- *    is the structural-impossibility signal used by
- *    `validateLegalityWithoutProposals`, when no proposal list is available
- *    at all. This is NOT inferred from an empty `proposals` array — a
- *    legitimate proposal-less self-update commit has an empty list and a
- *    defined committer, and must stay decidable.
+ * 1. If `input` is `undefined`, return `undecidable` immediately (D-03): the
+ *    structural-impossibility signal for a caller holding no classification
+ *    information whatsoever. This is NOT inferred from an empty `proposals`
+ *    array — a legitimate proposal-less self-update commit has an empty list
+ *    and a defined committer, and must stay decidable. A caller that knows
+ *    the committer but not the proposals should instead supply them with
+ *    {@link ChangedLeafClassificationInput.proposalsComplete} `false`, which
+ *    keeps the committer's own leaf decidable (see step 5).
  * 2. Add bucket: matches only if the changed leaf's slot was genuinely freed
  *    AND any proposal normalizes to an Add whose
  *    `add.keyPackage.leafNode.signature` is byte-equal ({@link bytesEqual})
@@ -64,9 +80,12 @@ export interface ChangedLeafClassificationInput {
  *    equal to `changed.leafIndex`.
  * 5. Nothing matched: `undecidable` (D-03) if `input.committerLeafIndex` is
  *    `undefined` — the leaf could still be the committer's own update-path
- *    leaf and there is no way to tell — otherwise `unattributable` (D-02):
- *    full classification information was available and the leaf is
- *    attributable to nobody, so the caller must fail closed.
+ *    leaf and there is no way to tell — or if `proposalsComplete` is `false`,
+ *    since an Add that was never supplied could explain it (CR-01).
+ *    Otherwise `unattributable` (D-02): full classification information WAS
+ *    available and the leaf is attributable to nobody, so the caller must
+ *    fail closed. The asymmetry is deliberate — `unattributable` is terminal,
+ *    so it is only ever drawn from a complete picture.
  *
  * Total and non-throwing: every `ProposalWithSender` item is normalized
  * defensively (mirroring `validateAddProposalAccountIdentityProofs`), so a
@@ -138,7 +157,15 @@ export function classifyChangedLeaf(
     return { kind: "committer-update-path" };
   }
 
-  return input.committerLeafIndex === undefined
+  // Nothing matched. `unattributable` is a TERMINAL verdict, so it may only be
+  // returned when this really is the whole picture: the committer is known AND
+  // the proposal list is complete. An unknown committer leaves open that this
+  // is the committer's own update-path leaf; an incomplete list leaves open
+  // that an Add we never saw explains it (CR-01). In either case the honest
+  // answer is `undecidable` — the caller is missing information, rather than
+  // the leaf being attributable to nobody.
+  return input.committerLeafIndex === undefined ||
+    input.proposalsComplete === false
     ? { kind: "undecidable" }
     : { kind: "unattributable" };
 }

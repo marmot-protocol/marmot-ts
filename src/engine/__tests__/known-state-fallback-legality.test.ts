@@ -82,4 +82,56 @@ describe("known-state shortcut without rebuildable proposals (WR-03)", () => {
       resolution.kind === "rejected" ? resolution.violation?.reason : undefined,
     ).toBe("admin-leaf-coupling");
   });
+
+  it("still resolves a LEGAL recorded child whose proposals cannot be rebuilt (CR-01 positive control)", async () => {
+    const { impl, ctx, adminEpoch1, admin2Epoch1 } = await seamGroup();
+
+    // A benign, proposal-free self-update by admin2, sent as a PrivateMessage
+    // so the shortcut can rebuild neither the commit's proposals nor even a
+    // committer index off the wire. This is the exact input class CR-01
+    // deferred FOREVER: `validateLegalityWithoutProposals` had lost the
+    // ability to return `legal` at all, so every legal own commit reaching it
+    // became a permanent `temporary_refusal` — which stops `#buildBranches`
+    // from registering our own deeper chain as a branch tip and hands the
+    // rewind to a shallower competitor.
+    const benign = await createCommit({
+      context: ctx,
+      state: admin2Epoch1,
+      wireAsPublicMessage: false,
+      ratchetTreeExtension: true,
+    });
+
+    const parent = snapshot(adminEpoch1);
+    const replayed = await processMessage({
+      context: {
+        cipherSuite: impl,
+        authService: ctx.authService,
+        externalPsks: {},
+      },
+      state: snapshot(adminEpoch1),
+      message: benign.commit,
+    });
+    if (replayed.kind !== "newState") throw new Error("expected newState");
+
+    const view = getMarmotGroupView(parent);
+    if (!view) throw new Error("expected a Marmot group view");
+    const resolution = await resolveCandidateParent({
+      ciphersuite: impl,
+      parent,
+      message: benign.commit,
+      callback: createAdminCommitPolicyCallback({
+        ratchetTree: parent.ratchetTree,
+        adminPubkeys: view.adminPubkeys,
+        ciphersuiteId: impl.id,
+      }),
+      known: {
+        parentTag: bytesToHex(parent.confirmationTag),
+        state: replayed.newState,
+      },
+    });
+
+    // The whole point: a deferral here is indistinguishable from a rejection
+    // for convergence purposes, because no future bytes can ever clear it.
+    expect(resolution.kind).toBe("resolved");
+  });
 });

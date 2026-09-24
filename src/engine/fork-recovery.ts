@@ -150,6 +150,24 @@ function proposalsFromPublicCommit(
 }
 
 /**
+ * The committer's MLS leaf index read straight off the wire. Factored out of
+ * {@link proposalsFromPublicCommit} because the committer stays recoverable
+ * even when that function bails — a `ProposalRef` the parent snapshot no
+ * longer stages defeats the proposal rebuild but not the sender field (CR-01).
+ *
+ * Returns `undefined` exactly where the wire genuinely carries no committer
+ * leaf index: a PrivateMessage commit (the content is encrypted) or a
+ * non-member sender.
+ */
+function committerOf(message: MlsFramedMessage): number | undefined {
+  if (message.wireformat !== wireformats.mls_public_message) return undefined;
+  const content = message.publicMessage.content;
+  if (content.contentType !== contentTypes.commit) return undefined;
+  if (content.sender.senderType !== senderTypes.member) return undefined;
+  return Number(content.sender.leafIndex);
+}
+
+/**
  * WR-03: the part of {@link validateCommitLegality} that is decidable without
  * the commit's own proposals, for a recorded child whose proposals cannot be
  * rebuilt off the wire. Runs, in the shared adapter's order:
@@ -157,25 +175,44 @@ function proposalsFromPublicCommit(
  *    never dropped) and the leaf-only `0x8009` guard. Rule 3 — every changed
  *    entry is backed by one of this commit's own AppDataUpdates — needs those
  *    proposals, so every resulting entry is treated as backed;
- * 2. the `0x8009` profile and changed-leaf proof check, called with NO
- *    `classification` (Phase 9, D-03): with neither this commit's proposals
- *    nor a committer index available, no changed leaf can be attributed to
- *    an Add, an Update sender, or the committer, so ANY changed leaf makes
- *    this step `undecidable` rather than `legal` or a terminal violation —
- *    authorization simply cannot be evaluated against this candidate parent
- *    without more information, and per `refs/marmot/foundation/errors.md`
- *    (lines 63-68) that is a deferral, not a rejection. A `violation` here
- *    still returns immediately; an `undecidable` outcome is remembered and
- *    step 3 still runs, so a definite admin-leaf-coupling violation still
- *    outranks it (mirrors {@link validateCommitLegality}'s own precedence);
- * 3. admin-leaf coupling — the remembered undecidable detail from step 2, if
- *    any, is returned only after this step finds no violation.
+ * 2. the `0x8009` profile and changed-leaf proof check. Every changed leaf's
+ *    proof is validated regardless of classification, and `committerLeafIndex`
+ *    ({@link committerOf}, which survives an unresolvable `ProposalRef`) is
+ *    threaded in so the committer's OWN update-path leaf is still classified
+ *    and its replacement identity still compared against its prior occupant.
+ *    The proposal list is passed empty and explicitly marked INCOMPLETE, so a
+ *    changed leaf that this commit's unavailable proposals would have
+ *    explained — an added member's leaf — is reported `undecidable` rather
+ *    than `unattributable`: with no proposal list in hand, "attributable to
+ *    nobody" is not a conclusion this helper is entitled to draw, and drawing
+ *    it would terminally reject legal Add commits (D-02 vs D-03);
+ * 3. admin-leaf coupling.
+ *
+ * CR-01: a residual `undecidable` from step 2 is deliberately NOT propagated.
+ * A deferral is only correct when later protocol bytes can change the verdict,
+ * and here they never can — no future bytes can produce a proposal list for a
+ * commit whose refs the parent snapshot no longer stages. Propagating it
+ * mapped this helper's only non-violation outcome onto a permanent
+ * `temporary_refusal`, which silently dropped our own canonical branch from
+ * convergence candidacy (`#buildBranches` refuses to register a deferred node
+ * as a branch tip), aborted tree-fed re-convergence, and could drop a
+ * canonical disband edge. By that point every check this helper CAN run has
+ * run — precisely its documented contract, "every legality check that does not
+ * need those proposals" — so it returns `legal`.
+ *
+ * A definite `violation` (integrity, profile drift, an invalid leaf proof, a
+ * committer whose replacement leaf changed account identity, or admin-leaf
+ * coupling) always returns instead, and always outranks the residual: coupling
+ * is evaluated BEFORE the residual is discarded, preserving the
+ * non-short-circuiting precedence {@link validateCommitLegality} enforces
+ * internally.
  *
  * Disband legality classifies the commit's own proposals and cannot run here.
  */
 function validateLegalityWithoutProposals(
   parentState: ClientState,
   resultingState: ClientState,
+  committerLeafIndex: number | undefined,
 ): CommitLegalityOutcome {
   const currentExtensions = parentState.groupContext.extensions;
   const resultingExtensions = resultingState.groupContext.extensions;
@@ -238,19 +275,28 @@ function validateLegalityWithoutProposals(
   });
   if (integrity) return { kind: "violation", violation: integrity };
 
-  // No `classification` supplied: this commit's proposals cannot be rebuilt
-  // off the wire, so any changed leaf is structurally undecidable (D-03). A
-  // violation here still returns immediately; an undecidable outcome is
-  // remembered so the admin-leaf-coupling check below still runs and can
-  // outrank it with a definite violation (mirrors validateCommitLegality).
+  // CR-01: the committer index survives an unresolvable `ProposalRef`, so
+  // thread it in rather than skipping classification altogether. The proposal
+  // list is empty AND flagged incomplete: the committer's own update-path leaf
+  // stays decidable (and its replacement identity IS compared against its
+  // prior occupant), while a leaf that only the missing proposals could have
+  // explained stays `undecidable` instead of being wrongly condemned as
+  // `unattributable` — which would terminally reject legal Add commits. A
+  // violation returns immediately.
   const proofOutcome = validateCommitAccountIdentityProofs({
     parentState,
     resultingState,
+    classification: {
+      proposals: [],
+      committerLeafIndex,
+      proposalsComplete: false,
+    },
   });
   if (proofOutcome.kind === "violation") return proofOutcome;
-  const undecidableDetail =
-    proofOutcome.kind === "undecidable" ? proofOutcome.detail : undefined;
 
+  // Runs BEFORE the residual undecidable is discarded, so a definite
+  // admin-leaf-coupling violation still outranks it (the non-short-circuiting
+  // precedence `validateCommitLegality` enforces internally).
   const couplingViolation = validateAdminLeafCoupling({
     currentExtensions,
     resultingExtensions,
@@ -259,9 +305,10 @@ function validateLegalityWithoutProposals(
   if (couplingViolation)
     return { kind: "violation", violation: couplingViolation };
 
-  if (undecidableDetail !== undefined)
-    return { kind: "undecidable", detail: undecidableDetail };
-
+  // CR-01: every proposal-independent check has now run and none objected. Any
+  // residual `undecidable` is structural — no future protocol bytes can supply
+  // this commit's proposals — so propagating it would defer this candidate
+  // forever and drop our own canonical branch from convergence. Decide.
   return { kind: "legal" };
 }
 
@@ -306,7 +353,11 @@ export async function resolveCandidateParent(params: {
             proposals: rebuilt.proposals,
             committerLeafIndex: rebuilt.committerLeafIndex,
           })
-        : validateLegalityWithoutProposals(parent, known.state);
+        : validateLegalityWithoutProposals(
+            parent,
+            known.state,
+            committerOf(message),
+          );
     } catch {
       return { kind: "deferred", reason: "temporary_refusal" };
     }

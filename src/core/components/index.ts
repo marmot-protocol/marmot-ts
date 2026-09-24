@@ -14,3 +14,4 @@ export * from "./disband-validation.js";
 export * from "./dictionary.js";
 export * from "./integrity.js";
 export * from "./tree-diff.js";
+export * from "./leaf-replacement.js";

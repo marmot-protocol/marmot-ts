@@ -55,6 +55,8 @@ import {
 } from "../ids.js";
 import {
   type AppDataUpdateOp,
+  type CommitIntegrityViolation,
+  type CommitLegalityOutcome,
   collectAppDataUpdateOps,
   validateAdminLeafCoupling,
   validateAppComponentIntegrity,
@@ -64,6 +66,41 @@ import {
 } from "../integrity.js";
 
 const SUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
+
+/**
+ * Asserts an outcome is `{ kind: "legal" }` (Phase 9 tri-state migration):
+ * used wherever this suite previously asserted `violation === undefined`, so
+ * a legal case asserts the positive shape rather than the absence of a
+ * violation.
+ */
+function expectLegal(outcome: CommitLegalityOutcome): void {
+  expect(outcome).toEqual({ kind: "legal" });
+}
+
+/**
+ * Extracts the `CommitIntegrityViolation` from a `CommitLegalityOutcome`, for
+ * every assertion in this file written against the pre-Phase-9
+ * `CommitIntegrityViolation | undefined` shape. Returns `undefined` for
+ * `legal`. THROWS for `undecidable` — this is the point of the helper:
+ * without it, an accidental regression that turns a decidable commit
+ * undecidable would silently read as "no violation" and every existing
+ * assertion in this file would still pass. No migrated test in this file may
+ * treat `undecidable` as legal.
+ */
+function violationOf(
+  outcome: CommitLegalityOutcome,
+): CommitIntegrityViolation | undefined {
+  switch (outcome.kind) {
+    case "legal":
+      return undefined;
+    case "violation":
+      return outcome.violation;
+    case "undecidable":
+      throw new Error(
+        `expected a decidable legality outcome (legal or violation), got undecidable: ${outcome.detail}`,
+      );
+  }
+}
 
 /** A 2-party group at epoch 1: admin (creator, leaf 0) + member (leaf 1). */
 async function twoPartyEpoch1Group() {
@@ -469,28 +506,36 @@ describe("validateCommitAccountIdentityProofs (D-01/D-02/D-03)", () => {
       signer: extraAccount.signer,
       ciphersuiteImpl: impl,
     });
+    const addProposal: Proposal = {
+      proposalType: defaultProposalTypes.add,
+      add: { keyPackage: extraKp.publicPackage },
+    };
     const addCommit = await createCommit({
       context: ctx,
       state: adminEpoch1,
       wireAsPublicMessage: true,
       ratchetTreeExtension: true,
-      extraProposals: [
-        {
-          proposalType: defaultProposalTypes.add,
-          add: { keyPackage: extraKp.publicPackage },
-        },
-      ],
+      extraProposals: [addProposal],
     });
 
-    const violation = validateCommitAccountIdentityProofs({
-      parentState: adminEpoch1,
-      resultingState: addCommit.newState,
-    });
-    expect(violation).toBeUndefined();
+    // Phase 9 (UPD-01): the added leaf is a changed leaf too, so the Add
+    // bucket needs the commit's own proposal list to classify it — matched
+    // by signature bytes, not by leaf index.
+    expectLegal(
+      validateCommitAccountIdentityProofs({
+        parentState: adminEpoch1,
+        resultingState: addCommit.newState,
+        classification: {
+          proposals: [{ proposal: addProposal, senderLeafIndex: undefined }],
+          committerLeafIndex: undefined,
+        },
+      }),
+    );
   });
 
-  it("returns undefined for an honest self-update (D-03: no prior-leaf identity comparison)", async () => {
-    const { impl, ctx, adminEpoch1 } = await twoPartyEpoch1Group();
+  it("is legal for an honest self-update (UPD-01: the prior-leaf identity comparison runs and finds the identity unchanged)", async () => {
+    const { impl, ctx, adminAccount, adminEpoch1 } =
+      await twoPartyEpoch1Group();
     const selfUpdate = await createCommit({
       context: ctx,
       state: adminEpoch1,
@@ -499,11 +544,37 @@ describe("validateCommitAccountIdentityProofs (D-01/D-02/D-03)", () => {
       extraProposals: [],
     });
 
-    const violation = validateCommitAccountIdentityProofs({
-      parentState: adminEpoch1,
-      resultingState: selfUpdate.newState,
-    });
-    expect(violation).toBeUndefined();
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
+    );
+    expect(adminLeafIndex).toBeDefined();
+
+    // This is no longer "no prior-leaf identity comparison is performed"
+    // (the stale D-03 rationale) — the comparison now runs against the
+    // committer's own prior leaf and finds the identity unchanged, which is
+    // exactly what an honest self-update is.
+    expectLegal(
+      validateCommitAccountIdentityProofs({
+        parentState: adminEpoch1,
+        resultingState: selfUpdate.newState,
+        classification: {
+          proposals: [],
+          committerLeafIndex: adminLeafIndex,
+        },
+      }),
+    );
+
+    // D-03: with no classification at all, the same changed leaf cannot be
+    // attributed to an Add, an Update sender, or the committer, so the
+    // outcome is undecidable — never silently legal.
+    expect(
+      validateCommitAccountIdentityProofs({
+        parentState: adminEpoch1,
+        resultingState: selfUpdate.newState,
+      }),
+    ).toEqual({ kind: "undecidable", detail: expect.any(String) });
+    void impl;
   });
 
   it("returns account-identity-proof/missing-requirement (no leafIndex) for a commit that drops the 0x8009 requirement", async () => {
@@ -517,10 +588,14 @@ describe("validateCommitAccountIdentityProofs (D-01/D-02/D-03)", () => {
       extraProposals: [dropRequirement],
     });
 
-    const violation = validateCommitAccountIdentityProofs({
-      parentState: adminEpoch1,
-      resultingState: commit.newState,
-    });
+    // Unaffected by UPD-01 classification: the profile-drift check runs
+    // before the changed-leaf loop and rejects unconditionally.
+    const violation = violationOf(
+      validateCommitAccountIdentityProofs({
+        parentState: adminEpoch1,
+        resultingState: commit.newState,
+      }),
+    );
     expect(violation?.reason).toBe("account-identity-proof");
     expect(violation?.proofReason).toBe("missing-requirement");
     expect(violation?.leafIndex).toBeUndefined();
@@ -553,10 +628,15 @@ describe("validateCommitAccountIdentityProofs (D-01/D-02/D-03)", () => {
     );
     expect(badLeafIndex).toBeDefined();
 
-    const violation = validateCommitAccountIdentityProofs({
-      parentState: adminEpoch1,
-      resultingState: commit.newState,
-    });
+    // Unaffected by UPD-01 classification: proof validity is checked before
+    // classification for every changed leaf, so this rejects on the invalid
+    // proof regardless of which bucket the leaf would otherwise fall into.
+    const violation = violationOf(
+      validateCommitAccountIdentityProofs({
+        parentState: adminEpoch1,
+        resultingState: commit.newState,
+      }),
+    );
     expect(violation?.reason).toBe("account-identity-proof");
     expect(violation?.proofReason).toBe("invalid-proof");
     expect(violation?.leafIndex).toBe(badLeafIndex);
@@ -596,20 +676,28 @@ describe("validateCommitAccountIdentityProofs (D-01/D-02/D-03)", () => {
     }
     expect(expectedReason).toBeDefined();
 
-    const violation = validateCommitAccountIdentityProofs({
-      parentState: adminEpoch1,
-      resultingState: commit.newState,
-    });
+    // Unaffected by UPD-01 classification: same reasoning as the
+    // tampered-proof case above.
+    const violation = violationOf(
+      validateCommitAccountIdentityProofs({
+        parentState: adminEpoch1,
+        resultingState: commit.newState,
+      }),
+    );
     expect(violation?.reason).toBe("account-identity-proof");
     expect(violation?.proofReason).toBe(expectedReason);
   });
 
   it("returns undefined for a removal-only commit (removed leaf is blanked, never validated)", async () => {
-    const { impl, ctx, adminEpoch1, memberAccount } =
+    const { impl, ctx, adminAccount, adminEpoch1, memberAccount } =
       await twoPartyEpoch1Group();
     const [memberLeafIndex] = getPubkeyLeafNodeIndexes(
       adminEpoch1,
       memberAccount.pubkey,
+    );
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
     );
     const removeCommit = await createCommit({
       context: ctx,
@@ -624,11 +712,18 @@ describe("validateCommitAccountIdentityProofs (D-01/D-02/D-03)", () => {
       ],
     });
 
-    const violation = validateCommitAccountIdentityProofs({
-      parentState: adminEpoch1,
-      resultingState: removeCommit.newState,
-    });
-    expect(violation).toBeUndefined();
+    // A Remove proposal forces an update path (forward secrecy), so the
+    // committer's OWN leaf is also a changed leaf here (in addition to the
+    // removed leaf, which diffChangedLeaves skips as blank) — UPD-01
+    // classification needs the committer's leaf index to attribute it to the
+    // committer-update-path bucket rather than reporting it undecidable.
+    expectLegal(
+      validateCommitAccountIdentityProofs({
+        parentState: adminEpoch1,
+        resultingState: removeCommit.newState,
+        classification: { proposals: [], committerLeafIndex: adminLeafIndex },
+      }),
+    );
     void impl;
   });
 });
@@ -772,12 +867,13 @@ describe("validateCommitLegality", () => {
       removeOp(GROUP_MESSAGE_RETENTION_COMPONENT_ID),
     ];
 
-    const violation = validateCommitLegality({
-      parentState,
-      resultingState,
-      proposals,
-    });
-    expect(violation).toBeUndefined();
+    expectLegal(
+      validateCommitLegality({
+        parentState,
+        resultingState,
+        proposals,
+      }),
+    );
   });
 
   it("returns the integrity violation before the coupling violation when a commit violates both", () => {
@@ -800,11 +896,13 @@ describe("validateCommitLegality", () => {
       [MEMBER_PUBKEY],
     );
 
-    const violation = validateCommitLegality({
-      parentState,
-      resultingState,
-      proposals: [],
-    });
+    const violation = violationOf(
+      validateCommitLegality({
+        parentState,
+        resultingState,
+        proposals: [],
+      }),
+    );
     expect(violation?.reason).toBe("component-integrity");
   });
 
@@ -823,12 +921,13 @@ describe("validateCommitLegality", () => {
       MEMBER_PUBKEY,
     ]);
 
-    const violation = validateCommitLegality({
-      parentState,
-      resultingState,
-      proposals: [],
-    });
-    expect(violation).toBeUndefined();
+    expectLegal(
+      validateCommitLegality({
+        parentState,
+        resultingState,
+        proposals: [],
+      }),
+    );
   });
 
   it("returns a typed violation instead of throwing when the PARENT app_components bytes do not decode", () => {
@@ -854,13 +953,15 @@ describe("validateCommitLegality", () => {
       [ADMIN_PUBKEY],
     );
 
-    let violation: ReturnType<typeof validateCommitLegality>;
+    let violation: CommitIntegrityViolation | undefined;
     expect(() => {
-      violation = validateCommitLegality({
-        parentState,
-        resultingState,
-        proposals: [],
-      });
+      violation = violationOf(
+        validateCommitLegality({
+          parentState,
+          resultingState,
+          proposals: [],
+        }),
+      );
     }).not.toThrow();
     expect(violation!).toEqual({
       reason: "component-integrity",
@@ -891,16 +992,18 @@ describe("validateCommitLegality", () => {
     ] as GroupContextExtension[];
     const resultingState = fakeClientState(resultingExtensions, [ADMIN_PUBKEY]);
 
-    const violation = validateCommitLegality({
-      parentState,
-      resultingState,
-      proposals: [
-        updateOp(
-          APP_COMPONENTS_COMPONENT_ID,
-          encodeComponentsList([GROUP_PROFILE_COMPONENT_ID]),
-        ),
-      ],
-    });
+    const violation = violationOf(
+      validateCommitLegality({
+        parentState,
+        resultingState,
+        proposals: [
+          updateOp(
+            APP_COMPONENTS_COMPONENT_ID,
+            encodeComponentsList([GROUP_PROFILE_COMPONENT_ID]),
+          ),
+        ],
+      }),
+    );
     expect(violation?.reason).toBe("component-integrity");
   });
 
@@ -969,12 +1072,14 @@ describe("validateCommitLegality", () => {
       extraProposals: violatingProposals,
     });
 
-    const violation = validateCommitLegality({
-      parentState: adminEpoch1,
-      resultingState: violatingCommit.newState,
-      proposals: violatingProposals,
-      committerLeafIndex: 0,
-    });
+    const violation = violationOf(
+      validateCommitLegality({
+        parentState: adminEpoch1,
+        resultingState: violatingCommit.newState,
+        proposals: violatingProposals,
+        committerLeafIndex: 0,
+      }),
+    );
     expect(violation?.reason).toBe("account-identity-proof");
   });
 
@@ -1000,13 +1105,15 @@ describe("validateCommitLegality", () => {
       [ADMIN_PUBKEY],
     );
 
-    let violation: ReturnType<typeof validateCommitLegality>;
+    let violation: CommitIntegrityViolation | undefined;
     expect(() => {
-      violation = validateCommitLegality({
-        parentState,
-        resultingState,
-        proposals: [updateOp(APP_COMPONENTS_COMPONENT_ID, duplicateIds)],
-      });
+      violation = violationOf(
+        validateCommitLegality({
+          parentState,
+          resultingState,
+          proposals: [updateOp(APP_COMPONENTS_COMPONENT_ID, duplicateIds)],
+        }),
+      );
     }).not.toThrow();
     expect(violation!).toEqual({
       reason: "account-identity-proof",

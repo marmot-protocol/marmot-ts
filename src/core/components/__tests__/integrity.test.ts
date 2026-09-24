@@ -1950,3 +1950,180 @@ describe("UPD-02: replacement leaf whose 0x8009 proof does not bind its resultin
     void impl;
   });
 });
+
+/**
+ * UPD-03 (09-04 Task 2): removing `0x8009` support or data from a non-blank
+ * member leaf. Ratified by named tests on both of its existing enforcement
+ * paths, per D-07 -- no new production code:
+ * - the changed-leaf proof check in
+ *   {@link validateCommitAccountIdentityProofs} rejects a replacement leaf
+ *   whose `app_data_dictionary` was stripped (the strip changes the leaf's
+ *   signature, so the tree diff always surfaces it as changed);
+ * - {@link validateAppComponentIntegrity}'s leaf-only guard (Phase 7/8)
+ *   separately rejects any `AppDataUpdate` targeting `0x8009` as
+ *   `component-integrity`.
+ * @see refs/marmot/app-components/account-identity-proof-v2.md lines 96-111
+ * ("0x8009 MUST NOT be removed from a non-blank member leaf")
+ */
+describe("UPD-03: removing 0x8009 support or data from a non-blank member leaf", () => {
+  it("Test 1 (UPD-03): a replacement leaf with its app_data_dictionary stripped is rejected with the validator's own absent-support/absent-data reason, carrying the leaf's MLS index", async () => {
+    const { impl, ctx, adminAccount, adminEpoch1 } =
+      await twoPartyEpoch1Group();
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
+    );
+    expect(adminLeafIndex).toBeDefined();
+
+    // Build a genuinely re-signed replacement leaf first (via
+    // createUpdateProposal, same technique 09-03's inbound UPD-04 fixture
+    // uses), then strip it afterward. diffChangedLeaves detects a "changed"
+    // leaf only by comparing signature bytes against the parent leaf at the
+    // same index (tree-diff.ts) -- a leaf whose extensions are edited
+    // in-place without a fresh signature is byte-identical on `signature`
+    // and would never be classified as changed at all, so this fixture must
+    // start from a real re-sign to be wire-shape-valid while becoming
+    // Marmot-layer-invalid.
+    const { message } = await createUpdateProposal({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+    });
+    if (message.publicMessage?.content.contentType !== contentTypes.proposal)
+      throw new Error("expected a proposal-framed message");
+    const updateProposal = message.publicMessage.content.proposal;
+    if (!("update" in updateProposal))
+      throw new Error("expected an update proposal");
+    const freshLeaf = updateProposal.update.leafNode;
+
+    const strippedLeaf = stripLeafAccountIdentityProof(freshLeaf);
+    const resultingState = spliceLeafAtIndex(
+      adminEpoch1,
+      adminLeafIndex!,
+      strippedLeaf,
+    );
+
+    // Derive the expected proofReason from the validator itself rather than
+    // hardcoding it (tracks the validator as the source of truth, matching
+    // the dynamic-expectation technique Phase 8 used for its proof-less Add
+    // fixture) -- correct whether the validator raises missing-support or
+    // missing-data first.
+    let expectedReason: string | undefined;
+    try {
+      validateLeafAccountIdentityProof(strippedLeaf, impl.id);
+    } catch (err) {
+      expectedReason = (err as { reason?: string }).reason;
+    }
+    expect(expectedReason).toBeDefined();
+
+    const outcome = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState,
+      classification: { proposals: [], committerLeafIndex: adminLeafIndex },
+    });
+    expect(outcome.kind).toBe("violation");
+    if (outcome.kind !== "violation") throw new Error("expected a violation");
+    expect(outcome.violation.reason).toBe("account-identity-proof");
+    expect(outcome.violation.proofReason).toBe(expectedReason);
+    expect(outcome.violation.leafIndex).toBe(adminLeafIndex);
+  });
+
+  it("Test 2 (UPD-03): the rejection fires before any identity comparison -- a stripped leaf that preserves the member's identity is still rejected, on a proof-material reason (never member-identity-changed)", async () => {
+    const { impl, ctx, adminAccount, adminEpoch1 } =
+      await twoPartyEpoch1Group();
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
+    );
+    expect(adminLeafIndex).toBeDefined();
+    const adminNode = adminEpoch1.ratchetTree[adminLeafIndex! * 2];
+    if (adminNode?.nodeType !== nodeTypes.leaf)
+      throw new Error("expected a leaf node at the admin's index");
+
+    const { message } = await createUpdateProposal({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+    });
+    if (message.publicMessage?.content.contentType !== contentTypes.proposal)
+      throw new Error("expected a proposal-framed message");
+    const updateProposal = message.publicMessage.content.proposal;
+    if (!("update" in updateProposal))
+      throw new Error("expected an update proposal");
+    const freshLeaf = updateProposal.update.leafNode;
+
+    // stripLeafAccountIdentityProof only removes the app_data_dictionary
+    // extension -- the credential (and therefore the account identity) is
+    // byte-identical to the genuine update's own credential, so a false pass
+    // here would mean the identity comparison ran and (wrongly) found no
+    // change, rather than the proof check rejecting first.
+    const strippedLeaf = stripLeafAccountIdentityProof(freshLeaf);
+    expect(strippedLeaf.credential).toEqual(adminNode.leaf.credential);
+
+    const resultingState = spliceLeafAtIndex(
+      adminEpoch1,
+      adminLeafIndex!,
+      strippedLeaf,
+    );
+    const outcome = validateCommitAccountIdentityProofs({
+      parentState: adminEpoch1,
+      resultingState,
+      classification: { proposals: [], committerLeafIndex: adminLeafIndex },
+    });
+    expect(outcome.kind).toBe("violation");
+    if (outcome.kind !== "violation") throw new Error("expected a violation");
+    expect(outcome.violation.proofReason).toBeDefined();
+    expect(outcome.violation.proofReason).not.toBe("member-identity-changed");
+    void impl;
+  });
+
+  it("Test 3 (UPD-03): an AppDataUpdate proposal targeting 0x8009 is rejected by validateCommitLegality as component-integrity, not account-identity-proof (Phase 7/8 leaf-only guard)", async () => {
+    const { adminEpoch1 } = await twoPartyEpoch1Group();
+    const proposal = updateOp(
+      ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+      new Uint8Array(AUTHORIZATION_PROOF_LENGTH),
+    );
+
+    const violation = violationOf(
+      validateCommitLegality({
+        parentState: adminEpoch1,
+        resultingState: adminEpoch1,
+        proposals: [proposal],
+      }),
+    );
+    expect(violation?.reason).toBe("component-integrity");
+  });
+
+  it("Test 4 (UPD-03): a blanked (removed) leaf is never validated, so a legitimate Remove is not misreported as a 0x8009 removal", async () => {
+    const { ctx, adminAccount, memberAccount, adminEpoch1 } =
+      await twoPartyEpoch1Group();
+    const [memberLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      memberAccount.pubkey,
+    );
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
+    );
+    const removeProposal: Proposal = {
+      proposalType: defaultProposalTypes.remove,
+      remove: { removed: memberLeafIndex as LeafIndex },
+    };
+    const removeCommit = await createCommit({
+      context: ctx,
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [removeProposal],
+    });
+
+    expectLegal(
+      validateCommitLegality({
+        parentState: adminEpoch1,
+        resultingState: removeCommit.newState,
+        proposals: [removeProposal],
+        committerLeafIndex: adminLeafIndex,
+      }),
+    );
+  });
+});

@@ -47,6 +47,7 @@ import {
 } from "../core/components/dictionary.js";
 import {
   type CommitIntegrityViolation,
+  type CommitLegalityOutcome,
   validateAddProposalAccountIdentityProofs,
   validateCommitLegality,
 } from "../core/components/integrity.js";
@@ -1471,6 +1472,15 @@ export class MarmotGroupEngine<TEnvelope> {
    * no explicit refs has it bundled by reference, and the integrity validator
    * would otherwise see a dictionary change with no backing op.
    *
+   * `committerLeafIndex` is always defined on this local send path (both
+   * callers pass `Number(parentState.privatePath.leafIndex)`), so an
+   * `undecidable` outcome (Phase 9, D-03) is unreachable in practice — every
+   * changed leaf is attributable to the committer's own index at minimum.
+   * There is no deferral disposition on a synchronous send (unlike inbound
+   * ingest or fork recovery, there is no pool to hold this in), so failing
+   * closed with the same `CommitLegalityError` is the only correct local
+   * behavior if it were ever reached.
+   *
    * @throws CommitLegalityError carrying the structured violation.
    */
   #assertStagedCommitLegal(
@@ -1479,13 +1489,24 @@ export class MarmotGroupEngine<TEnvelope> {
     committedProposals: readonly ProposalWithSender[],
     committerLeafIndex: number,
   ): void {
-    const violation = validateCommitLegality({
+    const outcome = validateCommitLegality({
       parentState,
       resultingState,
       proposals: committedProposals,
       committerLeafIndex,
     });
-    if (violation) throw new CommitLegalityError(violation);
+    switch (outcome.kind) {
+      case "legal":
+        return;
+      case "violation":
+        throw new CommitLegalityError(outcome.violation);
+      case "undecidable":
+        throw new CommitLegalityError({
+          reason: "account-identity-proof",
+          detail: outcome.detail,
+          proofReason: "unattributable-leaf",
+        });
+    }
   }
 
   /**
@@ -2060,9 +2081,9 @@ export class MarmotGroupEngine<TEnvelope> {
         // into the persisted tree. Without it an illegal commit that only
         // decrypts on a fork node would be recorded and reported `processed`,
         // and its edge would then pin tree-fed branch selection.
-        let violation: CommitIntegrityViolation | undefined;
+        let outcome: CommitLegalityOutcome;
         try {
-          violation = validateCommitLegality({
+          outcome = validateCommitLegality({
             parentState: state,
             resultingState: result.newState,
             proposals: captured.proposals,
@@ -2072,7 +2093,18 @@ export class MarmotGroupEngine<TEnvelope> {
           // Mirrors resolveCandidateParent's `deferred`: keep it pooled.
           return undefined;
         }
-        if (violation) {
+        if (outcome.kind === "undecidable") {
+          // Same keep-pooled idiom as the catch above: authorization cannot
+          // yet be evaluated against this candidate parent (Phase 9, D-03).
+          log(
+            "sweep commit undecidable at node %s detail:%s",
+            tag,
+            outcome.detail,
+          );
+          return undefined;
+        }
+        if (outcome.kind === "violation") {
+          const { violation } = outcome;
           log(
             "sweep commit rejected at node %s reason:%s detail:%s",
             tag,

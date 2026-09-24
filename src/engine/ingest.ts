@@ -821,13 +821,41 @@ export async function* ingestEnvelopes<TEnvelope>(
         // AFTER processMessage returns (never inside the callback — Pitfall 1),
         // BEFORE canonical state advances. A violating commit is rejected here
         // and never reaches ctx.setState/ctx.recordCommit.
-        const violation = validateCommitLegality({
+        const legalityOutcome = validateCommitLegality({
           parentState,
           resultingState: result.newState,
           proposals: capturedCommit.proposals,
           committerLeafIndex: capturedCommit.committerLeafIndex,
         });
-        if (violation) {
+        if (legalityOutcome.kind === "undecidable") {
+          // Phase 9 (D-03/D-04): this commit's changed leaves could not be
+          // attributed to its proposals or committer, so account-identity
+          // authorization cannot be evaluated against this candidate parent
+          // yet. Per refs/marmot/foundation/errors.md (lines 63-68) this is a
+          // deferral, not a rejection — the input stays retryable (no
+          // dedup.remember) and canonical state must not advance (no
+          // ctx.setState). Retry is bounded by the existing pool limits
+          // (maxSize plus source-epoch expiry against maxRewindCommits); the
+          // engine's ingest loop already pools any `kind: "deferred"` result,
+          // so no new retry mechanism is introduced here.
+          const deferredReason = deferredReasons.unjudgeableIdentity;
+          log(
+            "commit envelope:%s deferred reason:%s detail:%s",
+            envelopeLabel(envelope),
+            deferredReason,
+            legalityOutcome.detail,
+          );
+          yield {
+            kind: "deferred",
+            envelope,
+            message,
+            reason: deferredReason,
+            sourceEpoch: Number(framedEpoch(message) ?? 0n),
+          };
+          continue;
+        }
+        if (legalityOutcome.kind === "violation") {
+          const { violation } = legalityOutcome;
           log(
             "commit envelope:%s rejected reason:%s detail:%s",
             envelopeLabel(envelope),

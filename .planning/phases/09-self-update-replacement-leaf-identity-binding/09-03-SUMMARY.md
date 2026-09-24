@@ -205,3 +205,7 @@ None - no external service configuration required.
 
 *Phase: 09-self-update-replacement-leaf-identity-binding*
 *Completed: 2026-09-24*
+
+## Self-Check: PASSED
+
+All 8 modified/created source files verified present on disk with expected content; all 4 commit hashes (`28ee8e8`, `d7891c8`, `f94bac0`, `b339391`) verified present in `git log --oneline`.

@@ -205,6 +205,80 @@ describe("diffChangedLeaves", () => {
     ).toBeUndefined();
   });
 
+  it("a proposal-less self-update by leaf 0 carries a defined parentLeaf whose signature matches the parent leaf-0 signature and differs from the resulting leaf's signature", async () => {
+    const { impl, adminEpoch1, adminAccount } = await twoPartyEpoch1Group();
+    const [adminLeafIndex] = getPubkeyLeafNodeIndexes(
+      adminEpoch1,
+      adminAccount.pubkey,
+    );
+    expect(adminLeafIndex).toBe(0);
+
+    const selfUpdate = await createCommit({
+      context: ctxFor(impl),
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [],
+    });
+
+    const changed = diffChangedLeaves(
+      adminEpoch1.ratchetTree,
+      selfUpdate.newState.ratchetTree,
+    );
+    expect(changed).toHaveLength(1);
+    const parentNode = adminEpoch1.ratchetTree[adminLeafIndex! * 2];
+    expect(parentNode?.nodeType).toBe(nodeTypes.leaf);
+    if (parentNode?.nodeType !== nodeTypes.leaf)
+      throw new Error("expected a leaf node at the admin's parent index");
+
+    expect(changed[0]!.parentLeaf).toBeDefined();
+    expect(changed[0]!.parentLeaf!.signature).toEqual(
+      parentNode.leaf.signature,
+    );
+    expect(changed[0]!.parentLeaf!.signature).not.toEqual(
+      changed[0]!.leaf.signature,
+    );
+  });
+
+  it("a commit adding a brand-new member into a brand-new slot yields parentLeaf undefined", async () => {
+    const { impl, adminEpoch1 } = await twoPartyEpoch1Group();
+
+    const extraAccount = testAccount(2);
+    const extraKp = await generateKeyPackage({
+      credential: createCredential(extraAccount.pubkey),
+      signer: extraAccount.signer,
+      ciphersuiteImpl: impl,
+    });
+    const addCommit = await createCommit({
+      context: ctxFor(impl),
+      state: adminEpoch1,
+      wireAsPublicMessage: true,
+      ratchetTreeExtension: true,
+      extraProposals: [
+        {
+          proposalType: defaultProposalTypes.add,
+          add: { keyPackage: extraKp.publicPackage },
+        },
+      ],
+    });
+
+    const [newMemberLeafIndex] = getPubkeyLeafNodeIndexes(
+      addCommit.newState,
+      extraAccount.pubkey,
+    );
+    expect(newMemberLeafIndex).toBeDefined();
+
+    const changed = diffChangedLeaves(
+      adminEpoch1.ratchetTree,
+      addCommit.newState.ratchetTree,
+    );
+    const newMemberChanged = changed.find(
+      (c) => c.leafIndex === newMemberLeafIndex,
+    );
+    expect(newMemberChanged).toBeDefined();
+    expect(newMemberChanged!.parentLeaf).toBeUndefined();
+  });
+
   it("identical parent and resulting trees yield an empty array; trees of different lengths do not throw", async () => {
     const { adminEpoch1 } = await twoPartyEpoch1Group();
     expect(

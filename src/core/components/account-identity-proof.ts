@@ -93,6 +93,19 @@ function toHex4(value: number): string {
  * `invalid-proof`, `legacy-extension-present`) are all present; `invalid-credential`,
  * `invalid-dictionary`, `legacy-group`, `mixed-profile`, and `missing-requirement` are the
  * additions D-13 allows.
+ *
+ * Phase 9 (UPD-01) adds two more, both emitted by the commit-legality bucket
+ * classifier in `./integrity.js`, not by any validator in this module:
+ * - `member-identity-changed` (D-05): the replacement leaf at an existing
+ *   member's index carries a different account identity than the leaf it
+ *   replaced. Deliberately NOT `identity-mismatch` — that literal means the
+ *   proof's signer does not match this leaf's own credential identity (a
+ *   single-leaf check). Conflating the two would collapse a membership-model
+ *   violation into a proof-binding error.
+ * - `unattributable-leaf` (D-02): a changed leaf that, with the commit's full
+ *   proposal list and committer index available, matches no Add proposal, no
+ *   Update proposal sender, and is not the committer's update-path leaf —
+ *   fail closed.
  */
 export type AccountIdentityProofRejectReason =
   | "invalid-credential"
@@ -108,7 +121,9 @@ export type AccountIdentityProofRejectReason =
   | "invalid-proof"
   | "legacy-group"
   | "mixed-profile"
-  | "missing-requirement";
+  | "missing-requirement"
+  | "member-identity-changed"
+  | "unattributable-leaf";
 
 /** Thrown for every rejection in this module. */
 export class AccountIdentityProofError extends Error {

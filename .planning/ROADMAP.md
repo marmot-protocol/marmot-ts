@@ -182,11 +182,14 @@ during planning (`/gsd-plan-phase --research-phase 10`).
 4. Each invitee's Welcome is delivered independently; a failed delivery is retryable per invitee and never rolls back the group.
 5. An invitee who receives their Welcome joins at epoch 1 and can exchange messages with the creator.
 
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
 
-- [ ] TBD
+- [ ] 10-01-PLAN.md — Engine founding-Add send seam: `foundingAdd` intent + `foundingGroupCreated` result, shared legality gate, no envelope, per-kind audit branch
+- [ ] 10-02-PLAN.md — Shared per-recipient Welcome fanout: `NostrWelcomeDelivery.deliverMany()`, reshaped `GroupPublishResult.welcomeDelivery`, deliberate runtime-test migration
+- [ ] 10-03-PLAN.md — Founding orchestration: `options.invitees`, per-invitee intents, send+confirm, one-Welcome-per-invitee guard, single durable write, per-invitee retry state
+- [ ] 10-04-PLAN.md — Behavioural matrix, FOUND-05 end-to-end join-and-message integration test, and downstream docs for the non-durable/relay-less caveats
 
 ### Phase 11: Interop Fixtures, Exports Snapshot & QA Gate
 

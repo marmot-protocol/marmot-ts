@@ -131,7 +131,7 @@ a named alternative.**
 
 ### Create API shape & relays
 
-- **D-08: `options.invitees: NostrEvent[]` on the existing `create()`.** Extend `CreateGroupOptions` so
+- **D-08: `options.invitees` typed `NostrEvent[]` on the existing `create()`.** Extend `CreateGroupOptions` so
   `GroupsManager.create(name, options)` / `GroupFactory.create` covers both cases. Omitting `invitees` keeps
   today's exact behaviour **and code path**.
 

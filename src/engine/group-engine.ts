@@ -925,13 +925,25 @@ export class MarmotGroupEngine<TEnvelope> {
         type: "send_outcome",
         intent_kind: intentKind,
         result_kind: auditSendResultKind(result),
-        outbound_messages: [
-          {
-            msg_id: this.peeler.idOf(result.envelope),
-            artifact_kind: this.#artifactKind(result.envelope, result.kind),
-            transport: this.#transportEnvelope(result.envelope),
-          },
-        ],
+        // FOUND-01: `foundingGroupCreated` carries no `envelope` — no
+        // transport artifact was ever constructed for it (see the
+        // `SendResult` doc comment in types.ts). An empty `outbound_messages`
+        // list is therefore the honest audit record here; synthesizing a
+        // fabricated envelope reference would be dishonest (T-10-04) and
+        // `#transportEnvelope(undefined)` would throw at runtime (T-10-05).
+        outbound_messages:
+          result.kind === "foundingGroupCreated"
+            ? []
+            : [
+                {
+                  msg_id: this.peeler.idOf(result.envelope),
+                  artifact_kind: this.#artifactKind(
+                    result.envelope,
+                    result.kind,
+                  ),
+                  transport: this.#transportEnvelope(result.envelope),
+                },
+              ],
       });
       return result;
     } catch (error) {
@@ -1165,6 +1177,126 @@ export class MarmotGroupEngine<TEnvelope> {
           envelope,
           welcome,
           pending: {
+            kind: "commit",
+            newState,
+            parentState,
+            commitMessage: commit,
+            ownCommitStamp: this.#ownCommitStamp(commit, prepared),
+          },
+        };
+      }
+
+      case "foundingAdd": {
+        // D-01/D-02, FOUND-01/02/03: a founding Current-profile Add commit
+        // (epoch 0 -> 1) merged locally with no group-message publication
+        // obligation (refs/marmot/protocol-core/joining.md lines 21-30 — "the
+        // founding-creation exception"). Modelled on `case "commit"` above:
+        // identical proposal preparation and the identical
+        // `#assertStagedCommitLegal` gate (FOUND-02), so this cannot drift
+        // from ordinary commit legality. The caller (D-01) is expected to
+        // hand `pending` straight to `confirmPublished()` in the same
+        // uninterrupted continuation, with no intervening `await` — that
+        // invariant is convention, not enforced by this method (R-01).
+        const groupData = getMarmotGroupView(this.state);
+        if (!groupData) {
+          throw new Error("MarmotGroupData not found in ClientState.");
+        }
+
+        if (!mayPrepareLocalCommit(this.#lifecycle)) {
+          throw new Error(
+            `Cannot prepare a commit while the group is ${this.#lifecycle}`,
+          );
+        }
+
+        const context: ProposalContext = {
+          state: this.state,
+          ciphersuite: this.ciphersuite,
+          groupData,
+        };
+
+        const newProposals: Proposal[] = [];
+        for (const item of intent.extraProposals.flat()) {
+          if (typeof item === "function") {
+            newProposals.push(await item(context));
+          } else {
+            newProposals.push(item);
+          }
+        }
+
+        // No `proposalRefs` handling here: the intent has no such field — at
+        // epoch 0 there are no staged proposals to bundle by reference.
+
+        const prepared = this.#prepareOutboundCommitProposals(
+          this.state,
+          groupData.adminPubkeys,
+          newProposals,
+        );
+
+        const commitOptions: CreateCommitOptions = {
+          // Handshake content is wired as MLS PublicMessage (see wire-format.ts).
+          wireAsPublicMessage: true,
+          ratchetTreeExtension: true,
+        };
+
+        if (prepared.extraProposals.length > 0) {
+          commitOptions.extraProposals = prepared.extraProposals;
+        }
+
+        const parentState = this.state;
+        const { commit, newState, welcome } = await createCommit({
+          context: {
+            cipherSuite: this.ciphersuite,
+            authService: marmotAuthService,
+          },
+          // WR-05: staged invalid Adds pruned, so never bundled by reference.
+          state: prepared.commitState,
+          ...commitOptions,
+        });
+
+        // D-01/D-02: validate the staged commit before any lifecycle
+        // transition — the identical FOUND-02 gate `case "commit"` and `case
+        // "selfUpdate"` call, with the same argument order. The throw
+        // happens before the lifecycle transition below, so the engine is
+        // left in Stable with no pending state and no staged commit to roll
+        // back.
+        this.#assertStagedCommitLegal(
+          parentState,
+          newState,
+          prepared.committedWithSenders,
+          Number(parentState.privatePath.leafIndex),
+        );
+
+        // FOUND-01: unlike `case "commit"`, the peeler's transport-envelope
+        // wrap method is deliberately never invoked for a founding Add. Per
+        // refs/marmot/protocol-core/joining.md lines 21-30, the founding Add
+        // "has no group-message publication obligation because no
+        // pre-existing peer needs it" — and per MDK's own
+        // `do_create_group` comment (refs/mdk/crates/cgka-engine/src/group_lifecycle.rs),
+        // publishing it would make every invitee's Welcome-before-commit
+        // processing bounce with `AlreadyAtEpoch`. FOUND-01 is satisfied by
+        // never constructing the transport envelope at all, not by building
+        // one and leaving it unpublished.
+
+        if (welcome === undefined) {
+          throw new Error(
+            "foundingAdd: createCommit produced no Welcome for a founding Add that adds members",
+          );
+        }
+
+        this.#transitionLifecycle(
+          groupLifecycleStates.pendingPublish,
+          "begin_pending",
+          "foundingAdd",
+        );
+        this.#stagedCommitParentEpoch = Number(parentState.groupContext.epoch);
+        this.#sentContentIds.add(contentDedupId(commit));
+
+        return {
+          kind: "foundingGroupCreated",
+          welcome,
+          pending: {
+            // D-01: reuses the existing "commit" literal on purpose, so
+            // `confirmPublished()` is not modified by this plan.
             kind: "commit",
             newState,
             parentState,
@@ -3589,6 +3721,8 @@ function auditSendIntentKind(intent: SendIntent): string {
       return "group_evolution";
     case "selfUpdate":
       return "self_update";
+    case "foundingAdd":
+      return "founding_add";
   }
 }
 
@@ -3602,6 +3736,8 @@ function auditSendResultKind<TEnvelope>(result: SendResult<TEnvelope>): string {
       return "group_evolution";
     case "selfUpdate":
       return "self_update";
+    case "foundingGroupCreated":
+      return "founding_group_created";
   }
 }
 

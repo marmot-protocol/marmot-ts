@@ -79,7 +79,13 @@ export interface GroupPeeler<TEnvelope> {
   idOf(envelope: TEnvelope): string;
 }
 
-/** Staged state awaiting publish confirmation (publish-before-apply). */
+/**
+ * Staged state awaiting publish confirmation (publish-before-apply). The
+ * founding Add send case (D-01, `"foundingAdd"` on {@link SendIntent}) also
+ * produces a `"commit"`-kind `PendingState` — it deliberately does not get
+ * its own literal, so `confirmPublished`'s existing commit-recording branch
+ * applies unchanged.
+ */
 export type PendingState = {
   kind: "proposal" | "commit" | "selfUpdate";
   newState: ClientState;
@@ -125,7 +131,25 @@ export type SendIntent =
       )[];
       proposalRefs?: string[];
     }
-  | { kind: "selfUpdate" };
+  | { kind: "selfUpdate" }
+  | {
+      /**
+       * A founding Current-profile Add commit (epoch 0 → 1) merged locally
+       * with no group-message publication obligation
+       * (`refs/marmot/protocol-core/joining.md` lines 21-30 — "the
+       * founding-creation exception"; FOUND-01). Unlike `"commit"`,
+       * `extraProposals` is required: a founding Add with no Add proposals
+       * has no reason to exist. There is no `proposalRefs` field — at epoch 0
+       * there are no staged proposals to bundle by reference.
+       */
+      kind: "foundingAdd";
+      actorPubkey: string;
+      extraProposals: (
+        | Proposal
+        | ProposalAction<Proposal>
+        | (Proposal | ProposalAction<Proposal>)[]
+      )[];
+    };
 
 /** Engine response to {@link MarmotGroupEngine.send}. */
 export type SendResult<TEnvelope> =
@@ -137,7 +161,30 @@ export type SendResult<TEnvelope> =
       welcome: MlsWelcomeMessage | undefined;
       pending: PendingState;
     }
-  | { kind: "selfUpdate"; envelope: TEnvelope; pending: PendingState };
+  | { kind: "selfUpdate"; envelope: TEnvelope; pending: PendingState }
+  | {
+      /**
+       * Result of a `"foundingAdd"` send. Deliberately has NO `envelope`
+       * member:
+       *
+       * (a) Per `refs/marmot/protocol-core/joining.md` lines 21-30 and
+       *     `refs/marmot/protocol-core/publish-lifecycle.md` lines 66-78, the
+       *     founding Add has an empty publication obligation, so no transport
+       *     envelope exists for it — the absence of this field is the
+       *     type-level expression of FOUND-01, not merely an unpublished
+       *     envelope.
+       * (b) The caller MUST hand `pending` straight to `confirmPublished()`
+       *     in the same uninterrupted continuation with no intervening
+       *     `await` (D-01). This invariant is convention, not enforced by
+       *     this signature (R-01) — callers must be tested, not trusted.
+       * (c) `pending.kind` is `"commit"` (see {@link PendingState}'s doc
+       *     comment), so the existing commit-recording branch of
+       *     `confirmPublished()` applies to it unchanged.
+       */
+      kind: "foundingGroupCreated";
+      welcome: MlsWelcomeMessage;
+      pending: PendingState;
+    };
 
 /** An envelope whose MLS message was successfully processed. */
 export type ProcessedIngestResult<TEnvelope> = {

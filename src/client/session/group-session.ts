@@ -598,6 +598,11 @@ export class GroupSession<
           kind: "applicationMessage",
           payload: intent.payload,
         });
+        if (sendResult.kind !== "applicationMessage") {
+          throw new Error(
+            "Expected applicationMessage result from applicationMessage send",
+          );
+        }
         this.#sentEventIds.add(sendResult.envelope.id);
         await this.#saveHistory(intent.payload);
         return {

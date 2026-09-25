@@ -17,6 +17,7 @@ import type {
   GroupEffects,
   GroupPublishResult,
   GroupPublishWork,
+  WelcomeFanoutOutcome,
 } from "../session/group-effects.js";
 import type {
   NostrNetworkInterface,
@@ -295,16 +296,11 @@ export class GroupRuntime {
       kind: "notRequired",
     };
     if (innerWelcome && options.welcomeRecipients?.length) {
-      try {
-        await this.#deliverWelcomes(
-          innerWelcome,
-          options.actorPubkey,
-          options.welcomeRecipients,
-        );
-        welcomeDelivery = { kind: "succeeded" };
-      } catch (error) {
-        welcomeDelivery = { kind: "failed", error: errorDetail(error) };
-      }
+      welcomeDelivery = await this.#deliverWelcomes(
+        innerWelcome,
+        options.actorPubkey,
+        options.welcomeRecipients,
+      );
     }
 
     return {
@@ -445,60 +441,70 @@ export class GroupRuntime {
     return this.#getGroupRef();
   }
 
+  /**
+   * Delivers a Welcome to each recipient via the shared, non-throwing
+   * {@link NostrWelcomeDelivery.deliverMany} fanout (D-06/D-07) and reduces
+   * the result into {@link WelcomeFanoutOutcome}. This method itself must
+   * never throw: it runs after the commit has been confirmed and persisted,
+   * so a Welcome failure must never reject the publish (`publishFailed` is
+   * exclusive to pre-confirm relay failures — Phase 03.1-02).
+   */
   async #deliverWelcomes(
     welcome: import("ts-mls").Welcome,
     actorPubkey: string,
     recipients: WelcomeRecipient[],
-  ): Promise<void> {
+  ): Promise<WelcomeFanoutOutcome> {
     const groupData = this.#getGroupData();
-    if (!groupData)
-      throw new Error("MarmotGroupData not found in ClientState.");
+    if (!groupData) {
+      const message = "MarmotGroupData not found in ClientState.";
+      return {
+        kind: "attempted",
+        outcomes: recipients.map((recipient) => ({
+          kind: "failed",
+          recipient,
+          error: message,
+        })),
+      };
+    }
 
     this.#log?.(
       "Sending Welcome messages to %d recipient(s)",
       recipients.length,
     );
-    const welcomeResults = await Promise.allSettled(
-      recipients.map((recipient) =>
-        this.welcomeDelivery.deliver({
-          welcome,
-          author: actorPubkey,
-          groupRelays: groupData.relays,
-          recipient,
-        }),
-      ),
-    );
 
-    const failureDetails = welcomeResults
-      .map((result, i) => ({ result, recipient: recipients[i] }))
-      .filter(
-        (
-          item,
-        ): item is {
-          result: PromiseRejectedResult;
-          recipient: WelcomeRecipient;
-        } => item.result.status === "rejected",
-      )
-      .map((item) => {
-        const msg =
-          item.result.reason instanceof Error
-            ? item.result.reason.message
-            : String(item.result.reason);
-        return `${item.recipient.pubkey.slice(0, 16)}...: ${msg}`;
+    try {
+      const outcomes = await this.welcomeDelivery.deliverMany({
+        welcome,
+        author: actorPubkey,
+        groupRelays: groupData.relays,
+        recipients,
       });
 
-    if (failureDetails.length > 0) {
-      this.#log?.(
-        "%d/%d Welcome(s) failed to deliver: %O",
-        failureDetails.length,
-        recipients.length,
-        failureDetails,
-      );
-      throw new Error(
-        `Failed to deliver ${failureDetails.length}/${recipients.length} Welcome message(s): ${failureDetails.join(
-          "; ",
-        )}`,
-      );
+      const failed = outcomes.filter((outcome) => outcome.kind === "failed");
+      if (failed.length > 0) {
+        this.#log?.(
+          "%d/%d Welcome(s) failed to deliver: %O",
+          failed.length,
+          recipients.length,
+          failed.map(
+            (outcome) => `${outcome.recipient.pubkey.slice(0, 16)}...: ${outcome.error}`,
+          ),
+        );
+      }
+
+      return { kind: "attempted", outcomes };
+    } catch (error) {
+      // deliverMany is contractually non-throwing, but this defensively
+      // covers an unexpected throw so it can never reject the publish.
+      const message = errorDetail(error);
+      return {
+        kind: "attempted",
+        outcomes: recipients.map((recipient) => ({
+          kind: "failed",
+          recipient,
+          error: message,
+        })),
+      };
     }
   }
 }

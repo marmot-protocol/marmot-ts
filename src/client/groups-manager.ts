@@ -284,6 +284,7 @@ export class GroupsManager<
       cryptoProvider: this.cryptoProvider,
       historyFactory: options.historyFactory,
       mediaFactory: options.mediaFactory,
+      verifyEvent: this.#verifyEvent,
     });
 
     // Forward the registry's cache-level events as our own.

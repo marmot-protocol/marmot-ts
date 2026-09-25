@@ -11,6 +11,7 @@ import {
   encode,
   mlsMessageEncoder,
   Proposal,
+  Welcome,
 } from "ts-mls";
 
 import type { ProposalAction, ProposalContext } from "../../engine/types.js";
@@ -57,6 +58,10 @@ import {
 } from "../session/group-session.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
 import { NostrWelcomeDelivery } from "../transport/nostr/welcome-delivery.js";
+import type {
+  WelcomeDeliveryOutcome,
+  WelcomeRecipient,
+} from "../transport/nostr/welcome-delivery.js";
 import {
   GroupMediaService,
   type EncryptMediaMetadata,
@@ -401,6 +406,23 @@ export class MarmotGroup<
     once: boolean;
   }> = [];
 
+  /**
+   * FOUND-04 per-invitee Welcome delivery report, in the order recipients were
+   * supplied to {@link deliverFoundingWelcomes}. In-memory only (D-04): not
+   * serialized into `ClientState`, not persisted, not read on load. See
+   * {@link welcomeDeliveries} / {@link pendingWelcomes} for the accepted R-04
+   * consequence.
+   */
+  #welcomeDeliveries: WelcomeDeliveryOutcome[] = [];
+  /**
+   * The founding Welcome retained solely to support {@link retryWelcome}.
+   * In-memory only (D-04) — lost on restart, at which point `retryWelcome`
+   * throws rather than silently no-opping.
+   */
+  #foundingWelcome?: Welcome;
+  /** The author pubkey the retained founding Welcome was addressed from. */
+  #foundingWelcomeAuthor?: string;
+
   private log: Debugger;
 
   override on<
@@ -668,6 +690,112 @@ export class MarmotGroup<
 
   get relays() {
     return this.groupData?.relays;
+  }
+
+  /**
+   * The FOUND-04 per-invitee Welcome delivery report: one entry per recipient
+   * a founding create attempted to deliver to, in delivery order.
+   *
+   * **This is in-memory only and is lost on restart or crash (D-04).** It is
+   * discoverable state, not a returned value or a thrown error — a caller
+   * that never reads it silently loses an invitee who is already a member at
+   * epoch 1. The only recovery is the spec's re-invite path: the founding
+   * creator MAY re-invite the unreachable member with a fresh KeyPackage
+   * against the now-canonical group
+   * (refs/marmot/protocol-core/publish-lifecycle.md lines 66-78). This is an
+   * accepted consequence of D-04 + D-10 + D-12, not an oversight (R-04).
+   */
+  get welcomeDeliveries(): readonly WelcomeDeliveryOutcome[] {
+    return this.#welcomeDeliveries.slice();
+  }
+
+  /**
+   * The failed subset of {@link welcomeDeliveries} — the invitees a founding
+   * create has not yet reached. Retry with {@link retryWelcome}.
+   *
+   * Carries the same R-04 warning as {@link welcomeDeliveries}: this is
+   * in-memory only, lost on restart, and ignorable by a caller that never
+   * reads it. The only recovery beyond {@link retryWelcome} is the spec's
+   * re-invite-with-a-fresh-KeyPackage path
+   * (refs/marmot/protocol-core/publish-lifecycle.md lines 66-78).
+   */
+  get pendingWelcomes(): readonly WelcomeDeliveryOutcome[] {
+    return this.#welcomeDeliveries.filter(
+      (outcome) => outcome.kind === "failed",
+    );
+  }
+
+  /**
+   * Fans out a founding Welcome to every invitee, one {@link
+   * NostrWelcomeDelivery.deliverMany} call reached directly through
+   * `runtime.welcomeDelivery` (D-05/D-07) — this bypasses `GroupRuntime`'s
+   * publish path entirely, since a founding Add has no `GroupPublishWork` to
+   * drive. Retains the Welcome and author so a failed recipient can be
+   * retried later via {@link retryWelcome}.
+   *
+   * Never throws and never saves: partial or total Welcome failure is a
+   * normal outcome (D-12), reported through {@link pendingWelcomes} rather
+   * than raised. Passing an empty group-relay list is expected and supported
+   * (D-09) — delivery then depends entirely on each recipient's NIP-65 inbox
+   * relays, which `deliver` already resolves; a recipient with no published
+   * inbox relay list fails independently of the others.
+   */
+  async deliverFoundingWelcomes(options: {
+    welcome: Welcome;
+    author: string;
+    recipients: WelcomeRecipient[];
+  }): Promise<readonly WelcomeDeliveryOutcome[]> {
+    this.#foundingWelcome = options.welcome;
+    this.#foundingWelcomeAuthor = options.author;
+    const outcomes = await this.runtime.welcomeDelivery.deliverMany({
+      welcome: options.welcome,
+      author: options.author,
+      groupRelays: this.relays ?? [],
+      recipients: options.recipients,
+    });
+    this.#welcomeDeliveries = outcomes;
+    return outcomes;
+  }
+
+  /**
+   * Re-delivers one invitee's founding Welcome. Throws naming `pubkey` when
+   * there is no matching delivery outcome, or when no founding Welcome is
+   * retained (for instance after a restart) — this fails loudly rather than
+   * silently no-opping, since a silent no-op is exactly R-04's failure mode.
+   * When the matching entry already succeeded, returns it unchanged without
+   * performing another delivery.
+   *
+   * Deliberately has **no epoch guard**: RESEARCH Priority Finding #1
+   * establishes that a late epoch-1 Welcome is safe because the joiner's
+   * backfill (`GroupsManager#connectGroup`) has no `since` bound, **provided
+   * the group has relays**. A relay-less founding group (D-09/R-05) can never
+   * carry group traffic at all, so a late Welcome there leaves the joiner
+   * permanently at epoch 1.
+   */
+  async retryWelcome(pubkey: string): Promise<WelcomeDeliveryOutcome> {
+    const index = this.#welcomeDeliveries.findIndex(
+      (outcome) => outcome.recipient.pubkey === pubkey,
+    );
+    if (
+      index === -1 ||
+      !this.#foundingWelcome ||
+      !this.#foundingWelcomeAuthor
+    ) {
+      throw new Error(
+        `retryWelcome: no retained founding Welcome delivery outcome for recipient ${pubkey}`,
+      );
+    }
+    const existing = this.#welcomeDeliveries[index]!;
+    if (existing.kind === "succeeded") return existing;
+
+    const [outcome] = await this.runtime.welcomeDelivery.deliverMany({
+      welcome: this.#foundingWelcome,
+      author: this.#foundingWelcomeAuthor,
+      groupRelays: this.relays ?? [],
+      recipients: [existing.recipient],
+    });
+    this.#welcomeDeliveries[index] = outcome!;
+    return outcome!;
   }
 
   constructor(

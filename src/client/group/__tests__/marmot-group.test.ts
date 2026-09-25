@@ -1,4 +1,5 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
+import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
   CiphersuiteImpl,
   appDataUpdateProposalType,
@@ -11,6 +12,7 @@ import {
   makeAppDataDictionaryExtension,
   processMessage,
   unsafeTestingAuthenticationService,
+  type Welcome,
 } from "ts-mls";
 import { describe, expect, it, vi } from "vitest";
 
@@ -50,6 +52,7 @@ import {
   MarmotGroup,
 } from "../marmot-group.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
+import type { WelcomeRecipient } from "../../transport/nostr/welcome-delivery.js";
 
 async function createTestGroupState(
   account: PrivateKeyAccount<any>,
@@ -1004,5 +1007,153 @@ describe("MarmotGroup admin verification (MIP-03)", () => {
     if (result.kind !== "newState") throw new Error("expected newState");
     expect(result.actionTaken).toBe("accept");
     expect(result.newState.groupContext.epoch).toBe(initialEpoch + 1n);
+  });
+});
+
+describe("MarmotGroup founding Welcome delivery report (D-04/D-10/D-12/R-04, FOUND-04)", () => {
+  // Minimal, real (never-thrown-away) `Welcome` object. `NostrWelcomeDelivery`
+  // only encodes it into a rumor's content — it does not need to be
+  // cryptographically joinable for these bookkeeping/retry assertions.
+  const WELCOME: Welcome = {
+    cipherSuite: 1,
+    secrets: [],
+    encryptedGroupInfo: new Uint8Array([1, 2, 3, 4]),
+  };
+
+  function makeRecipient(
+    pubkey: string,
+    keyPackageEventId: string,
+  ): WelcomeRecipient {
+    return {
+      pubkey,
+      keyPackageEventId,
+      keyPackageEvent: {} as NostrEvent,
+    };
+  }
+
+  async function makeGroup(network: NostrNetworkInterface) {
+    const adminAccount = testAccount(6);
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const { clientState } = await createTestGroupState(adminAccount, impl);
+    const group = new MarmotGroup(clientState, {
+      store: new InMemoryKeyValueStore(),
+      signer: adminAccount.signer,
+      ciphersuite: impl,
+      network,
+    });
+    return { group, adminAccount };
+  }
+
+  it("reports one entry per recipient and no pending entries when every delivery succeeds", async () => {
+    const mockNetwork = new MockNetwork(["wss://relay.test"]);
+    const { group, adminAccount } = await makeGroup(mockNetwork);
+    const first = makeRecipient(testAccount(0).pubkey, "a".repeat(64));
+    const second = makeRecipient(testAccount(1).pubkey, "b".repeat(64));
+
+    const outcomes = await group.deliverFoundingWelcomes({
+      welcome: WELCOME,
+      author: adminAccount.pubkey,
+      recipients: [first, second],
+    });
+
+    expect(outcomes).toHaveLength(2);
+    expect(group.welcomeDeliveries).toHaveLength(2);
+    expect(group.pendingWelcomes).toEqual([]);
+    expect(group.welcomeDeliveries.every((o) => o.kind === "succeeded")).toBe(
+      true,
+    );
+  });
+
+  it("pendingWelcomes contains exactly the failed recipient while welcomeDeliveries reports both", async () => {
+    const mockNetwork = new MockNetwork(["wss://relay.test"]);
+    const { group, adminAccount } = await makeGroup(mockNetwork);
+    const first = makeRecipient(testAccount(2).pubkey, "c".repeat(64));
+    const second = makeRecipient(testAccount(3).pubkey, "d".repeat(64));
+    vi.spyOn(mockNetwork, "getUserInboxRelays").mockImplementation(
+      async (pubkey) =>
+        pubkey === second.pubkey ? [] : ["wss://mock-inbox.test"],
+    );
+
+    const outcomes = await group.deliverFoundingWelcomes({
+      welcome: WELCOME,
+      author: adminAccount.pubkey,
+      recipients: [first, second],
+    });
+
+    expect(outcomes).toHaveLength(2);
+    expect(group.welcomeDeliveries).toHaveLength(2);
+    expect(group.pendingWelcomes).toHaveLength(1);
+    expect(group.pendingWelcomes[0]!.recipient).toEqual(second);
+  });
+
+  it("retryWelcome re-delivers only the failed recipient and clears pendingWelcomes on success", async () => {
+    const mockNetwork = new MockNetwork(["wss://relay.test"]);
+    const { group, adminAccount } = await makeGroup(mockNetwork);
+    const first = makeRecipient(testAccount(4).pubkey, "e".repeat(64));
+    const second = makeRecipient(testAccount(5).pubkey, "f".repeat(64));
+    const inboxSpy = vi
+      .spyOn(mockNetwork, "getUserInboxRelays")
+      .mockImplementation(async (pubkey) =>
+        pubkey === second.pubkey ? [] : ["wss://mock-inbox.test"],
+      );
+
+    await group.deliverFoundingWelcomes({
+      welcome: WELCOME,
+      author: adminAccount.pubkey,
+      recipients: [first, second],
+    });
+    expect(group.pendingWelcomes).toHaveLength(1);
+
+    inboxSpy.mockImplementation(async () => ["wss://mock-inbox.test"]);
+    const retried = await group.retryWelcome(second.pubkey);
+
+    expect(retried.kind).toBe("succeeded");
+    expect(group.pendingWelcomes).toEqual([]);
+    expect(group.welcomeDeliveries).toHaveLength(2);
+  });
+
+  it("retryWelcome rejects for an unknown pubkey and returns the existing outcome without redelivering when already succeeded", async () => {
+    const mockNetwork = new MockNetwork(["wss://relay.test"]);
+    const { group, adminAccount } = await makeGroup(mockNetwork);
+    const first = makeRecipient(testAccount(7).pubkey, "0".repeat(64));
+
+    await group.deliverFoundingWelcomes({
+      welcome: WELCOME,
+      author: adminAccount.pubkey,
+      recipients: [first],
+    });
+
+    await expect(group.retryWelcome(testAccount(8).pubkey)).rejects.toThrow(
+      /no retained founding Welcome/,
+    );
+
+    const deliverManySpy = vi.spyOn(
+      group.runtime.welcomeDelivery,
+      "deliverMany",
+    );
+    const outcome = await group.retryWelcome(first.pubkey);
+
+    expect(outcome.kind).toBe("succeeded");
+    expect(deliverManySpy).not.toHaveBeenCalled();
+  });
+
+  it("a fanout whose deliveries all fail does not throw (D-12)", async () => {
+    const mockNetwork = new MockNetwork(["wss://relay.test"]);
+    const { group, adminAccount } = await makeGroup(mockNetwork);
+    vi.spyOn(mockNetwork, "getUserInboxRelays").mockResolvedValue([]);
+    const first = makeRecipient(testAccount(10).pubkey, "1".repeat(64));
+    const second = makeRecipient(testAccount(12).pubkey, "2".repeat(64));
+
+    const outcomes = await group.deliverFoundingWelcomes({
+      welcome: WELCOME,
+      author: adminAccount.pubkey,
+      recipients: [first, second],
+    });
+
+    expect(outcomes.every((o) => o.kind === "failed")).toBe(true);
+    expect(group.pendingWelcomes).toHaveLength(2);
   });
 });

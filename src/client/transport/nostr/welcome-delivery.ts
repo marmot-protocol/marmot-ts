@@ -33,6 +33,32 @@ export type DeliverWelcomeOptions = {
   recipient: WelcomeRecipient;
 };
 
+/**
+ * The outcome of one recipient's Welcome delivery attempt, produced by
+ * {@link NostrWelcomeDelivery.deliverMany}. This is the per-invitee unit of
+ * FOUND-04: a Welcome "succeeds or fails independently and does not affect
+ * canonical group state"
+ * (refs/marmot/protocol-core/publish-lifecycle.md lines 66-78).
+ */
+export type WelcomeDeliveryOutcome =
+  | {
+      kind: "succeeded";
+      recipient: WelcomeRecipient;
+      response: Record<string, PublishResponse>;
+    }
+  | {
+      kind: "failed";
+      recipient: WelcomeRecipient;
+      error: string;
+    };
+
+export type DeliverManyWelcomesOptions = {
+  welcome: Welcome;
+  author: string;
+  groupRelays: string[];
+  recipients: WelcomeRecipient[];
+};
+
 /** Owns Nostr/NIP-59 Welcome wrapping and inbox publication. */
 export class NostrWelcomeDelivery {
   readonly signer: EventSigner;
@@ -81,5 +107,45 @@ export class NostrWelcomeDelivery {
     }
 
     return this.network.publish(inboxRelays, giftWrapEvent);
+  }
+
+  /**
+   * Delivers a Welcome to many recipients, one {@link deliver} call each.
+   * This is the shared fanout D-06/D-07 puts on the class whose job is
+   * Welcome delivery — reached by both {@link GroupRuntime} (ordinary invite)
+   * and `GroupFactory` (founding create), so exactly one implementation
+   * exists that cannot drift.
+   *
+   * Never throws and never aggregates: each recipient's settled result maps
+   * to exactly one {@link WelcomeDeliveryOutcome} entry, in the order the
+   * recipients were supplied. A Welcome failure is a normal per-recipient
+   * outcome, not an error — see
+   * refs/marmot/protocol-core/publish-lifecycle.md lines 66-78 ("succeeds or
+   * fails independently and does not affect canonical group state").
+   */
+  async deliverMany(
+    options: DeliverManyWelcomesOptions,
+  ): Promise<WelcomeDeliveryOutcome[]> {
+    const settled = await Promise.allSettled(
+      options.recipients.map((recipient) =>
+        this.deliver({
+          welcome: options.welcome,
+          author: options.author,
+          groupRelays: options.groupRelays,
+          recipient,
+        }),
+      ),
+    );
+
+    return settled.map((result, index) => {
+      const recipient = options.recipients[index]!;
+      if (result.status === "fulfilled")
+        return { kind: "succeeded", recipient, response: result.value };
+      const error =
+        result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason);
+      return { kind: "failed", recipient, error };
+    });
   }
 }

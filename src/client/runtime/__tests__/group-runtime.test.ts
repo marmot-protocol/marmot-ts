@@ -51,6 +51,50 @@ function makeNetwork(
   };
 }
 
+/**
+ * Builds a `deliverMany` implementation that reproduces
+ * `NostrWelcomeDelivery.deliverMany`'s real per-recipient semantics
+ * (D-06/D-07) by delegating to the fixture's `deliver` mock: settle all
+ * recipients, map each fulfillment to a succeeded outcome carrying its
+ * recipient and value, and each rejection to a failed outcome carrying its
+ * recipient and the reason's message. The real `deliverMany` implementation
+ * is covered separately by Task 1's unit tests
+ * (`src/client/transport/nostr/__tests__/welcome-delivery.test.ts`).
+ */
+function makeDeliverManyFromDeliver(deliver: NostrWelcomeDelivery["deliver"]) {
+  return async (options: {
+    welcome: Welcome;
+    author: string;
+    groupRelays: string[];
+    recipients: WelcomeRecipient[];
+  }) => {
+    const settled = await Promise.allSettled(
+      options.recipients.map((recipient) =>
+        deliver({
+          welcome: options.welcome,
+          author: options.author,
+          groupRelays: options.groupRelays,
+          recipient,
+        }),
+      ),
+    );
+    return settled.map((result, index) => {
+      const recipient = options.recipients[index]!;
+      if (result.status === "fulfilled")
+        return {
+          kind: "succeeded" as const,
+          recipient,
+          response: result.value,
+        };
+      const error =
+        result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason);
+      return { kind: "failed" as const, recipient, error };
+    });
+  };
+}
+
 function makeRuntime(overrides: Partial<GroupRuntimeOptions> = {}) {
   const confirmedNotifications: StateNotification[] = [
     {
@@ -64,10 +108,14 @@ function makeRuntime(overrides: Partial<GroupRuntimeOptions> = {}) {
   const publishFailed = vi.fn();
   const save = vi.fn(async () => {});
   const deliver = vi.fn(async () => ackResponse());
+  const deliverMany = vi.fn(makeDeliverManyFromDeliver(deliver));
   const groupData = { relays: RELAYS } as MarmotGroupView;
 
   const options: GroupRuntimeOptions = {
-    welcomeDelivery: { deliver } as unknown as NostrWelcomeDelivery,
+    welcomeDelivery: {
+      deliver,
+      deliverMany,
+    } as unknown as NostrWelcomeDelivery,
     getNetwork: () => makeNetwork(async () => ackResponse()),
     getRelays: () => RELAYS,
     getGroupRef: () => "group-ref",
@@ -84,6 +132,7 @@ function makeRuntime(overrides: Partial<GroupRuntimeOptions> = {}) {
     publishFailed,
     save,
     deliver,
+    deliverMany,
     confirmedNotifications,
   };
 }
@@ -255,7 +304,7 @@ describe("GroupRuntime publish failure", () => {
     );
     expect(failed).toBeDefined();
     const publish = vi.fn(async () => noAckResponse());
-    const { runtime, confirmPublished, publishFailed, save, deliver } =
+    const { runtime, confirmPublished, publishFailed, save, deliver, deliverMany } =
       makeRuntime({ getNetwork: () => makeNetwork(publish) });
 
     await expect(
@@ -266,6 +315,7 @@ describe("GroupRuntime publish failure", () => {
     expect(publishFailed).toHaveBeenCalledWith(pending);
     expect(confirmPublished).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
+    expect(deliverMany).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
     expect(invitePublishFailFixture.expected_outcomes.at(-1)).toMatchObject({
       type: "client_state",
@@ -358,28 +408,46 @@ describe("GroupRuntime commit rollback", () => {
   });
 });
 
+// Migrated for D-06/D-07 (R-03): `GroupRuntime` now calls
+// `NostrWelcomeDelivery.deliverMany()` (per-recipient, never throwing)
+// instead of looping `deliver()` and throwing an aggregate error. The
+// fixture's `welcomeDelivery` stub gained a `deliverMany` implementation
+// that reproduces the real per-recipient semantics by delegating to the
+// same `deliver` mock, so the existing `deliver` call-count/argument
+// assertions below keep their original meaning while the runtime now
+// exercises the interface it actually calls. This is a deliberate migration
+// of the tests' shape, not a loosening of intent — see R-03 in
+// .planning/phases/10-founding-group-creation-via-welcome/10-CONTEXT.md.
 describe("GroupRuntime Welcome delivery", () => {
   const welcome = { welcome: {} as Welcome };
 
   it("delivers a Welcome to each recipient after a successful commit", async () => {
     const { runtime, deliver } = makeRuntime();
 
-    await runtime.publishWork(
-      commitWork({ welcome, welcomeRecipients: [recipient] }),
-    );
+    const [result] = await runtime.publishEffects({
+      publish: [commitWork({ welcome, welcomeRecipients: [recipient] })],
+    });
 
     expect(deliver).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledWith(
       expect.objectContaining({ recipient, groupRelays: RELAYS }),
     );
+    expect(result.welcomeDelivery).toEqual({
+      kind: "attempted",
+      outcomes: [{ kind: "succeeded", recipient, response: ackResponse() }],
+    });
   });
 
   it("does not deliver Welcomes when there are no recipients", async () => {
-    const { runtime, deliver } = makeRuntime();
+    const { runtime, deliver, deliverMany } = makeRuntime();
 
-    await runtime.publishWork(commitWork({ welcome, welcomeRecipients: [] }));
+    const [result] = await runtime.publishEffects({
+      publish: [commitWork({ welcome, welcomeRecipients: [] })],
+    });
 
     expect(deliver).not.toHaveBeenCalled();
+    expect(deliverMany).not.toHaveBeenCalled();
+    expect(result.welcomeDelivery).toEqual({ kind: "notRequired" });
   });
 
   it("preserves confirmed notifications when Welcome delivery fails", async () => {
@@ -387,9 +455,13 @@ describe("GroupRuntime Welcome delivery", () => {
       .fn()
       .mockResolvedValueOnce(ackResponse())
       .mockRejectedValueOnce(new Error("inbox unreachable"));
+    const deliverMany = vi.fn(makeDeliverManyFromDeliver(deliver));
     const { runtime, confirmPublished, publishFailed, confirmedNotifications } =
       makeRuntime({
-        welcomeDelivery: { deliver } as unknown as NostrWelcomeDelivery,
+        welcomeDelivery: {
+          deliver,
+          deliverMany,
+        } as unknown as NostrWelcomeDelivery,
       });
 
     const second: WelcomeRecipient = { ...recipient, pubkey: "e".repeat(64) };
@@ -403,10 +475,15 @@ describe("GroupRuntime Welcome delivery", () => {
     expect(result.notifications).toBe(confirmedNotifications);
     expect(result.persistence).toEqual({ kind: "succeeded" });
     expect(result.welcomeDelivery).toEqual({
-      kind: "failed",
-      error: expect.stringMatching(
-        /Failed to deliver 1\/2 Welcome message\(s\).*inbox unreachable/,
-      ),
+      kind: "attempted",
+      outcomes: [
+        { kind: "succeeded", recipient, response: ackResponse() },
+        {
+          kind: "failed",
+          recipient: second,
+          error: expect.stringMatching(/inbox unreachable/),
+        },
+      ],
     });
     expect(result.retryPublication).toBe(false);
     expect(confirmPublished).toHaveBeenCalledOnce();

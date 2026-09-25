@@ -62,7 +62,7 @@ Per `protocol-core/joining.md` founding-creation exception and MDK `SendResult::
 - [ ] **FOUND-01**: Developer can create a group with initial invitees; the founding Add is merged locally to epoch 1 and no kind-445 group event is published for it
 - [ ] **FOUND-02**: The founding Add passes the same proof and group-profile validation as an ordinary commit before it is merged
 - [ ] **FOUND-03**: After founding creation the group is `Stable` immediately, with no `PendingPublish` window
-- [ ] **FOUND-04**: Each invitee's Welcome is delivered independently; a failed delivery is retryable per invitee and never rolls back the group
+- [x] **FOUND-04**: Each invitee's Welcome is delivered independently; a failed delivery is retryable per invitee and never rolls back the group
 - [ ] **FOUND-05**: Initial invitees join at epoch 1 from their Welcome and can exchange messages with the creator
 
 ### Interop and quality (QA)
@@ -126,7 +126,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FOUND-01 | Phase 10 | Pending |
 | FOUND-02 | Phase 10 | Pending |
 | FOUND-03 | Phase 10 | Pending |
-| FOUND-04 | Phase 10 | Pending |
+| FOUND-04 | Phase 10 | Complete |
 | FOUND-05 | Phase 10 | Pending |
 | QA-03 | Phase 11 | Pending |
 | QA-04 | Phase 11 | Pending |

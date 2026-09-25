@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Account identity proof v2
 current_phase: 10
-current_phase_name: Founding Group Creation via Welcome
+current_phase_name: founding-group-creation-via-welcome
 status: executing
 stopped_at: Phase 10 context gathered
-last_updated: "2026-09-24T22:52:16.456Z"
-last_activity: 2026-09-24
-last_activity_desc: Phase 09 complete, transitioned to Phase 10
+last_updated: "2026-09-25T02:21:19.496Z"
+last_activity: 2026-09-25
+last_activity_desc: Phase 10 execution started
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 17
+  total_plans: 21
   completed_plans: 17
   percent: 67
 ---
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-11)
 
 **Core value:** A downstream client can join a Marmot group and exchange messages that interoperate, byte-for-byte, with any spec-conformant peer (incl. the Rust MDK reference), across every supported runtime.
-**Current focus:** Phase 09 — self-update-replacement-leaf-identity-binding
+**Current focus:** Phase 10 — founding-group-creation-via-welcome
 
 ## Current Position
 
-Phase: 10 — Founding Group Creation via Welcome
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-24 — Phase 09 complete, transitioned to Phase 10
+Phase: 10 (founding-group-creation-via-welcome) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 10
+Last activity: 2026-09-25 — Phase 10 execution started
 
 Progress: [░░░░░░░░░░] 0%
 

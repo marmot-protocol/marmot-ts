@@ -1,10 +1,13 @@
 /** @module @category Core - App Components */
 import {
+  appDataDictionaryExtensionType,
   appDataUpdateProposalType,
   ClientState,
+  defaultExtensionTypes,
   defaultProposalTypes,
   getAppDataDictionary,
   getCredentialFromLeafIndex,
+  nodeTypes,
   GroupContextExtension,
   type LeafIndex,
   Proposal,
@@ -17,9 +20,11 @@ import { getCredentialPubkey } from "../credential.js";
 import {
   ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
   APP_COMPONENTS_COMPONENT_ID,
+  GROUP_ADMIN_POLICY_COMPONENT_ID,
   AppComponentId,
 } from "./ids.js";
 import { bytesEqual } from "./bytes.js";
+import { decodeComponentsList } from "./app-components-list.js";
 import {
   AccountIdentityProofError,
   getGroupProfileSupport,
@@ -808,6 +813,143 @@ export function validateUpdateProposalAccountIdentityProofs(
  * @see refs/mdk/crates/cgka-engine/src/account_identity_proof.rs `validate_staged_commit_account_identity_proofs`
  * @see refs/marmot/app-components/account-identity-proof-v2.md "Validation"
  */
+/** MLS default extension (1..=5) and proposal (1..=7) types every leaf supports implicitly. */
+const isDefaultMlsExtensionType = (type: number) => type >= 1 && type <= 5;
+const isDefaultMlsProposalType = (type: number) => type >= 1 && type <= 7;
+
+/**
+ * Component ids with a GroupContext state format in the current profile: the
+ * protocol-owned registry minus the leaf-only account proof (`0x8009`) and the
+ * ephemeral-only multi-device join authorization (`0x800a`). A required
+ * component outside this set is unsupported. Mirrors MDK
+ * `is_known_group_component` over `PROTOCOL_OWNED_APP_COMPONENT_IDS`.
+ */
+const KNOWN_GROUP_COMPONENT_IDS: ReadonlySet<number> = new Set([
+  0x0001, 0x0002, 0x8001, 0x8002, 0x8003, 0x8004, 0x8005, 0x8006, 0x8007,
+  0x8008, 0x800b, 0x800c,
+]);
+
+/** The frozen encrypted-media v1 component, not permitted in the current profile. */
+const ENCRYPTED_MEDIA_V1_COMPONENT_ID = 0x8008;
+
+/**
+ * The current-profile invariants of a commit's COMPLETE resulting state,
+ * mirroring MDK `validate_current_profile_invariants_for_staged_commit`, which
+ * every MDK seam (send, ingest, convergence replay) runs before a commit can
+ * become canonical:
+ *
+ * - `required_capabilities` exists and requires `app_data_dictionary` and
+ *   `app_data_update`;
+ * - the dictionary exists, its `app_components` list decodes, it requires
+ *   admin-policy (`0x8003`) and the account proof (`0x8009`), and neither
+ *   requires nor carries the frozen encrypted-media v1 (`0x8008`);
+ * - every required component other than `0x8009` is a known group component
+ *   and has GroupContext state;
+ * - EVERY resulting leaf advertises each required non-default MLS extension,
+ *   proposal and credential type, and every required component id in its own
+ *   `app_components` support list.
+ *
+ * ts-mls checks the MLS `required_capabilities` only for leaves a commit adds,
+ * and knows nothing about Marmot app components. Without this check marmot-ts
+ * applied commits MDK rejects (an Add of a KeyPackage that does not advertise
+ * a required component, an AppDataUpdate that requires a component some
+ * member lacks), and the group split.
+ *
+ * @see refs/mdk/crates/cgka-engine/src/app_components.rs `validate_current_profile_group_context`, `validate_resulting_leaf_capabilities`
+ * @see refs/marmot/app-components/README.md
+ */
+export function validateResultingProfileInvariants(args: {
+  resultingExtensions: GroupContextExtension[];
+  resultingTree: ClientState["ratchetTree"];
+}): CommitIntegrityViolation | undefined {
+  const fail = (detail: string): CommitIntegrityViolation => ({
+    reason: "component-integrity",
+    detail: `invalid resulting state: ${detail}`,
+  });
+  const requiredExtension = args.resultingExtensions.find(
+    (extension) =>
+      extension.extensionType === defaultExtensionTypes.required_capabilities,
+  );
+  if (!requiredExtension) return fail("missing required_capabilities");
+  const required = requiredExtension.extensionData as {
+    extensionTypes: number[];
+    proposalTypes: number[];
+    credentialTypes: number[];
+  };
+  if (!required.extensionTypes.includes(appDataDictionaryExtensionType))
+    return fail("app_data_dictionary is not a required extension");
+  if (!required.proposalTypes.includes(appDataUpdateProposalType))
+    return fail("app_data_update is not a required proposal");
+
+  const dictionary = getAppDataDictionary(args.resultingExtensions);
+  if (!dictionary) return fail("missing app_data_dictionary");
+  let requiredComponents: readonly number[];
+  try {
+    requiredComponents = getAppComponents(args.resultingExtensions) ?? [];
+  } catch {
+    return fail("app_components list does not decode");
+  }
+  const hasState = (id: number) =>
+    dictionary.some((entry) => entry.componentId === id);
+  if (
+    requiredComponents.includes(ENCRYPTED_MEDIA_V1_COMPONENT_ID) ||
+    hasState(ENCRYPTED_MEDIA_V1_COMPONENT_ID)
+  )
+    return fail("frozen encrypted-media v1 component 0x8008 is not permitted");
+  for (const mandatory of [
+    GROUP_ADMIN_POLICY_COMPONENT_ID,
+    ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
+  ])
+    if (!requiredComponents.includes(mandatory))
+      return fail(
+        `missing mandatory component requirement 0x${mandatory.toString(16)}`,
+      );
+  for (const id of requiredComponents) {
+    if (id === ACCOUNT_IDENTITY_PROOF_COMPONENT_ID) continue;
+    if (!KNOWN_GROUP_COMPONENT_IDS.has(id))
+      return fail(`unsupported required component 0x${id.toString(16)}`);
+    if (!hasState(id))
+      return fail(`required component 0x${id.toString(16)} has no state`);
+  }
+
+  for (const node of args.resultingTree) {
+    if (!node || node.nodeType !== nodeTypes.leaf) continue;
+    const leaf = node.leaf;
+    const capabilities = leaf.capabilities ?? {
+      extensions: [],
+      proposals: [],
+      credentials: [],
+    };
+    const supportsMls =
+      required.extensionTypes.every(
+        (type) =>
+          isDefaultMlsExtensionType(type) ||
+          capabilities.extensions.includes(type),
+      ) &&
+      required.proposalTypes.every(
+        (type) =>
+          isDefaultMlsProposalType(type) ||
+          capabilities.proposals.includes(type),
+      ) &&
+      required.credentialTypes.every((type) =>
+        capabilities.credentials.includes(type),
+      );
+    if (!supportsMls) return fail("a member lacks a required MLS capability");
+    let advertised: readonly number[] = [];
+    try {
+      const list = getAppDataDictionary(
+        leaf.extensions as unknown as GroupContextExtension[],
+      )?.find((entry) => entry.componentId === APP_COMPONENTS_COMPONENT_ID);
+      advertised = list ? decodeComponentsList(list.data) : [];
+    } catch {
+      return fail("a member's app_components list does not decode");
+    }
+    if (requiredComponents.some((id) => !advertised.includes(id)))
+      return fail("a member lacks a required app component");
+  }
+  return undefined;
+}
+
 export function validateCommitLegality(args: {
   parentState: ClientState;
   resultingState: ClientState;
@@ -898,6 +1040,21 @@ export function validateCommitLegality(args: {
   });
   if (adminLeafCouplingViolation)
     return { kind: "violation", violation: adminLeafCouplingViolation };
+
+  // MDK selects the profile from the parent and checks the current-profile
+  // invariants of the whole resulting state; other profiles are refused
+  // elsewhere (`profileSupport`).
+  if (
+    getGroupProfileSupport(args.parentState.groupContext.extensions).kind ===
+    "supported"
+  ) {
+    const profileViolation = validateResultingProfileInvariants({
+      resultingExtensions: args.resultingState.groupContext.extensions,
+      resultingTree: args.resultingState.ratchetTree,
+    });
+    if (profileViolation)
+      return { kind: "violation", violation: profileViolation };
+  }
 
   if (undecidableDetail !== undefined)
     return { kind: "undecidable", detail: undecidableDetail };

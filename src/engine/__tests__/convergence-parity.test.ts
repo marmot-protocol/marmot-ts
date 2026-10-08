@@ -221,9 +221,9 @@ async function threeMemberEpoch1Group() {
  * commit is genuinely built by a different member from an independent
  * `ClientState` copy, not merely a second call against the same object.
  */
-async function twoMemberEpoch1Group() {
+async function twoMemberEpoch1Group(memberSlot = 9) {
   const adminAccount = testAccount(6);
-  const memberAccount = testAccount(9);
+  const memberAccount = testAccount(memberSlot);
   const adminPubkey = adminAccount.pubkey;
   const memberPubkey = memberAccount.pubkey;
   const impl = await getCiphersuiteImpl(
@@ -559,8 +559,11 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
   // pair is what proved the divergence. Now that our own branch is a genuine
   // candidate, this test's pass is meaningful on its own terms too.
   it("materializes its own confirmed commit as a convergence candidate when a winning same-epoch sibling arrives", async () => {
+    // Both commits are ordinary self-updates, so `tip_committer` decides
+    // before the digest: the member (slot 2) sorts before the admin (slot 6),
+    // so the sibling wins on the merits.
     const { impl, ctx, adminPubkey, adminEpoch1, memberEpoch1 } =
-      await twoMemberEpoch1Group();
+      await twoMemberEpoch1Group(2);
     const peeler = testPeeler(impl);
     const engine = new MarmotGroupEngine({
       state: adminEpoch1,
@@ -579,8 +582,9 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
       return result;
     };
 
-    // Search for a pairing where the sibling's ordering key WINS against our
-    // own. Both sides are re-drawn per attempt for the same reason as the
+    // Search for a pairing where our own digest is the LOWER one, so the
+    // sibling can only win through `tip_committer`, which ranks above the
+    // digest. Both sides are re-drawn per attempt for the same reason as the
     // test above (independent trials, 2^-25 instead of ~4% failure).
     let sent = await stageOwnCommit();
     let sibling = await selfUpdateCommit(ctx, memberEpoch1);
@@ -590,7 +594,7 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
       compareCommitOrderingKeys(
         orderingKeyOf(sent.pending.commitMessage!, 1),
         orderingKeyOf(sibling.commit, 1),
-      ) <= 0;
+      ) >= 0;
       attempts++
     ) {
       engine.publishFailed(sent.pending);
@@ -599,7 +603,7 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
     }
     const ownKey = orderingKeyOf(sent.pending.commitMessage!, 1);
     const siblingKey = orderingKeyOf(sibling.commit, 1);
-    expect(compareCommitOrderingKeys(ownKey, siblingKey)).toBeGreaterThan(0);
+    expect(compareCommitOrderingKeys(ownKey, siblingKey)).toBeLessThan(0);
 
     engine.confirmPublished(sent.pending);
     expect(Number(engine.state.groupContext.epoch)).toBe(2);

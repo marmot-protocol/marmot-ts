@@ -2,11 +2,12 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 
 import { BinaryReader, BinaryWriter } from "../core/binary.js";
+import type { CommitOrderingPriority } from "../core/convergence.js";
+
+export type { CommitOrderingPriority };
 
 const OWN_COMMIT_RECORD_MAGIC = Uint8Array.of(0x4f, 0x43, 0x53, 0x54); // OCST
 const OWN_COMMIT_RECORD_VERSION = 1;
-
-export type CommitOrderingPriority = "privileged" | "ordinary";
 
 /** Evidence captured while a locally-authored commit is still staged. */
 export interface OwnCommitConvergenceStamp {

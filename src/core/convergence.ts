@@ -2,6 +2,8 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
+import { selfRemoveProposalType } from "ts-mls";
+
 import { isAppPayloadExpired } from "./retained-history.js";
 
 /**
@@ -137,6 +139,33 @@ export function isWitnessEligible(
   );
 }
 
+/**
+ * The authenticated ordering class of a branch's tip commit
+ * (`convergence.md` "Candidate branches", `tip_priority`). A commit is
+ * `privileged` exactly when its authorization rule requires an active admin;
+ * the two commit shapes a non-admin may make (a self-update and a
+ * SelfRemove-only commit) are `ordinary` whoever commits them.
+ */
+export type CommitOrderingPriority = "privileged" | "ordinary";
+
+/**
+ * Classifies a commit by the proposals it carries (inline and by reference),
+ * mirroring MDK `commit_ordering_priority_for_staged`: a commit with no
+ * proposals (a self-update; MLS forces an UpdatePath) or with only SelfRemove
+ * proposals is `ordinary`; anything else needs an admin and is `privileged`.
+ *
+ * @see refs/mdk/crates/cgka-engine/src/app_components.rs `is_allowed_non_admin_commit`
+ */
+export function commitOrderingPriority(
+  proposals: readonly { proposal: { proposalType: number } }[],
+): CommitOrderingPriority {
+  return proposals.every(
+    ({ proposal }) => proposal.proposalType === selfRemoveProposalType,
+  )
+    ? "ordinary"
+    : "privileged";
+}
+
 /** A candidate branch produced by replaying commits from a retained state. */
 export interface BranchCandidate {
   /** Caller-supplied identifier for the branch (not used in scoring). */
@@ -149,6 +178,11 @@ export interface BranchCandidate {
   tipDigest: Uint8Array;
   /** Authenticated account identity of the tip commit's member sender. */
   tipCommitter?: Uint8Array;
+  /**
+   * Ordering class of the tip commit. Omitted is treated as `ordinary`, the
+   * class that never outranks a known `privileged` tip.
+   */
+  tipPriority?: CommitOrderingPriority;
   /** App-payload witnesses that decrypt on candidate states in the branch. */
   appWitnesses: AppWitness[];
 }
@@ -159,6 +193,7 @@ export interface BranchScore {
   effectiveCommitDepth: number;
   witnessQuorumMet: boolean;
   appWitnessScore: number;
+  tipPriority: CommitOrderingPriority;
   tipDigest: Uint8Array;
   tipCommitter: Uint8Array;
 }
@@ -223,6 +258,7 @@ export function scoreBranch(
     effectiveCommitDepth: validCommitDepth + witnessDepthBoost(branch, policy),
     witnessQuorumMet: witnessQuorumMet(branch.appWitnesses, policy),
     appWitnessScore: appWitnessScore(branch.appWitnesses, policy),
+    tipPriority: branch.tipPriority ?? "ordinary",
     tipDigest: branch.tipDigest,
     tipCommitter: branch.tipCommitter ?? new Uint8Array(),
   };
@@ -237,6 +273,10 @@ function compareBytes(a: Uint8Array, b: Uint8Array): number {
   return a.length - b.length;
 }
 
+function priorityRank(priority: CommitOrderingPriority): number {
+  return priority === "privileged" ? 1 : 0;
+}
+
 function cmpNum(a: number, b: number): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -244,9 +284,12 @@ function cmpNum(a: number, b: number): number {
 /**
  * Compares two branch scores per `convergence.md` "Branch selection": higher
  * effectiveCommitDepth, then witness quorum beats none, then higher
- * rawCommitDepth, then higher appWitnessScore, then LOWER tipDigest. Returns a
+ * rawCommitDepth, then higher appWitnessScore, then a `privileged` tip before
+ * an `ordinary` one, then LOWER tipCommitter, then LOWER tipDigest. Returns a
  * positive number when `a` ranks above `b` (so the canonical branch is the
  * maximum under this ordering).
+ *
+ * @see refs/mdk/crates/cgka-engine/src/convergence.rs `compare_scores`
  */
 export function compareBranchScores(a: BranchScore, b: BranchScore): number {
   return (
@@ -254,6 +297,8 @@ export function compareBranchScores(a: BranchScore, b: BranchScore): number {
     cmpNum(Number(a.witnessQuorumMet), Number(b.witnessQuorumMet)) ||
     cmpNum(a.validCommitDepth, b.validCommitDepth) ||
     cmpNum(a.appWitnessScore, b.appWitnessScore) ||
+    // A privileged tip (one that needed an admin) beats an ordinary one.
+    cmpNum(priorityRank(a.tipPriority), priorityRank(b.tipPriority)) ||
     // Lower authenticated account identity wins, matching MDK.
     compareBytes(b.tipCommitter, a.tipCommitter) ||
     // Lower tip digest wins, so invert the byte comparison.

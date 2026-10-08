@@ -10,6 +10,7 @@ import {
   type AppWitness,
   type BranchCandidate,
   commitDigest,
+  commitOrderingPriority,
   compareCommitOrderingKeys,
   DEFAULT_CONVERGENCE_POLICY,
   isBranchEligible,
@@ -149,6 +150,77 @@ describe("branch selection ordering", () => {
     expect(
       selectCanonicalBranch(20, [branch("old", 1, 2, digest(1))], policy),
     ).toBeUndefined();
+  });
+});
+
+describe("tip priority (convergence.md step 4)", () => {
+  const key = (n: number) => {
+    const b = new Uint8Array(32);
+    b[0] = n;
+    return b;
+  };
+
+  it("a privileged tip beats an ordinary tip from a lower committer", () => {
+    // MDK compare_scores: priority is compared before tip_committer and
+    // tip_digest, so an admin commit wins a tied same-epoch race against a
+    // self-update even when the self-updater's key sorts first.
+    const adminRename: BranchCandidate = {
+      ...branch("admin", 4, 5, digest(9)),
+      tipCommitter: key(0xd0),
+      tipPriority: "privileged",
+    };
+    const selfUpdate: BranchCandidate = {
+      ...branch("self-update", 4, 5, digest(1)),
+      tipCommitter: key(0x2d),
+      tipPriority: "ordinary",
+    };
+    for (const order of [
+      [adminRename, selfUpdate],
+      [selfUpdate, adminRename],
+    ])
+      expect(selectCanonicalBranch(5, order, policy)?.id).toBe("admin");
+  });
+
+  it("falls through to the lower committer when priorities tie", () => {
+    const a: BranchCandidate = {
+      ...branch("a", 4, 5, digest(1)),
+      tipCommitter: key(0xd1),
+      tipPriority: "ordinary",
+    };
+    const b: BranchCandidate = {
+      ...branch("b", 4, 5, digest(9)),
+      tipCommitter: key(0x2d),
+      tipPriority: "ordinary",
+    };
+    expect(selectCanonicalBranch(5, [a, b], policy)?.id).toBe("b");
+  });
+
+  it("does not let priority override a higher app-witness score", () => {
+    const privileged: BranchCandidate = {
+      ...branch("privileged", 4, 5, digest(1)),
+      tipCommitter: key(1),
+      tipPriority: "privileged",
+    };
+    const witnessed: BranchCandidate = {
+      ...branch("witnessed", 4, 5, digest(9), [
+        { epoch: 5, sender: sender(7) },
+      ]),
+      tipCommitter: key(2),
+      tipPriority: "ordinary",
+    };
+    expect(selectCanonicalBranch(5, [privileged, witnessed], policy)?.id).toBe(
+      "witnessed",
+    );
+  });
+
+  it("classifies only self-update and SelfRemove-only commits as ordinary", () => {
+    const selfRemove = { proposal: { proposalType: 0x000a } };
+    const remove = { proposal: { proposalType: 3 } };
+    const appData = { proposal: { proposalType: 0x0008 } };
+    expect(commitOrderingPriority([])).toBe("ordinary");
+    expect(commitOrderingPriority([selfRemove, selfRemove])).toBe("ordinary");
+    expect(commitOrderingPriority([selfRemove, remove])).toBe("privileged");
+    expect(commitOrderingPriority([appData])).toBe("privileged");
   });
 });
 

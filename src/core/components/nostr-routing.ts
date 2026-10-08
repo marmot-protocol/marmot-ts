@@ -46,7 +46,10 @@ function validateRelay(url: string): void {
   const parsed = new URL(url);
   if (parsed.username !== "" || parsed.password !== "")
     throw new Error("Nostr relay URL must not include credentials");
-  if (parsed.hash !== "")
+  // An empty fragment ("wss://relay.example/#") leaves `parsed.hash` empty but
+  // is still a fragment: MDK's `url` crate sees `Some("")` and rejects it.
+  // WHATWG keeps the "#" in `href`, which is the reliable check.
+  if (parsed.href.includes("#"))
     throw new Error("Nostr relay URL must not include a fragment");
   if (parsed.hostname === "")
     throw new Error("Nostr relay URL must include a host");

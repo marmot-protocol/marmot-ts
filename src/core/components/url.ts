@@ -41,7 +41,11 @@ export function validateAndNormalizeHttpsUrl(
 
   if (url.username !== "" || url.password !== "")
     throw new Error(`${label} must not include credentials`);
-  if (url.hash !== "") throw new Error(`${label} must not include a fragment`);
+  // `url.hash` is "" for both "no fragment" and an empty fragment ("…/#"), but
+  // the Rust `url` crate MDK uses reports `Some("")` for the latter and rejects
+  // it. WHATWG serialization keeps the "#" in `href`, so test that instead.
+  if (url.href.includes("#"))
+    throw new Error(`${label} must not include a fragment`);
 
   const scheme = url.protocol.replace(/:$/, "");
   const isLoopbackHttp =

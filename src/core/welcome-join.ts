@@ -9,6 +9,7 @@ import {
   type Welcome,
 } from "ts-mls";
 import { marmotAuthService } from "./auth-service.js";
+import { defaultMarmotClientConfig } from "./client-config.js";
 import { type MarmotGroupView, getMarmotGroupView } from "./client-state.js";
 import { getWelcome } from "./welcome-event.js";
 
@@ -46,6 +47,7 @@ export async function readWelcomeGroupInfo({
       context: {
         cipherSuite: ciphersuiteImpl,
         authService: marmotAuthService,
+        clientConfig: defaultMarmotClientConfig,
         externalPsks: {},
       },
       welcome,

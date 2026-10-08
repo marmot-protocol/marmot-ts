@@ -8,6 +8,7 @@ import {
   GroupContextExtension,
 } from "ts-mls";
 import { marmotAuthService } from "./auth-service.js";
+import { defaultMarmotClientConfig } from "./client-config.js";
 import { marmotRequiredCapabilitiesExtension } from "./capabilities.js";
 import {
   adminPolicyEntry,
@@ -99,6 +100,7 @@ export async function createGroup(
     context: {
       cipherSuite: ciphersuiteImpl,
       authService: marmotAuthService,
+      clientConfig: defaultMarmotClientConfig,
     },
     groupId,
     keyPackage: creatorKeyPackage.publicPackage,

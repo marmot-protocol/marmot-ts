@@ -25,7 +25,16 @@ import {
   APP_COMPONENTS_COMPONENT_ID,
   SAFE_AAD_COMPONENT_ID,
 } from "../../../../core/components/ids.js";
-import { createCredential } from "../../../../core/credential.js";
+import {
+  adminPolicyEntry,
+  agentTextStreamEntry,
+  groupProfileEntry,
+} from "../../../../core/components/dictionary.js";
+import {
+  createCredential,
+  getCredentialPubkey,
+} from "../../../../core/credential.js";
+import { createGroup } from "../../../../core/group.js";
 import { generateKeyPackage } from "../../../../core/key-package.js";
 import type { ProposalContext } from "../../marmot-group.js";
 import { proposeInviteUser } from "../invite-user.js";
@@ -198,6 +207,80 @@ describe("proposeInviteUser account identity proof verification", () => {
       action,
       { ciphersuite: otherImpl } as ProposalContext,
       "ciphersuite-mismatch",
+    );
+  });
+});
+
+describe("proposeInviteUser group requirement check", () => {
+  async function groupWith(
+    impl: CiphersuiteImpl,
+    components: Parameters<typeof createGroup>[0]["components"],
+    requiredComponentIds?: number[],
+  ): Promise<ProposalContext> {
+    const admin = await keyPackageWithProof(
+      impl,
+      Uint8Array.from({ length: 32 }, (_, i) => i + 1),
+    );
+    const { clientState } = await createGroup({
+      creatorKeyPackage: admin,
+      components: [
+        groupProfileEntry({ name: "g", description: "" }),
+        adminPolicyEntry([
+          getCredentialPubkey(admin.publicPackage.leafNode.credential),
+        ]),
+        ...components,
+      ],
+      requiredComponentIds,
+      ciphersuiteImpl: impl,
+    });
+    return {
+      state: clientState,
+      ciphersuite: impl,
+    } as ProposalContext;
+  }
+
+  async function invitee(impl: CiphersuiteImpl) {
+    return keyPackageWithProof(impl, new Uint8Array(32).fill(9));
+  }
+
+  it("accepts an invitee that supports every requirement", async () => {
+    const impl = await getCiphersuiteImpl(SUITE, defaultCryptoProvider);
+    const ctx = await groupWith(impl, []);
+    const kp = await invitee(impl);
+    await expect(
+      proposeInviteUser(kp.publicPackage)(ctx),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects an invitee whose leaf does not advertise a required app component", async () => {
+    // MDK members reject an Add whose leaf misses a required component
+    // (validate_resulting_leaf_capabilities), so the invite must not be sent.
+    const impl = await getCiphersuiteImpl(SUITE, defaultCryptoProvider);
+    const ctx = await groupWith(
+      impl,
+      [{ componentId: 0xf123, data: new Uint8Array([1]) }],
+      [0xf123],
+    );
+    const kp = await invitee(impl);
+    await expect(proposeInviteUser(kp.publicPackage)(ctx)).rejects.toThrow(
+      /missing app component 0xf123/,
+    );
+  });
+
+  it("rejects an invitee that lacks a required agent-text-stream role", async () => {
+    const impl = await getCiphersuiteImpl(SUITE, defaultCryptoProvider);
+    const ctx = await groupWith(impl, [
+      agentTextStreamEntry({
+        requiredMemberRoles: 0x03,
+        allowedMemberRoles: 0x03,
+        maxPlaintextFrameLen: 4096,
+        replayTtlSecs: 0,
+        paddingBucketBytes: 0,
+      }),
+    ]);
+    const kp = await invitee(impl);
+    await expect(proposeInviteUser(kp.publicPackage)(ctx)).rejects.toThrow(
+      /missing send role 0xf2d2/,
     );
   });
 });

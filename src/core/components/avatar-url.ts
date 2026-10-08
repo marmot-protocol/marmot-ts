@@ -5,6 +5,7 @@ import {
   decodeUtf8,
   encodeUtf8,
 } from "../binary.js";
+import { rejectNonRoutableHost } from "./host-safety.js";
 import { validateAndNormalizeHttpsUrl } from "./url.js";
 
 /**
@@ -17,9 +18,13 @@ import { validateAndNormalizeHttpsUrl } from "./url.js";
  *   opaque dim<V>;        // optional render hint, "" when absent
  *   opaque thumbhash<V>;  // optional render hint, "" when absent
  *
- * The URL is validated + normalized (`https` only, no credentials/fragment, not
- * localhost or a non-routable address); the decoder re-checks that a present
- * URL is already normalized.
+ * The URL is validated + normalized (`https` only, a host, no
+ * credentials/fragment); the decoder re-checks that a present URL is already
+ * normalized. Whether the host is safe to contact (localhost, private or other
+ * non-routable addresses) is NOT a validity rule: `group-avatar-url-v1.md`
+ * says it "MUST NOT affect component or commit validity", and MDK accepts such
+ * URLs as group state. Call {@link rejectUnsafeGroupAvatarContactUrl} before
+ * fetching or rendering the avatar instead.
  *
  * @see darkmatter `crates/traits/src/app_components.rs` `encode_group_avatar_url_v1`
  */
@@ -40,7 +45,19 @@ function normalizeUrl(url: string): string {
   return validateAndNormalizeHttpsUrl(url, {
     maxLen: GROUP_AVATAR_URL_MAX_LEN,
     label: "group avatar URL",
+    rejectUnsafeHosts: false,
   });
+}
+
+/**
+ * Contact policy for a group avatar URL: throws when the URL points at
+ * localhost or a non-routable address. Use it before fetching or rendering the
+ * avatar. It is separate from component validity on purpose, so a URL can be
+ * valid group state and still unsafe for this client to contact (mirrors MDK
+ * `reject_unsafe_group_avatar_contact_url`).
+ */
+export function rejectUnsafeGroupAvatarContactUrl(url: string): void {
+  rejectNonRoutableHost(new URL(url).hostname, "group avatar URL");
 }
 
 /** Encodes a {@link GroupAvatarUrlV1} to its component `data` bytes. */

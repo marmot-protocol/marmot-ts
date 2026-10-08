@@ -35,6 +35,7 @@ import {
 import {
   decodeGroupAvatarUrlV1,
   encodeGroupAvatarUrlV1,
+  rejectUnsafeGroupAvatarContactUrl,
 } from "../avatar-url.js";
 import {
   decodeEncryptedMediaPolicyV1,
@@ -221,16 +222,47 @@ describe("avatar-url.v1 (0x8007)", () => {
     expect(() => encodeGroupAvatarUrlV1({ url: "", dim: "1x1" })).toThrow();
   });
 
-  it("rejects non-https and non-routable urls", () => {
+  it("rejects non-https urls", () => {
     expect(() =>
       encodeGroupAvatarUrlV1({ url: "http://example.com/a.png" }),
     ).toThrow(/https/);
+  });
+
+  it("accepts localhost and non-routable hosts as valid state (MDK parity)", () => {
+    // group-avatar-url-v1.md: whether a client contacts the destination "MUST
+    // NOT affect component or commit validity". These are the exact bytes MDK
+    // (encode_group_avatar_url_v1) produces for the same inputs; MDK accepts
+    // them on decode, so rejecting them here forks commit acceptance.
+    const cases: [string, string][] = [
+      [
+        "https://localhost/a.png",
+        "1768747470733a2f2f6c6f63616c686f73742f612e706e670000",
+      ],
+      [
+        "https://192.168.1.10/a.png",
+        "1a68747470733a2f2f3139322e3136382e312e31302f612e706e670000",
+      ],
+      [
+        "https://127.0.0.1/a.png",
+        "1768747470733a2f2f3132372e302e302e312f612e706e670000",
+      ],
+    ];
+    for (const [url, mdkHex] of cases) {
+      expect(hex(encodeGroupAvatarUrlV1({ url }))).toBe(mdkHex);
+      expect(decodeGroupAvatarUrlV1(hexToBytes(mdkHex)).url).toBe(url);
+    }
+  });
+
+  it("keeps host safety as a separate contact-time check", () => {
     expect(() =>
-      encodeGroupAvatarUrlV1({ url: "https://127.0.0.1/a.png" }),
+      rejectUnsafeGroupAvatarContactUrl("https://127.0.0.1/a.png"),
     ).toThrow(/non-routable/);
     expect(() =>
-      encodeGroupAvatarUrlV1({ url: "https://localhost/a.png" }),
+      rejectUnsafeGroupAvatarContactUrl("https://localhost/a.png"),
     ).toThrow(/localhost/);
+    expect(() =>
+      rejectUnsafeGroupAvatarContactUrl("https://example.com/a.png"),
+    ).not.toThrow();
   });
 
   it("decodes a non-UTF-8 hint as absent, not an error (darkmatter parity)", () => {

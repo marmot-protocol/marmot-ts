@@ -7,6 +7,13 @@ export interface HttpsUrlOptions {
   /** Allow `http` URLs that point at a loopback host (encrypted-media only). */
   allowLoopbackHttp?: boolean;
   /**
+   * Reject `https` URLs whose host is localhost or a non-routable address.
+   * Defaults to `true` (the encrypted-media endpoint rule). Components whose
+   * spec makes host safety a contact-time policy rather than a validity rule
+   * (`group-avatar-url-v1.md`) pass `false`.
+   */
+  rejectUnsafeHosts?: boolean;
+  /**
    * Trim surrounding whitespace from the input before parsing. The darkmatter
    * encrypted-media endpoint validator does this (`raw.trim()`); the avatar
    * validator does not.
@@ -19,7 +26,8 @@ export interface HttpsUrlOptions {
 /**
  * Validates and normalizes an `https` (optionally loopback-`http`) URL the way
  * the darkmatter `validate_and_normalize_*` helpers do: no credentials, no
- * fragment, a routable host, and length bounds. Returns the WHATWG-normalized
+ * fragment, a routable host (unless `rejectUnsafeHosts` is `false`), and length
+ * bounds. Returns the WHATWG-normalized
  * URL. Both this and the Rust `url` crate implement the WHATWG URL Standard, so
  * normalized output matches across implementations for ordinary URLs.
  *
@@ -47,7 +55,8 @@ export function validateAndNormalizeHttpsUrl(
   const isLoopbackHttp =
     scheme === "http" && opts.allowLoopbackHttp && isLoopbackHost(url.hostname);
   if (scheme === "https") {
-    rejectNonRoutableHost(url.hostname, label);
+    if (opts.rejectUnsafeHosts ?? true)
+      rejectNonRoutableHost(url.hostname, label);
   } else if (!isLoopbackHttp) {
     throw new Error(`${label} scheme must be https`);
   }

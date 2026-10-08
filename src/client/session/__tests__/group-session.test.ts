@@ -460,9 +460,10 @@ describe("GroupSession application-message authorship (M3)", () => {
     // Correct author (MEMBER) but a tampered, non-canonical id.
     const tampered = rumorFrom(MEMBER, "tampered id");
     tampered.id = "0".repeat(64);
+    // Raw bytes: serializeApplicationRumor refuses to emit a non-canonical id.
     const effects = await memberSession.send({
       kind: "applicationMessage",
-      payload: serializeApplicationRumor(tampered),
+      payload: new TextEncoder().encode(JSON.stringify(tampered)),
     });
 
     const results = [];

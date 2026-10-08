@@ -2,6 +2,7 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { Debugger } from "debug";
 import {
+  appDataDictionaryExtensionType,
   appDataUpdateProposalType,
   CiphersuiteImpl,
   ClientState,
@@ -1537,6 +1538,20 @@ export class MarmotGroupEngine<TEnvelope> {
       committedProposals.push(adminPolicySplice);
       committedWithSenders.push({
         proposal: adminPolicySplice,
+        senderLeafIndex: Number(actorLeaf),
+      });
+    }
+
+    const dictionaryLast = dictionaryLastRepairFor(
+      state,
+      committedProposals,
+      referenced.map((p) => p.proposal),
+    );
+    if (dictionaryLast) {
+      extraProposals.unshift(dictionaryLast);
+      committedProposals.unshift(dictionaryLast);
+      committedWithSenders.unshift({
+        proposal: dictionaryLast,
         senderLeafIndex: Number(actorLeaf),
       });
     }
@@ -3749,6 +3764,75 @@ export class MarmotGroupEngine<TEnvelope> {
  * one would silently delete a proposal that is individually valid. Those are
  * caught by the batch check in {@link MarmotGroupEngine.#prepareOutboundCommitProposals}.
  */
+/**
+ * A `GroupContextExtensions` proposal that moves `app_data_dictionary` to the
+ * end of the GroupContext extension list, for a commit that carries an
+ * AppDataUpdate in a group whose dictionary is not already last. `undefined`
+ * when no repair is needed or allowed.
+ *
+ * GroupContext extensions are an ordered list that feeds the key schedule.
+ * ts-mls applies an AppDataUpdate by replacing the dictionary in place, while
+ * OpenMLS (MDK) removes it and re-appends it (`Extensions::add_or_replace`).
+ * Groups created before the dictionary was put last ([app_data_dictionary,
+ * required_capabilities]) therefore compute a different GroupContext for every
+ * AppDataUpdate commit on the two sides, and MDK rejects the commit with a
+ * confirmation tag mismatch. Both libraries apply a GroupContextExtensions
+ * proposal as a plain list replacement, and then update the dictionary at its
+ * new (last) position, so one commit carrying the reordered list and the
+ * AppDataUpdate is read identically by MDK, current marmot-ts and older
+ * marmot-ts. Every later AppDataUpdate then needs no repair.
+ *
+ * Lifecycle (0x800c) enablement and disband commits are left alone: both MDK
+ * and the spec allow no proposal besides their own updates in them. So is a
+ * commit that references a standalone AppDataUpdate (see below).
+ */
+function dictionaryLastRepairFor(
+  state: ClientState,
+  committedProposals: readonly Proposal[],
+  referencedProposals: readonly Proposal[],
+): Proposal | undefined {
+  // An AppDataUpdate must follow the GroupContextExtensions proposal in the
+  // commit (draft-ietf-mls-extensions), and `createCommit` lists references
+  // before inline proposals, so an inline repair cannot precede a referenced
+  // AppDataUpdate.
+  if (
+    referencedProposals.some(
+      (proposal) => proposal.proposalType === appDataUpdateProposalType,
+    )
+  )
+    return undefined;
+  let carriesAppDataUpdate = false;
+  for (const proposal of committedProposals) {
+    if (proposal.proposalType === defaultProposalTypes.group_context_extensions)
+      return undefined;
+    if (
+      proposal.proposalType !== appDataUpdateProposalType ||
+      !("appDataUpdate" in proposal)
+    )
+      continue;
+    if (proposal.appDataUpdate.componentId === GROUP_LIFECYCLE_COMPONENT_ID)
+      return undefined;
+    carriesAppDataUpdate = true;
+  }
+  if (!carriesAppDataUpdate) return undefined;
+
+  const extensions = state.groupContext.extensions;
+  const dictionaryIndex = extensions.findIndex(
+    (extension) => extension.extensionType === appDataDictionaryExtensionType,
+  );
+  if (dictionaryIndex === -1 || dictionaryIndex === extensions.length - 1)
+    return undefined;
+  return {
+    proposalType: defaultProposalTypes.group_context_extensions,
+    groupContextExtensions: {
+      extensions: [
+        ...extensions.filter((_, index) => index !== dictionaryIndex),
+        extensions[dictionaryIndex]!,
+      ],
+    },
+  };
+}
+
 function withoutInadmissibleStagedProposals(
   state: ClientState,
   ciphersuiteId: number,

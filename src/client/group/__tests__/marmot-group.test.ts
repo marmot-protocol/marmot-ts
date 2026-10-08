@@ -2,8 +2,10 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
   CiphersuiteImpl,
+  appDataDictionaryExtensionType,
   appDataUpdateProposalType,
   createCommit,
+  createGroup as mlsCreateGroup,
   defaultCryptoProvider,
   defaultProposalTypes,
   getCiphersuiteImpl,
@@ -77,6 +79,42 @@ async function createTestGroupState(
   return { clientState, kp };
 }
 
+/**
+ * The same group re-created with `app_data_dictionary` as the last
+ * GroupContext extension, so an AppDataUpdate commit needs no extension-order
+ * repair (which would add a GroupContextExtensions proposal and an UpdatePath
+ * that a clone of the committing leaf cannot process).
+ */
+async function createDictionaryLastGroupState(
+  account: PrivateKeyAccount<any>,
+  ciphersuiteImpl: CiphersuiteImpl,
+) {
+  const { clientState, kp } = await createTestGroupState(
+    account,
+    ciphersuiteImpl,
+  );
+  const extensions = clientState.groupContext.extensions;
+  return {
+    clientState: await mlsCreateGroup({
+      context: {
+        cipherSuite: ciphersuiteImpl,
+        authService: unsafeTestingAuthenticationService,
+      },
+      groupId: clientState.groupContext.groupId,
+      keyPackage: kp.publicPackage,
+      privateKeyPackage: kp.privatePackage,
+      extensions: [
+        ...extensions.filter(
+          (e) => e.extensionType !== appDataDictionaryExtensionType,
+        ),
+        ...extensions.filter(
+          (e) => e.extensionType === appDataDictionaryExtensionType,
+        ),
+      ],
+    }),
+  };
+}
+
 describe("MarmotGroup lifecycle (group-state.md)", () => {
   it("automatically regenerates disband after real convergence selects a deeper active branch", async () => {
     const adminAccount = testAccount(6);
@@ -85,7 +123,10 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
-    const { clientState } = await createTestGroupState(adminAccount, impl);
+    const { clientState } = await createDictionaryLastGroupState(
+      adminAccount,
+      impl,
+    );
     const cloneState = () =>
       deserializeClientState(serializeClientState(clientState));
     let nowMs = 100;

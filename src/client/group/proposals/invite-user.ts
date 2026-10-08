@@ -3,7 +3,10 @@ import { isEvent, NostrEvent } from "applesauce-core/helpers/event";
 
 import { defaultProposalTypes, ProposalAdd, type KeyPackage } from "ts-mls";
 import { validateKeyPackageAccountIdentityProof } from "../../../core/components/account-identity-proof.js";
-import { getKeyPackage } from "../../../core/key-package-event.js";
+import {
+  getKeyPackage,
+  validateKeyPackageEventMetadata,
+} from "../../../core/key-package-event.js";
 import { ProposalAction } from "../marmot-group.js";
 
 /** Builds a proposal to invite a user to the group from a key package event or raw key package */
@@ -14,6 +17,16 @@ export function proposeInviteUser(
     const keyPackage = isEvent(keyPackageEvent)
       ? getKeyPackage(keyPackageEvent)
       : keyPackageEvent;
+
+    // An event's tags are what discovery and selection read, so they must
+    // describe the KeyPackage it carries (transports/nostr.md; MDK rejects
+    // the same mismatches). Throws KeyPackageEventMetadataError.
+    if (isEvent(keyPackageEvent))
+      await validateKeyPackageEventMetadata(
+        keyPackageEvent,
+        keyPackage,
+        ciphersuite.hash,
+      );
 
     // The invitee KeyPackage is validated with its own ciphersuite, which must
     // equal the group's (refs/marmot/app-components/account-identity-proof-v2.md

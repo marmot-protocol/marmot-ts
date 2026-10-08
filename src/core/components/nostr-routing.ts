@@ -19,7 +19,8 @@ import { compareBytes } from "./bytes.js";
  *   // each MarmotNostrRelayV1 = opaque url<1..512>   (QUIC-varint length + UTF-8)
  *
  * Relays are sorted ascending by raw UTF-8 byte value, MUST be unique, and the
- * list MUST be non-empty. The decoder re-checks sort + uniqueness.
+ * list MUST hold between 1 and {@link NOSTR_ROUTING_MAX_RELAYS} entries. The
+ * decoder re-checks sort, uniqueness, and the count bound.
  *
  * @see darkmatter `crates/traits/src/app_components.rs` `encode_nostr_routing_v1`
  * @see Marmot v2 spec: `app-components/nostr-routing-v1.md`
@@ -27,6 +28,26 @@ import { compareBytes } from "./bytes.js";
 
 const NOSTR_GROUP_ID_BYTES = 32;
 const RELAY_URL_MAX_BYTES = 512;
+
+/**
+ * Maximum number of relays in a routing state (`nostr-routing-v1.md`
+ * "Validation": "the relay list contains at most 16 entries"). MDK enforces the
+ * same bound on encode and decode (`NOSTR_ROUTING_MAX_RELAYS` in
+ * `traits/src/app_components/routing.rs`) and caps the Welcome `relays` tag at
+ * 16, so a larger list is rejected by every MDK member.
+ */
+export const NOSTR_ROUTING_MAX_RELAYS = 16;
+
+function validateRelayCount(count: number): void {
+  if (count === 0) {
+    throw new Error("Nostr routing must contain at least one relay");
+  }
+  if (count > NOSTR_ROUTING_MAX_RELAYS) {
+    throw new Error(
+      `Nostr routing must contain at most ${NOSTR_ROUTING_MAX_RELAYS} relays`,
+    );
+  }
+}
 
 export interface NostrRoutingV1 {
   nostrGroupId: Uint8Array;
@@ -68,9 +89,7 @@ export function encodeNostrRoutingV1(routing: NostrRoutingV1): Uint8Array {
     if (i > 0 && compareBytes(encoded[i - 1][1], encoded[i][1]) === 0) continue;
     relays.push(encoded[i][0]);
   }
-  if (relays.length === 0) {
-    throw new Error("Nostr routing must contain at least one relay");
-  }
+  validateRelayCount(relays.length);
   for (const relay of relays) validateRelay(relay);
 
   const items = relays.map((r) =>
@@ -87,6 +106,11 @@ export function decodeNostrRoutingV1(data: Uint8Array): NostrRoutingV1 {
   const nostrGroupId = reader.bytes(NOSTR_GROUP_ID_BYTES);
   const relayBytes: Uint8Array[] = [];
   const relays = reader.vector((item) => {
+    if (relayBytes.length === NOSTR_ROUTING_MAX_RELAYS) {
+      throw new Error(
+        `Nostr routing must contain at most ${NOSTR_ROUTING_MAX_RELAYS} relays`,
+      );
+    }
     const bytes = item.opaque({ max: RELAY_URL_MAX_BYTES });
     if (bytes.length === 0)
       throw new Error("Nostr relay URL must not be empty");
@@ -95,9 +119,7 @@ export function decodeNostrRoutingV1(data: Uint8Array): NostrRoutingV1 {
   });
   reader.end();
 
-  if (relays.length === 0) {
-    throw new Error("Nostr routing must contain at least one relay");
-  }
+  validateRelayCount(relays.length);
   for (let i = 1; i < relayBytes.length; i++) {
     const cmp = compareBytes(relayBytes[i - 1], relayBytes[i]);
     if (cmp === 0) throw new Error("Nostr relay URLs must be unique");

@@ -24,16 +24,29 @@ export function encodeComponentsList(
   return new BinaryWriter().vector(items).build();
 }
 
-/** Decodes an `app_components` data payload into a sorted, unique id list. */
+/**
+ * Decodes an `app_components` data payload into a sorted, unique id list.
+ *
+ * Rejects duplicate ids and ids that are not in ascending order. The decoder
+ * never sorts on the caller's behalf: non-canonical bytes are invalid
+ * (`foundation/canonical-encoding.md`), and MDK's `decode_components_list`
+ * rejects an unsorted list, so accepting one here would let the two
+ * implementations disagree on the same GroupContext, LeafNode, or KeyPackage.
+ */
 export function decodeComponentsList(data: Uint8Array): AppComponentId[] {
   const reader = new BinaryReader(data);
   const seen = new Set<number>();
+  let previous = -1;
   const ids = reader.vector((item) => {
     const id = item.uint16();
     if (seen.has(id)) {
       throw new Error(`duplicate component id ${id} in app_components list`);
     }
+    if (id < previous) {
+      throw new Error("app_components list is not sorted ascending");
+    }
     seen.add(id);
+    previous = id;
     return id;
   });
   reader.end();

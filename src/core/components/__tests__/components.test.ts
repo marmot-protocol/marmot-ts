@@ -72,6 +72,15 @@ describe("app_components list (0x0001)", () => {
       /duplicate component id/,
     );
   });
+
+  it("rejects ids that are not in ascending order on decode", () => {
+    // QUIC varint 4, then 0x8003 before 0x8001. MDK's decode_components_list
+    // rejects this ("component list is not sorted"); a lenient decoder would
+    // accept a GroupContext, LeafNode, or KeyPackage that MDK members reject.
+    expect(() => decodeComponentsList(hexToBytes("0480038001"))).toThrow(
+      /not sorted/,
+    );
+  });
 });
 
 describe("group.profile.v1 (0x8001)", () => {

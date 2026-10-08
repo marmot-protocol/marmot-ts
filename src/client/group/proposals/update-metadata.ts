@@ -11,6 +11,8 @@ import {
   type EncryptedMediaPolicyV1,
   encryptedMediaEntry,
   groupAvatarUrlEntry,
+  groupBlossomImageEntry,
+  type GroupBlossomImageV1,
   groupProfileEntry,
   messageRetentionEntry,
   nostrRoutingEntry,
@@ -31,6 +33,12 @@ export interface UpdateGroupMetadata {
   nostrGroupId?: Uint8Array;
   /** New group avatar URL (group.avatar-url.v1). */
   avatarUrl?: string;
+  /**
+   * New encrypted group image (group.blossom.image.v1); pass
+   * `emptyGroupBlossomImageV1()` to clear it. Build it with
+   * `encryptGroupBlossomImage` and upload the blob first.
+   */
+  image?: GroupBlossomImageV1;
   /** New encrypted-media policy (group.encrypted-media.v1). */
   encryptedMedia?: EncryptedMediaPolicyV1;
   /**
@@ -99,6 +107,10 @@ export function proposeUpdateMetadata(
       proposals.push(
         componentUpdate(groupAvatarUrlEntry({ url: metadata.avatarUrl })),
       );
+    }
+
+    if (metadata.image !== undefined) {
+      proposals.push(componentUpdate(groupBlossomImageEntry(metadata.image)));
     }
 
     if (metadata.encryptedMedia !== undefined) {

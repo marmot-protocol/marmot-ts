@@ -7,6 +7,7 @@ export * from "./admin-policy.js";
 export * from "./nostr-routing.js";
 export * from "./message-retention.js";
 export * from "./avatar-url.js";
+export * from "./blossom-image.js";
 export * from "./encrypted-media.js";
 export * from "./agent-text-stream.js";
 export * from "./group-lifecycle.js";

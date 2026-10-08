@@ -86,8 +86,11 @@ export const DEFAULT_GROUP_COMPONENT_IDS: readonly AppComponentId[] = [
  * This is a superset of the darkmatter reference app's supported set
  * (`{0x8001, 0x8003, 0x8004, 0x8006, 0x8008}`); the negotiated required set for
  * any group is the intersection across members, so advertising extra supported
- * components is safe. Excludes `group.blossom.image` (`0x8002`), which has no
- * wire codec, and the `app_components` list id (`0x0001`) itself.
+ * components is safe. Excludes the `app_components` list id (`0x0001`) itself.
+ *
+ * Includes `group.blossom.image` (`0x8002`): MDK/White Noise only puts an
+ * encrypted group image into a group when every founding member's leaf
+ * advertises `0x8002`, and otherwise silently drops it.
  *
  * Includes `0x8009`: every KeyPackage leaf advertises and carries the account
  * identity proof, and the kind-30443 `app_components` tag must include it
@@ -95,6 +98,7 @@ export const DEFAULT_GROUP_COMPONENT_IDS: readonly AppComponentId[] = [
  */
 export const SUPPORTED_APP_COMPONENT_IDS: readonly AppComponentId[] = [
   GROUP_PROFILE_COMPONENT_ID,
+  GROUP_BLOSSOM_IMAGE_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
   NOSTR_ROUTING_COMPONENT_ID,
   GROUP_MESSAGE_RETENTION_COMPONENT_ID,

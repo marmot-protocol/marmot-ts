@@ -215,7 +215,9 @@ describe("makeLeafAppComponentsExtension", () => {
           ...projectionExtension.extensionData,
         ]),
       ),
-    ).toBe("00061d1c00011514000180018003800480058006800780088009800c00020100");
+    ).toBe(
+      "00061f1e000117160001800180028003800480058006800780088009800c00020100",
+    );
 
     function makeAppDataDictionaryExtensionForProjection() {
       // Bypasses makeAppComponentsExtension's SafeAAD guard (that guard is a

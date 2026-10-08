@@ -15,6 +15,7 @@ import {
   APP_COMPONENTS_COMPONENT_ID,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
   GROUP_AVATAR_URL_COMPONENT_ID,
+  GROUP_BLOSSOM_IMAGE_COMPONENT_ID,
   GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
   GROUP_MESSAGE_RETENTION_COMPONENT_ID,
   GROUP_LIFECYCLE_COMPONENT_ID,
@@ -49,6 +50,11 @@ import {
   encodeGroupAvatarUrlV1,
   GroupAvatarUrlV1,
 } from "./avatar-url.js";
+import {
+  decodeGroupBlossomImageV1,
+  encodeGroupBlossomImageV1,
+  GroupBlossomImageV1,
+} from "./blossom-image.js";
 import {
   decodeEncryptedMediaPolicyV1,
   encodeEncryptedMediaPolicyV1,
@@ -247,6 +253,11 @@ const GROUP_AVATAR_URL_CODEC = defineCodec(
   decodeGroupAvatarUrlV1,
   encodeGroupAvatarUrlV1,
 );
+const GROUP_BLOSSOM_IMAGE_CODEC = defineCodec(
+  GROUP_BLOSSOM_IMAGE_COMPONENT_ID,
+  decodeGroupBlossomImageV1,
+  encodeGroupBlossomImageV1,
+);
 const ENCRYPTED_MEDIA_CODEC = defineCodec(
   GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
   decodeEncryptedMediaPolicyV1,
@@ -325,6 +336,13 @@ export function getGroupAvatarUrl(
   return getComponent(extensions, GROUP_AVATAR_URL_CODEC);
 }
 
+/** The `group.blossom.image.v1` encrypted group image (`0x8002`). */
+export function getGroupBlossomImage(
+  extensions: GroupContextExtension[],
+): GroupBlossomImageV1 | undefined {
+  return getComponent(extensions, GROUP_BLOSSOM_IMAGE_CODEC);
+}
+
 /** The `group.encrypted-media.v1` policy (`0x8008`). */
 export function getEncryptedMediaPolicy(
   extensions: GroupContextExtension[],
@@ -378,6 +396,13 @@ export function agentTextStreamEntry(
 /** Builds the `group.avatar-url.v1` entry. */
 export function groupAvatarUrlEntry(avatar: GroupAvatarUrlV1): ComponentData {
   return entryFor(GROUP_AVATAR_URL_CODEC, avatar);
+}
+
+/** Builds the `group.blossom.image.v1` entry (an empty state clears the image). */
+export function groupBlossomImageEntry(
+  image: GroupBlossomImageV1,
+): ComponentData {
+  return entryFor(GROUP_BLOSSOM_IMAGE_CODEC, image);
 }
 
 /** Builds the `group.encrypted-media.v1` entry. */

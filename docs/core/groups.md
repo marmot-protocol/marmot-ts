@@ -162,7 +162,16 @@ console.log(view?.description); // "A group for..."
 console.log(view?.relays); // ["wss://..."]
 console.log(view?.adminPubkeys); // ["admin-hex"]
 console.log(view?.avatarUrl); // "https://..." (group.avatar-url.v1)
+console.log(view?.image?.mediaType); // "image/png" (group.blossom.image.v1)
 ```
+
+The encrypted group image (`group.blossom.image.v1`, used by White Noise) is one
+Blossom blob. Fetch it by `view.image.imageHash` and decrypt it with
+`decryptGroupBlossomImage(blob, view.image)`. To set one, encrypt it with
+`encryptGroupBlossomImage(bytes, "image/png")`, upload `encryptedBlob` (the
+Blossom upload authorization is signed with `image.imageUploadKey`), then commit
+`proposeUpdateMetadata({ image })`. When both `avatarUrl` and `image` are set,
+the URL avatar wins for rendering.
 
 See [Protocol Constants & Concepts](./protocol) for the app-component model.
 

@@ -67,10 +67,11 @@ export type GenerateKeyPackageOptions = {
   lifetime?: Lifetime;
   extensions?: CustomExtension[];
   /**
-   * Whether to mark this KeyPackage as reusable using the MLS `last_resort` extension.
+   * Whether to mark this KeyPackage as reusable (last-resort).
    *
-   * - `true`: include the `last_resort` KeyPackage extension (reusable; helps with race windows)
-   * - `false`: omit the extension (single-use; private init_key is expected to be consumed)
+   * - `true`: add the empty `last_resort_key_package` component (`0x0004`) to an
+   *   `app_data_dictionary` KeyPackage extension (reusable; helps with race windows)
+   * - `false`: omit the marker (single-use; private init_key is expected to be consumed)
    *
    * Default: `true` for backwards compatibility with existing marmot-ts behavior.
    */
@@ -125,8 +126,9 @@ export async function generateKeyPackage({
     throw new Error(
       `generateKeyPackage: lifetime range ${resolvedLifetime.notAfter - resolvedLifetime.notBefore}s exceeds the 7,261,200s (84-day) cap`,
     );
-  // Marmot requires support for last_resort capability signaling (`foundation/key-packages.md`),
-  // but individual KeyPackages may be single-use or last-resort reusable.
+  // Individual KeyPackages may be single-use or last-resort reusable
+  // (`foundation/key-packages.md`); last-resort is a KeyPackage-level marker,
+  // not an advertised capability.
   // `isLastResort` controls whether this KeyPackage is marked reusable.
   const resolvedExtensions = isLastResort
     ? ensureLastResortExtension(extensions ?? [])

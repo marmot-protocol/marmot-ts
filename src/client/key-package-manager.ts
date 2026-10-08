@@ -85,7 +85,7 @@ export type CreateKeyPackageOptions = {
   identifier?: string;
   /** Ciphersuite to use (default: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519) */
   ciphersuite?: CiphersuiteName;
-  /** Whether to mark the key package with the MLS last_resort extension (default: true) */
+  /** Whether to mark the key package as last-resort (`last_resort_key_package` component; default: true) */
   isLastResort?: boolean;
   /** Client identifier string to include in the key package event */
   client?: string;
@@ -108,7 +108,7 @@ export type RotateKeyPackageOptions = {
   d?: string;
   /** Ciphersuite to use for the new key package */
   ciphersuite?: CiphersuiteName;
-  /** Whether to mark the new key package with the MLS last_resort extension (default: true) */
+  /** Whether to mark the new key package as last-resort (`last_resort_key_package` component; default: true) */
   isLastResort?: boolean;
   /** Client identifier string to include in the new key package event */
   client?: string;

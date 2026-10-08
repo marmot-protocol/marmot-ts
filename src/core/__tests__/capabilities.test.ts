@@ -24,7 +24,7 @@ import {
 const LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE = 0xf2f1;
 
 describe("ensureMarmotCapabilities", () => {
-  it("should advertise the app_data_dictionary extension and last_resort", () => {
+  it("should advertise the app_data_dictionary extension but not the legacy last_resort extension", () => {
     const capabilities: Capabilities = {
       versions: [protocolVersions.mls10],
       ciphersuites: [ciphersuites.MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519],
@@ -36,7 +36,7 @@ describe("ensureMarmotCapabilities", () => {
     const result = ensureMarmotCapabilities(capabilities);
 
     expect(result.extensions).toContain(appDataDictionaryExtensionType);
-    expect(result.extensions).toContain(LAST_RESORT_EXTENSION_TYPE);
+    expect(result.extensions).not.toContain(LAST_RESORT_EXTENSION_TYPE);
     expect(result.extensions).toContain(1);
     expect(result.extensions).toContain(2);
     expect(result.extensions).toContain(3);
@@ -134,7 +134,6 @@ describe("ensureMarmotCapabilities", () => {
 
     expect(result.extensions).toEqual([
       appDataDictionaryExtensionType,
-      LAST_RESORT_EXTENSION_TYPE,
       AGENT_TEXT_STREAM_QUIC_RECEIVE_EXTENSION_TYPE,
     ]);
     expect(result.extensions).not.toContain(

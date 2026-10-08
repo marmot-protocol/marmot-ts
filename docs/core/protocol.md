@@ -27,14 +27,10 @@ import {
 MLS extensions used by Marmot:
 
 ```typescript
-import { LAST_RESORT_EXTENSION_TYPE } from "@internet-privacy/marmot-ts"; // 0x000a
+import { LAST_RESORT_KEY_PACKAGE_COMPONENT_ID } from "@internet-privacy/marmot-ts"; // 0x0004
 ```
 
-- **0x000a (LAST_RESORT_EXTENSION_TYPE):** the legacy MLS `last_resort` KeyPackage extension, which marmot-ts currently emits (and advertises in capabilities and the `mls_extensions` tag) for reusable KeyPackages
-
-::: warning Spec deviation
-The spec marks last-resort KeyPackages with the empty-data `last_resort_key_package` component (`0x0004`) in the KeyPackage's `app_data_dictionary`, not an MLS extension ([`foundation/key-packages.md`](https://github.com/marmot-protocol/marmot/blob/master/foundation/key-packages.md), [`foundation/registries.md`](https://github.com/marmot-protocol/marmot/blob/master/foundation/registries.md)). marmot-ts still emits the legacy `0x000a` extension.
-:::
+- **0x0004 (LAST_RESORT_KEY_PACKAGE_COMPONENT_ID):** an empty entry for this component in the KeyPackage's own `app_data_dictionary` marks the key package as reusable. The legacy `last_resort` extension type `0x000a` (`LAST_RESORT_EXTENSION_TYPE`, deprecated) is recognized on read but no longer emitted or advertised.
 
 In Marmot v2, group metadata is no longer carried in a single `0xf2ee` extension — it lives in the **app-component dictionary** described below.
 

@@ -14,7 +14,7 @@ import { isGreaseValue } from "./grease.js";
  * Per `protocol-core/group-setup.md` (capability checks before create/add) and
  * `foundation/key-packages.md`, KeyPackages MUST advertise the capabilities a Marmot group
  * requires — the extensions and proposals `ensureMarmotCapabilities` adds (app_data_dictionary,
- * last_resort, the agent-text-stream `receive` role, app_data_update, self_remove) — to pass
+ * the agent-text-stream `receive` role, app_data_update, self_remove) — to pass
  * validation when added to groups.
  */
 export function defaultCapabilities(): Capabilities {

@@ -103,7 +103,7 @@ async function createKeyPackageEventInternal(
   }
 
   // Filter out GREASE values from the extension types
-  // We only want to include real extension ids (e.g. last_resort, app_data_dictionary), not GREASE.
+  // We only want to include real extension ids (e.g. app_data_dictionary), not GREASE.
   // MDK strips GREASE from extensions on both its publish and validate sides
   // (refs/mdk crates/cgka-engine/src/capabilities.rs
   // `advertised_capabilities_from_caps`), so mls_extensions stays GREASE-free.

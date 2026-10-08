@@ -22,6 +22,7 @@
 - Validate member identity proofs during sends, ingestion, and fork recovery, preventing invalid membership changes from being accepted.
 - Authorize commits against their parent state, including during fork recovery and when an admin is demoted earlier in an ingestion batch.
 - Keep admin restrictions enforced when optional group metadata is malformed, and reject invalid group component updates before applying them.
+- Mark last-resort KeyPackages with the empty `last_resort_key_package` component (`0x0004`) in the KeyPackage-level `app_data_dictionary`, as the spec requires and as MDK / White Noise (OpenMLS `mark_as_last_resort`) emit, instead of the legacy `last_resort` extension (`0x000a`); the legacy extension type is no longer advertised in LeafNode capabilities or the `mls_extensions` tag. Adds `isLastResortKeyPackage` (recognizes both encodings) and `LAST_RESORT_KEY_PACKAGE_COMPONENT_ID`.
 
 ### Breaking changes
 

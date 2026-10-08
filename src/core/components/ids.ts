@@ -28,6 +28,15 @@ export const APP_COMPONENTS_COMPONENT_ID: AppComponentId = 0x0001;
  */
 export const SAFE_AAD_COMPONENT_ID: AppComponentId = 0x0002;
 
+/**
+ * Upstream MLS extensions-draft `last_resort_key_package` component. A
+ * last-resort KeyPackage carries an empty-data entry for it in the
+ * `app_data_dictionary` of its KeyPackage extensions (not its LeafNode).
+ * @see refs/marmot/foundation/key-packages.md "Capability advertising"
+ * @see refs/marmot/foundation/registries.md
+ */
+export const LAST_RESORT_KEY_PACKAGE_COMPONENT_ID: AppComponentId = 0x0004;
+
 /** Marmot private component ids live in the `0x8000..0xffff` range. */
 export const GROUP_PROFILE_COMPONENT_ID: AppComponentId = 0x8001;
 export const GROUP_BLOSSOM_IMAGE_COMPONENT_ID: AppComponentId = 0x8002;

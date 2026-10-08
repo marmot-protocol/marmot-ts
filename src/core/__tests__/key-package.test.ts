@@ -37,7 +37,7 @@ import {
   getComponentData,
 } from "../components/dictionary.js";
 import { validateKeyPackageAccountIdentityProof } from "../components/account-identity-proof.js";
-import { LAST_RESORT_EXTENSION_TYPE } from "../protocol.js";
+import { isLastResortKeyPackage } from "../extensions.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 
 // The legacy `marmot.account-identity-proof.v2` custom LeafNode extension (`0xf2f1`),
@@ -286,11 +286,7 @@ describe("generateKeyPackage", () => {
       signer: VALID_ACCOUNT.signer,
     });
 
-    const hasLastResort = keyPackage.publicPackage.extensions.some(
-      (ext) =>
-        typeof ext.extensionType === "number" &&
-        ext.extensionType === LAST_RESORT_EXTENSION_TYPE,
-    );
+    const hasLastResort = isLastResortKeyPackage(keyPackage.publicPackage);
 
     expect(hasLastResort).toBe(true);
   });
@@ -309,11 +305,7 @@ describe("generateKeyPackage", () => {
       signer: VALID_ACCOUNT.signer,
     });
 
-    const hasLastResort = keyPackage.publicPackage.extensions.some(
-      (ext) =>
-        typeof ext.extensionType === "number" &&
-        ext.extensionType === LAST_RESORT_EXTENSION_TYPE,
-    );
+    const hasLastResort = isLastResortKeyPackage(keyPackage.publicPackage);
 
     expect(hasLastResort).toBe(false);
   });
@@ -377,11 +369,7 @@ describe("generateKeyPackage", () => {
       (ext) =>
         typeof ext.extensionType === "number" && ext.extensionType === 0x1234,
     );
-    const hasLastResort = extensions.some(
-      (ext) =>
-        typeof ext.extensionType === "number" &&
-        ext.extensionType === LAST_RESORT_EXTENSION_TYPE,
-    );
+    const hasLastResort = isLastResortKeyPackage(keyPackage.publicPackage);
 
     expect(hasCustom).toBe(true);
     expect(hasLastResort).toBe(true);
@@ -415,11 +403,7 @@ describe("generateKeyPackage", () => {
       (ext) =>
         typeof ext.extensionType === "number" && ext.extensionType === 0x1234,
     );
-    const hasLastResort = extensions.some(
-      (ext) =>
-        typeof ext.extensionType === "number" &&
-        ext.extensionType === LAST_RESORT_EXTENSION_TYPE,
-    );
+    const hasLastResort = isLastResortKeyPackage(keyPackage.publicPackage);
 
     expect(hasCustom).toBe(true);
     expect(hasLastResort).toBe(false);

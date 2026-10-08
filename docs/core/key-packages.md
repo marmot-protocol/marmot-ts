@@ -61,12 +61,13 @@ Every Marmot KeyPackage must ([`foundation/key-packages.md`](https://github.com/
 - Use a **basic credential** whose identity is the raw 32-byte x-only Nostr pubkey
 - Carry exactly one valid account identity proof (`0x8009`) on its LeafNode, signed by the account (`signer`) over the leaf's MLS signature key, and advertise `0x8009` in the leaf's `app_components`
 - Advertise the `app_data_dictionary` extension (`0x0006`) and the `app_data_update` (`0x0008`) and `self_remove` (`0x000a`) proposals; new groups require these via `required_capabilities`
+- Carry an empty **`last_resort_key_package` component** (`0x0004`) in the KeyPackage's own `app_data_dictionary` extension when reusable key packages are desired (`isLastResort`, default `true`). Last-resort status is not an MLS capability, so it is not advertised in the LeafNode capabilities
 - Carry a `Lifetime` no longer than 7,261,200 s (84 days + 1 h)
 
 `generateKeyPackage()` enforces the credential type and lifetime cap (an explicit `lifetime` over the cap throws), adds the `0x8009` proof, and merges the required capabilities (via `ensureMarmotCapabilities`). By default it also:
 
 - sets an 84-day lifetime (with `notBefore` backdated 1 h for clock skew)
-- marks the package last-resort (`isLastResort` defaults to `true`; see the deviation note under [Default Extensions](#default-extensions))
+- marks the package last-resort (`isLastResort` defaults to `true`; the package carries the empty `0x0004` `last_resort_key_package` component in its own `app_data_dictionary`)
 - advertises the agent-text-stream `receive` role (`0xf2d1`)
 
 The ciphersuite is whatever `ciphersuiteImpl` you pass; `0x0001` (`MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`) is the mandatory-to-implement default ([`foundation/mls-protocol.md`](https://github.com/marmot-protocol/marmot/blob/master/foundation/mls-protocol.md)).
@@ -89,13 +90,12 @@ const ref = await calculateKeyPackageRef(keyPackage.publicPackage);
 import { keyPackageDefaultExtensions } from "@internet-privacy/marmot-ts";
 
 const extensions = keyPackageDefaultExtensions();
-// Returns: [{ extensionType: 0x000a, extensionData: ... }]
-// The legacy MLS last_resort extension (empty data)
-```
+// Returns: [{ extensionType: 0x0006, extensionData: ... }]
+// An app_data_dictionary holding the empty last_resort_key_package (0x0004) entry
 
-::: warning Spec deviation
-The spec marks a last-resort KeyPackage with the empty-data `last_resort_key_package` component (`0x0004`) in its KeyPackage `app_data_dictionary` ([`foundation/key-packages.md`](https://github.com/marmot-protocol/marmot/blob/master/foundation/key-packages.md), [`foundation/registries.md`](https://github.com/marmot-protocol/marmot/blob/master/foundation/registries.md)). marmot-ts currently emits the legacy MLS `last_resort` extension (`0x000a`) instead, and advertises `0x000a` in capabilities and the `mls_extensions` tag.
-:::
+isLastResortKeyPackage(keyPackage.publicPackage); // true
+// (also true for KeyPackages carrying the legacy 0x000a last_resort extension)
+```
 
 ## Capabilities
 
@@ -114,7 +114,7 @@ const caps = defaultCapabilities();
 const updated = ensureMarmotCapabilities(myCapabilities);
 ```
 
-`defaultCapabilities()` advertises ciphersuite `0x0001` (plus GREASE values), `basic` credentials only, the extensions `0x0006` (`app_data_dictionary`), `0x000a` (legacy `last_resort`) and `0xf2d1` (agent-text-stream `receive` role), and the proposals `0x0008` (`app_data_update`) and `0x000a` (`self_remove`). `ensureMarmotCapabilities()` adds the same extensions and proposals without filtering ciphersuites or credential types.
+`defaultCapabilities()` advertises ciphersuite `0x0001` (plus GREASE values), `basic` credentials only, the extensions `0x0006` (`app_data_dictionary`) and `0xf2d1` (agent-text-stream `receive` role), and the proposals `0x0008` (`app_data_update`) and `0x000a` (`self_remove`). `ensureMarmotCapabilities()` adds the same extensions and proposals without filtering ciphersuites or credential types.
 
 ## Lifecycle
 

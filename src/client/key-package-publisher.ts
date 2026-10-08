@@ -40,7 +40,7 @@ export type GeneratedKeyPackage = {
 export type GenerateKeyPackageOptions = {
   /** Ciphersuite to use (default: MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519) */
   ciphersuite?: CiphersuiteName;
-  /** Whether to mark the key package with the MLS last_resort extension (default: true) */
+  /** Whether to mark the key package as last-resort (`last_resort_key_package` component; default: true) */
   isLastResort?: boolean;
 };
 

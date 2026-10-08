@@ -1,7 +1,13 @@
 /** @module @category Core - Constants */
 import { defaultExtensionTypes } from "ts-mls";
 
-/** The extension id for the last_resort extension for key packages */
+/**
+ * The extension id of the legacy `last_resort` KeyPackage extension.
+ *
+ * @deprecated Marmot marks last-resort KeyPackages with the
+ * `last_resort_key_package` component (`LAST_RESORT_KEY_PACKAGE_COMPONENT_ID`,
+ * `0x0004`) instead; this id is only recognized on read.
+ */
 export const LAST_RESORT_EXTENSION_TYPE = 0x000a;
 
 /**

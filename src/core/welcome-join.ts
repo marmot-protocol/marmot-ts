@@ -1,16 +1,99 @@
 /** @module @category Core - Welcome */
 import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
 import {
+  type AuthenticationService,
   CiphersuiteImpl,
+  type ClientState,
   type GroupInfo,
-  joinGroup,
+  type GroupInfoExtension,
+  joinGroupWithExtensions,
   KeyPackage,
+  nodeTypes,
   PrivateKeyPackage,
   type Welcome,
 } from "ts-mls";
 import { marmotAuthService } from "./auth-service.js";
+import { bytesEqual } from "./components/bytes.js";
 import { type MarmotGroupView, getMarmotGroupView } from "./client-state.js";
 import { getWelcome } from "./welcome-event.js";
+
+/** The result of {@link joinWelcomeWithAuthor}. */
+export interface WelcomeJoinResult {
+  /** The joined MLS state. Nothing has been persisted. */
+  state: ClientState;
+  /** Extensions carried by the Welcome's GroupInfo (e.g. `ratchet_tree`). */
+  groupInfoExtensions: GroupInfoExtension[];
+  /**
+   * Leaf index of the GroupInfo signer, i.e. the Welcome author
+   * (`protocol-core/joining.md` receiving-flow step 6).
+   */
+  authorLeafIndex: number;
+}
+
+/**
+ * Runs the MLS Welcome join and also identifies the Welcome author: the leaf
+ * that signed the GroupInfo.
+ *
+ * ts-mls verifies the GroupInfo signature against `tree[gi.signer]` but does
+ * not return `gi.signer`. It does call `authService.validateCredential` for
+ * that signer leaf before anything else, and right before checking the
+ * GroupInfo signature against that leaf's key. So the first key passed to the
+ * auth service is the verified signer's signature key. The author leaf is then
+ * found by that key; MLS requires signature keys to be unique across leaves.
+ * If the key cannot be matched to exactly one leaf, the join fails closed.
+ *
+ * Nothing is persisted, and the KeyPackage is not consumed.
+ */
+export async function joinWelcomeWithAuthor({
+  welcome,
+  keyPackage,
+  privateKeys,
+  ciphersuiteImpl,
+  authService = marmotAuthService,
+}: {
+  welcome: Welcome;
+  keyPackage: KeyPackage;
+  privateKeys: PrivateKeyPackage;
+  ciphersuiteImpl: CiphersuiteImpl;
+  authService?: AuthenticationService;
+}): Promise<WelcomeJoinResult> {
+  let signerKey: Uint8Array | undefined;
+  const capturing: AuthenticationService = {
+    validateCredential(credential, signaturePublicKey) {
+      signerKey ??= signaturePublicKey;
+      return authService.validateCredential(credential, signaturePublicKey);
+    },
+  };
+
+  const { state, groupInfoExtensions } = await joinGroupWithExtensions({
+    context: {
+      cipherSuite: ciphersuiteImpl,
+      authService: capturing,
+      externalPsks: {},
+    },
+    welcome,
+    keyPackage,
+    privateKeys,
+  });
+
+  const matches: number[] = [];
+  if (signerKey !== undefined) {
+    state.ratchetTree.forEach((node, nodeIndex) => {
+      if (
+        nodeIndex % 2 === 0 &&
+        node?.nodeType === nodeTypes.leaf &&
+        bytesEqual(node.leaf.signaturePublicKey, signerKey)
+      )
+        matches.push(nodeIndex / 2);
+    });
+  }
+  if (matches.length !== 1)
+    throw new Error(
+      "Welcome author could not be identified from the GroupInfo signer",
+    );
+
+  return { state, groupInfoExtensions, authorLeafIndex: matches[0]! };
+}
 
 /**
  * Decrypts the {@link GroupInfo} from a Welcome message using the provided key package,
@@ -42,22 +125,21 @@ export async function readWelcomeGroupInfo({
   if (isRumor(welcome)) welcome = getWelcome(welcome);
 
   try {
-    const clientState = await joinGroup({
-      context: {
-        cipherSuite: ciphersuiteImpl,
-        authService: marmotAuthService,
-        externalPsks: {},
-      },
-      welcome,
-      keyPackage: keyPackage.publicPackage,
-      privateKeys: keyPackage.privatePackage,
-    });
+    const { state, groupInfoExtensions, authorLeafIndex } =
+      await joinWelcomeWithAuthor({
+        welcome,
+        keyPackage: keyPackage.publicPackage,
+        privateKeys: keyPackage.privatePackage,
+        ciphersuiteImpl,
+      });
 
+    // `signer` is the real GroupInfo signer (the Welcome author), not the
+    // joiner's own leaf. The signature itself is not exposed by ts-mls.
     return {
-      groupContext: clientState.groupContext,
-      extensions: [],
-      confirmationTag: clientState.confirmationTag,
-      signer: clientState.privatePath.leafIndex,
+      groupContext: state.groupContext,
+      extensions: groupInfoExtensions,
+      confirmationTag: state.confirmationTag,
+      signer: authorLeafIndex,
       signature: new Uint8Array(),
     };
   } catch (err) {

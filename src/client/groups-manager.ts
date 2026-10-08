@@ -8,7 +8,6 @@ import {
   ClientState,
   CryptoProvider,
   defaultCryptoProvider,
-  joinGroup,
   Welcome,
 } from "ts-mls";
 import {
@@ -21,7 +20,8 @@ import {
   assertCurrentGroupAccountIdentityProofProfile,
   validateGroupMemberAccountIdentityProofs,
 } from "../core/components/account-identity-proof.js";
-import { marmotAuthService } from "../core/auth-service.js";
+import { joinWelcomeWithAuthor } from "../core/welcome-join.js";
+import { validateWelcomeGroupState } from "../engine/welcome-validation.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
 import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
 import type { AuditContextOptions, AuditSink } from "../audit/index.js";
@@ -682,21 +682,20 @@ export class GroupsManager<
     }
 
     let clientState: ClientState | null = null;
+    let authorLeafIndex = -1;
     let lastError: Error | null = null;
     let consumedKeyPackageRef: Uint8Array | null = null;
 
     for (const candidate of candidates) {
       try {
-        clientState = await joinGroup({
-          context: {
-            cipherSuite: ciphersuiteImpl,
-            authService: marmotAuthService,
-            externalPsks: {},
-          },
+        const joined = await joinWelcomeWithAuthor({
           welcome,
           keyPackage: candidate.publicPackage,
           privateKeys: candidate.privatePackage,
+          ciphersuiteImpl,
         });
+        clientState = joined.state;
+        authorLeafIndex = joined.authorLeafIndex;
         consumedKeyPackageRef = candidate.keyPackageRef;
         break;
       } catch (error) {
@@ -725,6 +724,11 @@ export class GroupsManager<
       clientState,
       clientState.groupContext.cipherSuite,
     );
+    // The rest of the Marmot group state, the capabilities this client needs,
+    // and the Welcome author's admin authority (joining.md steps 6-8). Also
+    // before adoptClientState, so a rejected Welcome persists nothing and
+    // leaves the KeyPackage unconsumed.
+    validateWelcomeGroupState({ state: clientState, authorLeafIndex });
 
     const group = await this.adoptClientState(clientState, { emit: "joined" });
     return { group, consumedKeyPackageRef };

@@ -51,7 +51,7 @@ function toLeafIndex(index: number): LeafIndex {
  * An AppDataUpdate for an id outside this table is opaque to the library and
  * left to the application (`app-components/README.md` "Unknown Data").
  */
-const COMPONENT_PAYLOAD_DECODERS: ReadonlyMap<
+export const COMPONENT_PAYLOAD_DECODERS: ReadonlyMap<
   number,
   (data: Uint8Array) => unknown
 > = new Map<number, (data: Uint8Array) => unknown>([

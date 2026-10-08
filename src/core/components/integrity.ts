@@ -1,9 +1,11 @@
 /** @module @category Core - App Components */
 import {
+  appDataDictionaryExtensionType,
   appDataUpdateProposalType,
   ClientState,
   defaultProposalTypes,
   getAppDataDictionary,
+  makeAppDataDictionaryExtension,
   getCredentialFromLeafIndex,
   GroupContextExtension,
   type LeafIndex,
@@ -808,6 +810,79 @@ export function validateUpdateProposalAccountIdentityProofs(
  * @see refs/mdk/crates/cgka-engine/src/account_identity_proof.rs `validate_staged_commit_account_identity_proofs`
  * @see refs/marmot/app-components/account-identity-proof-v2.md "Validation"
  */
+/**
+ * The GroupContext extensions a commit produces, rebuilt from its proposals,
+ * for a receiver the commit removes.
+ *
+ * ts-mls stops processing once it sees that the commit removes the local leaf:
+ * the returned tombstone has the post-commit tree but keeps the PARENT
+ * GroupContext. Checking that pair against the resulting-epoch invariants is
+ * wrong. A commit that removes an admin also drops it from the admin policy,
+ * but the tombstone still lists it while its leaf is gone, so the removed admin
+ * reported an admin-leaf-coupling violation, rejected its own removal and kept
+ * presenting the group as active. MDK (OpenMLS) stages the full resulting
+ * context even for a removed receiver.
+ *
+ * Applies a GroupContextExtensions replacement, then every AppDataUpdate in
+ * commit order to the dictionary (last update wins, removals delete the entry,
+ * new entries are inserted in component-id order), mirroring ts-mls
+ * `applyAppDataUpdates`.
+ */
+function projectedRemovedReceiverExtensions(
+  parentExtensions: GroupContextExtension[],
+  proposals: readonly Proposal[],
+): GroupContextExtension[] {
+  let extensions = parentExtensions;
+  for (const proposal of proposals)
+    if (
+      proposal.proposalType === defaultProposalTypes.group_context_extensions &&
+      "groupContextExtensions" in proposal
+    )
+      extensions = proposal.groupContextExtensions.extensions;
+
+  const updates = proposals.flatMap((proposal) =>
+    proposal.proposalType === appDataUpdateProposalType &&
+    "appDataUpdate" in proposal
+      ? [proposal.appDataUpdate]
+      : [],
+  );
+  if (updates.length === 0) return extensions;
+
+  const dictionary = [...(getAppDataDictionary(extensions) ?? [])];
+  for (const update of updates) {
+    const index = dictionary.findIndex(
+      (entry) => entry.componentId === update.componentId,
+    );
+    if (update.operation === "remove") {
+      if (index !== -1) dictionary.splice(index, 1);
+      continue;
+    }
+    if (index !== -1) {
+      dictionary[index] = {
+        componentId: update.componentId,
+        data: update.update,
+      };
+      continue;
+    }
+    const insertAt = dictionary.findIndex(
+      (entry) => entry.componentId > update.componentId,
+    );
+    dictionary.splice(insertAt === -1 ? dictionary.length : insertAt, 0, {
+      componentId: update.componentId,
+      data: update.update,
+    });
+  }
+  const replacement = makeAppDataDictionaryExtension(dictionary);
+  const position = extensions.findIndex(
+    (extension) => extension.extensionType === appDataDictionaryExtensionType,
+  );
+  return position === -1
+    ? [...extensions, replacement]
+    : extensions.map((extension, i) =>
+        i === position ? replacement : extension,
+      );
+}
+
 export function validateCommitLegality(args: {
   parentState: ClientState;
   resultingState: ClientState;
@@ -822,6 +897,13 @@ export function validateCommitLegality(args: {
   );
   const proposals = proposalsWithSenders.map(({ proposal }) => proposal);
   const appDataUpdateOps = collectAppDataUpdateOps(proposals);
+  const resultingExtensions =
+    args.resultingState.groupActiveState?.kind === "removedFromGroup"
+      ? projectedRemovedReceiverExtensions(
+          args.parentState.groupContext.extensions,
+          proposals,
+        )
+      : args.resultingState.groupContext.extensions;
 
   // The `app_components` (0x0001) bytes are attacker-influenceable: an admin
   // can land an AppDataUpdate writing arbitrary bytes to that id (Rule 3
@@ -850,7 +932,7 @@ export function validateCommitLegality(args: {
 
   const integrityViolation = validateAppComponentIntegrity({
     currentExtensions: args.parentState.groupContext.extensions,
-    resultingExtensions: args.resultingState.groupContext.extensions,
+    resultingExtensions,
     appDataUpdateOps,
     requiredIds,
   });
@@ -893,7 +975,7 @@ export function validateCommitLegality(args: {
 
   const adminLeafCouplingViolation = validateAdminLeafCoupling({
     currentExtensions: args.parentState.groupContext.extensions,
-    resultingExtensions: args.resultingState.groupContext.extensions,
+    resultingExtensions,
     resultingMemberAccounts,
   });
   if (adminLeafCouplingViolation)

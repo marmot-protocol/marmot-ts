@@ -2,7 +2,11 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { ClientState, MlsMessage } from "ts-mls";
 
-import type { GroupPeeler, PeeledMessagePair } from "../../engine/types.js";
+import type {
+  GroupMessageWrapOptions,
+  GroupPeeler,
+  PeeledMessagePair,
+} from "../../engine/types.js";
 import {
   createGroupEvent,
   decryptGroupMessages,
@@ -33,11 +37,13 @@ export class NostrGroupPeeler implements GroupPeeler<NostrEvent> {
   async wrapGroupMessage(
     message: MlsMessage,
     state: ClientState,
+    options?: GroupMessageWrapOptions,
   ): Promise<NostrEvent> {
     return createGroupEvent({
       message,
       state,
       ciphersuite: this.ciphersuite,
+      expiration: options?.expiration,
     });
   }
 

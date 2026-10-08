@@ -30,6 +30,7 @@ import {
   wireformats,
 } from "ts-mls";
 
+import { getAppMessageExpiration } from "../core/app-message-expiration.js";
 import { marmotAuthService } from "../core/auth-service.js";
 import { getMarmotGroupView } from "../core/client-state.js";
 import {
@@ -976,9 +977,13 @@ export class MarmotGroupEngine<TEnvelope> {
           message: intent.payload,
         });
 
+        // Pinned from the source epoch: `this.state` is still the state the
+        // message was encrypted under (message-retention-v1.md).
+        const expiration = getAppMessageExpiration(this.state, intent.payload);
         const envelope = await this.peeler.wrapGroupMessage(
           message,
           this.state,
+          expiration === undefined ? undefined : { expiration },
         );
         this.#sentContentIds.add(contentDedupId(message));
         this.#setState(newState);

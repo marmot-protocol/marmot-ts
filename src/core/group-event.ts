@@ -14,6 +14,11 @@ export type CreateGroupEventOptions = {
   state: ClientState;
   /** The ciphersuite implementation */
   ciphersuite: CiphersuiteImpl;
+  /**
+   * NIP-40 `expiration` (Unix seconds). Only for application messages whose
+   * source epoch enables message retention; never for commits or proposals.
+   */
+  expiration?: bigint;
 };
 
 /**
@@ -25,7 +30,7 @@ export type CreateGroupEventOptions = {
 export async function createGroupEvent(
   options: CreateGroupEventOptions,
 ): Promise<NostrEvent> {
-  const { message, state, ciphersuite } = options;
+  const { message, state, ciphersuite, expiration } = options;
 
   const content = await createEncryptedGroupEventContent({
     state,
@@ -40,6 +45,8 @@ export async function createGroupEvent(
     content,
     tags: [[nostrTransportBinding.groupIdTag, groupId]],
   };
+  if (expiration !== undefined)
+    draft.tags.push(["expiration", expiration.toString()]);
 
   // Ephemeral keypair for signing — distinct from the encryption keypair (`transports/nostr.md`: fresh per-event ephemeral key)
   const ephemeralSecretKey = generateSecretKey();

@@ -63,6 +63,17 @@ export type PeeledMessagePair<TEnvelope> = {
   message: MlsMessage;
 };
 
+/** Transport metadata for wrapping one outbound MLS message. */
+export type GroupMessageWrapOptions = {
+  /**
+   * Relay expiry hint (Unix seconds) for an application message whose source
+   * epoch enables `message-retention.v1`. The Nostr binding writes it as the
+   * NIP-40 `expiration` tag (`transports/nostr.md` "Message expiration").
+   * Never set for commits or proposals.
+   */
+  expiration?: bigint;
+};
+
 /** Crypto boundary between the engine and transport-specific wrapping. */
 export interface GroupPeeler<TEnvelope> {
   peelGroupMessages(
@@ -73,7 +84,11 @@ export interface GroupPeeler<TEnvelope> {
     unreadable: TEnvelope[];
   }>;
 
-  wrapGroupMessage(message: MlsMessage, state: ClientState): Promise<TEnvelope>;
+  wrapGroupMessage(
+    message: MlsMessage,
+    state: ClientState,
+    options?: GroupMessageWrapOptions,
+  ): Promise<TEnvelope>;
 
   /** A stable transport id for an envelope (used to key the ingestion pool). */
   idOf(envelope: TEnvelope): string;

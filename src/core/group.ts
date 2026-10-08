@@ -89,10 +89,18 @@ export async function createGroup(
     (e) =>
       e.extensionType === marmotRequiredCapabilitiesExtension().extensionType,
   );
+  // app_data_dictionary MUST be the last GroupContext extension. GroupContext
+  // extensions are an ordered list that feeds the key schedule, and OpenMLS
+  // (MDK) applies an AppDataUpdate by removing the dictionary and re-appending
+  // it (`Extensions::add_or_replace`), while ts-mls replaces it in place. If the
+  // dictionary is not already last, the two compute different GroupContexts for
+  // the same AppDataUpdate commit and MDK rejects it with a confirmation tag
+  // mismatch. MDK itself creates groups as [required_capabilities,
+  // app_data_dictionary] (cgka-engine/src/group_lifecycle.rs).
   const groupExtensions = [
-    appDataExtension,
     ...(hasRequiredCapabilities ? [] : [marmotRequiredCapabilitiesExtension()]),
     ...extensions,
+    appDataExtension,
   ];
 
   const clientState = await MLSCreateGroup({

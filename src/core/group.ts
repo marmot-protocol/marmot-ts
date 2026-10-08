@@ -13,7 +13,11 @@ import {
   adminPolicyEntry,
   AppComponentId,
   appComponentsEntry,
+  DEFAULT_ENCRYPTED_MEDIA_BLOB_ENDPOINTS,
   DEFAULT_GROUP_COMPONENT_IDS,
+  type EncryptedMediaPolicyV2,
+  encryptedMediaV2BlossomDefault,
+  encryptedMediaV2Entry,
   GROUP_LIFECYCLE_COMPONENT_ID,
   groupLifecycleEntry,
   groupProtocolLifecycleValues,
@@ -113,13 +117,24 @@ export type SimpleGroupOptions = {
   description?: string;
   adminPubkeys?: string[];
   relays?: string[];
+  /**
+   * The group's `marmot.group.encrypted-media.v2` (`0x800b`) policy. Defaults
+   * to a Blossom policy over {@link DEFAULT_ENCRYPTED_MEDIA_BLOB_ENDPOINTS},
+   * which is what MDK puts in every new current-profile group. Pass `false`
+   * for a non-media group (`protocol-core/group-setup.md` lets it omit the
+   * component), e.g. to invite peers whose KeyPackages lack `0x800b`.
+   */
+  encryptedMedia?: EncryptedMediaPolicyV2 | false;
 };
 
 /**
  * Creates a Marmot v2 group seeded with the default group components: a
  * `group.profile.v1` (name + description), an `admin-policy.v1` (the creator
- * plus any extra admins), and — when relays are supplied — a
+ * plus any extra admins), a `group.encrypted-media.v2` media policy (unless
+ * `options.encryptedMedia` is `false`), and — when relays are supplied — a
  * `transport.nostr.routing.v1` carrying a fresh nostr group id and the relays.
+ * Every seeded component is listed as required, so invitees must advertise
+ * support for it (MDK requires `0x800b` the same way).
  */
 export async function createSimpleGroup(
   creatorKeyPackage: CompleteKeyPackage,
@@ -142,6 +157,20 @@ export async function createSimpleGroup(
     }),
     adminPolicyEntry(adminPubkeys),
   ];
+
+  // Media-capable profile: new groups carry and require 0x800b, like MDK
+  // (`protocol-core/group-setup.md` "Creation flow"; MDK
+  // `encrypted_media_component_for_new_group`).
+  if (options?.encryptedMedia !== false) {
+    components.push(
+      encryptedMediaV2Entry(
+        options?.encryptedMedia ??
+          encryptedMediaV2BlossomDefault([
+            ...DEFAULT_ENCRYPTED_MEDIA_BLOB_ENDPOINTS,
+          ]),
+      ),
+    );
+  }
 
   const relays = options?.relays ?? [];
   if (relays.length > 0) {

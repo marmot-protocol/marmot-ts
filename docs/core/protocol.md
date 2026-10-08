@@ -60,8 +60,15 @@ state and mutated through `app_data_update` proposals (`0x0008`).
 | `0x8005` | `marmot.group.message-retention.v1`      | retention window (seconds)                  |
 | `0x8006` | `marmot.group.agent-text-stream.quic.v1` | agent stream policy / required roles        |
 | `0x8007` | `marmot.group.avatar-url.v1`             | avatar URL                                  |
-| `0x8008` | `marmot.group.encrypted-media.v1`        | blob-store policy for media                 |
+| `0x8008` | `marmot.group.encrypted-media.v1`        | frozen legacy media policy                  |
+| `0x800b` | `marmot.group.encrypted-media.v2`        | blob-store policy for media                 |
 | `0x800c` | `marmot.group.lifecycle.v1`              | protocol lifecycle (`active` / `disbanded`) |
+
+New groups carry and require `marmot.group.encrypted-media.v2` (`0x800b`) by
+default, as MDK does; pass `encryptedMedia: false` to `createSimpleGroup` /
+`groups.create` for a group without media. Media references in a v2 group use
+the `encrypted-media-v2` format (`group.uploadMedia`, `group.downloadMedia`,
+`parseMediaAttachment`, `encodeMediaImetaTag`).
 
 `0x8009` (`marmot.member.account-identity-proof.v2`) is LeafNode-only: it has
 no GroupContext state, only an entry in the group's required `app_components`
@@ -80,7 +87,8 @@ view?.adminPubkeys; // ["admin-pubkey-hex"]
 view?.relays; // ["wss://relay.example.com"]
 view?.nostrGroupId; // Uint8Array(32) | undefined (undefined without the routing component)
 view?.avatarUrl; // "https://..." | undefined
-view?.encryptedMedia; // EncryptedMediaPolicyV1 | undefined
+view?.encryptedMedia; // EncryptedMediaPolicyV1 | undefined (legacy 0x8008)
+view?.encryptedMediaV2; // EncryptedMediaPolicyV2 | undefined (0x800b)
 view?.messageRetention; // bigint seconds | undefined
 view?.protocolLifecycle; // "active" | "disbanded" | undefined
 ```
@@ -88,9 +96,9 @@ view?.protocolLifecycle; // "active" | "disbanded" | undefined
 Individual components can be read from `clientState.groupContext.extensions`
 with the typed getters (`getGroupProfile(extensions)`, `getAdminPolicy`,
 `getNostrRouting`, `getGroupAvatarUrl`, `getEncryptedMediaPolicy`,
-`getMessageRetention`, `getGroupLifecycle`, ...) and built with the matching
-entry builders (`groupProfileEntry`, `adminPolicyEntry`, `nostrRoutingEntry`,
-...).
+`getEncryptedMediaPolicyV2`, `getMessageRetention`, `getGroupLifecycle`, ...)
+and built with the matching entry builders (`groupProfileEntry`,
+`adminPolicyEntry`, `nostrRoutingEntry`, ...).
 
 ### Required capabilities
 

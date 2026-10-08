@@ -16,6 +16,7 @@ import { decodeAgentTextStreamQuicPolicyV1 } from "../core/components/agent-text
 import { decodeComponentsList } from "../core/components/app-components-list.js";
 import { decodeGroupAvatarUrlV1 } from "../core/components/avatar-url.js";
 import { decodeEncryptedMediaPolicyV1 } from "../core/components/encrypted-media.js";
+import { decodeEncryptedMediaPolicyV2 } from "../core/components/encrypted-media-v2.js";
 import { decodeGroupLifecycleV1 } from "../core/components/group-lifecycle.js";
 import { decodeGroupProfileV1 } from "../core/components/group-profile.js";
 import {
@@ -26,6 +27,7 @@ import {
   GROUP_ADMIN_POLICY_COMPONENT_ID,
   GROUP_AVATAR_URL_COMPONENT_ID,
   GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
+  GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID,
   GROUP_LIFECYCLE_COMPONENT_ID,
   GROUP_MESSAGE_RETENTION_COMPONENT_ID,
   GROUP_PROFILE_COMPONENT_ID,
@@ -63,6 +65,7 @@ const COMPONENT_PAYLOAD_DECODERS: ReadonlyMap<
   [AGENT_TEXT_STREAM_QUIC_COMPONENT_ID, decodeAgentTextStreamQuicPolicyV1],
   [GROUP_AVATAR_URL_COMPONENT_ID, decodeGroupAvatarUrlV1],
   [GROUP_ENCRYPTED_MEDIA_COMPONENT_ID, decodeEncryptedMediaPolicyV1],
+  [GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID, decodeEncryptedMediaPolicyV2],
   [GROUP_LIFECYCLE_COMPONENT_ID, decodeGroupLifecycleV1],
 ]);
 

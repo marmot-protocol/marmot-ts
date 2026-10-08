@@ -10,6 +10,7 @@
 - Enable optional forensic audit logging to investigate group activity.
 - Check group compatibility through `profileSupport` and identify older KeyPackages through `ListedKeyPackage.nonCurrent`.
 - Receive account identity proof rejection details and group removal or disband notifications during recovery.
+- Support Marmot encrypted media v2 (`marmot.group.encrypted-media.v2`, `0x800b`), wire-compatible with MDK: KeyPackages now advertise `0x800b`, new groups carry and require a v2 policy over MDK's default Blossom endpoints, `GroupMediaService` and `parseMediaAttachment` handle the `encrypted-media-v2` message format (strict v2 media-type and filename profiles, reference-key derivation and AAD matching MDK), and minimal Blossom helpers (`uploadBlossomBlob`, `fetchBlossomBlob`) are included. v1 references still parse and decrypt; `encryptMedia` in a group without any encrypted-media component now produces v2 references.
 
 ### Changed
 

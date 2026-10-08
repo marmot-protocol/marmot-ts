@@ -397,6 +397,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
       "marmot.group.profile.v1",
       "marmot.group.admin-policy.v1",
       "marmot.transport.nostr.routing.v1",
+      "marmot.group.encrypted-media.v2",
       "marmot.group.lifecycle.v1",
     ]);
     expect(group.info.nostr.groupIdHex).toHaveLength(64);

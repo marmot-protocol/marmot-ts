@@ -21,6 +21,9 @@ import { KEY_PACKAGE_APP_COMPONENTS_TAG } from "../protocol.js";
  * that the `app_components` tag MUST include `0x8009`
  * (`refs/marmot/transports/nostr.md`). Production now advertises it (via
  * `SUPPORTED_APP_COMPONENT_IDS`), inserted immediately before `0x800c`.
+ * It also predates `marmot.group.encrypted-media.v2` (`0x800b`), which MDK
+ * now advertises and requires in new groups; production advertises it between
+ * `0x8009` and `0x800c` (ascending id order).
  * This helper projects the raw Rust fixture forward to what production is
  * expected to emit, without touching the pinned fixture bytes/hash.
  */
@@ -30,7 +33,7 @@ function withAccountIdentityProofTag(tags: string[][]): string[][] {
     const idx = tag.indexOf("0x800c");
     if (idx === -1) return tag;
     const withProof = [...tag];
-    withProof.splice(idx, 0, "0x8009");
+    withProof.splice(idx, 0, "0x8009", "0x800b");
     return withProof;
   });
 }
@@ -70,9 +73,9 @@ describe("MDK kind-30443 tag parity", () => {
       bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(rust.tags)))),
     ).toBe(rust.tags_sha256);
 
-    // The pinned fixture predates the 0x8009 tag rule; production tags equal
-    // the fixture tags with "0x8009" inserted into app_components immediately
-    // before "0x800c" (PITFALLS 14).
+    // The pinned fixture predates the 0x8009 tag rule and 0x800b; production
+    // tags equal the fixture tags with "0x8009", "0x800b" inserted into
+    // app_components immediately before "0x800c" (PITFALLS 14).
     await expectProductionTags(withAccountIdentityProofTag(rust.tags));
   });
 

@@ -64,7 +64,9 @@ import type {
 } from "../transport/nostr/welcome-delivery.js";
 import {
   GroupMediaService,
+  type DownloadMediaOptions,
   type EncryptMediaMetadata,
+  type UploadMediaOptions,
 } from "./group-media-service.js";
 
 export { createAdminCommitPolicyCallback } from "../../engine/admin-policy.js";
@@ -178,7 +180,7 @@ export interface BaseGroupHistory extends GroupSessionHistory {
 export type StoredMedia = {
   /** Plaintext (decrypted) file bytes. */
   data: Uint8Array;
-  /** The full encrypted-media-v1 attachment metadata associated with this blob. */
+  /** The full encrypted-media attachment metadata associated with this blob. */
   attachment: MediaAttachment;
 };
 
@@ -882,6 +884,7 @@ export class MarmotGroup<
       getState: () => this.state,
       getCiphersuite: () => this.ciphersuite,
       getRetainedStates: () => this.session.retainedStates(),
+      getSigner: () => this.signer,
     });
   }
 
@@ -1475,7 +1478,9 @@ export class MarmotGroup<
   }
 
   /**
-   * Encrypts a media file for sharing in a group message (encrypted-media-v1).
+   * Encrypts a media file for sharing in a group message, in the group's
+   * media format (`encrypted-media-v2` unless the group only carries the
+   * frozen v1 policy — see {@link GroupMediaService.mediaVersion}).
    *
    * Derives the per-file key from the current MLS epoch, encrypts with
    * ChaCha20-Poly1305, and returns the ciphertext alongside a populated
@@ -1495,7 +1500,32 @@ export class MarmotGroup<
   }
 
   /**
-   * Decrypts an encrypted-media-v1 attachment downloaded from a blob store.
+   * Encrypts a media file and uploads the ciphertext to the group's Blossom
+   * endpoints (or `opts.servers`), returning an attachment with a
+   * `blossom-v1` locator ready for `encodeMediaImetaTag`. See
+   * {@link GroupMediaService.uploadMedia}.
+   */
+  async uploadMedia(
+    blob: Blob,
+    metadata: EncryptMediaMetadata,
+    opts?: UploadMediaOptions,
+  ): Promise<{ encrypted: Uint8Array; attachment: MediaAttachment }> {
+    return this.mediaService.uploadMedia(blob, metadata, opts);
+  }
+
+  /**
+   * Fetches, verifies and decrypts an attachment from its locators or the
+   * group's fallback endpoints. See {@link GroupMediaService.downloadMedia}.
+   */
+  async downloadMedia(
+    attachment: MediaAttachment,
+    opts?: DownloadMediaOptions,
+  ): Promise<StoredMedia> {
+    return this.mediaService.downloadMedia(attachment, opts);
+  }
+
+  /**
+   * Decrypts an encrypted-media attachment (v1 or v2) downloaded from a blob store.
    *
    * On the first call for a given file the plaintext bytes are derived via
    * key-derivation + ChaCha20-Poly1305 decryption (after verifying the

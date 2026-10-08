@@ -12,7 +12,6 @@ import {
 } from "ts-mls";
 import { encodeContent } from "../utils/encoding.js";
 import { unixNow } from "../utils/nostr.js";
-import { isValidRelayUrl, normalizeRelayUrl } from "../utils/relay-url.js";
 import { isGreaseValue } from "./grease.js";
 import { calculateKeyPackageRef } from "./key-package.js";
 import {
@@ -23,7 +22,6 @@ import {
   KEY_PACKAGE_EXTENSIONS_TAG,
   KEY_PACKAGE_MLS_VERSION_TAG,
   KEY_PACKAGE_PROPOSALS_TAG,
-  KEY_PACKAGE_RELAYS_TAG,
 } from "./protocol.js";
 import { SUPPORTED_APP_COMPONENT_IDS } from "./components/ids.js";
 
@@ -35,7 +33,13 @@ export type CreateKeyPackageEventOptions = {
    * throwing {@link MissingSlotIdentifierError} when none is available.
    */
   identifier: string;
-  /** Relay URLs to advertise in the event */
+  /**
+   * @deprecated Ignored. KeyPackage events do not repeat the publishing relays
+   * (`transports/nostr.md`, KeyPackage publication: "KeyPackage events do not
+   * repeat those relays"); peers find KeyPackages through the author's kind
+   * 10002 relay list. {@link KeyPackageManager} records the publish relays in
+   * its local store instead.
+   */
   relays?: string[];
   client?: string;
   /**
@@ -62,7 +66,7 @@ export function createKeyPackageEvent(
 async function createKeyPackageEventInternal(
   options: CreateKeyPackageEventOptions,
 ): Promise<EventTemplate> {
-  const { keyPackage, relays, client } = options;
+  const { keyPackage, client } = options;
 
   // Publish the KeyPackage wrapped in an MLSMessage with wire_format
   // mls_key_package (RFC 9420 §6). The kind-30443 content is specified as the
@@ -169,14 +173,6 @@ async function createKeyPackageEventInternal(
 
   // Add client tag if provided
   if (client) tags.push([KEY_PACKAGE_CLIENT_TAG, client]);
-
-  // Add relay tags if provided
-  if (relays && relays.length > 0) {
-    const validRelays = relays.filter(isValidRelayUrl).map(normalizeRelayUrl);
-    if (validRelays.length > 0) {
-      tags.push([KEY_PACKAGE_RELAYS_TAG, ...validRelays]);
-    }
-  }
 
   return {
     kind: ADDRESSABLE_KEY_PACKAGE_KIND,

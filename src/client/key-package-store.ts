@@ -41,6 +41,12 @@ export type LocalKeyPackage = {
   identifier?: string;
   /** Nostr kind-30443 events this key package has been published under */
   published?: NostrEvent[];
+  /**
+   * Relays this key package was published to. Local bookkeeping for
+   * rotation and deletion only: KeyPackage events do not carry their relays
+   * (`transports/nostr.md`, KeyPackage publication).
+   */
+  relays?: string[];
   /** Whether this key package has been consumed (e.g. used to join a group). Undefined means unused. */
   used?: boolean;
 };
@@ -66,6 +72,12 @@ export type TrackedKeyPackage = {
   identifier?: string;
   /** Nostr kind-30443 events this key package has been published under */
   published?: NostrEvent[];
+  /**
+   * Relays this key package was published to. Local bookkeeping for
+   * rotation and deletion only: KeyPackage events do not carry their relays
+   * (`transports/nostr.md`, KeyPackage publication).
+   */
+  relays?: string[];
   /** Whether this key package has been consumed (e.g. used to join a group). Undefined means unused. */
   used?: boolean;
 };
@@ -163,7 +175,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    */
   async add(
     keyPackage: Pick<LocalKeyPackage, "publicPackage" | "privatePackage"> &
-      Partial<Pick<LocalKeyPackage, "published" | "identifier">>,
+      Partial<Pick<LocalKeyPackage, "published" | "identifier" | "relays">>,
   ): Promise<string> {
     const keyPackageRef = await calculateKeyPackageRef(
       keyPackage.publicPackage,
@@ -180,6 +192,9 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         : {}),
       ...(keyPackage.published !== undefined
         ? { published: deduplicatePublishedEvents(keyPackage.published) }
+        : {}),
+      ...(keyPackage.relays !== undefined && keyPackage.relays.length > 0
+        ? { relays: mergeRelays([], keyPackage.relays) }
         : {}),
     };
 
@@ -201,10 +216,14 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    *
    * Throws if the event body cannot be decoded as a valid key package, or if
    * the event's `i` tag (KeyPackageRef) does not match the decoded body.
+   *
+   * @param relays - Relays the event was published to, merged into the
+   *   entry's local `relays` record.
    */
   async addPublished(
     ref: string | Uint8Array,
     event: NostrEvent,
+    relays: string[] = [],
   ): Promise<void> {
     const key = this.#resolveKey(ref);
 
@@ -238,6 +257,9 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       ]);
       const shouldPersistIdentifier =
         identifier !== undefined && existing.identifier === undefined;
+      const mergedRelays = mergeRelays(existing.relays ?? [], relays);
+      const relaysChanged =
+        mergedRelays.length !== (existing.relays ?? []).length;
       const publishedChanged =
         existing.published === undefined ||
         published.length !== existing.published.length ||
@@ -245,7 +267,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
           (e, index) => e.id === existing.published?.[index]?.id,
         );
 
-      if (!publishedChanged && !shouldPersistIdentifier) {
+      if (!publishedChanged && !shouldPersistIdentifier && !relaysChanged) {
         return;
       }
 
@@ -254,6 +276,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         // Persist identifier if discovered for the first time on this entry
         ...(shouldPersistIdentifier ? { identifier } : {}),
         published,
+        ...(mergedRelays.length > 0 ? { relays: mergedRelays } : {}),
       };
 
       await this.#store.setItem(key, updated);
@@ -266,6 +289,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         publicPackage,
         ...(identifier !== undefined ? { identifier } : {}),
         published: [event],
+        ...(relays.length > 0 ? { relays: mergeRelays([], relays) } : {}),
       };
 
       await this.#store.setItem(key, entry);
@@ -317,23 +341,33 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         (pkg): pkg is LocalKeyPackage =>
           pkg !== null && pkg.privatePackage !== undefined,
       )
-      .map(({ keyPackageRef, publicPackage, identifier, published, used }) => {
-        let nonCurrent = false;
-        try {
-          validateKeyPackageAccountIdentityProof(publicPackage);
-        } catch {
-          nonCurrent = true;
-        }
-
-        return {
+      .map(
+        ({
           keyPackageRef,
           publicPackage,
-          ...(identifier !== undefined ? { identifier } : {}),
-          ...(published !== undefined ? { published } : {}),
-          ...(used !== undefined ? { used } : {}),
-          ...(nonCurrent ? { nonCurrent: true as const } : {}),
-        };
-      });
+          identifier,
+          published,
+          relays,
+          used,
+        }) => {
+          let nonCurrent = false;
+          try {
+            validateKeyPackageAccountIdentityProof(publicPackage);
+          } catch {
+            nonCurrent = true;
+          }
+
+          return {
+            keyPackageRef,
+            publicPackage,
+            ...(identifier !== undefined ? { identifier } : {}),
+            ...(published !== undefined ? { published } : {}),
+            ...(relays !== undefined ? { relays } : {}),
+            ...(used !== undefined ? { used } : {}),
+            ...(nonCurrent ? { nonCurrent: true as const } : {}),
+          };
+        },
+      );
   }
 
   /**
@@ -403,4 +437,9 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       }
     }
   }
+}
+
+/** Union of two relay lists, keeping first-seen order and dropping duplicates. */
+function mergeRelays(existing: string[], added: string[]): string[] {
+  return [...new Set([...existing, ...added])];
 }

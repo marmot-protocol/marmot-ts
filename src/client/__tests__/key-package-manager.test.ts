@@ -48,13 +48,36 @@ function makeManager(
   account: PrivateKeyAccount<any>,
   clientId?: string,
 ) {
+  const store = new InMemoryKeyValueStore<StoredKeyPackage>();
   const manager = new KeyPackageManager({
-    store: new InMemoryKeyValueStore(),
+    store,
     signer: account.signer,
     network,
     clientId,
   });
-  return { manager };
+  return { manager, store };
+}
+
+/**
+ * Rewrites a stored entry into the shape an older version left behind: no
+ * local `relays` record, and a published event that still carries a
+ * `relays` tag.
+ */
+async function makeLegacyEntry(
+  store: InMemoryKeyValueStore<StoredKeyPackage>,
+  ref: Uint8Array,
+  legacyRelays: string[],
+) {
+  const key = bytesToHex(ref);
+  const entry = (await store.getItem(key))!;
+  const { relays: _dropped, ...rest } = entry;
+  await store.setItem(key, {
+    ...rest,
+    published: entry.published!.map((e) => ({
+      ...e,
+      tags: [...e.tags, ["relays", ...legacyRelays]],
+    })),
+  });
 }
 
 /** Returns the published NostrEvent[] for a ref, or [] if none */
@@ -215,12 +238,17 @@ describe("KeyPackageManager", () => {
       expect(events[0].id).toBe(networkEvent?.id);
     });
 
-    it("records relay URLs on the published event", async () => {
+    it("keeps publish relays off the event and records them locally", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
 
+      // transports/nostr.md: "KeyPackage events do not repeat those relays".
       const events = await getPublished(manager, pkg.keyPackageRef);
-      expect(getKeyPackageRelays(events[0])).toEqual(["wss://relay.test/"]);
+      expect(events[0].tags.some((t) => t[0] === "relays")).toBe(false);
+      expect(getKeyPackageRelays(events[0])).toBeUndefined();
+
+      const [listed] = await manager.list();
+      expect(listed.relays).toEqual(["wss://relay.test"]);
     });
 
     it("emits added and published events", async () => {
@@ -382,12 +410,29 @@ describe("KeyPackageManager", () => {
         relays: ["wss://specific-relay.test"],
       });
 
+      const publish = vi.spyOn(network, "publish");
       const newPkg = await manager.rotate(pkg.keyPackageRef);
 
-      const events = await getPublished(manager, newPkg.keyPackageRef);
-      expect(getKeyPackageRelays(events[0])).toContain(
-        "wss://specific-relay.test/",
-      );
+      const listed = (await manager.list()).find(
+        (p) => bytesToHex(p.keyPackageRef) === bytesToHex(newPkg.keyPackageRef),
+      )!;
+      expect(listed.relays).toEqual(["wss://specific-relay.test"]);
+      expect(publish.mock.calls.map(([relays]) => relays)).toContainEqual([
+        "wss://specific-relay.test",
+      ]);
+    });
+
+    it("falls back to the relays tag of an event published by an older version", async () => {
+      const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
+      const pkg = await manager.create({ relays: ["wss://relay.test"] });
+      await makeLegacyEntry(store, pkg.keyPackageRef, ["wss://legacy.test/"]);
+      const publish = vi.spyOn(network, "publish");
+
+      await manager.rotate(pkg.keyPackageRef);
+
+      expect(publish.mock.calls.map(([relays]) => relays)).toContainEqual([
+        "wss://legacy.test/",
+      ]);
     });
 
     it("skips relay deletion if the old key package was never published", async () => {
@@ -480,6 +525,35 @@ describe("KeyPackageManager", () => {
   // -------------------------------------------------------------------------
 
   describe("purge()", () => {
+    it("publishes the deletion to the relays recorded at publish time", async () => {
+      const { manager } = makeManager(network, account, TEST_CLIENT_ID);
+      const pkg = await manager.create({
+        relays: ["wss://relay1.test", "wss://relay2.test"],
+      });
+      const publish = vi.spyOn(network, "publish");
+
+      await manager.purge(pkg.keyPackageRef);
+
+      const call = publish.mock.calls.find(([, e]) => e.kind === 5)!;
+      expect(call[0]).toEqual(["wss://relay1.test", "wss://relay2.test"]);
+    });
+
+    it("also deletes on relays named by a legacy relays tag and on extra relays passed in", async () => {
+      const { manager, store } = makeManager(network, account, TEST_CLIENT_ID);
+      const pkg = await manager.create({ relays: ["wss://relay.test"] });
+      await makeLegacyEntry(store, pkg.keyPackageRef, ["wss://legacy.test/"]);
+      const publish = vi.spyOn(network, "publish");
+
+      await manager.purge(pkg.keyPackageRef, {
+        relays: ["wss://other-device.test"],
+      });
+
+      const call = publish.mock.calls.find(([, e]) => e.kind === 5)!;
+      expect(new Set(call[0])).toEqual(
+        new Set(["wss://other-device.test", "wss://legacy.test/"]),
+      );
+    });
+
     it("publishes a kind 5 deletion for a single ref", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({ relays: ["wss://relay.test"] });
@@ -745,7 +819,7 @@ describe("KeyPackageManager", () => {
       expect(stored?.identifier).toBe(TEST_CLIENT_ID);
     });
 
-    it("records relay URLs from the event's relays tag", async () => {
+    it("keeps the locally recorded publish relays when the same event is tracked again", async () => {
       const { manager } = makeManager(network, account, TEST_CLIENT_ID);
       const pkg = await manager.create({
         relays: ["wss://relay1.test", "wss://relay2.test"],
@@ -756,11 +830,10 @@ describe("KeyPackageManager", () => {
 
       await manager.track({ ...realEvent, id: "e".repeat(64) });
 
-      const events = await getPublished(manager, pkg.keyPackageRef);
-      expect(getKeyPackageRelays(events[0])).toEqual([
-        "wss://relay1.test/",
-        "wss://relay2.test/",
-      ]);
+      const listed = (await manager.list()).find(
+        (p) => bytesToHex(p.keyPackageRef) === bytesToHex(pkg.keyPackageRef),
+      )!;
+      expect(listed.relays).toEqual(["wss://relay1.test", "wss://relay2.test"]);
     });
 
     it("records a valid key package event from another device (no local private key)", async () => {
@@ -1259,9 +1332,7 @@ describe("KeyPackageManager", () => {
 
       expect(value[0].keyPackageRef).toEqual(pkg.keyPackageRef);
       expect(value[0].published).toHaveLength(1);
-      expect(getKeyPackageRelays(value[0].published![0])).toContain(
-        "wss://relay.test/",
-      );
+      expect(value[0].relays).toContain("wss://relay.test");
     });
 
     it("yields updated snapshot after a key package is added", async () => {

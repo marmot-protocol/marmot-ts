@@ -67,6 +67,29 @@ import {
 const SUBSCRIPTION_ID_CACHE_CAPACITY = 10_000;
 
 /** Deterministic bounded LRU used by long-lived group subscriptions. */
+
+const U64_MAX = (1n << 64n) - 1n;
+
+/**
+ * The kind-445 tag-set rule (`transports/nostr.md` "Group message delivery"):
+ * besides its single `h` tag, a group event may carry only one NIP-40
+ * `["expiration", <unsigned integer>]` tag, and nothing else. Receivers
+ * validate the whole envelope before decrypting ("Validation before
+ * peeling"). Mirrors MDK `NostrTransportEvent::kind_445_transport_group_id`,
+ * which drops such events, so accepting them here would let a member show
+ * marmot-ts users messages that MDK users never see.
+ */
+function hasOnlyGroupEventTags(event: NostrEvent): boolean {
+  let expirations = 0;
+  for (const tag of event.tags) {
+    if (tag[0] === "h") continue; // cardinality checked by getSingletonTagValue
+    if (tag[0] !== "expiration") return false;
+    if (++expirations > 1 || tag.length !== 2) return false;
+    if (!/^[0-9]+$/.test(tag[1]) || BigInt(tag[1]) > U64_MAX) return false;
+  }
+  return true;
+}
+
 export class BoundedIdCache {
   readonly #ids = new Map<string, undefined>();
 
@@ -552,8 +575,9 @@ export class GroupsManager<
       const fresh = events.filter((event) => !seen.has(event.id));
       if (!fresh.length) return;
 
-      // Trust boundary (SEC-01/WIRE-02): verify signature and `h` tag
-      // cardinality BEFORE any event reaches group.ingest() or occupies the
+      // Trust boundary (SEC-01/WIRE-02): verify signature, the kind-445 tag
+      // set, and `h` tag cardinality BEFORE any event reaches group.ingest()
+      // or occupies the
       // dedup `seen` slot. Not a cross-check of the `h` value against the
       // subscribed group id — that is out of scope (RESEARCH Open Question 1).
       const trusted: NostrEvent[] = [];
@@ -563,7 +587,10 @@ export class GroupsManager<
           this.emit("rejected", group.id, event, "invalid-signature");
           continue;
         }
-        if (getSingletonTagValue(event, "h") !== h) {
+        if (
+          !hasOnlyGroupEventTags(event) ||
+          getSingletonTagValue(event, "h") !== h
+        ) {
           rejected.add(event.id);
           this.emit("rejected", group.id, event, "tag-cardinality");
           continue;

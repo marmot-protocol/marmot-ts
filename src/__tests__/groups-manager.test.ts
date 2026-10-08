@@ -556,6 +556,78 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
     expect(ingestSpy).not.toHaveBeenCalled();
   });
 
+  // transports/nostr.md: a kind-445 carries one `h` tag and at most one NIP-40
+  // `expiration` tag, nothing else. MDK drops anything else before decrypting.
+  async function reSignedWithTags(extraTags: string[][]): Promise<{
+    manager: ReturnType<typeof makeManager>;
+    group: Awaited<ReturnType<ReturnType<typeof makeManager>["create"]>>;
+    rejections: string[];
+  }> {
+    const network = new MockNetwork(["wss://relay.test"]);
+    const manager = makeManager(network);
+    const group = await manager.create("Test Group", {
+      relays: ["wss://relay.test"],
+    });
+    await manager.send(group.id, {
+      kind: "applicationMessage",
+      payload: new TextEncoder().encode("hello"),
+    });
+    const real = network.events[0];
+    const event = finalizeEvent(
+      {
+        kind: real.kind,
+        created_at: real.created_at,
+        content: real.content,
+        tags: [...real.tags, ...extraTags],
+      },
+      generateSecretKey(),
+    );
+    network.clear();
+    network.events.push(event);
+    const rejections: string[] = [];
+    manager.on("rejected", (_groupId, _event, reason) =>
+      rejections.push(reason),
+    );
+    return { manager, group, rejections };
+  }
+
+  it.each([
+    ["a p tag", [["p", "ab".repeat(32)]]],
+    ["an encoding tag", [["encoding", "base64"]]],
+    ["a non-numeric expiration", [["expiration", "soon"]]],
+    ["an expiration with an extra value", [["expiration", "1", "2"]]],
+    [
+      "two expiration tags",
+      [
+        ["expiration", "1"],
+        ["expiration", "2"],
+      ],
+    ],
+  ])(
+    "rejects a properly-signed 445 event carrying %s before ingest",
+    async (_label, extraTags) => {
+      const { manager, group, rejections } = await reSignedWithTags(extraTags);
+      const ingestSpy = vi.spyOn(group, "ingest");
+
+      await manager.connect(group.id);
+
+      expect(rejections).toEqual(["tag-cardinality", "tag-cardinality"]);
+      expect(ingestSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts a 445 event carrying one NIP-40 expiration tag", async () => {
+    const { manager, group, rejections } = await reSignedWithTags([
+      ["expiration", "4102444800"],
+    ]);
+    const ingestSpy = vi.spyOn(group, "ingest");
+
+    await manager.connect(group.id);
+
+    expect(rejections).toEqual([]);
+    expect(ingestSpy).toHaveBeenCalled();
+  });
+
   it("delegates verification to an injected fakeVerifyEvent (trust-upstream)", async () => {
     const network = new MockNetwork(["wss://relay.test"]);
     const manager = makeManager(network, fakeVerifyEvent);

@@ -110,6 +110,7 @@ import { logger } from "../utils/debug.js";
 import type { GenericKeyValueStore } from "../utils/key-value.js";
 import {
   createAdminCommitPolicyCallback,
+  findProposalSenderViolation,
   requiredComponentIdsOf,
   validatePreApplyProposals,
   withCapturedProposals,
@@ -195,6 +196,20 @@ export class CommitLegalityError extends Error {
   constructor(readonly violation: CommitIntegrityViolation) {
     super(violation.detail);
     this.name = "CommitLegalityError";
+  }
+}
+
+/**
+ * Thrown before publishing a standalone proposal its sender is not authorized
+ * to make (`app-components/admin-policy-v1.md`, `protocol-core/group-messaging.md`):
+ * a non-admin's Add, Remove, Update, GroupContextExtensions or AppDataUpdate,
+ * an admin's SelfRemove, or an unsupported proposal type. Every peer would
+ * refuse it.
+ */
+export class ProposalAuthorizationError extends Error {
+  constructor(readonly reason: string) {
+    super(`Not authorized to send this proposal: ${reason}`);
+    this.name = "ProposalAuthorizationError";
   }
 }
 
@@ -1051,6 +1066,24 @@ export class MarmotGroupEngine<TEnvelope> {
           this.ciphersuite.id,
         );
         if (proposalViolation) throw new CommitLegalityError(proposalViolation);
+
+        // Every peer (marmot-ts and MDK alike) refuses a standalone proposal
+        // its sender may not make, so refuse it before publishing. In v1 a
+        // non-admin may only send SelfRemove, and an admin may not send
+        // SelfRemove until it has left the admin set.
+        const senderViolation = findProposalSenderViolation(
+          [
+            {
+              proposal: intent.proposal,
+              senderLeafIndex: Number(this.state.privatePath.leafIndex),
+            },
+          ],
+          this.state.ratchetTree,
+          this.#adminPubkeysOf(this.state),
+          true,
+        );
+        if (senderViolation)
+          throw new ProposalAuthorizationError(senderViolation);
 
         const { message, newState } = await createProposal({
           context: {
@@ -3675,6 +3708,15 @@ export class MarmotGroupEngine<TEnvelope> {
     return byTip;
   }
 
+  /** The admin set of `state`, or `[]` when the admin policy does not decode. */
+  #adminPubkeysOf(state: ClientState): string[] {
+    try {
+      return getAdminPolicy(state.groupContext.extensions) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   #createAdminVerificationCallback(
     state: ClientState = this.state,
   ): IncomingMessageCallback {
@@ -3700,6 +3742,12 @@ export class MarmotGroupEngine<TEnvelope> {
       return (incoming) =>
         incoming.kind === "commit" ||
         validatePreApplyProposals([incoming.proposal], ciphersuiteId) ||
+        findProposalSenderViolation(
+          [incoming.proposal],
+          state.ratchetTree,
+          [],
+          true,
+        ) ||
         validateUpdateProposalAccountIdentityProofs(
           [incoming.proposal],
           state.ratchetTree,
@@ -3754,9 +3802,22 @@ function withoutInadmissibleStagedProposals(
   ciphersuiteId: number,
 ): ClientState {
   const entries = Object.entries(state.unappliedProposals);
+  if (entries.length === 0) return state;
+  let adminPubkeys: string[] = [];
+  try {
+    adminPubkeys = getAdminPolicy(state.groupContext.extensions) ?? [];
+  } catch {
+    adminPubkeys = [];
+  }
   const admissible = entries.filter(
     ([, staged]) =>
       !validatePreApplyProposals([staged], ciphersuiteId) &&
+      !findProposalSenderViolation(
+        [staged],
+        state.ratchetTree,
+        adminPubkeys,
+        true,
+      ) &&
       !validateUpdateProposalAccountIdentityProofs(
         [staged],
         state.ratchetTree,

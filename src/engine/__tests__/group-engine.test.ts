@@ -8,6 +8,7 @@ import {
   getCiphersuiteImpl,
   joinGroup,
   makeCustomExtension,
+  nodeTypes,
   unsafeTestingAuthenticationService,
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
@@ -384,8 +385,15 @@ describe("MarmotGroupEngine admin verification (protocol-core/group-messaging.md
     }
 
     function buildCallback(account: PrivateKeyAccount<any>) {
+      // Leaf 0 is the admin, so a standalone proposal it sends passes the
+      // proposal-sender gate and only the proof gate decides.
       return createAdminCommitPolicyCallback({
-        ratchetTree: [] as never,
+        ratchetTree: [
+          {
+            nodeType: nodeTypes.leaf,
+            leaf: { credential: createCredential(account.pubkey) },
+          },
+        ] as never,
         adminPubkeys: [account.pubkey],
         ciphersuiteId,
         onUnverifiableCommit: "retry",
@@ -485,7 +493,7 @@ describe("MarmotGroupEngine admin verification (protocol-core/group-messaging.md
       expect(
         callback({
           kind: "proposal",
-          proposal: valid.proposals[0]!.proposal,
+          proposal: valid.proposals[0]!,
         } as never),
       ).toBe("accept");
 
@@ -526,11 +534,11 @@ describe("MarmotGroupEngine admin verification (protocol-core/group-messaging.md
       wrapped.take();
       const result = wrapped.callback({
         kind: "proposal",
-        proposal: proposalWithSender.proposal,
+        proposal: proposalWithSender,
       } as never);
       expect(result).toBe("accept");
       const captured = wrapped.take();
-      expect(captured.proposals).toEqual([proposalWithSender.proposal]);
+      expect(captured.proposals).toEqual([proposalWithSender]);
       expect(captured.committerLeafIndex).toBeUndefined();
     });
   });

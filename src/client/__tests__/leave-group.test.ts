@@ -95,6 +95,31 @@ describe("groups.leave() proposal + destroy semantics", () => {
     mockNetwork = new MockNetwork();
   });
 
+  it("refuses an admin's leave before publishing or destroying anything", async () => {
+    // An admin must leave the admin set first (member-departure.md); every
+    // peer, MDK included, rejects an admin's SelfRemove. Publishing it and
+    // then destroying local state left the admin in the group for everyone
+    // else, with no way to retry.
+    const { adminClient, adminGroup } = await setupTwoMemberGroup(mockNetwork);
+    const before = (
+      await mockNetwork.request(["wss://mock-relay.test"], {
+        kinds: [GROUP_EVENT_KIND],
+      })
+    ).length;
+
+    await expect(adminClient.groups.leave(adminGroup.id)).rejects.toThrow(
+      "self_remove sender is an active admin",
+    );
+
+    const after = (
+      await mockNetwork.request(["wss://mock-relay.test"], {
+        kinds: [GROUP_EVENT_KIND],
+      })
+    ).length;
+    expect(after).toBe(before);
+    expect(await adminClient.groups.has(adminGroup.id)).toBe(true);
+  });
+
   it("publishes a leave proposal event to group relays", async () => {
     const { memberClient, memberGroup } =
       await setupTwoMemberGroup(mockNetwork);

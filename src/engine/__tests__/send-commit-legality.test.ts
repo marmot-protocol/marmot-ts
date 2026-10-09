@@ -25,6 +25,7 @@ import {
   type CiphersuiteImpl,
   type ClientState,
   createCommit,
+  createProposal,
   defaultCryptoProvider,
   defaultProposalTypes,
   encode,
@@ -185,6 +186,40 @@ async function stageAdminPolicyProposal(
     },
   });
   engine.confirmPublished(staged.pending);
+  const [ref] = Object.keys(engine.state.unappliedProposals);
+  if (ref === undefined) throw new Error("expected staged proposal reference");
+  return ref;
+}
+
+/**
+ * Stages an admin-policy proposal on a NON-admin's engine the only way it can
+ * get there: an admin sends it standalone and the member ingests it. A
+ * non-admin may not send it itself (`ProposalAuthorizationError`).
+ */
+async function ingestAdminPolicyProposal(
+  engine: MarmotGroupEngine<NostrEvent>,
+  adminState: ClientState,
+  impl: CiphersuiteImpl,
+  admins: string[],
+): Promise<string> {
+  const { message } = await createProposal({
+    context: {
+      cipherSuite: impl,
+      authService: unsafeTestingAuthenticationService,
+    },
+    state: adminState,
+    wireAsPublicMessage: true,
+    proposal: {
+      proposalType: appDataUpdateProposalType,
+      appDataUpdate: {
+        componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
+        operation: "update",
+        update: encodeAdminPolicyV1(admins),
+      },
+    },
+  });
+  const envelope = await testPeeler(impl).wrapGroupMessage(message, adminState);
+  for await (const _ of engine.ingest([envelope])) void _;
   const [ref] = Object.keys(engine.state.unappliedProposals);
   if (ref === undefined) throw new Error("expected staged proposal reference");
   return ref;
@@ -624,8 +659,8 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
     );
     expect(engine.lifecycle).toBe("Stable");
   });
-  it("rejects a non-admin selfUpdate consuming its staged admin-only proposal by reference", async () => {
-    const { impl, adminPubkey, admin2Pubkey, memberEpoch1 } =
+  it("rejects a non-admin selfUpdate consuming a staged admin-only proposal by reference", async () => {
+    const { impl, adminPubkey, admin2Pubkey, epoch1, memberEpoch1 } =
       await twoAdminGroup();
     const engine = new MarmotGroupEngine({
       state: memberEpoch1,
@@ -633,23 +668,13 @@ describe("selfUpdate seam commit legality (CR-03) — D-01/D-02/D-05/D-07", () =
       peeler: testPeeler(impl),
     });
 
-    // CR-02: the payload must DECODE — the send seam now runs the same
-    // pre-apply payload gate as inbound, so an undecodable admin-policy blob
-    // is refused at proposal creation. This row is about authorization, not
-    // payload validity, so it stages a well-formed admin-policy update exactly
-    // as the admin rows below do.
-    const staged = await engine.send({
-      kind: "proposal",
-      proposal: {
-        proposalType: appDataUpdateProposalType,
-        appDataUpdate: {
-          componentId: GROUP_ADMIN_POLICY_COMPONENT_ID,
-          operation: "update",
-          update: encodeAdminPolicyV1([adminPubkey, admin2Pubkey]),
-        },
-      },
-    });
-    engine.confirmPublished(staged.pending);
+    // A well-formed admin-policy update sent by an admin and staged on the
+    // member's engine. A non-admin cannot commit it, not even inside a
+    // self-update.
+    await ingestAdminPolicyProposal(engine, epoch1, impl, [
+      adminPubkey,
+      admin2Pubkey,
+    ]);
 
     const beforeTag = bytesToHex(engine.state.confirmationTag);
     const beforeProposalRefs = Object.keys(engine.state.unappliedProposals);
@@ -812,8 +837,14 @@ describe("outbound exact-union actor authorization matrix", () => {
   ] as const)(
     "rejects a non-admin $intentKind with an admin-only $origin proposal",
     async ({ intentKind, origin }) => {
-      const { impl, adminPubkey, admin2Pubkey, memberPubkey, memberEpoch1 } =
-        await twoAdminGroup();
+      const {
+        impl,
+        adminPubkey,
+        admin2Pubkey,
+        memberPubkey,
+        epoch1,
+        memberEpoch1,
+      } = await twoAdminGroup();
       const engine = new MarmotGroupEngine({
         state: memberEpoch1,
         ciphersuite: impl,
@@ -830,7 +861,7 @@ describe("outbound exact-union actor authorization matrix", () => {
 
       let ref: string | undefined;
       if (origin !== "by-value") {
-        ref = await stageAdminPolicyProposal(engine, [
+        ref = await ingestAdminPolicyProposal(engine, epoch1, impl, [
           adminPubkey,
           admin2Pubkey,
         ]);

@@ -2,7 +2,9 @@ import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
   appDataUpdateProposalType,
   type CiphersuiteImpl,
+  type ClientState,
   createCommit,
+  createProposal,
   defaultCryptoProvider,
   defaultProposalTypes,
   getCiphersuiteImpl,
@@ -106,15 +108,34 @@ async function memberGroup() {
     privateKeys: memberKp.privatePackage,
     ratchetTree: undefined,
   });
-  return { adminPubkey, memberPubkey, siblingPubkey, impl, memberState };
+  return {
+    adminPubkey,
+    memberPubkey,
+    siblingPubkey,
+    impl,
+    memberState,
+    adminState: add.newState,
+  };
 }
 
+/**
+ * Stages an admin-only proposal on the member's engine the way it arrives in
+ * practice: the admin sends it standalone and the member ingests it. A
+ * non-admin can no longer send it itself (`ProposalAuthorizationError`).
+ */
 async function stageForeignProposal(
   engine: MarmotGroupEngine<NostrEvent>,
   adminPubkey: string,
+  adminState: ClientState,
+  impl: CiphersuiteImpl,
 ) {
-  const staged = await engine.send({
-    kind: "proposal",
+  const { message } = await createProposal({
+    context: {
+      cipherSuite: impl,
+      authService: { validateCredential: () => true },
+    },
+    state: adminState,
+    wireAsPublicMessage: true,
     proposal: {
       proposalType: appDataUpdateProposalType,
       appDataUpdate: {
@@ -124,21 +145,23 @@ async function stageForeignProposal(
       },
     },
   });
-  engine.confirmPublished(staged.pending);
+  const envelope = await testPeeler(impl).wrapGroupMessage(message, adminState);
+  for await (const _ of engine.ingest([envelope])) void _;
+  expect(Object.keys(engine.state.unappliedProposals)).toHaveLength(1);
 }
 
 describe("outbound commit authorization seams", () => {
   it.each(["commit", "selfUpdate"] as const)(
     "rejects a non-admin %s carrying an unauthorized by-reference proposal before staging",
     async (kind) => {
-      const { adminPubkey, memberPubkey, impl, memberState } =
+      const { adminPubkey, memberPubkey, impl, memberState, adminState } =
         await memberGroup();
       const engine = new MarmotGroupEngine({
         state: memberState,
         ciphersuite: impl,
         peeler: testPeeler(impl),
       });
-      await stageForeignProposal(engine, adminPubkey);
+      await stageForeignProposal(engine, adminPubkey, adminState, impl);
 
       const send =
         kind === "commit"

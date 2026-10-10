@@ -707,6 +707,15 @@ export class MarmotGroupEngine<TEnvelope> {
     return this.#retainedPassInput.length;
   }
 
+  /**
+   * The envelopes retained but not yet admitted to a convergence pass (held
+   * while a commit publication or merge gates inbound, or a pass reaches its
+   * cutoff). Like {@link pendingEnvelopes}, they exist only in memory.
+   */
+  retainedConvergenceInput(): TEnvelope[] {
+    return [...this.#retainedPassInput];
+  }
+
   /** Opens or refreshes the current collection pass from the monotonic clock. */
   admitConvergencePass(): ConvergencePassState {
     const nowMs = this.#now();
@@ -2098,14 +2107,14 @@ export class MarmotGroupEngine<TEnvelope> {
       return;
     }
     if (!mayApplyRetainedInbound(this.#lifecycle)) {
-      this.#retainedPassInput.push(...envelopes);
+      for (const envelope of envelopes) this.#retainedPassInput.push(envelope);
       return;
     }
     if (
       this.#convergencePass &&
       this.#now() >= this.#convergencePass.deadlineMs
     ) {
-      this.#retainedPassInput.push(...envelopes);
+      for (const envelope of envelopes) this.#retainedPassInput.push(envelope);
       this.#closeConvergencePass();
       this.#scheduleRetainedContinuation();
       return;

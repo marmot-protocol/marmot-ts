@@ -62,7 +62,24 @@ import {
 } from "./group/group-image-transport.js";
 import type { WelcomeKeyPackageCandidate } from "./key-package-store.js";
 import { GroupFactory, type CreateGroupOptions } from "./group-factory.js";
+import {
+  DEFAULT_BACKFILL_MAX_PAGES,
+  DEFAULT_BACKFILL_PAGE_SIZE,
+  DEFAULT_BACKFILL_SLACK_SECONDS,
+  type BackfillProgress,
+  type PagedBackfillResult,
+  backfillCursorKey,
+  backfillProgressKey,
+  encodeBackfillCursor,
+  encodeBackfillProgress,
+  fetchPagedBackfill,
+  nextBackfillCursor,
+  oldestCreatedAt,
+  readBackfillCursor,
+  readBackfillProgress,
+} from "./group-backfill.js";
 import { GroupRegistry } from "./group-registry.js";
+import { InMemoryKeyValueStore } from "../extra/in-memory-key-value-store.js";
 import type { GroupRuntime } from "./runtime/group-runtime.js";
 import type {
   GroupPublishResult,
@@ -126,6 +143,51 @@ export interface ConnectOptions {
    * just as it cannot send).
    */
   fallbackRelays?: string[];
+  /**
+   * Overlap, in seconds, re-fetched behind each relay's stored backfill
+   * cursor (and ahead of the live subscription's start) to absorb relay clock
+   * skew and late-propagating events. Defaults to 600 (10 minutes).
+   */
+  backfillSlackSeconds?: number;
+  /** `limit` of each backfill page request. Defaults to 500. */
+  backfillPageSize?: number;
+  /**
+   * Maximum pages fetched from each relay per connect. When a relay hits the
+   * cap the fetched events are still ingested, but its cursor is not
+   * advanced, so the remainder is retried on the next connect. Defaults to 50.
+   */
+  backfillMaxPages?: number;
+}
+
+function positiveInteger(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < 1)
+    throw new Error(`${name} must be a positive integer`);
+  return value;
+}
+
+/** Validates the backfill bounds of {@link ConnectOptions}, applying defaults. */
+function backfillBounds(options: ConnectOptions | undefined) {
+  const slack = options?.backfillSlackSeconds ?? DEFAULT_BACKFILL_SLACK_SECONDS;
+  if (!Number.isFinite(slack) || slack < 0)
+    throw new Error("backfillSlackSeconds must be a non-negative number");
+  return {
+    slack,
+    pageSize: positiveInteger(
+      options?.backfillPageSize,
+      DEFAULT_BACKFILL_PAGE_SIZE,
+      "backfillPageSize",
+    ),
+    maxPages: positiveInteger(
+      options?.backfillMaxPages,
+      DEFAULT_BACKFILL_MAX_PAGES,
+      "backfillMaxPages",
+    ),
+  };
 }
 
 /** Options for creating a new GroupsManager */
@@ -282,8 +344,10 @@ export class GroupsManager<
   readonly #admissions = new Map<
     string,
     {
-      tail: Promise<void>;
+      tail: Promise<unknown>;
       seen: BoundedIdCache;
+      /** Set once an admitted batch fails to ingest; never cleared. */
+      ingestFailed: boolean;
       connections: number;
       pending: number;
       cleanup: () => void;
@@ -293,6 +357,8 @@ export class GroupsManager<
   readonly #factory: GroupFactory<THistory, TMedia>;
   /** The injectable event verifier gating the 445 drain (SEC-01). */
   readonly #verifyEvent: VerifyEventMethod;
+  /** Holds each group's backfill cursor alongside its ingest state. */
+  readonly #ingestStateStore: GenericKeyValueStore<Uint8Array>;
 
   constructor(options: GroupsManagerOptions<THistory, TMedia>) {
     super();
@@ -308,6 +374,8 @@ export class GroupsManager<
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
+    this.#ingestStateStore =
+      options.ingestStateStore ?? new InMemoryKeyValueStore<Uint8Array>();
 
     this.#registry = new GroupRegistry<THistory, TMedia>({
       store: options.store,
@@ -810,6 +878,7 @@ export class GroupsManager<
     groupId: Uint8Array | string,
     options?: ConnectOptions,
   ): Promise<Unsubscribable> {
+    backfillBounds(options);
     return this.#connectGroup(await this.get(groupId), options);
   }
 
@@ -821,6 +890,7 @@ export class GroupsManager<
    * whose `.unsubscribe()` tears down every connection and stops tracking.
    */
   connectAll(options?: ConnectOptions): Unsubscribable {
+    backfillBounds(options);
     const records = new Map<
       string,
       { controller: AbortController; sub?: Unsubscribable }
@@ -937,6 +1007,7 @@ export class GroupsManager<
       admission = {
         tail: Promise.resolve(),
         seen: new BoundedIdCache(SUBSCRIPTION_ID_CACHE_CAPACITY),
+        ingestFailed: false,
         connections: 0,
         pending: 0,
         cleanup: () => group.off("ingestResult", forward),
@@ -952,10 +1023,13 @@ export class GroupsManager<
         this.#admissions.delete(group.idStr);
     };
     let cancelled = false;
+    // Stops a paged backfill once the connection is cancelled (abort/disband).
+    const paging = new AbortController();
     let sub: Unsubscribable | undefined;
     const unsubscribe = () => {
       if (cancelled) return;
       cancelled = true;
+      paging.abort();
       options?.signal?.removeEventListener("abort", unsubscribe);
       group.off("disbanded", unsubscribe);
       sub?.unsubscribe();
@@ -965,9 +1039,35 @@ export class GroupsManager<
     options?.signal?.addEventListener("abort", unsubscribe, { once: true });
     group.once("disbanded", unsubscribe);
     const seen = record.seen;
-    const drain = async (events: NostrEvent[]): Promise<void> => {
-      const fresh = events.filter((event) => !seen.has(event.id));
-      if (!fresh.length) return;
+    type DrainOutcome = {
+      /**
+       * Events that passed the trust boundary: those handed to ingest now and
+       * those an earlier batch for this group already admitted.
+       */
+      trusted: NostrEvent[];
+      /** Whether this or an earlier admitted batch was not fully ingested. */
+      failed: boolean;
+    };
+    const drain = async (events: NostrEvent[]): Promise<DrainOutcome> => {
+      // `seen` is shared by every connection to this group, so a backfill can
+      // re-fetch events an earlier batch already ingested. They count towards
+      // the backfill cursor unless an admitted batch has failed. A same-id
+      // copy only counts if it passes the trust boundary itself: the cache
+      // vouches for the id, not for this copy's `created_at`.
+      const outcome: DrainOutcome = {
+        trusted: [],
+        failed: record.ingestFailed,
+      };
+      const fresh: NostrEvent[] = [];
+      for (const event of events) {
+        if (!seen.has(event.id)) fresh.push(event);
+        else if (
+          safeVerifyEvent(this.#verifyEvent, event) &&
+          getSingletonTagValue(event, "h") === h
+        )
+          outcome.trusted.push(event);
+      }
+      if (!fresh.length) return outcome;
 
       // Trust boundary (SEC-01/WIRE-02): verify signature and `h` tag
       // cardinality BEFORE any event reaches group.ingest() or occupies the
@@ -985,19 +1085,47 @@ export class GroupsManager<
         seen.add(event.id);
         trusted.push(event);
       }
-      if (!trusted.length) return;
+      for (const event of trusted) outcome.trusted.push(event);
+      if (!trusted.length) return outcome;
 
       // Result delivery uses the facade event only; consuming yields as well
       // would duplicate live results and still miss timer-driven results.
       for await (const result of group.ingest(trusted)) void result;
+      return outcome;
     };
-    const admit = (events: NostrEvent[]) => {
-      if (cancelled) return Promise.resolve();
+    /**
+     * Queues `events` behind every earlier batch for this group. `settle`
+     * runs in the same queued operation, after the drain, so no later batch
+     * is ingested while it inspects or persists ingest-dependent state.
+     */
+    const admit = (
+      events: NostrEvent[],
+      settle?: (outcome: DrainOutcome) => Promise<void>,
+    ): Promise<DrainOutcome> => {
+      if (cancelled) return Promise.resolve({ trusted: [], failed: true });
       record.pending++;
       const work = record.tail
-        .then(() => drain(events))
-        .catch((err) => {
-          log("connect: ingest failed for group %s: %o", group.idStr, err);
+        .then(async () => {
+          let outcome: DrainOutcome;
+          try {
+            outcome = await drain(events);
+          } catch (err) {
+            log("connect: ingest failed for group %s: %o", group.idStr, err);
+            record.ingestFailed = true;
+            outcome = { trusted: [], failed: true };
+          }
+          if (settle) {
+            try {
+              await settle(outcome);
+            } catch (err) {
+              log(
+                "connect: backfill settle failed for %s: %o",
+                group.idStr,
+                err,
+              );
+            }
+          }
+          return outcome;
         })
         .finally(() => {
           record.pending--;
@@ -1008,9 +1136,89 @@ export class GroupsManager<
     };
 
     // Backfill before subscribing (mirrors the proven attach order): the backlog
-    // ingests as one batch so out-of-order commits resolve together.
+    // ingests as one batch so out-of-order commits resolve together. Each relay
+    // is fetched from its own cursor (newest event ingested from its last
+    // complete backfill) minus a slack window, and paged so relay result caps
+    // cannot silently truncate it; a relay without a cursor is paged through
+    // its full history. Per-relay cursors let a failing or incomplete relay be
+    // re-read without holding back the others.
     try {
-      await admit(await this.network.request(relays, filter));
+      const { slack, pageSize, maxPages } = backfillBounds(options);
+      const nowSeconds = () => Math.floor(Date.now() / 1000);
+      const cursors = new Map<string, number>();
+      const since = new Map<string, number>();
+      // Per-relay progress of an earlier page-capped backfill: the walk skips
+      // ranges already fetched, so history beyond the cap is reached over
+      // several connects instead of re-reading the newest pages every time.
+      const resume = new Map<string, BackfillProgress>();
+      for (const relay of relays) {
+        const cursor = await readBackfillCursor(
+          this.#ingestStateStore,
+          group.idStr,
+          relay,
+          nowSeconds(),
+        );
+        if (cursor !== undefined) {
+          cursors.set(relay, cursor);
+          since.set(relay, Math.max(0, Math.floor(cursor - slack)));
+        }
+        const progress = await readBackfillProgress(
+          this.#ingestStateStore,
+          group.idStr,
+          relay,
+          nowSeconds(),
+        );
+        if (progress)
+          resume.set(relay, {
+            from: progress.from,
+            to: Math.floor(progress.to - slack),
+          });
+      }
+      const walkStart = nowSeconds();
+      const backfill = await fetchPagedBackfill(this.network, relays, filter, {
+        since,
+        pageSize,
+        maxPages,
+        resume,
+        signal: paging.signal,
+        // The admission trust gates, applied before copies are collapsed by
+        // id so a forged copy cannot displace the genuine event.
+        accept: (event) =>
+          safeVerifyEvent(this.#verifyEvent, event) &&
+          getSingletonTagValue(event, "h") === h,
+      });
+      await admit(backfill.events, async (drained) => {
+        // Decided inside the admission queue: no other batch for this group
+        // can be ingested (and pool, retain, or fail) between reading the
+        // state below and persisting the cursor and progress.
+        if (drained.failed || cancelled || group.session.terminalTombstone)
+          return;
+        // Events the group holds only in memory are lost on restart, so
+        // neither the cursor nor recorded progress may pass them: the
+        // undecryptable-so-far pool and capacity-refused input (pooled
+        // without yielding a result), and input retained while a commit
+        // publication or merge is in progress.
+        const held = group.pendingEvents();
+        const retained = group.session.retainedEvents();
+
+        await this.#recordBackfillProgress(
+          group,
+          backfill,
+          resume,
+          [...held, ...retained],
+          walkStart,
+        );
+
+        await this.#advanceBackfillCursors(
+          group,
+          backfill,
+          drained.trusted,
+          held,
+          retained,
+          cursors,
+          nowSeconds(),
+        );
+      });
 
       // Backfill may itself have selected terminal state. Never seed a live route
       // after the durable tombstone has won.
@@ -1019,8 +1227,13 @@ export class GroupsManager<
         return noop;
       }
 
+      // The backfill covered everything before the walk began; the slack
+      // re-reads events that reached a relay late.
       const installed = this.network
-        .subscription(relays, filter)
+        .subscription(relays, {
+          ...filter,
+          since: Math.max(0, Math.floor(walkStart - slack)),
+        })
         .subscribe({ next: (event) => void admit([event]) });
       sub = installed;
       if (cancelled) installed.unsubscribe();
@@ -1028,6 +1241,113 @@ export class GroupsManager<
     } catch (error) {
       unsubscribe();
       throw error;
+    }
+  }
+
+  /**
+   * Writes one of a group's backfill records (removes it without `value`),
+   * unless the group is destroyed or disbanded. Their cleanup purges the
+   * group's ingest state, possibly while this write is in flight, so a record
+   * written as the group closes is removed again.
+   */
+  async #writeBackfillRecord(
+    group: MarmotGroup<THistory, TMedia>,
+    key: string,
+    value?: Uint8Array,
+  ): Promise<void> {
+    const closed = () =>
+      group.session.destroyed || group.session.terminalTombstone !== undefined;
+    if (closed()) return;
+    if (value === undefined) return this.#ingestStateStore.removeItem(key);
+    await this.#ingestStateStore.setItem(key, value);
+    if (closed()) await this.#ingestStateStore.removeItem(key);
+  }
+
+  /**
+   * Advances the cursor of each relay whose backfill completed, from the
+   * events it returned that admission trusted. A relay that hit the page
+   * cap, saturated a second, or failed keeps its cursor, so its next connect
+   * re-reads the same window. Persistence failures are logged, never thrown.
+   */
+  async #advanceBackfillCursors(
+    group: MarmotGroup<THistory, TMedia>,
+    backfill: PagedBackfillResult,
+    trusted: readonly NostrEvent[],
+    held: readonly NostrEvent[],
+    retained: readonly NostrEvent[],
+    cursors: ReadonlyMap<string, number>,
+    nowSeconds: number,
+  ): Promise<void> {
+    const trustedIds = new Set(trusted.map((event) => event.id));
+    for (const outcome of backfill.relays) {
+      if (outcome.status !== "complete") continue;
+      const previous = cursors.get(outcome.relay);
+      const next = nextBackfillCursor({
+        ingested: (backfill.relayEvents.get(outcome.relay) ?? []).filter(
+          (event) => trustedIds.has(event.id),
+        ),
+        held,
+        retained,
+        previous,
+        nowSeconds,
+      });
+      if (next === undefined || next === previous) continue;
+      try {
+        await this.#writeBackfillRecord(
+          group,
+          backfillCursorKey(group.idStr, outcome.relay),
+          encodeBackfillCursor(next),
+        );
+      } catch (err) {
+        log("connect: failed to persist cursor for %s: %o", group.idStr, err);
+      }
+    }
+  }
+
+  /**
+   * Records each relay's resumable paging progress after a backfill has been
+   * ingested: a capped relay stores the range now fetched (`[until, walk
+   * start]`, ended strictly below the second of the oldest event still held
+   * in memory), a completed
+   * relay drops its record. Saturated or failed relays keep any earlier
+   * record unchanged. Persistence failures are logged, never thrown.
+   */
+  async #recordBackfillProgress(
+    group: MarmotGroup<THistory, TMedia>,
+    backfill: PagedBackfillResult,
+    recorded: ReadonlyMap<string, BackfillProgress>,
+    held: readonly NostrEvent[],
+    walkStart: number,
+  ): Promise<void> {
+    for (const outcome of backfill.relays) {
+      const key = backfillProgressKey(group.idStr, outcome.relay);
+      try {
+        if (outcome.status === "complete") {
+          if (recorded.has(outcome.relay))
+            await this.#writeBackfillRecord(group, key);
+        } else if (outcome.status === "capped") {
+          const from = outcome.until;
+          // End strictly below the oldest held event: its whole second must
+          // be re-read (a jump inside it could skip same-second events).
+          const oldestHeld = oldestCreatedAt(held, from);
+          const to = Math.min(
+            walkStart,
+            oldestHeld === undefined ? walkStart : oldestHeld - 1,
+          );
+          if (from <= to)
+            await this.#writeBackfillRecord(
+              group,
+              key,
+              encodeBackfillProgress({ from, to }),
+            );
+          // Nothing durable to record: drop any older range, which may
+          // cover the held event too.
+          else if (recorded.has(outcome.relay))
+            await this.#writeBackfillRecord(group, key);
+        }
+      } catch (err) {
+        log("connect: failed to persist backfill progress: %o", err);
+      }
     }
   }
 

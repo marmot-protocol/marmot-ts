@@ -406,6 +406,16 @@ export class GroupSession<
     return this.#engine.pendingEnvelopes();
   }
 
+  /**
+   * Transport events retained but not yet processed because a commit
+   * publication or merge is in progress (or a convergence pass reached its
+   * cutoff). Like {@link pendingEvents}, they exist only in memory until a
+   * later convergence pass processes them.
+   */
+  retainedEvents(): NostrEvent[] {
+    return this.#engine.retainedConvergenceInput();
+  }
+
   get unappliedProposals() {
     return this.state.unappliedProposals;
   }

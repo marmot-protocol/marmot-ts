@@ -183,6 +183,19 @@ describe("bounded convergence scheduling", () => {
     expect(wakeups).toBe(1);
   });
 
+  it("retains a large inbound batch while PendingPublish", async () => {
+    const { admin, engine, makeCommit } = await fixture(() => 100);
+    await engine.send({ kind: "commit", actorPubkey: admin });
+    // Larger than an engine's argument-count limit for one call.
+    const batch = new Array(200_000).fill(await makeCommit("large"));
+
+    for await (const _ of engine.ingest(batch)) {
+      // Retained input yields nothing.
+    }
+
+    expect(engine.retainedConvergenceInputCount).toBe(batch.length);
+  });
+
   it("retains inbound while PendingPublish without opening a pass", async () => {
     let nowMs = 100;
     const { admin, engine, makeCommit } = await fixture(() => nowMs);

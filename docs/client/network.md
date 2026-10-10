@@ -26,7 +26,7 @@ interface NostrNetworkInterface {
 
 - **`publish`** — Publish signed events to the listed relays. Return per-relay `ok` / `message` so failures surface after commits and welcomes. Used by `KeyPackageManager` (key packages, deletes), each group's `GroupRuntime` (MLS traffic, app messages), and Welcome delivery (gift wraps).
 
-- **`request`** — One-shot REQ until EOSE; dedupe by `id` if you merge multiple filters. Used by `client.groups.connect()` / `connectAll()` to backfill a group's kind 445 history.
+- **`request`** — One-shot REQ until EOSE; dedupe by `id` if you merge multiple filters. Used by `client.groups.connect()` / `connectAll()` to backfill a group's kind 445 history, one relay and one `limit`-sized page per call. Reject the promise when the relay fails, closes the request, or times out: a resolved empty array means the relay holds nothing more in that window, and the backfill records it as read. The client keeps at most `limit` events of each response, but the adapter receives every response whole: to bound memory against a relay that ignores `limit`, stop collecting in the adapter once it has `limit` events. A backfill can hold up to `backfillPageSize * backfillMaxPages` events per relay in memory (about 25,000 with the defaults); see [Bounded backfill](/client/marmot-client#bounded-backfill) for tuning them on mobile.
 
 - **`subscription`** — Live updates; emit one event per `next`. Used by `client.groups.connect()` / `connectAll()` for live kind 445 traffic and by `client.invites.listen()`.
 
@@ -130,7 +130,7 @@ KeyPackage discovery uses the account's kind 10002 NIP-65 write relays (`getNip6
 
 `await client.groups.connect(groupId, options?)` backfills kind 445 events, fully drains that batch, then installs a live subscription. It returns an `Unsubscribable`. `client.groups.connectAll(options?)` returns its handle immediately and follows the set of loaded groups, starting and stopping their connections as groups are loaded, joined, removed, or unloaded.
 
-Both APIs accept `{ signal?: AbortSignal, fallbackRelays?: string[] }`. Group relays take precedence over fallback relays; groups with neither are skipped. Use an `AbortSignal` to stop a direct connection while its backfill request is still pending:
+Both APIs accept `{ signal?: AbortSignal, fallbackRelays?: string[] }`, plus the backfill bounds `backfillSlackSeconds`, `backfillPageSize` and `backfillMaxPages` (see [Bounded backfill](/client/marmot-client#bounded-backfill)). Group relays take precedence over fallback relays; groups with neither are skipped. Use an `AbortSignal` to stop a direct connection while its backfill request is still pending:
 
 ```typescript
 const controller = new AbortController();

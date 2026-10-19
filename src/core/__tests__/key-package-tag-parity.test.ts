@@ -19,9 +19,11 @@ import { KEY_PACKAGE_APP_COMPONENTS_TAG } from "../protocol.js";
 /**
  * The pinned MDK tag fixture (`mdk_sha` `798a3e07`) predates the spec rule
  * that the `app_components` tag MUST include `0x8009`
- * (`refs/marmot/transports/nostr.md`) and the implemented `0x8002` image
- * support (`refs/marmot/app-components/group-blossom-image-v1.md`). Production
- * advertises both, in canonical numeric order.
+ * (`refs/marmot/transports/nostr.md`), the implemented `0x8002` image
+ * support (`refs/marmot/app-components/group-blossom-image-v1.md`) and
+ * `marmot.group.encrypted-media.v2` (`0x800b`), which MDK now advertises and
+ * requires in new groups. Production advertises all three, in canonical
+ * numeric order.
  * This helper projects the raw Rust fixture forward to what production is
  * expected to emit, without touching the pinned fixture bytes/hash.
  */
@@ -31,7 +33,7 @@ function withCurrentImageAndProofTags(tags: string[][]): string[][] {
     const idx = tag.indexOf("0x800c");
     if (idx === -1) return tag;
     const withProof = [...tag];
-    withProof.splice(idx, 0, "0x8009");
+    withProof.splice(idx, 0, "0x8009", "0x800b");
     withProof.splice(withProof.indexOf("0x8003"), 0, "0x8002");
     return withProof;
   });
@@ -73,7 +75,8 @@ describe("MDK kind-30443 tag parity", () => {
     ).toBe(rust.tags_sha256);
 
     // Preserve the immutable Rust oracle and project only the approved
-    // current proof and implemented image support additions (PITFALLS 14).
+    // current proof, implemented image support and encrypted-media v2
+    // additions (PITFALLS 14).
     await expectProductionTags(withCurrentImageAndProofTags(rust.tags));
   });
 

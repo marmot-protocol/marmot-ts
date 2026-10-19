@@ -239,7 +239,7 @@ Marmot-TS implements the **Marmot v2** specification ([marmot-protocol/marmot](h
 - **Joining (Welcomes):** [`protocol-core/joining.md`](https://github.com/marmot-protocol/marmot/blob/master/protocol-core/joining.md)
 - **Group messaging, convergence & departure:** [`protocol-core/group-messaging.md`](https://github.com/marmot-protocol/marmot/blob/master/protocol-core/group-messaging.md), [`protocol-core/convergence.md`](https://github.com/marmot-protocol/marmot/blob/master/protocol-core/convergence.md), [`protocol-core/member-departure.md`](https://github.com/marmot-protocol/marmot/blob/master/protocol-core/member-departure.md)
 - **Nostr transport binding:** [`transports/nostr.md`](https://github.com/marmot-protocol/marmot/blob/master/transports/nostr.md)
-- **Encrypted media:** [`features/encrypted-media-v1.md`](https://github.com/marmot-protocol/marmot/blob/master/features/encrypted-media-v1.md) (v1 only; [`app-components/group-encrypted-media-v2.md`](https://github.com/marmot-protocol/marmot/blob/master/app-components/group-encrypted-media-v2.md) is not yet implemented)
+- **Encrypted media:** [`features/encrypted-media.md`](https://github.com/marmot-protocol/marmot/blob/master/features/encrypted-media.md) and [`app-components/group-encrypted-media-v2.md`](https://github.com/marmot-protocol/marmot/blob/master/app-components/group-encrypted-media-v2.md) (v2; frozen v1 references still decode)
 
 ## Security Properties
 

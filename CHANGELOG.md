@@ -5,6 +5,7 @@
 ### Added
 
 - Reuse one persisted leaf signature key per installation across KeyPackages with the new `getSignatureKeyPair` option on `MarmotClient` (or `signatureKeyPair` on `generateKeyPackage`). Other clients can then match a member's leaf to its published KeyPackages after the one used to join was consumed, as they can for MDK devices. Init and encryption keys stay fresh for every KeyPackage.
+- Exchange encrypted media with White Noise groups through Marmot encrypted media v2 (`marmot.group.encrypted-media.v2`, `0x800b`), wire-compatible with MDK. KeyPackages now advertise `0x800b`, so White Noise users can invite marmot-ts users into their groups, and `getMarmotGroupView()` exposes the group's v2 policy as `encryptedMediaV2`. `parseMediaAttachment()` and `parseMediaImetaTag()` read `encrypted-media-v2` references with MDK's validation and rejection reasons, and `GroupMediaService` encrypts and decrypts them. `MarmotGroup.uploadMedia()` and `downloadMedia()` move the ciphertext through the group's Blossom endpoints; the underlying `uploadBlossomBlob()` and `fetchBlossomBlob()` helpers are exported for custom flows. Encrypted media v1 references still parse and decrypt.
 
 ### Fixed
 
@@ -21,11 +22,13 @@
 
 ### Changed
 
+- `GroupMediaService.encryptMedia()` and `MarmotGroup.encryptMedia()` produce `encrypted-media-v2` references unless the group carries only the frozen encrypted-media v1 component, as MDK does. A group without any encrypted-media component therefore also gets v2 references; pass `version: "encrypted-media-v1"` to keep the old format for a peer that cannot read v2.
 - `GroupsManager.connect()` and `connectAll()` fetch a group's kind 445 backlog in pages and, after a relay's first complete backfill, only from that relay's cursor (minus a slack window); the live subscription starts a slack window before the backfill. Cursors are stored in `ingestStateStore`, so pass a durable one to keep reconnects cheap across restarts. A relay that fails or stays incomplete re-reads its own window on the next connect without holding back the others, and a backfill that hits the page cap resumes below the range already read. A cursor does not advance past events the group still holds only in memory (unless they are dated more than seven days before the newest event), or when a relay answers outside the requested window or may have truncated a one-second page. Tune with the new `backfillSlackSeconds`, `backfillPageSize`, and `backfillMaxPages` connect options. The network adapter's `request` must reject when a relay fails or times out.
 - `serializeApplicationRumor` writes only the six Marmot app-event members (a `sig` or other extra field is no longer sent) and throws instead of producing a payload that receivers would drop.
 
 ### Breaking changes
 
+- `groups.create()` and `createSimpleGroup()` add a required `marmot.group.encrypted-media.v2` (`0x800b`) policy over MDK's default Blossom endpoints, as White Noise does for new groups. Invitees must advertise `0x800b`, so KeyPackages published by marmot-ts 0.7.0 or earlier are refused until those users upgrade and republish. Pass `encryptedMedia: false` to create a group without a media policy, or an `EncryptedMediaPolicyV2` to choose your own endpoints.
 - `groups.leave()` by an active admin now throws before publishing or deleting anything. Previously it published a SelfRemove that every peer rejected and then destroyed the local group, leaving the admin in the group for everyone else. To leave, first remove yourself from the admin set (another admin must remain), then call `leave()`.
 
 ## 0.7.0

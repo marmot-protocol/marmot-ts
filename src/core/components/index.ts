@@ -9,6 +9,7 @@ export * from "./message-retention.js";
 export * from "./avatar-url.js";
 export * from "./blossom-image.js";
 export * from "./encrypted-media.js";
+export * from "./encrypted-media-v2.js";
 export * from "./agent-text-stream.js";
 export * from "./group-lifecycle.js";
 export * from "./disband-validation.js";

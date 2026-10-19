@@ -16,6 +16,7 @@ import {
   AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
   APP_COMPONENTS_COMPONENT_ID,
   type EncryptedMediaPolicyV1,
+  type EncryptedMediaPolicyV2,
   GROUP_ADMIN_POLICY_COMPONENT,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
   GROUP_AVATAR_URL_COMPONENT,
@@ -24,6 +25,8 @@ import {
   GROUP_BLOSSOM_IMAGE_COMPONENT_ID,
   GROUP_ENCRYPTED_MEDIA_COMPONENT,
   GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
+  GROUP_ENCRYPTED_MEDIA_V2_COMPONENT,
+  GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID,
   GROUP_MESSAGE_RETENTION_COMPONENT,
   GROUP_MESSAGE_RETENTION_COMPONENT_ID,
   GROUP_LIFECYCLE_COMPONENT,
@@ -36,6 +39,7 @@ import {
   decodeAgentTextStreamQuicPolicyV1,
   decodeComponentsList,
   decodeEncryptedMediaPolicyV1,
+  decodeEncryptedMediaPolicyV2,
   decodeGroupAvatarUrlV1,
   decodeGroupBlossomImage,
   decodeGroupProfileV1,
@@ -45,6 +49,7 @@ import {
   getAdminPolicy,
   getComponentData,
   getEncryptedMediaPolicy,
+  getEncryptedMediaPolicyV2,
   getGroupAvatarUrl,
   getGroupProfile,
   getMessageRetention,
@@ -89,6 +94,12 @@ export interface MarmotGroupView {
    * group-scoped blob-store endpoints and format, if set.
    */
   encryptedMedia?: EncryptedMediaPolicyV1;
+  /**
+   * Group encrypted-media policy (`group.encrypted-media.v2`, `0x800b`), if
+   * set. This is the current-profile media policy; new media references in a
+   * group that carries it use `encrypted-media-v2`.
+   */
+  encryptedMediaV2?: EncryptedMediaPolicyV2;
   /**
    * Message-retention window in seconds (`message-retention.v1`, `0x8005`), if
    * set; `0n` means retain indefinitely.
@@ -168,6 +179,7 @@ const COMPONENT_NAMES = new Map<number, string>([
   [AGENT_TEXT_STREAM_QUIC_COMPONENT_ID, AGENT_TEXT_STREAM_QUIC_COMPONENT],
   [GROUP_AVATAR_URL_COMPONENT_ID, GROUP_AVATAR_URL_COMPONENT],
   [GROUP_ENCRYPTED_MEDIA_COMPONENT_ID, GROUP_ENCRYPTED_MEDIA_COMPONENT],
+  [GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID, GROUP_ENCRYPTED_MEDIA_V2_COMPONENT],
   [GROUP_LIFECYCLE_COMPONENT_ID, GROUP_LIFECYCLE_COMPONENT],
 ]);
 
@@ -217,6 +229,8 @@ function decodeGroupComponent(
     }
     case GROUP_ENCRYPTED_MEDIA_COMPONENT_ID:
       return decodeEncryptedMediaPolicyV1(data);
+    case GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID:
+      return decodeEncryptedMediaPolicyV2(data);
     case GROUP_LIFECYCLE_COMPONENT_ID:
       return decodeGroupLifecycleV1(data);
     default:
@@ -281,6 +295,7 @@ export function getMarmotGroupView(
       ? decodeGroupBlossomImage(blossomBytes)
       : undefined;
     const encryptedMedia = getEncryptedMediaPolicy(extensions);
+    const encryptedMediaV2 = getEncryptedMediaPolicyV2(extensions);
     const messageRetention = getMessageRetention(extensions);
     const protocolLifecycle = getGroupLifecycle(extensions);
 
@@ -297,6 +312,7 @@ export function getMarmotGroupView(
       blossomImage,
       imageSource: getGroupImageSource(clientState),
       encryptedMedia,
+      encryptedMediaV2,
       messageRetention,
       protocolLifecycle,
     };

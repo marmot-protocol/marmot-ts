@@ -16,6 +16,7 @@ import {
   GROUP_ADMIN_POLICY_COMPONENT_ID,
   GROUP_AVATAR_URL_COMPONENT_ID,
   GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
+  GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID,
   GROUP_MESSAGE_RETENTION_COMPONENT_ID,
   GROUP_LIFECYCLE_COMPONENT_ID,
   GROUP_PROFILE_COMPONENT_ID,
@@ -54,6 +55,11 @@ import {
   encodeEncryptedMediaPolicyV1,
   EncryptedMediaPolicyV1,
 } from "./encrypted-media.js";
+import {
+  decodeEncryptedMediaPolicyV2,
+  encodeEncryptedMediaPolicyV2,
+  EncryptedMediaPolicyV2,
+} from "./encrypted-media-v2.js";
 import {
   AgentTextStreamQuicPolicyV1,
   decodeAgentTextStreamQuicPolicyV1,
@@ -252,6 +258,11 @@ const ENCRYPTED_MEDIA_CODEC = defineCodec(
   decodeEncryptedMediaPolicyV1,
   encodeEncryptedMediaPolicyV1,
 );
+const ENCRYPTED_MEDIA_V2_CODEC = defineCodec(
+  GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID,
+  decodeEncryptedMediaPolicyV2,
+  encodeEncryptedMediaPolicyV2,
+);
 const GROUP_LIFECYCLE_CODEC = defineCodec(
   GROUP_LIFECYCLE_COMPONENT_ID,
   decodeGroupLifecycleV1,
@@ -332,6 +343,13 @@ export function getEncryptedMediaPolicy(
   return getComponent(extensions, ENCRYPTED_MEDIA_CODEC);
 }
 
+/** The `group.encrypted-media.v2` policy (`0x800b`). */
+export function getEncryptedMediaPolicyV2(
+  extensions: GroupContextExtension[],
+): EncryptedMediaPolicyV2 | undefined {
+  return getComponent(extensions, ENCRYPTED_MEDIA_V2_CODEC);
+}
+
 /** The `group.lifecycle.v1` protocol state (`0x800c`). */
 export function getGroupLifecycle(
   extensions: GroupContextExtension[],
@@ -385,6 +403,13 @@ export function encryptedMediaEntry(
   policy: EncryptedMediaPolicyV1,
 ): ComponentData {
   return entryFor(ENCRYPTED_MEDIA_CODEC, policy);
+}
+
+/** Builds the `group.encrypted-media.v2` entry. */
+export function encryptedMediaV2Entry(
+  policy: EncryptedMediaPolicyV2,
+): ComponentData {
+  return entryFor(ENCRYPTED_MEDIA_V2_CODEC, policy);
 }
 
 /** Builds the `group.lifecycle.v1` entry. */

@@ -30,6 +30,7 @@ export type {
   GroupImageSnapshotIdentity,
 } from "../../core/group-image.js";
 export type { GroupPublishResult as GroupImagePublicationResult } from "../session/group-effects.js";
+export * from "./blossom.js";
 export * from "./group-media-store.js";
 export * from "./marmot-group.js";
 export * from "./group-rumor-history.js";

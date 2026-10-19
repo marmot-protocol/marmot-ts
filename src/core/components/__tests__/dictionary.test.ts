@@ -205,7 +205,8 @@ describe("makeLeafAppComponentsExtension", () => {
     // so pin only a projection of the 0x0001 (app_components) and 0x0002
     // (SafeAAD) entries, reconstructed from the same builder the production
     // leaf dictionary uses (PITFALLS 14). The current projection includes
-    // implemented 0x8002 image support in addition to the pinned MDK baseline.
+    // implemented 0x8002 image support and encrypted-media v2 (0x800b) in
+    // addition to the pinned MDK baseline.
     const projectionExtension = makeAppDataDictionaryExtensionForProjection();
     expect(
       bytesToHex(
@@ -217,7 +218,7 @@ describe("makeLeafAppComponentsExtension", () => {
         ]),
       ),
     ).toBe(
-      "00061f1e000117160001800180028003800480058006800780088009800c00020100",
+      "00062120000119180001800180028003800480058006800780088009800b800c00020100",
     );
 
     function makeAppDataDictionaryExtensionForProjection() {

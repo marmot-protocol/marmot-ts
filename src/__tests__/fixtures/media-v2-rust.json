@@ -1,0 +1,21 @@
+{
+  "provenance": {
+    "mdk": "c2284b314736562bbeb7f2bcb63256a0dd1cc9e0",
+    "command": "MDK_PROFILE=media MDK_WRITE_FIXTURES=1 node scripts/mdk-interop/run.mjs",
+    "implementation": "marmot-app upload_encrypted_media; test-only bridge; fixed disposable exporter"
+  },
+  "mediaSecret": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+  "plaintext": "52757374206d65646961207632207061796c6f6164",
+  "policy": "12656e637279707465642d6d656469612d76320b0a626c6f73736f6d2d7631250a626c6f73736f6d2d76311968747470733a2f2f6578616d706c652e636f6d2f6d65646961",
+  "tag": [
+    "imeta",
+    "v encrypted-media-v2",
+    "locator blossom-v1 http://127.0.0.1:41245/c8e25859620b39643616e81b6d24cdefde0ad5d41116f07df0b63f239ca49842",
+    "ciphertext_sha256 c8e25859620b39643616e81b6d24cdefde0ad5d41116f07df0b63f239ca49842",
+    "plaintext_sha256 7c8ab40bd3b7bf6d9af91817926d2f4bca9f478a2a9f65ae2c4ae8d4435d29a0",
+    "nonce f5c8dc54435b752e5d2dc57a",
+    "m text/plain",
+    "filename café.txt"
+  ],
+  "encrypted": "fbbd934eb0f2a5cdb1342f6a5076a27d5d58e9b2622e3b9131d59ceda97592ed72259124e4"
+}

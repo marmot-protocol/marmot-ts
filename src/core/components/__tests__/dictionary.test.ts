@@ -217,7 +217,7 @@ describe("makeLeafAppComponentsExtension", () => {
         ]),
       ),
     ).toBe(
-      "00061f1e000117160001800180028003800480058006800780088009800c00020100",
+      "00061f1e00011716000180018002800380048005800680078009800b800c00020100",
     );
 
     function makeAppDataDictionaryExtensionForProjection() {

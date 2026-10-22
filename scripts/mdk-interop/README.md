@@ -1,4 +1,4 @@
-# MDK Welcome interoperability probe
+# MDK Welcome and media interoperability probe
 
 Build the TypeScript library first, then exchange real MLS KeyPackages and
 Welcomes with the Rust MDK engine and NIP-59 wraps with its pinned rust-nostr:
@@ -14,9 +14,9 @@ MDK_PROFILE=media node scripts/mdk-interop/run.mjs
 lifecycle state. `base` uses the engine's protocol baseline without the optional
 self-remove registration. Neither profile claims to reproduce the full MDK app.
 `media` additionally requires encrypted-media v2 (`0x800b`), as current MDK app
-groups do. This currently exits **1** with `MissingRequiredCapabilities`:
-marmot-ts does not advertise or implement this component. This failure is an
-interoperability finding, not a passing test.
+groups do. It exercises the public TypeScript transfer APIs, real MLS messages,
+and MDK's actual media upload/download functions against a local HTTP Blossom
+fixture. All profiles should exit zero.
 
 To test another checked-out MDK revision without changing reference pointers:
 
@@ -36,8 +36,27 @@ real accounts.
 Coverage: MDK accepts the TypeScript KeyPackage, emits a Welcome, TypeScript
 unwraps it and validates the resulting group; TypeScript accepts the MDK
 KeyPackage, emits a Welcome, Rust unwraps it and MDK joins it. All communication
-is local over subprocess pipes. The engine uses a raw transport peeler;
-NIP-59 uses the same pinned rust-nostr routines used by MDK, rather than running
-the full MDK Nostr peeler or app runtime. No relays, Android UI, inbox discovery,
-message exchange, concurrent-commit recovery or restart delivery are tested by
-this probe.
+uses subprocess pipes plus loopback HTTP for blobs. The engine uses a raw
+transport peeler; the TypeScript client wraps/ingests locally constructed Nostr
+group events. NIP-59 uses pinned rust-nostr routines. The media profile also
+tests an MDK Commit during upload, a delayed attachment after epoch advancement,
+and a caption with one missing and one valid sibling.
+
+MDK's media transfer functions are crate-private. The media profile creates a
+disposable detached worktree and appends `media-bridge.rs` to expose those actual
+implementations without changing their algorithms. Older pins use
+`upload_encrypted_media_retaining`; newer pins use `upload_encrypted_media`.
+The script removes its worktree when it exits, including on build failure.
+This does not run the full MDK app runtime, relay routing, inbox discovery,
+Android UI or general cross-language recovery/forks.
+
+To regenerate the immutable TypeScript crypto/policy fixture through the actual
+MDK uploader (a fresh random nonce changes the fixture):
+
+```sh
+MDK_PROFILE=media MDK_WRITE_FIXTURES=1 node scripts/mdk-interop/run.mjs
+```
+
+Its exporter is fixed disposable test material, unrelated to the runtime MLS
+exporters. Runtime exporter material is never sent across the probe pipes or
+logged.

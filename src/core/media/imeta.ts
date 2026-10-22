@@ -1,9 +1,9 @@
 /** @module @category Core - Encrypted Media */
 import {
-  isLoopbackHost,
-  rejectNonRoutableHost,
-} from "../components/host-safety.js";
-import { canonicalizeMimeType, isValidHex } from "./canonical.js";
+  canonicalizeMimeType,
+  isValidHex,
+  validateMediaFilename,
+} from "./canonical.js";
 import {
   BLOSSOM_LOCATOR_KIND,
   ENCRYPTED_MEDIA_VERSION,
@@ -11,7 +11,7 @@ import {
   type MediaLocator,
 } from "./types.js";
 
-/** Single-occurrence `imeta` field names for `encrypted-media-v1`. */
+/** Single-occurrence `imeta` field names for `encrypted-media-v2`. */
 const SINGLE_FIELDS = [
   "v",
   "ciphertext_sha256",
@@ -24,7 +24,7 @@ const SINGLE_FIELDS = [
 ] as const;
 
 /**
- * Serializes a {@link MediaAttachment} into an `encrypted-media-v1` `imeta`
+ * Serializes a {@link MediaAttachment} into an `encrypted-media-v2` `imeta`
  * tag array (`features/encrypted-media.md` — Message Shape).
  *
  * Field order follows the spec: `v`, `locator`…, `ciphertext_sha256`,
@@ -35,6 +35,8 @@ const SINGLE_FIELDS = [
  * @returns A Nostr tag array beginning with `"imeta"`
  */
 export function encodeMediaImetaTag(attachment: MediaAttachment): string[] {
+  if (attachment.version !== ENCRYPTED_MEDIA_VERSION)
+    throw new Error("invalid media version");
   if (attachment.locators.length === 0) {
     throw new Error("encodeMediaImetaTag: attachment has no locators");
   }
@@ -50,31 +52,8 @@ export function encodeMediaImetaTag(attachment: MediaAttachment): string[] {
   if (attachment.dim !== undefined) parts.push(`dim ${attachment.dim}`);
   if (attachment.thumbhash !== undefined)
     parts.push(`thumbhash ${attachment.thumbhash}`);
+  decodeMediaImetaTag(parts);
   return parts;
-}
-
-/**
- * Throws if a `blossom-v1` locator URL points at a hostile fetch target — an
- * unsafe host or cleartext `http` (`features/encrypted-media.md` — Validation;
- * `foundation/host-safety.md`). Unlike the policy component's dev endpoints,
- * loopback is unsafe here, so the only acceptable blossom locator is `https`
- * to a routable host. This is the one locator property that invalidates a
- * reference, because the fetch request itself is the harm.
- *
- * @internal
- */
-function rejectUnsafeBlossomLocator(url: URL): void {
-  const scheme = url.protocol.replace(/:$/, "");
-  if (scheme !== "https") {
-    // Cleartext http (loopback or not) and any non-https scheme are rejected.
-    throw new Error("blossom-v1 locator must use https");
-  }
-  // Rejects loopback, private, CGNAT, link-local, documentation, multicast, etc.
-  rejectNonRoutableHost(url.hostname, "blossom-v1 locator");
-  // Defensive: rejectNonRoutableHost already covers loopback IPs/localhost.
-  if (isLoopbackHost(url.hostname)) {
-    throw new Error("blossom-v1 locator must not point at loopback");
-  }
 }
 
 /** Parses one `locator <kind> <value>` field value into a {@link MediaLocator}. */
@@ -82,29 +61,20 @@ function parseLocator(value: string): MediaLocator {
   const sp = value.indexOf(" ");
   if (sp <= 0) throw new Error("locator must be '<kind> <value>'");
   const kind = value.slice(0, sp);
-  const locValue = value.slice(sp + 1).trim();
+  const locValue = value.slice(sp + 1);
   if (kind.length === 0) throw new Error("locator kind must not be empty");
   if (locValue.length === 0) throw new Error("locator value must not be empty");
   if (!URL.canParse(locValue))
     throw new Error("locator value must parse as a URL");
   if (kind === BLOSSOM_LOCATOR_KIND) {
-    rejectUnsafeBlossomLocator(new URL(locValue));
+    const url = new URL(locValue);
+    if (url.protocol !== "http:" && url.protocol !== "https:")
+      throw new Error("blossom locator must use http or https");
   }
   return { kind, value: locValue };
 }
 
-/**
- * Strictly decodes an `encrypted-media-v1` attachment from an `imeta` tag.
- *
- * Throws on any structural-integrity or host-safety violation
- * (`features/encrypted-media.md` — Validation): wrong/legacy/missing version,
- * `blurhash` present, a duplicated single-occurrence field, malformed hashes or
- * nonce, missing required fields, no locator, a malformed locator, or a
- * `blossom-v1` locator pointing at an unsafe host. Fetchability of a locator
- * kind against group policy is NOT checked here (see `selectFetchableLocators`).
- *
- * @internal
- */
+/** Strict v2 reference validation. Contact policy is applied only before I/O. */
 function decodeMediaImetaTag(tag: string[]): MediaAttachment {
   if (tag[0] !== "imeta") throw new Error("not an imeta tag");
 
@@ -116,8 +86,13 @@ function decodeMediaImetaTag(tag: string[]): MediaAttachment {
     const key = sp === -1 ? part : part.slice(0, sp);
     const value = sp === -1 ? "" : part.slice(sp + 1);
 
+    if (
+      sp === -1 &&
+      (key === "locator" || (SINGLE_FIELDS as readonly string[]).includes(key))
+    )
+      throw new Error("media field is missing its value");
     if (key === "blurhash") {
-      throw new Error("blurhash is invalid in encrypted-media-v1");
+      throw new Error("blurhash is invalid in encrypted-media-v2");
     }
     if (key === "locator") {
       locators.push(parseLocator(value));
@@ -133,7 +108,7 @@ function decodeMediaImetaTag(tag: string[]): MediaAttachment {
   }
 
   if (single.get("v") !== ENCRYPTED_MEDIA_VERSION) {
-    throw new Error("missing or non-encrypted-media-v1 version");
+    throw new Error("missing or non-encrypted-media-v2 version");
   }
   if (locators.length === 0) throw new Error("no locator present");
 
@@ -154,6 +129,8 @@ function decodeMediaImetaTag(tag: string[]): MediaAttachment {
 
   // Canonicalize the media type (also rejects an empty / slash-less value).
   const mediaType = canonicalizeMimeType(mediaTypeRaw);
+  if (mediaType !== mediaTypeRaw) throw new Error("non-canonical media type");
+  validateMediaFilename(filename);
 
   return {
     version: ENCRYPTED_MEDIA_VERSION,
@@ -169,18 +146,8 @@ function decodeMediaImetaTag(tag: string[]): MediaAttachment {
 }
 
 /**
- * Parses an `imeta` tag into a {@link MediaAttachment}, or returns `null` if the
- * tag is not a valid `encrypted-media-v1` attachment.
- *
- * A `null` result means the media reference is invalid and MUST be dropped (the
- * containing message should be dropped too for a host-safety failure). The
- * internal `decodeMediaImetaTag` rejects wrong/legacy/missing versions,
- * `blurhash`, duplicated single-occurrence fields, malformed hashes or nonce,
- * missing required fields, absent or malformed locators, and unsafe
- * `blossom-v1` hosts. Locator fetchability against group policy is checked
- * separately by {@link selectFetchableLocators}.
- *
- * @param tag - A raw `imeta` tag array from a Nostr event
+ * Parse one v2 reference. Invalid references are attachment-local: retain the
+ * carrying caption and all valid sibling attachments.
  */
 export function parseMediaImetaTag(tag: string[]): MediaAttachment | null {
   try {
@@ -191,7 +158,7 @@ export function parseMediaImetaTag(tag: string[]): MediaAttachment | null {
 }
 
 /**
- * Extracts all valid `encrypted-media-v1` attachments from a tag list.
+ * Extracts all valid `encrypted-media-v2` attachments from a tag list.
  *
  * Non-`imeta` tags and `imeta` tags that fail validation are skipped.
  *

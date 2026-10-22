@@ -564,10 +564,11 @@ describe("durable removal recovery activation", () => {
       getCiphersuite: () => f.impl,
     });
     const plaintext = Uint8Array.of(0, 255, 128, 17);
-    const { encrypted, attachment } = await ancientMedia.encryptMedia(
-      new Blob([plaintext], { type: "application/octet-stream" }),
-      { filename: "pinned-parent.bin" },
-    );
+    const { encrypted, attachment, expectedParent } =
+      await ancientMedia.encryptMedia(
+        new Blob([plaintext], { type: "application/octet-stream" }),
+        { filename: "pinned-parent.bin" },
+      );
     await realize(f);
     const r = registry(f);
     const loaded = await r.load(f.id);
@@ -613,9 +614,10 @@ describe("durable removal recovery activation", () => {
         getCiphersuite: () => f.impl,
         getRetainedStates: () => restored.session.retainedStates(),
       });
-      expect((await receiver.decryptMedia(encrypted, attachment)).data).toEqual(
-        plaintext,
-      );
+      expect(
+        (await receiver.decryptMedia(encrypted, attachment, expectedParent))
+          .data,
+      ).toEqual(plaintext);
       await restored.session.save(true);
       restored.dispose();
     }
@@ -757,7 +759,7 @@ describe("durable removal recovery activation", () => {
       getCiphersuite: () => f.impl,
     });
     const plaintext = new Uint8Array([9, 8, 7]);
-    const { encrypted, attachment } = await sender.encryptMedia(
+    const { encrypted, attachment, expectedParent } = await sender.encryptMedia(
       new Blob([plaintext], { type: "application/octet-stream" }),
       { filename: "intermediate.bin" },
     );
@@ -787,9 +789,10 @@ describe("durable removal recovery activation", () => {
         getCiphersuite: () => f.impl,
         getRetainedStates: () => loaded.session.retainedStates(),
       });
-      expect((await receiver.decryptMedia(encrypted, attachment)).data).toEqual(
-        plaintext,
-      );
+      expect(
+        (await receiver.decryptMedia(encrypted, attachment, expectedParent))
+          .data,
+      ).toEqual(plaintext);
     } finally {
       r.untrack(f.id);
       f.session.dispose();

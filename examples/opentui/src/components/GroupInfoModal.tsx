@@ -14,7 +14,7 @@ const FIELDS: readonly FormField<GroupInfoKey>[] = [
   {
     key: "blossom",
     label:
-      "blossom servers — encrypted-media blob endpoints (group.encrypted-media.v1)",
+      "blossom servers — encrypted-media blob endpoints (group.encrypted-media.v2)",
     placeholder: "https://blossom.primal.net, https://cdn.example.com",
   },
 ];

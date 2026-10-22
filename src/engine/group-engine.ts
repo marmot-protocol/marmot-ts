@@ -1,4 +1,11 @@
 /** @module @category Engine */
+import { parseMediaImetaTag } from "../core/media/imeta.js";
+import { getEncryptedMediaPolicy } from "../core/components/dictionary.js";
+import {
+  mediaSourceStateToken,
+  StaleMediaPreparationError,
+} from "../core/media/source-state.js";
+
 import { completeSettledRetentionOwner } from "./settled-retention-owner.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { Debugger } from "debug";
@@ -1430,6 +1437,43 @@ export class MarmotGroupEngine<TEnvelope> {
     switch (intent.kind) {
       case "applicationMessage": {
         const sourceState = this.state;
+        if (
+          intent.expectedParent !== undefined &&
+          intent.expectedParent !== mediaSourceStateToken(sourceState)
+        )
+          throw new StaleMediaPreparationError();
+        let outgoing: ReturnType<typeof deserializeApplicationData> | undefined;
+        try {
+          outgoing = deserializeApplicationData(intent.payload);
+        } catch {
+          /* Opaque app bytes remain supported. */
+        }
+        if (outgoing?.kind === 9) {
+          const mediaTags = outgoing.tags.filter((tag) => tag[0] === "imeta");
+          if (mediaTags.length) {
+            if (intent.expectedParent === undefined)
+              throw new Error(
+                "Media messages require expectedParent from media preparation",
+              );
+            const policy = getEncryptedMediaPolicy(
+              sourceState.groupContext.extensions,
+            );
+            if (!policy) throw new Error("Encrypted media v2 is not enabled");
+            for (const tag of mediaTags) {
+              const reference = parseMediaImetaTag(tag);
+              if (
+                !reference ||
+                reference.locators.some(
+                  (locator) =>
+                    !policy.allowedLocatorKinds.includes(locator.kind),
+                )
+              )
+                throw new Error(
+                  "Invalid or out-of-policy outbound v2 attachment",
+                );
+            }
+          }
+        }
         let expiration: bigint | undefined;
         try {
           const { created_at } = deserializeApplicationData(intent.payload);
@@ -3066,16 +3110,34 @@ export class MarmotGroupEngine<TEnvelope> {
       )
         return undefined;
       this.#rememberSeen(message);
-      this.#delivered.record({
-        epoch: Number(state.groupContext.epoch),
-        stateTag: tag,
+      const mediaSource =
+        state.groupContext.epoch === sourceEpoch
+          ? state
+          : this.retainedStates().find(
+              (candidate) => candidate.groupContext.epoch === sourceEpoch,
+            );
+      {
+        const deliveryState = mediaSource ?? state;
+        const sourceTag = bytesToHex(deliveryState.confirmationTag);
+        this.#delivered.record({
+          epoch: Number(deliveryState.groupContext.epoch),
+          stateTag: sourceTag,
+          envelope,
+          message,
+          payload: result.message,
+          ...this.#deliveryAttribution(sourceTag, envelope, result.message),
+        });
+      }
+      this.#tree.updateSnapshot(tag, result.newState);
+      return {
+        kind: "processed",
+        result,
         envelope,
         message,
-        payload: result.message,
-        ...this.#deliveryAttribution(tag, envelope, result.message),
-      });
-      this.#tree.updateSnapshot(tag, result.newState);
-      return { kind: "processed", result, envelope, message };
+        sourceParent: mediaSource
+          ? mediaSourceStateToken(mediaSource)
+          : undefined,
+      };
     }
 
     return undefined;

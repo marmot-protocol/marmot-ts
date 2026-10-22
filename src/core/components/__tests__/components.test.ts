@@ -40,7 +40,7 @@ import {
 import {
   decodeEncryptedMediaPolicyV1,
   encodeEncryptedMediaPolicyV1,
-  encryptedMediaBlossomDefault,
+  encryptedMediaBlossomDefaultV1 as encryptedMediaBlossomDefault,
 } from "../encrypted-media.js";
 import {
   AGENT_TEXT_STREAM_ROLE_RECEIVE,

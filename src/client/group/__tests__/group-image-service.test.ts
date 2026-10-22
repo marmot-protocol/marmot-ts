@@ -252,11 +252,14 @@ describe("settled image retention", () => {
         historyTree: (await GroupHistoryTree.load(rewindStore, id))!,
       },
     );
-    const restored = await restarted.decryptMedia(
-      encrypted.encrypted,
-      encrypted.attachment,
-    );
-    expect(restored.data).toBe(delivered.data);
+    await expect(
+      restarted.decryptMedia(
+        encrypted.encrypted,
+        encrypted.attachment,
+        encrypted.expectedParent,
+      ),
+    ).rejects.toThrow(/no longer retained/);
+    expect(rows.get(hash)!.data).toBe(delivered.data);
     await restarted.save(true);
     restarted.dispose();
     expect(delivered.data).toEqual(original);

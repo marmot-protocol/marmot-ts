@@ -1,35 +1,32 @@
 /** @module @category Core - Encrypted Media */
 
 /**
- * Canonicalizes a MIME type for use in `encrypted-media-v1` cryptographic
+ * Canonicalizes a MIME type for use in `encrypted-media-v2` cryptographic
  * operations (key derivation and AEAD AAD).
  *
  * Sender and receiver MUST apply this identical algorithm
  * (`features/encrypted-media.md` — Media Type Canonicalization):
  *
  * 1. take the substring before the first `;`, dropping any parameters
- * 2. trim leading and trailing ASCII whitespace
+ * 2. trim leading/trailing HTAB, LF, FF, CR and space (not vertical tab)
  * 3. lowercase using ASCII case folding only
- * 4. reject if the result is empty or does not contain `/`
+ * 4. require exactly two HTTP-token segments of 1..64 bytes, total ≤128 bytes
  * 5. apply the canonical alias `image/jpg` → `image/jpeg`
  *
  * Adding an alias or normalization step is a breaking media-version change.
  *
  * @param mimeType - The raw MIME type string
  * @returns The canonical MIME type
- * @throws If the canonical result is empty or has no `/`
+ * @throws If the canonical result violates the v2 MIME profile
  */
 export function canonicalizeMimeType(mimeType: string): string {
-  // Steps 1–3: strip parameters, trim, ASCII-lowercase.
   const base = mimeType
     .split(";")[0]
-    .trim()
+    .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "")
     .replace(/[A-Z]/g, (c) => c.toLowerCase());
-
-  // Step 4: reject empty or `/`-less results.
-  const slash = base.indexOf("/");
-  if (slash <= 0 || slash >= base.length - 1) {
-    throw new Error(`invalid media type: ${JSON.stringify(mimeType)}`);
+  const token = "[a-z0-9!#$%&'*+.^_`|~-]{1,64}";
+  if (base.length > 128 || !new RegExp(`^${token}/${token}$`).test(base)) {
+    throw new Error("invalid media type");
   }
 
   // Step 5: canonical alias.
@@ -57,5 +54,19 @@ export function isValidMimeType(value: string): boolean {
  * @internal
  */
 export function isValidHex(value: string, expectedBytes: number): boolean {
-  return value.length === expectedBytes * 2 && /^[0-9a-f]+$/.test(value);
+  return value.length === expectedBytes * 2 && /^[0-9a-fA-F]+$/.test(value);
+}
+
+/** Validate exact filename bytes without Unicode repair or normalization. */
+export function validateMediaFilename(value: string): void {
+  const bytes = new TextEncoder().encode(value);
+  if (
+    bytes.length < 1 ||
+    bytes.length > 255 ||
+    value.includes("\0") ||
+    new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) !==
+      value
+  ) {
+    throw new Error("filename must be valid UTF-8, 1..255 bytes, without NUL");
+  }
 }

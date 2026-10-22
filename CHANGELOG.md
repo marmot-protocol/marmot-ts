@@ -4,6 +4,8 @@
 
 ### Added
 
+- Encrypted media v2 policy, attachment metadata and encryption, source-bound sending/decryption, and bounded Blossom upload/download with ordered fallbacks. Failed attachments preserve captions and valid siblings. New KeyPackages advertise v2; `ensurePublished()` upgrades old publications while preserving pending-Welcome private bundles.
+
 - Reuse one persisted leaf signature key per installation across KeyPackages with the new `getSignatureKeyPair` option on `MarmotClient` (or `signatureKeyPair` on `generateKeyPackage`). Other clients can then match a member's leaf to its published KeyPackages after the one used to join was consumed, as they can for MDK devices. Init and encryption keys stay fresh for every KeyPackage.
 
 ### Changed
@@ -12,6 +14,7 @@
 
 ### Fixed
 
+- KeyPackage publication tags now reflect the supplied signed LeafNode, avoiding overstated capabilities when older KeyPackages are republished. Delayed media messages retain their source epoch in durable delivery evidence, so their attachments can resolve after restart.
 - Accept valid MDK Welcomes whose groups do not require `self_remove`, a group profile, or lifecycle-v1. Joining now checks the protocol baseline separately from new-group defaults and applies the same complete-state invariants as commits. Existing groups without lifecycle-v1 remain usable without disbanding. Welcomes containing frozen encrypted-media v1 state are now refused, matching MDK; recreate those groups without that component.
 
 - Groups created before 0.7.0, with the app-data dictionary first in their GroupContext extensions, can now be renamed and have their admins, relays or other components changed without splitting off White Noise members. The first such commit by a marmot-ts admin also moves the dictionary last, so later updates need no repair. Groups that already split on an earlier update are not recovered.
@@ -31,6 +34,8 @@
 - `serializeApplicationRumor` writes only the six Marmot app-event members (a `sig` or other extra field is no longer sent) and throws instead of producing a payload that receivers would drop.
 
 ### Breaking changes
+
+- Unversioned encrypted-media APIs now use v2 (`0x800b`) for MDK-compatible attachments. Use `prepareMediaMessage` and retain its guarded intent when uploading and sending; a changed MLS source throws `StaleMediaPreparationError` and requires fresh preparation. Explicit `V1` helpers preserve historical data. Existing v1 policy users should switch to `EncryptedMediaPolicyV2`; unsupported legacy groups still require recreation. See the [encrypted-media migration guide](docs/core/media.md).
 
 - `groups.leave()` by an active admin now throws before publishing or deleting anything. Previously it published a SelfRemove that every peer rejected and then destroyed the local group, leaving the admin in the group for everyone else. To leave, first remove yourself from the admin set (another admin must remain), then call `leave()`.
 

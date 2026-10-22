@@ -1,5 +1,5 @@
 /** @module @category Core - Encrypted Media */
-import type { EncryptedMediaPolicyV1 } from "../components/encrypted-media.js";
+import type { EncryptedMediaPolicyV2 } from "../components/encrypted-media-v2.js";
 import { BLOSSOM_LOCATOR_KIND, type MediaAttachment } from "./types.js";
 
 /** Locator kinds this client knows how to fetch. */
@@ -9,7 +9,7 @@ export const SUPPORTED_LOCATOR_KINDS: readonly string[] = [
 
 export type FetchableLocatorOptions = {
   /**
-   * The group's `allowed_locator_kinds` (`marmot.group.encrypted-media.v1`). A
+   * The group's `allowed_locator_kinds` (`marmot.group.encrypted-media.v2`). A
    * locator whose kind is not allowed is unfetchable and skipped — but it does
    * NOT invalidate the attachment or drop the message. When omitted, the policy
    * gate is not applied (all structurally-valid locators are considered).
@@ -53,7 +53,7 @@ export function selectFetchableLocators(
  */
 export function buildFallbackFetchUrls(
   attachment: MediaAttachment,
-  policy: EncryptedMediaPolicyV1,
+  policy: EncryptedMediaPolicyV2,
   opts: FetchableLocatorOptions = {},
 ): string[] {
   const supported = opts.supportedLocatorKinds ?? SUPPORTED_LOCATOR_KINDS;
@@ -61,9 +61,17 @@ export function buildFallbackFetchUrls(
   for (const endpoint of policy.defaultBlobEndpoints) {
     if (endpoint.locatorKind !== BLOSSOM_LOCATOR_KIND) continue;
     if (!supported.includes(endpoint.locatorKind)) continue;
+    if (
+      !(opts.allowedLocatorKinds ?? policy.allowedLocatorKinds).includes(
+        endpoint.locatorKind,
+      )
+    )
+      continue;
     // baseUrl is WHATWG-normalized (keeps a trailing `/`); join the hash.
     urls.push(
-      new URL(attachment.ciphertextSha256, endpoint.baseUrl).toString(),
+      endpoint.baseUrl.replace(/\/+$/, "") +
+        "/" +
+        attachment.ciphertextSha256.toLowerCase(),
     );
   }
   return urls;
@@ -77,7 +85,7 @@ export function buildFallbackFetchUrls(
  */
 export function resolveMediaFetchUrls(
   attachment: MediaAttachment,
-  policy: EncryptedMediaPolicyV1,
+  policy: EncryptedMediaPolicyV2,
   opts: FetchableLocatorOptions = {},
 ): string[] {
   const supported = opts.supportedLocatorKinds ?? SUPPORTED_LOCATOR_KINDS;

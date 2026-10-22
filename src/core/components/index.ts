@@ -16,3 +16,5 @@ export * from "./dictionary.js";
 export * from "./integrity.js";
 export * from "./tree-diff.js";
 export * from "./leaf-replacement.js";
+
+export * from "./encrypted-media-v2.js";

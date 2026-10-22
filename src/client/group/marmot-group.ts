@@ -189,7 +189,7 @@ export interface BaseGroupHistory extends GroupSessionHistory {
 export type StoredMedia = {
   /** Plaintext (decrypted) file bytes. */
   data: Uint8Array;
-  /** The full encrypted-media-v1 attachment metadata associated with this blob. */
+  /** The full encrypted-media-v2 attachment metadata associated with this blob. */
   attachment: MediaAttachment;
 };
 
@@ -957,6 +957,7 @@ export class MarmotGroup<
     linkPublicationRetention(this.runtime, this.session);
     this.mediaService = new GroupMediaService({
       media: this.media,
+      assertOpen: () => this.session.assertOutboundOpen(),
       getState: () => this.state,
       getCiphersuite: () => this.ciphersuite,
       getRetainedStates: () => this.session.retainedStates(),
@@ -1639,7 +1640,7 @@ export class MarmotGroup<
   }
 
   /**
-   * Encrypts a media file for sharing in a group message (encrypted-media-v1).
+   * Encrypts a media file for sharing in a group message (encrypted-media-v2).
    *
    * Derives the per-file key from the current MLS epoch, encrypts with
    * ChaCha20-Poly1305, and returns the ciphertext alongside a populated
@@ -1650,28 +1651,32 @@ export class MarmotGroup<
    * 1. Upload `encrypted` to a blob store (`ciphertextSha256` is the content id).
    * 2. Push a locator (`{ kind, value }`) onto `attachment.locators`.
    * 3. Serialize with `encodeMediaImetaTag` and include the tag on the rumor.
+   * 4. Preserve the returned `expectedParent` on the application send intent.
    */
   async encryptMedia(
     blob: Blob,
     metadata: EncryptMediaMetadata,
-  ): Promise<{ encrypted: Uint8Array; attachment: MediaAttachment }> {
+  ): Promise<{
+    encrypted: Uint8Array;
+    attachment: MediaAttachment;
+    expectedParent: string;
+  }> {
     return this.mediaService.encryptMedia(blob, metadata);
   }
 
   /**
-   * Decrypts an encrypted-media-v1 attachment downloaded from a blob store.
+   * Decrypts an encrypted-media-v2 attachment downloaded from a blob store.
    *
-   * On the first call for a given file the plaintext bytes are derived via
-   * key-derivation + ChaCha20-Poly1305 decryption (after verifying the
-   * ciphertext and plaintext hashes) and stored in {`@link` media}. Subsequent
-   * calls for the same `attachment.ciphertextSha256` are served directly from
-   * the cache, skipping key-derivation entirely.
+   * Pass the authenticated sourceParent from the processed message or
+   * session.mediaSourceForRumor(). Omission selects the current state only.
+   * Cached plaintext never bypasses ciphertext and metadata validation.
    */
   async decryptMedia(
     encrypted: Uint8Array,
     attachment: MediaAttachment,
+    sourceParent?: string,
   ): Promise<StoredMedia> {
-    return this.mediaService.decryptMedia(encrypted, attachment);
+    return this.mediaService.decryptMedia(encrypted, attachment, sourceParent);
   }
 
   /**

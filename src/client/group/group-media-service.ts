@@ -5,7 +5,8 @@ import type { CiphersuiteImpl, ClientState } from "ts-mls";
 
 import {
   canonicalizeMimeType,
-  decryptMediaFileWithKeys,
+  decryptMediaFile,
+  mediaSourceStateToken,
   deriveMediaEncryptionKey,
   encryptMediaFile,
   type MediaAttachment,
@@ -28,8 +29,9 @@ export type GroupMediaServiceOptions<
   media: TMedia;
   getState: () => ClientState;
   getCiphersuite: () => CiphersuiteImpl;
+  assertOpen?: () => void;
   /**
-   * The still-retained canonical states (newest epoch first), used to decrypt
+   * The still-retained canonical states, used to decrypt
    * media from an epoch older than the current tip. Optional — when omitted,
    * decryption uses only the current epoch's key. See
    * {@link GroupMediaService.decryptMedia}.
@@ -38,22 +40,15 @@ export type GroupMediaServiceOptions<
 };
 
 /**
- * Optional group-scoped encrypted-media helper and plaintext cache adapter.
- *
- * On send, the media file key is derived from the group's CURRENT `ClientState`
- * — the source epoch is the current epoch. On receive, the source epoch is the
- * MLS epoch of the message that carried the attachment, which is not encoded in
- * the `imeta` tag (`features/encrypted-media.md` — Key Derivation). Rather than
- * thread that epoch through every caller, {@link decryptMedia} derives one
- * candidate key per still-retained epoch and lets the AEAD tag pick the right
- * one, so media sent before the local tip advanced still decrypts. Media from
- * an epoch already pruned past the rollback horizon cannot be decrypted.
+ * Source-bound v2 encryption and verified plaintext cache writes.
+ * Retained state is bounded by the existing session rollback policy.
  */
 export class GroupMediaService<
   TMedia extends BaseGroupMedia | undefined = undefined,
 > {
   readonly media: TMedia;
 
+  readonly #assertOpen?: () => void;
   readonly #getState: () => ClientState;
   readonly #getCiphersuite: () => CiphersuiteImpl;
   readonly #getRetainedStates?: () => Iterable<ClientState>;
@@ -61,6 +56,7 @@ export class GroupMediaService<
 
   constructor(options: GroupMediaServiceOptions<TMedia>) {
     this.media = options.media;
+    this.#assertOpen = options.assertOpen;
     this.#getState = options.getState;
     this.#getCiphersuite = options.getCiphersuite;
     this.#getRetainedStates = options.getRetainedStates;
@@ -75,7 +71,14 @@ export class GroupMediaService<
   async encryptMedia(
     blob: Blob,
     metadata: EncryptMediaMetadata,
-  ): Promise<{ encrypted: Uint8Array; attachment: MediaAttachment }> {
+  ): Promise<{
+    encrypted: Uint8Array;
+    attachment: MediaAttachment;
+    expectedParent: string;
+  }> {
+    this.#assertOpen?.();
+    const sourceState = this.#getState();
+    const expectedParent = mediaSourceStateToken(sourceState);
     const mimeType = metadata.type ?? blob.type;
     if (!mimeType) {
       throw new Error(
@@ -95,86 +98,71 @@ export class GroupMediaService<
     };
 
     const fileKey = await deriveMediaEncryptionKey(
-      this.#getState(),
+      sourceState,
       this.#getCiphersuite(),
       fields,
     );
 
-    return encryptMediaFile(plaintext, fileKey, fields);
+    this.#assertOpen?.();
+    return { ...encryptMediaFile(plaintext, fileKey, fields), expectedParent };
   }
 
   /**
-   * Decrypts a fetched blob for a parsed attachment, verifying its ciphertext
-   * and plaintext hashes, and caches the plaintext keyed by `ciphertextSha256`.
-   *
-   * The media file key is bound to the message's source-epoch media exporter
-   * secret, which is not carried in the `imeta` tag. This derives one candidate
-   * key per still-retained epoch (current epoch first) and lets the AEAD tag
-   * select the right one, so media sent before the local tip advanced still
-   * decrypts. Media from an epoch already pruned past the rollback horizon
-   * cannot be decrypted.
+   * Decrypt using the sourceParent supplied on the accepted application-message
+   * result. Omission selects the current state only. Missing retained material
+   * makes the attachment unavailable; it does not invalidate its message.
+   * Cache contents never bypass cryptographic or metadata validation.
    */
   async decryptMedia(
     encrypted: Uint8Array,
     attachment: MediaAttachment,
+    sourceParent: string = mediaSourceStateToken(this.#getState()),
   ): Promise<StoredMedia> {
+    this.#assertOpen?.();
+    // Select the exact authenticated source, never probe unrelated epochs/forks.
+    const state = [
+      this.#getState(),
+      ...(this.#getRetainedStates?.() ?? []),
+    ].find((candidate) => mediaSourceStateToken(candidate) === sourceParent);
+    if (!state) throw new Error("Media source material is no longer retained");
+    // Verify supplied ciphertext and authenticated metadata even on cache hits.
+    // Old hash-only cache entries are not evidence of a verified v2 reference.
     const key = attachment.ciphertextSha256;
-    if (!key) {
-      throw new Error("decryptMedia: attachment.ciphertextSha256 is required");
-    }
-
-    const cached = await this.media?.getMedia(key);
-    if (cached) return cached;
-
-    const inFlight = this.#decryptingMedia.get(key);
+    const identity = JSON.stringify([
+      sourceParent,
+      attachment.version,
+      key,
+      attachment.plaintextSha256,
+      attachment.nonce,
+      attachment.mediaType,
+      attachment.filename,
+      bytesToHex(sha256(encrypted)),
+    ]);
+    const inFlight = this.#decryptingMedia.get(identity);
     if (inFlight) return inFlight;
-
     const decryptPromise = (async () => {
-      const ciphersuite = this.#getCiphersuite();
-      const states = this.#candidateStates();
-      const fileKeys = await Promise.all(
-        states.map((state) =>
-          deriveMediaEncryptionKey(state, ciphersuite, attachment),
-        ),
-      );
-      const plaintext = decryptMediaFileWithKeys(
-        encrypted,
-        fileKeys,
+      const fileKey = await deriveMediaEncryptionKey(
+        state,
+        this.#getCiphersuite(),
         attachment,
       );
-
+      const plaintext = decryptMediaFile(encrypted, fileKey, attachment);
+      this.#assertOpen?.();
       await this.media?.addMedia(key, {
         data: plaintext,
         attachment,
       });
 
+      this.#assertOpen?.();
       return { data: plaintext, attachment };
     })();
 
-    this.#decryptingMedia.set(key, decryptPromise);
+    this.#decryptingMedia.set(identity, decryptPromise);
 
     try {
       return await decryptPromise;
     } finally {
-      this.#decryptingMedia.delete(key);
+      this.#decryptingMedia.delete(identity);
     }
-  }
-
-  /**
-   * The states whose media-exporter secrets to try, current epoch first, then
-   * the remaining retained epochs, deduplicated by epoch. The current state is
-   * always included even if retention is unavailable.
-   */
-  #candidateStates(): ClientState[] {
-    const current = this.#getState();
-    const states = [current];
-    const seen = new Set<number>([Number(current.groupContext.epoch)]);
-    for (const state of this.#getRetainedStates?.() ?? []) {
-      const epoch = Number(state.groupContext.epoch);
-      if (seen.has(epoch)) continue;
-      seen.add(epoch);
-      states.push(state);
-    }
-    return states;
   }
 }

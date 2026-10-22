@@ -13,6 +13,10 @@ import { defaultMarmotClientConfig } from "./client-config.js";
 import { marmotRequiredCapabilitiesExtension } from "./capabilities.js";
 import {
   adminPolicyEntry,
+  encryptedMediaEntry,
+  getEncryptedMediaPolicy,
+  GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID,
+  type EncryptedMediaPolicyV2,
   AppComponentId,
   appComponentsEntry,
   DEFAULT_GROUP_COMPONENT_IDS,
@@ -125,6 +129,15 @@ export async function createGroup(
     appDataExtension,
   ];
 
+  const mediaPolicy = getEncryptedMediaPolicy(groupExtensions);
+  if (
+    requiredIds.includes(GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID) &&
+    !mediaPolicy
+  )
+    throw new InvalidGroupContextExtensionError(
+      "Required encrypted-media v2 policy is missing",
+    );
+
   const clientState = await MLSCreateGroup({
     context: {
       cipherSuite: ciphersuiteImpl,
@@ -144,6 +157,7 @@ export type SimpleGroupOptions = {
   description?: string;
   adminPubkeys?: string[];
   relays?: string[];
+  encryptedMedia?: EncryptedMediaPolicyV2;
 };
 
 /**
@@ -173,6 +187,9 @@ export async function createSimpleGroup(
     }),
     adminPolicyEntry(adminPubkeys),
   ];
+
+  if (options?.encryptedMedia)
+    components.push(encryptedMediaEntry(options.encryptedMedia));
 
   const relays = options?.relays ?? [];
   if (relays.length > 0) {

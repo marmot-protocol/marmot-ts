@@ -162,7 +162,7 @@ function normalizePolicy(
 }
 
 /** Builds the default Blossom-backed policy for the given endpoint base URLs. */
-export function encryptedMediaBlossomDefault(
+export function encryptedMediaBlossomDefaultV1(
   baseUrls: string[],
 ): EncryptedMediaPolicyV1 {
   return normalizePolicy({

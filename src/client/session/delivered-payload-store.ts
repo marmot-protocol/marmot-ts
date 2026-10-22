@@ -80,9 +80,15 @@ export function decodeDeliveredEvidence(
       throw new Error("Invalid delivered evidence producing edge");
     const messageBytes = hexToBytes(hex(entry.message));
     const message = decode(mlsMessageDecoder, messageBytes);
+    const sourceEpoch = message && framedEpoch(message);
+    // A historical-receiver-only delivery can be attributed to a later tip
+    // when no full source snapshot remains. It is valid retraction evidence,
+    // but mediaSourceForRumor refuses to treat it as exact source provenance.
     if (
       !message ||
-      framedEpoch(message) !== BigInt(entry.epoch) ||
+      sourceEpoch === undefined ||
+      sourceEpoch < 0n ||
+      sourceEpoch > BigInt(entry.epoch) ||
       bytesToHex(encode(mlsMessageEncoder, message)) !== entry.message
     )
       throw new Error("Invalid delivered evidence MLS message");

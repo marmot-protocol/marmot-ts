@@ -22,6 +22,8 @@ import {
   appComponentsEntry,
   groupLifecycleEntry,
   makeAppComponentsExtension,
+  encryptedMediaEntry,
+  encryptedMediaBlossomDefault,
 } from "../components/index.js";
 
 describe("MDK current-profile Welcome admission", () => {
@@ -30,6 +32,7 @@ describe("MDK current-profile Welcome admission", () => {
   // or profile state, and self_remove is an optional feature registration.
   async function welcome(
     lifecycle: "absent" | "active" | "disbanded" | "missing",
+    media?: { required: boolean; malformed: boolean },
   ) {
     const suite = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -50,6 +53,7 @@ describe("MDK current-profile Welcome admission", () => {
       ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
     ];
     if (lifecycle !== "absent") required.push(GROUP_LIFECYCLE_COMPONENT_ID);
+    if (media?.required) required.push(0x800b);
     const context = {
       cipherSuite: suite,
       authService: marmotAuthService,
@@ -72,6 +76,17 @@ describe("MDK current-profile Welcome admission", () => {
         makeAppComponentsExtension([
           appComponentsEntry(required),
           adminPolicyEntry([admin.pubkey]),
+          ...(media
+            ? [
+                media.malformed
+                  ? { componentId: 0x800b, data: Uint8Array.of(0) }
+                  : encryptedMediaEntry(
+                      encryptedMediaBlossomDefault([
+                        "http://192.168.1.1/blobs",
+                      ]),
+                    ),
+              ]
+            : []),
           ...(lifecycle === "active" || lifecycle === "disbanded"
             ? [groupLifecycleEntry(lifecycle)]
             : []),
@@ -115,4 +130,17 @@ describe("MDK current-profile Welcome admission", () => {
     const { state, groupInfo } = await welcome("disbanded");
     expect(() => validateWelcomeGroup(state, groupInfo)).toThrow(/not active/);
   });
+  it.each([true, false])(
+    "accepts canonical v2 policy and rejects malformed state even when optional (required=%s)",
+    async (required) => {
+      const valid = await welcome("active", { required, malformed: false });
+      expect(validateWelcomeGroup(valid.state, valid.groupInfo)).toBe(
+        valid.admin.pubkey,
+      );
+      const invalid = await welcome("active", { required, malformed: true });
+      expect(() =>
+        validateWelcomeGroup(invalid.state, invalid.groupInfo),
+      ).toThrow(/media v2 policy/);
+    },
+  );
 });

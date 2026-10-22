@@ -60,7 +60,7 @@ state and mutated through `app_data_update` proposals (`0x0008`).
 | `0x8005` | `marmot.group.message-retention.v1`      | retention window (seconds)                  |
 | `0x8006` | `marmot.group.agent-text-stream.quic.v1` | agent stream policy / required roles        |
 | `0x8007` | `marmot.group.avatar-url.v1`             | avatar URL                                  |
-| `0x8008` | `marmot.group.encrypted-media.v1`        | blob-store policy for media                 |
+| `0x800b` | `marmot.group.encrypted-media.v2`        | blob-store policy for media                 |
 | `0x800c` | `marmot.group.lifecycle.v1`              | protocol lifecycle (`active` / `disbanded`) |
 
 `0x8009` (`marmot.member.account-identity-proof.v2`) is LeafNode-only: it has
@@ -80,7 +80,7 @@ view?.adminPubkeys; // ["admin-pubkey-hex"]
 view?.relays; // ["wss://relay.example.com"]
 view?.nostrGroupId; // Uint8Array(32) | undefined (undefined without the routing component)
 view?.avatarUrl; // "https://..." | undefined
-view?.encryptedMedia; // EncryptedMediaPolicyV1 | undefined
+view?.encryptedMedia; // EncryptedMediaPolicyV2 | undefined
 view?.messageRetention; // bigint seconds | undefined
 view?.protocolLifecycle; // "active" | "disbanded" | undefined
 ```

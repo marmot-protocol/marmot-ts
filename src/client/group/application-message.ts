@@ -48,9 +48,13 @@ export function createChatRumor(options: CreateChatRumorOptions): Rumor {
  */
 export function createApplicationMessageIntent(
   rumor: Rumor,
+  options?: { expectedParent?: string },
 ): Extract<GroupSessionSendIntent, { kind: "applicationMessage" }> {
   return {
     kind: "applicationMessage",
     payload: serializeApplicationRumor(rumor),
+    ...(options?.expectedParent !== undefined
+      ? { expectedParent: options.expectedParent }
+      : {}),
   };
 }

@@ -24,12 +24,9 @@ import {
 } from "../components/ids.js";
 
 /**
- * Historical capability regression checks, mirrored in TypeScript. These are
- * not a cross-implementation interoperability certificate: current MDK app
- * groups require encrypted-media v2 (0x800b), which marmot-ts does not support.
- * The 0x8008 assertion below preserves the existing v1 advertisement only.
- * Run scripts/mdk-interop/run.mjs for actual Rust Welcome exchange and the
- * media-profile rejection. See docs/guide/mdk-compatibility.md.
+ * Capability regression checks mirrored in TypeScript; these do not execute MDK.
+ * Current media support is v2 (0x800b). Run scripts/mdk-interop/run.mjs for
+ * independent Rust KeyPackage, Welcome and media-message/crypto exchange.
  */
 const DARKMATTER_REQUIRED_LEAF_EXTENSIONS = [
   appDataDictionaryExtensionType, // 0x0006
@@ -46,7 +43,7 @@ const DARKMATTER_REQUIRED_APP_COMPONENTS = [
   GROUP_ADMIN_POLICY_COMPONENT_ID, // 0x8003
   NOSTR_ROUTING_COMPONENT_ID, // 0x8004
   AGENT_TEXT_STREAM_QUIC_COMPONENT_ID, // 0x8006
-  GROUP_ENCRYPTED_MEDIA_COMPONENT_ID, // 0x8008
+  GROUP_ENCRYPTED_MEDIA_COMPONENT_ID, // 0x800b
   ACCOUNT_IDENTITY_PROOF_COMPONENT_ID, // 0x8009
 ];
 
@@ -58,7 +55,7 @@ const DARKMATTER_REQUIRED_APP_COMPONENTS = [
 // "legacy profile -> unsupported legacy-group".
 const LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE = 0xf2f1;
 
-describe("historical darkmatter capability advertisement", () => {
+describe("Marmot capability advertisement (TypeScript regression)", () => {
   async function generateOpenTuiStyleKeyPackage() {
     // Mirror the examples/opentui flow: default ciphersuite/capabilities and a
     // real Nostr account signer, so the leaf carries the 0x8009 proof.
@@ -92,7 +89,7 @@ describe("historical darkmatter capability advertisement", () => {
     );
   });
 
-  it("preserves the historical app-component advertisement (not current MDK media-v2 compatibility)", async () => {
+  it("advertises required current components (independent Rust compatibility is tested separately)", async () => {
     const { keyPackage } = await generateOpenTuiStyleKeyPackage();
     // The leaf carries the app_components advertisement inside its
     // app_data_dictionary extension; darkmatter reads it the same way.

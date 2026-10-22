@@ -3,6 +3,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { EventTemplate } from "applesauce-core/helpers/event";
 import {
   CustomExtension,
+  type GroupContextExtension,
   encode,
   KeyPackage,
   type MlsKeyPackage,
@@ -24,7 +25,7 @@ import {
   KEY_PACKAGE_PROPOSALS_TAG,
   LAST_RESORT_EXTENSION_TYPE,
 } from "./protocol.js";
-import { SUPPORTED_APP_COMPONENT_IDS } from "./components/ids.js";
+import { getAppComponents } from "./components/dictionary.js";
 
 export type CreateKeyPackageEventOptions = {
   keyPackage: KeyPackage;
@@ -160,10 +161,16 @@ async function createKeyPackageEventInternal(
     if (!proposalTypes.includes(hexValue)) proposalTypes.push(hexValue);
   }
 
-  // Supported Marmot app-component ids this implementation can encode/decode.
-  const appComponentIds = SUPPORTED_APP_COMPONENT_IDS.map(
-    (id) => `0x${id.toString(16).padStart(4, "0")}`,
-  );
+  // Advertise the signed leaf, not the capabilities of the running release.
+  // MDK's directory checks exact private-use component equality.
+  const appComponentIds = (
+    getAppComponents(
+      keyPackage.leafNode.extensions as unknown as GroupContextExtension[],
+    ) ?? []
+  )
+    .filter((id) => id >= 0x8000)
+    .sort((a, b) => a - b)
+    .map((id) => `0x${id.toString(16).padStart(4, "0")}`);
 
   // The spec forbids an `encoding` tag (transports/nostr.md "Transport byte
   // encoding"); content is always standard base64.

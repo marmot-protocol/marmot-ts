@@ -125,7 +125,7 @@ async fn main() {
     }
     let mut supported = vec![0x8001, 0x8003, 0x800c];
     if mode == "media" {
-        supported.push(0x800b);
+        supported.extend([0x8004, 0x800b]);
     }
     let mut engine = EngineBuilder::new(SqliteAccountStorage::in_memory().unwrap())
         .feature_registry(registry)
@@ -173,6 +173,145 @@ async fn handle(
             Ok(serde_json::from_str(&gift.rumor.as_json()).unwrap())
         }
 
+        #[cfg(feature = "media-probe")]
+        "media_receive" => {
+            use cgka_traits::engine::GroupEvent;
+            let id = cgka_traits::types::GroupId::new(
+                hex::decode(v["group_id"].as_str().unwrap()).unwrap(),
+            );
+            let transport_id = engine
+                .group_context(&id)
+                .map_err(|e| format!("{e:?}"))?
+                .transport_group_id()
+                .unwrap();
+            let incoming = message(
+                hex::decode(v["message"].as_str().unwrap()).unwrap(),
+                TransportEnvelope::GroupMessage {
+                    transport_group_id: transport_id,
+                },
+            );
+            engine.drain_events();
+            let disposition = engine
+                .ingest(incoming)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
+            for event in engine.drain_events() {
+                if let GroupEvent::MessageReceived {
+                    payload,
+                    epoch,
+                    encrypted_media_secret: Some(secret),
+                    ..
+                } = event
+                {
+                    let rumor: Value =
+                        serde_json::from_slice(&payload).map_err(|e| e.to_string())?;
+                    let mut outcomes = vec![];
+                    for tag in rumor["tags"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|tag| tag[0] == "imeta")
+                    {
+                        outcomes.push(
+                            match marmot_app::marmot_ts_media_probe(
+                                json!({"op":"download", "tag":tag}),
+                                secret.as_bytes(),
+                                epoch.0,
+                            )
+                            .await
+                            {
+                                Ok(mut value) => {
+                                    value["status"] = json!("ready");
+                                    value
+                                }
+                                Err(_) => json!({"status":"unavailable"}),
+                            },
+                        );
+                    }
+                    let mut result = outcomes.first().cloned().ok_or("no attachments")?;
+                    result["caption"] = rumor["content"].clone();
+                    result["outcomes"] = json!(outcomes);
+                    return Ok(result);
+                }
+            }
+            Err(format!("no authenticated media delivery: {disposition:?}"))
+        }
+        #[cfg(feature = "media-probe")]
+        "advance" => {
+            use cgka_traits::engine::SendIntent;
+            let id = cgka_traits::types::GroupId::new(
+                hex::decode(v["group_id"].as_str().unwrap()).unwrap(),
+            );
+            let result = engine
+                .send(SendIntent::SelfUpdate { group_id: id })
+                .await
+                .map_err(|e| format!("{e:?}"))?;
+            if let SendResult::GroupEvolution { msg, pending, .. } = result {
+                engine
+                    .confirm_published(pending)
+                    .await
+                    .map_err(|e| format!("{e:?}"))?;
+                Ok(json!({"message":hex::encode(msg.payload)}))
+            } else {
+                Err(format!("unexpected update: {result:?}"))
+            }
+        }
+        #[cfg(feature = "media-probe")]
+        "media_fixture" => {
+            let result = marmot_app::marmot_ts_media_probe(
+                json!({"op":"media_upload", "server":v["server"]}),
+                &[42; 32],
+                7,
+            )
+            .await?;
+            use cgka_traits::app_components::*;
+            let policy = encode_encrypted_media_policy_v2(
+                &EncryptedMediaPolicyV2::blossom_default(vec!["https://example.com/media".into()])
+                    .unwrap(),
+            )
+            .unwrap();
+            Ok(json!({"tag":result["tag"], "policy":hex::encode(policy)}))
+        }
+        #[cfg(feature = "media-probe")]
+        "media_upload" => {
+            use cgka_traits::engine::SendIntent;
+            use cgka_traits::types::GroupId;
+            let id = GroupId::new(hex::decode(v["group_id"].as_str().unwrap()).unwrap());
+            let context = engine.group_context(&id).map_err(|e| format!("{e:?}"))?;
+            let epoch = context.epoch();
+            let secret = context
+                .exporter_secret(
+                    cgka_traits::app_components::GROUP_ENCRYPTED_MEDIA_EXPORTER_CACHE_KEY,
+                    32,
+                )
+                .ok_or("media exporter missing")?;
+            drop(context);
+            let result = marmot_app::marmot_ts_media_probe(v, &secret, epoch.0).await?;
+            let mut rumor = UnsignedEvent::from_json(
+                json!({
+                    "pubkey":hex::encode(identity), "kind":9, "created_at":1,
+                    "content":"Rust caption", "tags":[result["tag"].clone()]
+                })
+                .to_string(),
+            )
+            .map_err(|e| e.to_string())?;
+            rumor.ensure_id();
+            let sent = engine
+                .send(SendIntent::AppMessage {
+                    group_id: id,
+                    payload: rumor.as_json().into_bytes(),
+                    expected_epoch: Some(epoch),
+                })
+                .await
+                .map_err(|e| format!("{e:?}"))?;
+            match sent {
+                SendResult::ApplicationMessage { msg, .. } => {
+                    Ok(json!({"message":hex::encode(msg.payload)}))
+                }
+                other => Err(format!("unexpected media send: {other:?}")),
+            }
+        }
+
         "create" => {
             let kp = KeyPackage::new(hex::decode(v["key_package"].as_str().unwrap()).unwrap())
                 .with_protocol_profile(ProtocolProfile::Current);
@@ -184,16 +323,29 @@ async fn handle(
                     required_features: vec![],
                     app_components: if mode == "media" {
                         use cgka_traits::app_components::*;
-                        vec![AppComponentData {
-                            component_id: 0x800b,
-                            data: encode_encrypted_media_policy_v2(
-                                &EncryptedMediaPolicyV2::blossom_default(vec![
-                                    "https://blossom.primal.net/".into(),
-                                ])
+                        vec![
+                            AppComponentData {
+                                component_id: 0x8004,
+                                data: encode_nostr_routing_v1(
+                                    &NostrRoutingV1::new(
+                                        [3; 32],
+                                        vec!["wss://relay.example.com".into()],
+                                    )
+                                    .unwrap(),
+                                )
                                 .unwrap(),
-                            )
-                            .unwrap(),
-                        }]
+                            },
+                            AppComponentData {
+                                component_id: 0x800b,
+                                data: encode_encrypted_media_policy_v2(
+                                    &EncryptedMediaPolicyV2::blossom_default(vec![
+                                        v["server"].as_str().unwrap().into(),
+                                    ])
+                                    .unwrap(),
+                                )
+                                .unwrap(),
+                            },
+                        ]
                     } else {
                         vec![]
                     },

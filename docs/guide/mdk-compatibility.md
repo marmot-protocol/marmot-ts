@@ -1,10 +1,10 @@
 # MDK and White Noise compatibility review
 
-Reviewed on October 22, 2026 against marmot-ts's `v0.8` branch (package version
-`0.7.0` plus unreleased changes). Basic MLS Welcome exchange works after the
-join-validation fixes in this change. **Current White Noise media-enabled groups
-remain incompatible:** marmot-ts lacks encrypted-media v2 (`0x800b`). A successful
-TypeScript test suite does not establish full White Noise interoperability.
+Reviewed on October 22, 2026 against marmot-ts's `v0.8` work (package version
+`0.7.0` plus unreleased changes). Media v2 groups now pass actual bidirectional
+MLS Welcome, application-message and attachment decryption checks against the
+three MDK revisions below. This is local Rust/TypeScript interoperability evidence;
+Android UI and live-relay delivery remain separate tests.
 
 ## Reference versions
 
@@ -22,41 +22,51 @@ release may embed a different MDK revision.
 
 ## Executed compatibility matrix
 
-Each passing cell includes Rust KeyPackage acceptance, NIP-59 decryption and
-validated MLS Welcome joins in **both directions**, using the local probe.
+Each media passing cell includes KeyPackage acceptance, NIP-59 decryption,
+validated Welcomes and media-bearing MLS messages with attachment decryption in
+**both directions**. A local HTTP Blossom fixture carries the encrypted blobs.
 
-| MDK target                | Base engine (no self-remove registration) | Simple group with self-remove | Group requiring media v2 |
-| ------------------------- | ----------------------------------------- | ----------------------------- | ------------------------ |
-| Latest `c2284b31`         | Pass                                      | Pass                          | Fails: missing `0x800b`  |
-| Stable `v0.13.0`          | Pass                                      | Pass                          | Fails: missing `0x800b`  |
-| Android-pinned `8c214fee` | Pass                                      | Pass                          | Fails: missing `0x800b`  |
+| MDK target                | Base engine | Simple group with self-remove | Required media v2 group |
+| ------------------------- | ----------- | ----------------------------- | ----------------------- |
+| Latest `c2284b31`         | Pass        | Pass                          | Pass                    |
+| Stable `v0.13.0`          | Pass        | Pass                          | Pass                    |
+| Android-pinned `8c214fee` | Pass        | Pass                          | Pass                    |
 
-All nine profiles were executed; the three media failures are reproduced
-compatibility defects, not skipped tests or successes. These are engine/SDK
-results, not tests of the Android UI or full MDK application profile.
+The extended media probe also passed on all three revisions: a real MDK Commit
+during a TypeScript upload invalidates preparation; a delayed MDK attachment
+decrypts after an epoch advance; and actual MDK parsing/download preserves a
+caption and valid sibling when another attachment's blob is unavailable.
+
+The base/simple rows cover Welcome exchange; their scope is narrower than the
+media rows. These are engine/SDK results, not Android-device or full app-runtime
+certification.
 
 ## Findings
 
-### Blocking: encrypted-media v2 is missing
+### Fixed: encrypted-media v2 negotiation and attachment exchange
 
-Current MDK app groups use `marmot.group.encrypted-media.v2`, component `0x800b`.
-The library's `SUPPORTED_APP_COMPONENT_IDS` advertises the frozen v1 component
-`0x8008` and omits `0x800b`. An MDK group requiring v2 rejects the TypeScript
-KeyPackage with `MissingRequiredCapabilities` before creating a Welcome. The
-Rust-backed media profile reproduces this rejection. Advertising `0x8008` does
-not satisfy a requirement for `0x800b`.
+The earlier review reproduced `MissingRequiredCapabilities` because the library
+implemented frozen v1 `0x8008` while current MDK groups require v2 `0x800b`.
+The implementation now includes the distinct v2 policy codec, complete-state
+validation, signed capability advertisement, strict reference fields, v2
+exporter/HKDF/AAD contexts, source-bound sending and receiving, and an injectable
+bounded transfer path. Frozen v1 remains available only through explicit helpers
+for historical data. See [the media guide](../core/media.md) for API migration.
 
-In the opposite direction, a TypeScript leaf cannot join a group requiring
-`0x800b`; `validateWelcomeGroup` rejects unsupported required components. Adding
-only a transport tag or capability advertisement would claim support without
-implementing its state validation and media semantics. Full compatibility needs
-v2 policy codecs, capability/metadata handling, group-state validation and the
-corresponding media behavior. Existing groups' required components select the
-version; v1 state cannot be silently relabelled as v2.
+Media source identities include branch state as well as epoch. An attachment
+prepared before a Commit cannot be silently published under the new state.
+Delayed incoming delivery evidence records the authenticated source epoch, so it
+can be persisted and resolved after restart. Metadata or ciphertext changes
+cannot bypass validation through plaintext cache hits.
 
-Sources: MDK `crates/marmot-app/src/lib.rs` (`supported_app_component_ids`),
-`crates/marmot-app/src/client/projection.rs`, and
-[`app-components/group-encrypted-media-v2.md`](https://github.com/marmot-protocol/marmot/blob/d181ce1c4661ca985e8fb12a48a962dbe76fec6c/app-components/group-encrypted-media-v2.md).
+KeyPackage publication tags now reflect the supplied signed LeafNode rather than
+the running library's global capabilities. Startup `ensurePublished()` refreshes
+packages missing v2 while preserving pending-Welcome private material.
+
+Sources: MDK `crates/marmot-app/src/media/`, `crates/cgka-engine/src/app_payload.rs`,
+`crates/nostr-directory/src/published_records.rs` (older pins:
+`crates/marmot-app/src/key_package_records.rs`), and
+[the v2 policy specification](https://github.com/marmot-protocol/marmot/blob/d181ce1c4661ca985e8fb12a48a962dbe76fec6c/app-components/group-encrypted-media-v2.md).
 
 ### Fixed: Welcome admission confused creation defaults with protocol requirements
 
@@ -88,8 +98,14 @@ TypeScript actors; those do not prove a Rust peer accepts the same wire bytes.
 
 The new `scripts/mdk-interop/run.mjs` compiles a real MDK engine, exchanges fresh
 KeyPackages and Welcomes in both directions, and exercises NIP-59 with MDK's
-pinned rust-nostr dependency. The `media` profile intentionally reports the
-remaining incompatibility as a nonzero exit.
+pinned rust-nostr dependency. The `media` profile additionally runs the public
+TypeScript client transfer path against unchanged MDK media upload/download code.
+A test-only bridge in a disposable MDK worktree exposes its crate-private
+routines. Stable/Android pins use their production retaining-upload routine;
+latest uses its production upload routine. No crypto implementation is mirrored.
+The pinned ciphertext fixture in `src/__tests__/fixtures/media-v2-rust.json`
+was generated by the actual latest-MDK uploader with a fixed disposable exporter;
+ordinary tests verify its policy bytes and decrypt its ciphertext.
 
 ### Existing legacy groups remain outside the current join profile
 
@@ -137,22 +153,29 @@ MDK_PROFILE=media node scripts/mdk-interop/run.mjs
 ```
 
 Use `MDK_ROOT=/absolute/path/to/checkout` to test stable or the Android-pinned
-revision. The media command is expected to exit 1 until v2 is implemented.
+revision. All profiles are expected to exit zero.
 See `scripts/mdk-interop/README.md` for dependencies and exact coverage.
 
 The local TypeScript suite covers invitation state management, persistence,
 mock-network delivery, conformance scenarios and group messaging. The Rust probe
-covers real KeyPackage, Welcome and NIP-59 exchange. Neither is an Android device
-test or a live-relay delivery test. It does not certify cross-language message
-exchange, recovery, forks, media or every optional MDK component. Matching the
+covers real KeyPackage, Welcome and NIP-59 exchange, plus media-bearing messages
+and blobs in the media profile. Neither is an Android device test or a live-relay
+delivery test. They do not certify every optional MDK component or general
+cross-language fork/recovery behavior. Matching the
 installed Android version and examining its actual error remains necessary to
 attribute a particular failed invitation.
 
-## Validation recorded for this review
+## Validation recorded for this implementation
 
-- `pnpm check`: passed formatting, test types, all **2,315 tests in 146 files**, and the library/fork build.
-- `pnpm docs:build`: passed the documentation and API-reference builds.
-- Rust probe: all nine matrix profiles executed, with six successful bidirectional exchanges and three reproduced media-v2 capability rejections.
-- The first full check, while Rust dependencies compiled concurrently, timed out in one removal-recovery test. That file passed on its focused retry, and the final full check passed after the Rust builds finished.
+- All three Rust media profiles pass the extended bidirectional checks above.
+- TypeScript tests cover strict metadata, policy canonicalization, v1 history,
+  source-state races, bounded transport, invalid cache metadata, policy removal,
+  delayed inbound media across durable restart and KeyPackage refresh.
+- `pnpm check` passed formatting, test types, **2,359 tests across 152 files**,
+  and the package/MLS-fork build.
+- `pnpm docs:build` passed VitePress and API-reference generation without warnings.
+- `pnpm --dir examples/opentui typecheck` passed.
+- All six plain-group base/simple Welcome probes were refreshed after implementation;
+  all three extended media probes passed as described above.
 
-The fixes and probe are local repository changes; this review does not publish a new package release or change the Android app.
+No package release or Android application change is published by these local checks.

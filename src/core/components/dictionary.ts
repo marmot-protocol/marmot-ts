@@ -1,5 +1,11 @@
 /** @module @category Core - App Components */
 import {
+  decodeEncryptedMediaPolicyV1,
+  encodeEncryptedMediaPolicyV1,
+  type EncryptedMediaPolicyV1,
+} from "./encrypted-media.js";
+
+import {
   AppDataDictionary,
   ComponentData,
   CustomExtension,
@@ -50,10 +56,10 @@ import {
   GroupAvatarUrlV1,
 } from "./avatar-url.js";
 import {
-  decodeEncryptedMediaPolicyV1,
-  encodeEncryptedMediaPolicyV1,
-  EncryptedMediaPolicyV1,
-} from "./encrypted-media.js";
+  decodeEncryptedMediaPolicyV2,
+  encodeEncryptedMediaPolicyV2,
+  EncryptedMediaPolicyV2,
+} from "./encrypted-media-v2.js";
 import {
   AgentTextStreamQuicPolicyV1,
   decodeAgentTextStreamQuicPolicyV1,
@@ -249,8 +255,8 @@ const GROUP_AVATAR_URL_CODEC = defineCodec(
 );
 const ENCRYPTED_MEDIA_CODEC = defineCodec(
   GROUP_ENCRYPTED_MEDIA_COMPONENT_ID,
-  decodeEncryptedMediaPolicyV1,
-  encodeEncryptedMediaPolicyV1,
+  decodeEncryptedMediaPolicyV2,
+  encodeEncryptedMediaPolicyV2,
 );
 const GROUP_LIFECYCLE_CODEC = defineCodec(
   GROUP_LIFECYCLE_COMPONENT_ID,
@@ -325,10 +331,10 @@ export function getGroupAvatarUrl(
   return getComponent(extensions, GROUP_AVATAR_URL_CODEC);
 }
 
-/** The `group.encrypted-media.v1` policy (`0x8008`). */
+/** The `group.encrypted-media.v2` policy (`0x800b`). */
 export function getEncryptedMediaPolicy(
   extensions: GroupContextExtension[],
-): EncryptedMediaPolicyV1 | undefined {
+): EncryptedMediaPolicyV2 | undefined {
   return getComponent(extensions, ENCRYPTED_MEDIA_CODEC);
 }
 
@@ -380,9 +386,9 @@ export function groupAvatarUrlEntry(avatar: GroupAvatarUrlV1): ComponentData {
   return entryFor(GROUP_AVATAR_URL_CODEC, avatar);
 }
 
-/** Builds the `group.encrypted-media.v1` entry. */
+/** Builds the `group.encrypted-media.v2` entry. */
 export function encryptedMediaEntry(
-  policy: EncryptedMediaPolicyV1,
+  policy: EncryptedMediaPolicyV2,
 ): ComponentData {
   return entryFor(ENCRYPTED_MEDIA_CODEC, policy);
 }
@@ -393,3 +399,29 @@ export function groupLifecycleEntry(
 ): ComponentData {
   return entryFor(GROUP_LIFECYCLE_CODEC, value);
 }
+
+/** Frozen historical policy reader; does not admit v1 current-profile state. */
+export function getEncryptedMediaPolicyV1(extensions: GroupContextExtension[]) {
+  return getComponent(
+    extensions,
+    defineCodec(
+      0x8008,
+      decodeEncryptedMediaPolicyV1,
+      encodeEncryptedMediaPolicyV1,
+    ),
+  );
+}
+export function encryptedMediaEntryV1(policy: EncryptedMediaPolicyV1) {
+  return entryFor(
+    defineCodec(
+      0x8008,
+      decodeEncryptedMediaPolicyV1,
+      encodeEncryptedMediaPolicyV1,
+    ),
+    policy,
+  );
+}
+export {
+  getEncryptedMediaPolicy as getEncryptedMediaPolicyV2,
+  encryptedMediaEntry as encryptedMediaEntryV2,
+};

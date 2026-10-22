@@ -10,8 +10,8 @@ import type { SerializedClientState } from "../client-state.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import {
   encryptedMediaBlossomDefault,
-  type EncryptedMediaPolicyV1,
-} from "../components/encrypted-media.js";
+  type EncryptedMediaPolicyV2,
+} from "../components/encrypted-media-v2.js";
 import { createCredential } from "../credential.js";
 import { createSimpleGroup } from "../group.js";
 import { generateKeyPackage } from "../key-package.js";
@@ -485,7 +485,7 @@ describe("encodeMediaImetaTag / parseMediaImetaTag", () => {
     expect(parseMediaImetaTag(notUrl)).toBeNull();
   });
 
-  it("rejects a blossom-v1 locator on an unsafe / cleartext host", async () => {
+  it("accepts structurally valid http/https locators independently of contact policy", async () => {
     const base = await validImetaTag();
     for (const bad of [
       "http://blossom.example.com/x",
@@ -497,7 +497,7 @@ describe("encodeMediaImetaTag / parseMediaImetaTag", () => {
       const tag = base.map((p) =>
         p.startsWith("locator ") ? `locator blossom-v1 ${bad}` : p,
       );
-      expect(parseMediaImetaTag(tag), bad).toBeNull();
+      expect(parseMediaImetaTag(tag)?.locators[0].value, bad).toBe(bad);
     }
   });
 
@@ -565,7 +565,7 @@ describe("getMediaAttachments", () => {
 // ---------------------------------------------------------------------------
 
 describe("locator resolution", () => {
-  const policy: EncryptedMediaPolicyV1 = encryptedMediaBlossomDefault([
+  const policy: EncryptedMediaPolicyV2 = encryptedMediaBlossomDefault([
     "https://blossom.primal.net",
   ]);
 

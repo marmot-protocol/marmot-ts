@@ -8,7 +8,10 @@ import {
 
 import {
   adminPolicyEntry,
-  type EncryptedMediaPolicyV1,
+  appComponentsEntry,
+  getAppComponents,
+  GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID,
+  type EncryptedMediaPolicyV2,
   encryptedMediaEntry,
   groupAvatarUrlEntry,
   groupProfileEntry,
@@ -31,8 +34,8 @@ export interface UpdateGroupMetadata {
   nostrGroupId?: Uint8Array;
   /** New group avatar URL (group.avatar-url.v1). */
   avatarUrl?: string;
-  /** New encrypted-media policy (group.encrypted-media.v1). */
-  encryptedMedia?: EncryptedMediaPolicyV1;
+  /** New encrypted-media policy (group.encrypted-media.v2). */
+  encryptedMedia?: EncryptedMediaPolicyV2;
   /**
    * New message-retention window in seconds (message-retention.v1); `0` retains
    * indefinitely.
@@ -114,5 +117,35 @@ export function proposeUpdateMetadata(
     }
 
     return proposals;
+  };
+}
+
+/**
+ * Atomically activate/replace or remove v2 policy and its requirement.
+ * The engine validates admin authority and resulting member capabilities.
+ * Unsupported legacy-profile parents remain unsupported.
+ */
+export function proposeSetEncryptedMediaPolicy(
+  policy: EncryptedMediaPolicyV2 | null,
+  required = true,
+): ProposalAction<Proposal[]> {
+  return async ({ state }) => {
+    const current = getAppComponents(state.groupContext.extensions) ?? [];
+    const next = current.filter(
+      (id) => id !== GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID,
+    );
+    if (policy && required) next.push(GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID);
+    return [
+      componentUpdate(appComponentsEntry(next)),
+      policy
+        ? componentUpdate(encryptedMediaEntry(policy))
+        : {
+            proposalType: appDataUpdateProposalType,
+            appDataUpdate: {
+              componentId: GROUP_ENCRYPTED_MEDIA_V2_COMPONENT_ID,
+              operation: "remove",
+            },
+          },
+    ];
   };
 }

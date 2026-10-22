@@ -136,7 +136,7 @@ export type CommitProposalInputs = (
 
 /** Application intent when calling {@link MarmotGroupEngine.send}. */
 export type SendIntent =
-  | { kind: "applicationMessage"; payload: Uint8Array }
+  | { kind: "applicationMessage"; payload: Uint8Array; expectedParent?: string }
   | { kind: "proposal"; proposal: Proposal }
   | {
       kind: "commit";
@@ -206,6 +206,8 @@ export type SendResult<TEnvelope> =
 /** An envelope whose MLS message was successfully processed. */
 export type ProcessedIngestResult<TEnvelope> = {
   kind: "processed";
+  /** Exact authenticated media source. Absent when source material was pruned. */
+  sourceParent?: string;
   result: ProcessMessageResult;
   envelope: TEnvelope;
   message: MlsMessage;

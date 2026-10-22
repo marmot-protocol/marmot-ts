@@ -255,3 +255,10 @@ For advanced integrations, `group.session` (a [`GroupSession`](https://github.co
 - **[Proposals](/client/proposals)** — building add/remove/metadata proposals
 - **[History](/client/history)** — persisting and querying messages
 - **[MarmotClient](/client/marmot-client)** — lifecycle and the manager APIs
+
+## Encrypted attachments
+
+Use [encrypted media v2](../core/media.md) to configure group media policy,
+prepare source-bound attachments, and fetch/decrypt received files. Preserve the
+`expectedParent` on prepared send intents; a changed source requires fresh
+encryption and upload. Historical v1 helpers remain explicitly versioned.

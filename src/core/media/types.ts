@@ -5,10 +5,10 @@
  *
  * Written to the `v` field of an attachment `imeta` tag and mixed into the
  * key-derivation context and AEAD associated data. New media references MUST
- * use this value; V1 clients MUST reject any legacy media-version string (see
+ * use this value; v2 parsing rejects every other media-version string (see
  * darkmatter `features/encrypted-media.md`).
  */
-export const ENCRYPTED_MEDIA_VERSION = "encrypted-media-v1" as const;
+export const ENCRYPTED_MEDIA_VERSION = "encrypted-media-v2" as const;
 
 /** The initial (and only v1) locator kind. */
 export const BLOSSOM_LOCATOR_KIND = "blossom-v1" as const;
@@ -28,7 +28,7 @@ export interface MediaLocator {
 }
 
 /**
- * A decoded `encrypted-media-v1` attachment (one `imeta` tag).
+ * A decoded `encrypted-media-v2` attachment (one `imeta` tag).
  *
  * Built by {@link encryptMediaFile} (locators are filled in by the caller after
  * upload), serialized with `encodeMediaImetaTag`, and read back with

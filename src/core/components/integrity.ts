@@ -15,7 +15,11 @@ import {
   ProposalWithSender,
 } from "ts-mls";
 
-import { getAdminPolicy, getAppComponents } from "./dictionary.js";
+import {
+  getAdminPolicy,
+  getAppComponents,
+  getEncryptedMediaPolicy,
+} from "./dictionary.js";
 import { getGroupMemberPubkeys } from "../group-members.js";
 import { getCredentialPubkey } from "../credential.js";
 import {
@@ -1001,6 +1005,11 @@ export function validateResultingProfileInvariants(args: {
     hasState(ENCRYPTED_MEDIA_V1_COMPONENT_ID)
   )
     return fail("frozen encrypted-media v1 component 0x8008 is not permitted");
+  try {
+    getEncryptedMediaPolicy(args.resultingExtensions);
+  } catch {
+    return fail("encrypted-media v2 policy does not decode");
+  }
   for (const mandatory of [
     GROUP_ADMIN_POLICY_COMPONENT_ID,
     ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,

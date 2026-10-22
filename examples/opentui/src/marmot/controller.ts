@@ -23,6 +23,9 @@ import {
   type UnreadInvite,
   type Unsubscribable,
   type WelcomeRecipient,
+  prepareMediaMessage,
+  downloadMediaAttachment,
+  createBlossomMediaTransport,
 } from "@internet-privacy/marmot-ts/client";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
@@ -32,12 +35,9 @@ import {
   getKeyPackageReference,
 } from "@internet-privacy/marmot-ts";
 import {
-  BLOSSOM_LOCATOR_KIND,
-  encodeMediaImetaTag,
   encryptedMediaBlossomDefault,
   getMediaAttachments,
-  resolveMediaFetchUrls,
-  type EncryptedMediaPolicyV1,
+  type EncryptedMediaPolicyV2,
   type MediaAttachment,
 } from "@internet-privacy/marmot-ts/core";
 import type { Proposal } from "@internet-privacy/marmot-ts/mls";
@@ -51,7 +51,6 @@ import createDebug from "debug";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-import { downloadEncryptedBlob, uploadEncryptedBlob } from "./blossom.js";
 import { guessMediaType } from "./mime.js";
 import { LOOKUP_RELAYS, type Directory } from "../helpers/discovery.js";
 import type { RelayPool } from "../helpers/relay-pool.js";
@@ -605,7 +604,7 @@ export class MarmotController {
    */
   readonly #mediaIndex = new Map<string, Map<string, MediaFetchRecord>>();
   /** Lazily-built fallback media policy (see {@link DEFAULT_BLOSSOM_SERVERS}). */
-  #defaultMediaPolicyCache?: EncryptedMediaPolicyV1;
+  #defaultMediaPolicyCache?: EncryptedMediaPolicyV2;
   /** Older-message pagination state, one per group id. */
   readonly #pagination = new Map<string, PaginationState>();
 
@@ -816,6 +815,7 @@ export class MarmotController {
         );
       const group = await this.#client.groups.create(name, {
         relays: groupRelays,
+        encryptedMedia: this.#defaultMediaPolicy(),
       });
       this.#attachGroup(group);
       this.#activeId = group.idStr;
@@ -1205,28 +1205,23 @@ export class MarmotController {
     const fileBytes = new Uint8Array(await readFile(path));
     const mediaType = guessMediaType(filename);
 
-    const { encrypted, attachment } = await group.encryptMedia(
-      new Blob([fileBytes], { type: mediaType }),
-      { filename, type: mediaType },
+    const tags: string[][] = replyTo
+      ? [["q", replyTo.id, "", replyTo.authorPubkey]]
+      : [];
+    const prepared = await prepareMediaMessage(
+      group,
+      [
+        {
+          blob: new Blob([fileBytes], { type: mediaType }),
+          metadata: { filename, type: mediaType },
+        },
+      ],
+      {
+        transport: createBlossomMediaTransport({ signer: group.signer }),
+        tags,
+      },
     );
-
-    const server = this.#uploadServer(group);
-    this.log(
-      `uploading ${filename} (${formatBytes(fileBytes.length)}) → ${server}`,
-    );
-    const url = await uploadEncryptedBlob(encrypted, server, group.signer);
-    attachment.locators.push({ kind: BLOSSOM_LOCATOR_KIND, value: url });
-
-    // Seed our own plaintext so the attachment shows as ready immediately; the
-    // incoming history projection then finds the blob already cached.
-    this.#seedMedia(group, attachment, fileBytes);
-
-    const tags: string[][] = [encodeMediaImetaTag(attachment)];
-    if (replyTo) tags.push(["q", replyTo.id, "", replyTo.authorPubkey]);
-    const pubkey = await group.signer.getPublicKey();
-    const rumor = createChatRumor({ pubkey, content: "", tags });
-    const intent = createApplicationMessageIntent(rumor);
-    await this.#client.groups.send(group.id, intent);
+    await this.#client.groups.send(group.id, prepared.intent);
     this.log(`sent ${filename}`);
   }
 
@@ -2055,8 +2050,9 @@ export class MarmotController {
     const refs = getMediaAttachments(rumor.tags);
     const attachments = refs.length
       ? refs.map((att) => {
-          this.#registerMedia(group, att);
-          return this.#toChatAttachment(group, att);
+          const sourceParent = rumor.id;
+          this.#registerMedia(group, att, sourceParent);
+          return this.#toChatAttachment(group, att, sourceParent);
         })
       : undefined;
     return {
@@ -2074,10 +2070,15 @@ export class MarmotController {
   }
 
   /** Builds the display skeleton for an attachment, overlaying current fetch state. */
-  #toChatAttachment(group: MarmotGroup, att: MediaAttachment): ChatAttachment {
-    const rec = this.#mediaIndex.get(group.idStr)?.get(att.ciphertextSha256);
+  #toChatAttachment(
+    group: MarmotGroup,
+    att: MediaAttachment,
+    sourceParent?: string,
+  ): ChatAttachment {
+    const id = this.#mediaKey(att, sourceParent);
+    const rec = this.#mediaIndex.get(group.idStr)?.get(id);
     return {
-      id: att.ciphertextSha256,
+      id,
       filename: att.filename,
       mediaType: att.mediaType,
       dim: att.dim,
@@ -2109,59 +2110,55 @@ export class MarmotController {
    * fetch+decrypt. Keyed by `ciphertextSha256`, so a blob referenced by several
    * messages is fetched once and shared.
    */
-  #registerMedia(group: MarmotGroup, att: MediaAttachment): void {
+  #mediaKey(att: MediaAttachment, sourceParent?: string): string {
+    return JSON.stringify([
+      sourceParent,
+      att.version,
+      att.ciphertextSha256,
+      att.plaintextSha256,
+      att.nonce,
+      att.mediaType,
+      att.filename,
+    ]);
+  }
+
+  #registerMedia(
+    group: MarmotGroup,
+    att: MediaAttachment,
+    sourceParent?: string,
+  ): void {
     const gid = group.idStr;
     let index = this.#mediaIndex.get(gid);
     if (!index) this.#mediaIndex.set(gid, (index = new Map()));
-    if (index.has(att.ciphertextSha256)) return;
-    index.set(att.ciphertextSha256, { attachment: att, status: "pending" });
-    void this.#fetchMedia(group, att);
+    const key = this.#mediaKey(att, sourceParent);
+    if (index.has(key)) return;
+    index.set(key, { attachment: att, status: "pending" });
+    void this.#fetchMedia(group, att, key, sourceParent);
   }
 
-  /** Seeds a known plaintext (e.g. our own outgoing file) as already-decrypted. */
-  #seedMedia(group: MarmotGroup, att: MediaAttachment, data: Uint8Array): void {
-    const gid = group.idStr;
-    let index = this.#mediaIndex.get(gid);
-    if (!index) this.#mediaIndex.set(gid, (index = new Map()));
-    index.set(att.ciphertextSha256, { attachment: att, status: "ready", data });
-  }
-
-  /**
-   * Fetches an attachment's ciphertext from its Blossom locator(s) — explicit
-   * first, then the group policy's `default_blob_endpoints` fallbacks — and
-   * decrypts it via the library (which verifies both content hashes). Updates
-   * the media index and re-projects so the row flips pending → fetching →
-   * ready/error.
-   *
-   * NOTE: `decryptMedia` tries the current epoch's key plus every still-retained
-   * epoch's key, so media sent before the local tip advanced still decrypts.
-   * Media from an epoch already pruned past the engine's rollback horizon can no
-   * longer be decrypted.
-   */
-  async #fetchMedia(group: MarmotGroup, att: MediaAttachment): Promise<void> {
-    const rec = this.#mediaIndex.get(group.idStr)?.get(att.ciphertextSha256);
+  async #fetchMedia(
+    group: MarmotGroup,
+    att: MediaAttachment,
+    key: string,
+    sourceParent?: string,
+  ): Promise<void> {
+    const rec = this.#mediaIndex.get(group.idStr)?.get(key);
     if (!rec) return;
     rec.status = "fetching";
     this.#projectTimeline(group);
     try {
-      const policy =
-        group.groupData?.encryptedMedia ?? this.#defaultMediaPolicy();
-      const urls = resolveMediaFetchUrls(att, policy);
-      if (!urls.length) throw new Error("no fetchable locator for attachment");
-
-      let encrypted: Uint8Array | undefined;
-      let lastError: unknown;
-      for (const url of urls) {
-        try {
-          encrypted = await downloadEncryptedBlob(url);
-          break;
-        } catch (err) {
-          lastError = err;
-        }
-      }
-      if (!encrypted) throw lastError ?? new Error("all blob locators failed");
-
-      const stored = await group.decryptMedia(encrypted, att);
+      const authenticatedSource =
+        sourceParent && (await group.session.mediaSourceForRumor(sourceParent));
+      if (!authenticatedSource)
+        throw new Error("Attachment source material is no longer available");
+      const stored = await downloadMediaAttachment(
+        group,
+        att,
+        authenticatedSource,
+        {
+          transport: createBlossomMediaTransport({ signer: group.signer }),
+        },
+      );
       rec.data = stored.data;
       rec.status = "ready";
     } catch (err) {
@@ -2172,18 +2169,8 @@ export class MarmotController {
     this.#projectTimeline(group);
   }
 
-  /** The Blossom base URL to upload to, from the group policy or the fallback. */
-  #uploadServer(group: MarmotGroup): string {
-    const policy =
-      group.groupData?.encryptedMedia ?? this.#defaultMediaPolicy();
-    const endpoint = policy.defaultBlobEndpoints.find(
-      (e) => e.locatorKind === BLOSSOM_LOCATOR_KIND,
-    );
-    return endpoint?.baseUrl ?? DEFAULT_BLOSSOM_SERVERS[0];
-  }
-
   /** Lazily builds (and caches) the fallback Blossom media policy. */
-  #defaultMediaPolicy(): EncryptedMediaPolicyV1 {
+  #defaultMediaPolicy(): EncryptedMediaPolicyV2 {
     return (this.#defaultMediaPolicyCache ??= encryptedMediaBlossomDefault(
       DEFAULT_BLOSSOM_SERVERS,
     ));

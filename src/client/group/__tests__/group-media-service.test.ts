@@ -10,7 +10,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import type { MediaAttachment } from "../../../core/media.js";
+import {
+  mediaSourceStateToken,
+  type MediaAttachment,
+} from "../../../core/media.js";
 import { GroupMediaService } from "../group-media-service.js";
 import type { BaseGroupMedia, StoredMedia } from "../marmot-group.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
@@ -109,9 +112,9 @@ describe("GroupMediaService", () => {
     await service.decryptMedia(encrypted, attachment);
     await service.decryptMedia(encrypted, attachment);
 
-    // Stored once on first decrypt; second call hits the cache.
-    expect(cache.addMedia).toHaveBeenCalledOnce();
-    expect(cache.getMedia).toHaveBeenCalledTimes(2);
+    // Repeated reads must verify the bytes and metadata again.
+    expect(cache.addMedia).toHaveBeenCalledTimes(2);
+    expect(cache.getMedia).not.toHaveBeenCalled();
   });
 
   it("deduplicates concurrent decrypts of the same file", async () => {
@@ -161,7 +164,11 @@ describe("GroupMediaService", () => {
       getRetainedStates: () => [tip, sourceState],
     });
 
-    const { data } = await receiver.decryptMedia(encrypted, attachment);
+    const { data } = await receiver.decryptMedia(
+      encrypted,
+      attachment,
+      mediaSourceStateToken(sourceState),
+    );
     expect(data).toEqual(plaintext);
   });
 
@@ -192,9 +199,13 @@ describe("GroupMediaService", () => {
       getRetainedStates: () => [tip],
     });
 
-    await expect(receiver.decryptMedia(encrypted, attachment)).rejects.toThrow(
-      /did not authenticate/,
-    );
+    await expect(
+      receiver.decryptMedia(
+        encrypted,
+        attachment,
+        mediaSourceStateToken(sourceState),
+      ),
+    ).rejects.toThrow(/no longer retained/);
   });
 
   it("throws when decrypting an attachment without a ciphertextSha256", async () => {
@@ -203,6 +214,66 @@ describe("GroupMediaService", () => {
       service.decryptMedia(new Uint8Array(), {
         ciphertextSha256: "",
       } as MediaAttachment),
-    ).rejects.toThrow(/ciphertextSha256 is required/);
+    ).rejects.toThrow(/required/);
+  });
+});
+
+describe("v2 receive validation", () => {
+  it("does not let a cached ciphertext hash authenticate changed metadata", async () => {
+    const cache = makeMediaCache();
+    const service = await makeService(cache);
+    const { encrypted, attachment } = await service.encryptMedia(
+      new Blob(["secret"], { type: "text/plain" }),
+      { filename: "a.txt" },
+    );
+    await service.decryptMedia(encrypted, attachment);
+    await expect(
+      service.decryptMedia(encrypted, {
+        ...attachment,
+        filename: "forged.txt",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      service.decryptMedia(encrypted, {
+        ...attachment,
+        mediaType: "TEXT/PLAIN",
+      }),
+    ).rejects.toThrow(/canonical/);
+    await expect(
+      service.decryptMedia(new Uint8Array(encrypted.length), attachment),
+    ).rejects.toThrow();
+  });
+
+  it("does not guess another retained source when the requested branch is absent", async () => {
+    const impl = await getCiphersuiteImpl(
+      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      defaultCryptoProvider,
+    );
+    const source = await createState(impl);
+    let current = source;
+    const service = new GroupMediaService({
+      media: undefined,
+      getState: () => current,
+      getCiphersuite: () => impl,
+      getRetainedStates: () => [source],
+    });
+    const { encrypted, attachment, expectedParent } =
+      await service.encryptMedia(new Blob(["secret"], { type: "text/plain" }), {
+        filename: "a.txt",
+      });
+    current = {
+      ...source,
+      confirmationTag: new Uint8Array(32).fill(71),
+      keySchedule: { ...source.keySchedule, exporterSecret: randomBytes(32) },
+    };
+    await expect(service.decryptMedia(encrypted, attachment)).rejects.toThrow();
+    await expect(
+      service.decryptMedia(encrypted, attachment, expectedParent),
+    ).resolves.toMatchObject({
+      data: new TextEncoder().encode("secret"),
+    });
+    await expect(
+      service.decryptMedia(encrypted, attachment, "missing-branch"),
+    ).rejects.toThrow(/no longer retained/);
   });
 });

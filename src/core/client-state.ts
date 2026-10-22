@@ -15,7 +15,7 @@ import {
   AGENT_TEXT_STREAM_QUIC_COMPONENT,
   AGENT_TEXT_STREAM_QUIC_COMPONENT_ID,
   APP_COMPONENTS_COMPONENT_ID,
-  type EncryptedMediaPolicyV1,
+  type EncryptedMediaPolicyV2,
   GROUP_ADMIN_POLICY_COMPONENT,
   GROUP_ADMIN_POLICY_COMPONENT_ID,
   GROUP_AVATAR_URL_COMPONENT,
@@ -35,7 +35,7 @@ import {
   decodeAdminPolicyV1,
   decodeAgentTextStreamQuicPolicyV1,
   decodeComponentsList,
-  decodeEncryptedMediaPolicyV1,
+  decodeEncryptedMediaPolicyV2,
   decodeGroupAvatarUrlV1,
   decodeGroupBlossomImage,
   decodeGroupProfileV1,
@@ -85,10 +85,10 @@ export interface MarmotGroupView {
   /** URL-first rendering source; fetching failures cannot change this selection. */
   imageSource: GroupImageSource;
   /**
-   * Group encrypted-media policy (`group.encrypted-media.v1`, `0x8008`): the
+   * Group encrypted-media policy (`group.encrypted-media.v2`, `0x800b`): the
    * group-scoped blob-store endpoints and format, if set.
    */
-  encryptedMedia?: EncryptedMediaPolicyV1;
+  encryptedMedia?: EncryptedMediaPolicyV2;
   /**
    * Message-retention window in seconds (`message-retention.v1`, `0x8005`), if
    * set; `0n` means retain indefinitely.
@@ -216,7 +216,7 @@ function decodeGroupComponent(
         : { kind: "present", mediaType: image.mediaType };
     }
     case GROUP_ENCRYPTED_MEDIA_COMPONENT_ID:
-      return decodeEncryptedMediaPolicyV1(data);
+      return decodeEncryptedMediaPolicyV2(data);
     case GROUP_LIFECYCLE_COMPONENT_ID:
       return decodeGroupLifecycleV1(data);
     default:

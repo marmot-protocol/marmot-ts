@@ -65,7 +65,12 @@ export type GroupPublishResult = {
 
 /** Local protocol intent accepted by {@link GroupSession}. */
 export type GroupSessionSendIntent =
-  | { kind: "applicationMessage"; payload: Uint8Array }
+  | {
+      kind: "applicationMessage";
+      payload: Uint8Array;
+      expectedParent?: string;
+      signal?: AbortSignal;
+    }
   | { kind: "proposal"; proposal: Proposal }
   | { kind: "selfUpdate" }
   | {

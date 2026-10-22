@@ -1,4 +1,9 @@
 /** @module @category Client - Session */
+import {
+  mediaSourceStateToken,
+  StaleMediaPreparationError,
+} from "../../core/media/source-state.js";
+
 import { deserializeApplicationData } from "../../core/application-rumor.js";
 import {
   encodeDeliveredEvidence,
@@ -654,21 +659,32 @@ export class GroupSession<
 
   /** Serializable identity of the canonical parent, including same-epoch forks. */
   get parentToken(): string {
-    const { groupContext, confirmationTag } = this.state;
-    return bytesToHex(
-      sha256(
-        new TextEncoder().encode(
-          JSON.stringify([
-            "marmot/group-parent/v1",
-            bytesToHex(groupContext.groupId),
-            groupContext.epoch.toString(),
-            bytesToHex(confirmationTag),
-            bytesToHex(groupContext.treeHash),
-            bytesToHex(groupContext.confirmedTranscriptHash),
-          ]),
-        ),
-      ),
-    );
+    return mediaSourceStateToken(this.state);
+  }
+
+  /** Resolve persisted authenticated delivery evidence, never an imeta epoch. */
+  async mediaSourceForRumor(rumorId: string): Promise<string | undefined> {
+    await this.#deliveredHydrated;
+    if (
+      this.#destroyed ||
+      this.#disposed ||
+      this.removalBlocked ||
+      this.#terminalTombstone
+    )
+      return undefined;
+    const states = [this.state, ...this.retainedStates()];
+    for (const entry of this.#engine.exportDeliveredPayloads()) {
+      if (entry.rumorId !== rumorId) continue;
+      const epoch = framedEpoch(entry.message);
+      const state = states.find(
+        (candidate) =>
+          candidate.groupContext.epoch === epoch &&
+          epoch === BigInt(entry.epoch) &&
+          bytesToHex(candidate.confirmationTag) === entry.stateTag,
+      );
+      if (state) return mediaSourceStateToken(state);
+    }
+    return undefined;
   }
 
   /** Track a whole admitted operation, including engine I/O between awaits. */
@@ -1513,7 +1529,11 @@ export class GroupSession<
     return this.#prepareOutbound(
       (associate) => this.#send(admitted, associate),
       () => {
-        if (admitted.kind === "commit") admitted.signal?.throwIfAborted();
+        if (
+          admitted.kind === "commit" ||
+          admitted.kind === "applicationMessage"
+        )
+          admitted.signal?.throwIfAborted();
       },
     );
   }
@@ -1526,9 +1546,16 @@ export class GroupSession<
     this.assertOpen();
     switch (intent.kind) {
       case "applicationMessage": {
+        intent.signal?.throwIfAborted();
+        if (
+          intent.expectedParent !== undefined &&
+          intent.expectedParent !== this.parentToken
+        )
+          throw new StaleMediaPreparationError();
         const sendResult = await this.#engine.send({
           kind: "applicationMessage",
           payload: intent.payload,
+          expectedParent: intent.expectedParent,
         });
         associate(sendResult);
         this.assertOpen();

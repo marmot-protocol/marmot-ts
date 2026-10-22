@@ -11,6 +11,10 @@ ignoredBuiltDependencies:
 
 minimumReleaseAgeExclude:
   - "@hono/node-server@2.0.6"
+  # Reviewed Applesauce v7 patches selected for the dependency upgrade.
+  - "applesauce-accounts@7.0.2"
+  - "applesauce-core@7.0.3"
+  - "applesauce-loaders@7.0.2"
 
 onlyBuiltDependencies:
   - esbuild

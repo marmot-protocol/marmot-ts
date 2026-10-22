@@ -1,8 +1,7 @@
 /** @module @category Client - Group History */
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-import type { NostrEvent } from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers/filter";
-import { matchFilters } from "applesauce-core/helpers/filter";
+import { compileFilters } from "applesauce-core/helpers/filter";
 import { EventEmitter } from "eventemitter3";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import { BaseGroupHistory, GroupHistoryFactory } from "../index.js";
@@ -101,6 +100,7 @@ export class GroupRumorHistory
         : [filters]
       : [{}];
 
+    const matches = compileFilters<Rumor>(filtersArray);
     let version = 0;
     let observed = -1;
     let wake: (() => void) | undefined;
@@ -110,7 +110,7 @@ export class GroupRumorHistory
       wake = undefined;
     };
     const inserted = (rumor: Rumor) => {
-      if (matchFilters(filtersArray, rumor as NostrEvent)) changed();
+      if (matches(rumor)) changed();
     };
     this.on("rumor", inserted);
     this.on("cleared", changed);

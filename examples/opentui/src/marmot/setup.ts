@@ -283,7 +283,7 @@ export async function createController(
   const directory = new Directory(eventStore);
   // Relays that refuse a REQ/EVENT with auth-required get a NIP-42 AUTH
   // signed by the account (relay.ditto.pub gates the kind-1059 inbox this
-  // way). Teardown happens inside RelayPool.close().
+  // way). Authentication is scoped to the refused operation.
   const pool = new RelayPool(nostr, bootstrapRelays, directory, {
     authSigner: account.signer,
   });

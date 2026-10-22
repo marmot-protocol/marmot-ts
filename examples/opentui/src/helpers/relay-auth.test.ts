@@ -1,334 +1,140 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { PrivateKeyAccount } from "applesauce-accounts/accounts";
+import { EventStore } from "applesauce-core/event-store";
+import { RelayPool as ApplesauceRelayPool } from "applesauce-relay";
 
-import type { AuthSigner, PublishResponse } from "applesauce-relay/types";
+import { Directory } from "./discovery.js";
+import { RelayPool } from "./relay-pool.js";
 
-import {
-  autoAuthenticateRelays,
-  type AuthWatchablePool,
-  type AuthWatchableRelay,
-  type Unsubscribable,
-} from "./relay-auth.js";
+const account = PrivateKeyAccount.fromKey("1".padStart(64, "0"));
+const event = await account.signEvent({
+  kind: 1,
+  created_at: 1,
+  tags: [],
+  content: "test",
+});
+const wireEvent = JSON.parse(JSON.stringify(event));
+const cleanup: (() => void)[] = [];
+afterEach(() => {
+  for (const close of cleanup.splice(0).reverse()) close();
+});
 
-/** Waits out every pending microtask (auth attempts are promise chains). */
-async function flush(): Promise<void> {
-  await Bun.sleep(0);
-}
-
-const SIGNER: AuthSigner = {
-  signEvent: () => {
-    throw new Error("not used by these tests");
-  },
-};
-
-/**
- * `BehaviorSubject`-like fake: has a current value, emits it synchronously on
- * `subscribe`, and tracks live listener count for teardown assertions.
- */
-class FakeState<T> {
-  #value: T;
-  #listeners = new Set<(value: T) => void>();
-
-  constructor(initial: T) {
-    this.#value = initial;
-  }
-
-  get listenerCount(): number {
-    return this.#listeners.size;
-  }
-
-  subscribe(next: (value: T) => void): Unsubscribable {
-    this.#listeners.add(next);
-    next(this.#value);
-    return {
-      unsubscribe: () => {
-        this.#listeners.delete(next);
+/** Local relay exercises the real v7 retry/auth lifecycle without public networking. */
+function setup({ requiresAuth = true, rejectsAuth = false } = {}) {
+  let authAttempts = 0;
+  const server = Bun.serve<{ authenticated: boolean }>({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req, server) {
+      if (server.upgrade(req, { data: { authenticated: false } })) return;
+      return new Response(null, { status: 400 });
+    },
+    websocket: {
+      open(ws) {
+        ws.send(JSON.stringify(["AUTH", "test-challenge"]));
       },
-    };
-  }
-
-  next(value: T): void {
-    this.#value = value;
-    for (const listener of [...this.#listeners]) listener(value);
-  }
-}
-
-/** `Subject`-like fake: no replay, tracks live listener count. */
-class FakeSignal<T> {
-  #listeners = new Set<(value: T) => void>();
-
-  get listenerCount(): number {
-    return this.#listeners.size;
-  }
-
-  subscribe(next: (value: T) => void): Unsubscribable {
-    this.#listeners.add(next);
-    return {
-      unsubscribe: () => {
-        this.#listeners.delete(next);
+      message(ws, message) {
+        const [verb, value] = JSON.parse(String(message));
+        if (verb === "AUTH") {
+          authAttempts++;
+          ws.data.authenticated = !rejectsAuth;
+          ws.send(
+            JSON.stringify([
+              "OK",
+              value.id,
+              !rejectsAuth,
+              rejectsAuth ? "restricted: denied" : "",
+            ]),
+          );
+        } else if (verb === "REQ") {
+          if (requiresAuth && !ws.data.authenticated) {
+            ws.send(
+              JSON.stringify(["CLOSED", value, "auth-required: sign in"]),
+            );
+          } else {
+            ws.send(JSON.stringify(["EVENT", value, event]));
+            ws.send(JSON.stringify(["EOSE", value]));
+          }
+        } else if (verb === "EVENT") {
+          const ok = !requiresAuth || ws.data.authenticated;
+          ws.send(
+            JSON.stringify([
+              "OK",
+              value.id,
+              ok,
+              ok ? "" : "auth-required: sign in",
+            ]),
+          );
+        }
       },
-    };
-  }
-
-  emit(value: T): void {
-    for (const listener of [...this.#listeners]) listener(value);
-  }
+    },
+  });
+  cleanup.push(() => server.stop(true));
+  const url = `ws://127.0.0.1:${server.port}/`;
+  const store = new EventStore();
+  const pool = new RelayPool(
+    new ApplesauceRelayPool({ keepAlive: 0 }),
+    [url],
+    new Directory(store),
+    { authSigner: account },
+  );
+  cleanup.push(() => {
+    pool.close();
+    store.dispose();
+  });
+  return { pool, url, authAttempts: () => authAttempts };
 }
 
-interface FakeRelay extends AuthWatchableRelay {
-  challenge$: FakeState<string | null>;
-  authRequiredForRead$: FakeState<boolean>;
-  authRequiredForPublish$: FakeState<boolean>;
-  authenticate: ReturnType<
-    typeof mock<(signer: AuthSigner) => Promise<PublishResponse>>
-  >;
-}
-
-function createFakeRelay(url: string): FakeRelay {
-  return {
-    url,
-    challenge$: new FakeState<string | null>(null),
-    authRequiredForRead$: new FakeState<boolean>(false),
-    authRequiredForPublish$: new FakeState<boolean>(false),
-    authenticate: mock(
-      async () => ({ ok: true, from: url }) as PublishResponse,
-    ),
-  };
-}
-
-interface FakePool extends AuthWatchablePool {
-  relays: Map<string, AuthWatchableRelay>;
-  add$: FakeSignal<AuthWatchableRelay>;
-  remove$: FakeSignal<AuthWatchableRelay>;
-}
-
-function createFakePool(relays: AuthWatchableRelay[] = []): FakePool {
-  return {
-    relays: new Map(relays.map((relay) => [relay.url, relay])),
-    add$: new FakeSignal<AuthWatchableRelay>(),
-    remove$: new FakeSignal<AuthWatchableRelay>(),
-  };
-}
-
-describe("autoAuthenticateRelays", () => {
-  test("Test 1: a challenge alone never authenticates (privacy / on-demand)", async () => {
-    const relay = createFakeRelay("wss://relay.example/");
-    const pool = createFakePool([relay]);
-    const handle = autoAuthenticateRelays(pool, SIGNER);
-
-    relay.challenge$.next("c1");
-    await flush();
-
-    expect(relay.authenticate).not.toHaveBeenCalled();
-    handle.unsubscribe();
+describe("operation-scoped relay authentication", () => {
+  test("a bare challenge does not authenticate a public request", async () => {
+    const { pool, authAttempts } = setup({ requiresAuth: false });
+    expect(
+      JSON.parse(JSON.stringify(await pool.request([], { kinds: [1] }))),
+    ).toEqual([wireEvent]);
+    expect(authAttempts()).toBe(0);
   });
 
-  test("Test 2: read auth-required + challenge authenticates exactly once, in either order", async () => {
-    const relay = createFakeRelay("wss://relay.example/");
-    const pool = createFakePool([relay]);
-    const handle = autoAuthenticateRelays(pool, SIGNER);
-
-    relay.authRequiredForRead$.next(true);
-    relay.challenge$.next("c1");
-    await flush();
-
-    expect(relay.authenticate).toHaveBeenCalledTimes(1);
-    expect(relay.authenticate).toHaveBeenCalledWith(SIGNER);
-    handle.unsubscribe();
-
-    const relay2 = createFakeRelay("wss://relay2.example/");
-    const pool2 = createFakePool([relay2]);
-    const handle2 = autoAuthenticateRelays(pool2, SIGNER);
-
-    relay2.challenge$.next("c1");
-    relay2.authRequiredForRead$.next(true);
-    await flush();
-
-    expect(relay2.authenticate).toHaveBeenCalledTimes(1);
-    expect(relay2.authenticate).toHaveBeenCalledWith(SIGNER);
-    handle2.unsubscribe();
+  test("a refused request authenticates and retries", async () => {
+    const { pool, authAttempts } = setup();
+    expect(
+      JSON.parse(JSON.stringify(await pool.request([], { kinds: [1] }))),
+    ).toEqual([wireEvent]);
+    expect(authAttempts()).toBe(1);
   });
 
-  test("Test 3: publish auth-required + challenge authenticates once", async () => {
-    const relay = createFakeRelay("wss://relay.example/");
-    const pool = createFakePool([relay]);
-    const handle = autoAuthenticateRelays(pool, SIGNER);
-
-    relay.authRequiredForPublish$.next(true);
-    relay.challenge$.next("c1");
-    await flush();
-
-    expect(relay.authenticate).toHaveBeenCalledTimes(1);
-    handle.unsubscribe();
+  test("public lookups can decline authentication and propagate all-relay failure", async () => {
+    const { pool, authAttempts } = setup();
+    await expect(
+      pool.request([], { kinds: [1] }, { waitForAuth: false }),
+    ).rejects.toThrow();
+    expect(authAttempts()).toBe(0);
   });
 
-  test("Test 4: re-emitting the same challenge and flags never re-authenticates", async () => {
-    const relay = createFakeRelay("wss://relay.example/");
-    const pool = createFakePool([relay]);
-    const handle = autoAuthenticateRelays(pool, SIGNER);
-
-    relay.authRequiredForRead$.next(true);
-    relay.challenge$.next("c1");
-    await flush();
-    expect(relay.authenticate).toHaveBeenCalledTimes(1);
-
-    relay.challenge$.next("c1");
-    relay.authRequiredForRead$.next(false);
-    relay.authRequiredForRead$.next(true);
-    relay.authRequiredForPublish$.next(true);
-    await flush();
-
-    expect(relay.authenticate).toHaveBeenCalledTimes(1);
-    handle.unsubscribe();
+  test("a refused publish authenticates and retries", async () => {
+    const { pool, url, authAttempts } = setup();
+    const responses = await pool.publish([], event);
+    expect(responses[url]?.ok).toBe(true);
+    expect(authAttempts()).toBe(1);
   });
 
-  test("Test 5: a fresh challenge after reconnect authenticates again while required", async () => {
-    const relay = createFakeRelay("wss://relay.example/");
-    const pool = createFakePool([relay]);
-    const handle = autoAuthenticateRelays(pool, SIGNER);
-
-    relay.authRequiredForRead$.next(true);
-    relay.challenge$.next("c1");
-    await flush();
-    expect(relay.authenticate).toHaveBeenCalledTimes(1);
-
-    relay.challenge$.next(null);
-    relay.challenge$.next("c2");
-    await flush();
-    expect(relay.authenticate).toHaveBeenCalledTimes(2);
-    handle.unsubscribe();
-
-    const relay2 = createFakeRelay("wss://relay2.example/");
-    const pool2 = createFakePool([relay2]);
-    const handle2 = autoAuthenticateRelays(pool2, SIGNER);
-
-    relay2.authRequiredForRead$.next(false);
-    relay2.authRequiredForPublish$.next(false);
-    relay2.challenge$.next("c2");
-    await flush();
-    expect(relay2.authenticate).not.toHaveBeenCalled();
-    handle2.unsubscribe();
-  });
-
-  test("Test 6: watches relays present at attach time and relays added later via add$", async () => {
-    const existing = createFakeRelay("wss://existing.example/");
-    const pool = createFakePool([existing]);
-    const handle = autoAuthenticateRelays(pool, SIGNER);
-
-    existing.authRequiredForRead$.next(true);
-    existing.challenge$.next("c1");
-    await flush();
-    expect(existing.authenticate).toHaveBeenCalledTimes(1);
-
-    const added = createFakeRelay("wss://added.example/");
-    pool.add$.emit(added);
-    added.authRequiredForRead$.next(true);
-    added.challenge$.next("c1");
-    await flush();
-    expect(added.authenticate).toHaveBeenCalledTimes(1);
-
-    handle.unsubscribe();
-  });
-
-  test("Test 7: authenticate failures are logged quietly and never retried for the same challenge", async () => {
-    const rejecting = createFakeRelay("wss://rejecting.example/");
-    rejecting.authenticate = mock(async () => {
-      throw new Error("network down");
+  test("a refused subscription authenticates and delivers events", async () => {
+    const { pool, authAttempts } = setup();
+    const received = await new Promise((resolve, reject) => {
+      const sub = pool.subscription([], { kinds: [1] }).subscribe({
+        next: (value) => {
+          sub.unsubscribe();
+          resolve(value);
+        },
+        error: reject,
+      });
     });
-    const throwing = createFakeRelay("wss://throwing.example/");
-    throwing.authenticate = mock(() => {
-      throw new Error("sync boom");
-    });
-    const refused = createFakeRelay("wss://refused.example/");
-    refused.authenticate = mock(
-      async () =>
-        ({
-          ok: false,
-          message: "auth-required: nope",
-          from: refused.url,
-        }) as PublishResponse,
-    );
-
-    const pool = createFakePool([rejecting, throwing, refused]);
-    const log = mock((_formatter: string, ..._args: unknown[]) => {});
-    const handle = autoAuthenticateRelays(pool, SIGNER, log);
-
-    for (const relay of [rejecting, throwing, refused]) {
-      relay.authRequiredForRead$.next(true);
-      relay.challenge$.next("c1");
-    }
-    await flush();
-
-    expect(rejecting.authenticate).toHaveBeenCalledTimes(1);
-    expect(throwing.authenticate).toHaveBeenCalledTimes(1);
-    expect(refused.authenticate).toHaveBeenCalledTimes(1);
-
-    const loggedUrls = log.mock.calls.map((call) => call.join(" "));
-    expect(loggedUrls.some((line) => line.includes(rejecting.url))).toBe(true);
-    expect(loggedUrls.some((line) => line.includes(throwing.url))).toBe(true);
-    expect(loggedUrls.some((line) => line.includes(refused.url))).toBe(true);
-
-    // Re-emitting the same challenge must not retry any of the failed relays.
-    for (const relay of [rejecting, throwing, refused]) {
-      relay.challenge$.next("c1");
-    }
-    await flush();
-    expect(rejecting.authenticate).toHaveBeenCalledTimes(1);
-    expect(throwing.authenticate).toHaveBeenCalledTimes(1);
-    expect(refused.authenticate).toHaveBeenCalledTimes(1);
-
-    handle.unsubscribe();
+    expect(JSON.parse(JSON.stringify(received))).toEqual(wireEvent);
+    expect(authAttempts()).toBe(1);
   });
 
-  test("Test 8: unsubscribe detaches every watcher; nothing authenticates afterward", async () => {
-    const relay = createFakeRelay("wss://relay.example/");
-    const pool = createFakePool([relay]);
-    const handle = autoAuthenticateRelays(pool, SIGNER);
-
-    handle.unsubscribe();
-    handle.unsubscribe(); // idempotent
-
-    expect(relay.challenge$.listenerCount).toBe(0);
-    expect(relay.authRequiredForRead$.listenerCount).toBe(0);
-    expect(relay.authRequiredForPublish$.listenerCount).toBe(0);
-    expect(pool.add$.listenerCount).toBe(0);
-    expect(pool.remove$.listenerCount).toBe(0);
-
-    relay.authRequiredForRead$.next(true);
-    relay.challenge$.next("c1");
-    const added = createFakeRelay("wss://added.example/");
-    pool.add$.emit(added);
-    added.authRequiredForRead$.next(true);
-    added.challenge$.next("c1");
-    await flush();
-
-    expect(relay.authenticate).not.toHaveBeenCalled();
-    expect(added.authenticate).not.toHaveBeenCalled();
-  });
-
-  test("Test 9: removing one relay detaches only that relay's watchers", async () => {
-    const kept = createFakeRelay("wss://kept.example/");
-    const removed = createFakeRelay("wss://removed.example/");
-    const pool = createFakePool([kept, removed]);
-    const handle = autoAuthenticateRelays(pool, SIGNER);
-
-    pool.remove$.emit(removed);
-
-    expect(removed.challenge$.listenerCount).toBe(0);
-    expect(removed.authRequiredForRead$.listenerCount).toBe(0);
-    expect(removed.authRequiredForPublish$.listenerCount).toBe(0);
-    expect(kept.challenge$.listenerCount).toBe(1);
-    expect(kept.authRequiredForRead$.listenerCount).toBe(1);
-    expect(kept.authRequiredForPublish$.listenerCount).toBe(1);
-
-    removed.authRequiredForRead$.next(true);
-    removed.challenge$.next("c1");
-    kept.authRequiredForRead$.next(true);
-    kept.challenge$.next("c1");
-    await flush();
-
-    expect(removed.authenticate).not.toHaveBeenCalled();
-    expect(kept.authenticate).toHaveBeenCalledTimes(1);
-
-    handle.unsubscribe();
+  test("rejected AUTH fails the request without retrying forever", async () => {
+    const { pool, authAttempts } = setup({ rejectsAuth: true });
+    await expect(pool.request([], { kinds: [1] })).rejects.toThrow();
+    expect(authAttempts()).toBe(1);
   });
 });

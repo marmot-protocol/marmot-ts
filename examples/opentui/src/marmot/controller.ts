@@ -860,11 +860,9 @@ export class MarmotController {
       onProgress?.(
         `fetching KeyPackages from ${searchRelays.length} relay(s)…`,
       );
-      // KeyPackages are public, so this lookup does not wait on auth: a relay
-      // whose connection was flagged auth-required by another REQ (e.g.
-      // ditto gating our kind-1059 inbox) would otherwise hold this REQ
-      // until auth succeeds. applesauce's group completion keeps any one
-      // stuck relay from blocking results from the others.
+      // KeyPackages are public: decline authentication for this lookup.
+      // Other operations on the same connection can authenticate independently;
+      // an auth refusal here fails only this relay's request.
       const kps = await this.#pool.request(
         searchRelays,
         {

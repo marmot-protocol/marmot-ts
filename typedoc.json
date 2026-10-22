@@ -60,6 +60,9 @@
     "@yields"
   ],
   "externalSymbolLinkMappings": {
+    "applesauce-core": {
+      "Rumor": "https://applesauce.build/typedoc/types/applesauce-core.Helpers.Rumor.html"
+    },
     "nostr-tools": {
       "NostrEvent": "https://applesauce.build/typedoc/types/applesauce-core.Helpers.NostrEvent.html"
     },

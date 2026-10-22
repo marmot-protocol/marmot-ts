@@ -6,6 +6,10 @@
 
 - Reuse one persisted leaf signature key per installation across KeyPackages with the new `getSignatureKeyPair` option on `MarmotClient` (or `signatureKeyPair` on `generateKeyPackage`). Other clients can then match a member's leaf to its published KeyPackages after the one used to join was consumed, as they can for MDK devices. Init and encryption keys stay fresh for every KeyPackage.
 
+### Changed
+
+- Upgrade Applesauce dependencies to v7 for improved event caching, relay reliability, and loader performance. Applications using Applesauce alongside marmot-ts should upgrade their Applesauce packages to v7 together. Live rumor-history subscriptions now compile filters once for faster matching. The OpenTUI example uses operation-scoped relay authentication.
+
 ### Fixed
 
 - Groups created before 0.7.0, with the app-data dictionary first in their GroupContext extensions, can now be renamed and have their admins, relays or other components changed without splitting off White Noise members. The first such commit by a marmot-ts admin also moves the dictionary last, so later updates need no repair. Groups that already split on an earlier update are not recovered.

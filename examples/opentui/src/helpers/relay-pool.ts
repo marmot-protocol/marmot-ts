@@ -1,7 +1,11 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Filter } from "applesauce-core/helpers/filter";
 import type { RelayPool as AsRelayPool } from "applesauce-relay/pool";
-import type { AuthSigner, RelayRequestOptions } from "applesauce-relay/types";
+import type {
+  AuthSigner,
+  RelayAuthHandler,
+  RelayRequestOptions,
+} from "applesauce-relay/types";
 
 import type {
   NostrNetworkInterface,
@@ -9,8 +13,7 @@ import type {
   Subscribable,
 } from "@internet-privacy/marmot-ts/client";
 
-import { autoAuthenticateRelays } from "./relay-auth.js";
-import type { Unsubscribable } from "./relay-auth.js";
+import { createRelayAuthHandler } from "./relay-auth.js";
 import type { Directory } from "./discovery.js";
 
 function resolveRelays(relays: string[], fallback: string[]): string[] {
@@ -40,7 +43,7 @@ export class RelayPool implements NostrNetworkInterface {
 
   readonly #pool: AsRelayPool;
   readonly #directory: Directory;
-  #relayAuth?: Unsubscribable;
+  #onAuthRequired?: RelayAuthHandler;
   #closed = false;
 
   constructor(
@@ -53,7 +56,7 @@ export class RelayPool implements NostrNetworkInterface {
     this.defaultRelays = defaultRelays;
     this.#directory = directory;
     if (options.authSigner) {
-      this.#relayAuth = autoAuthenticateRelays(this.#pool, options.authSigner);
+      this.#onAuthRequired = createRelayAuthHandler(options.authSigner);
     }
   }
 
@@ -63,7 +66,9 @@ export class RelayPool implements NostrNetworkInterface {
   ): Promise<Record<string, PublishResponse>> {
     if (this.#closed) return {};
     const targets = resolveRelays(relays, this.defaultRelays);
-    const responses = await this.#pool.publish(targets, event);
+    const responses = await this.#pool.publish(targets, event, {
+      onAuthRequired: this.#onAuthRequired,
+    });
     const results: Record<string, PublishResponse> = {};
     for (const response of responses) {
       results[response.from] = response;
@@ -75,11 +80,9 @@ export class RelayPool implements NostrNetworkInterface {
     relays: string[],
     filters: Filter | Filter[],
     /**
-     * Set `waitForAuth: false` for public lookups so a connection flagged
-     * auth-required by an unrelated REQ cannot hold this REQ. applesauce's
-     * default group completion (5s after the first relay EOSE, or all
-     * relays EOSE/ERROR) already keeps one stuck relay from blocking
-     * results from the others.
+     * Set `waitForAuth: false` for public lookups that should fail rather
+     * than authenticate when a relay refuses them. Authentication in v7 is
+     * scoped to each operation; unrelated public requests remain independent.
      */
     options?: Pick<RelayRequestOptions, "waitForAuth">,
   ): Promise<NostrEvent[]> {
@@ -87,11 +90,16 @@ export class RelayPool implements NostrNetworkInterface {
     const targets = resolveRelays(relays, this.defaultRelays);
     const collected: NostrEvent[] = [];
     await new Promise<void>((resolve, reject) => {
-      this.#pool.request(targets, filters, options).subscribe({
-        next: (event) => collected.push(event),
-        error: reject,
-        complete: () => resolve(),
-      });
+      this.#pool
+        .request(targets, filters, {
+          onAuthRequired: this.#onAuthRequired,
+          ...options,
+        })
+        .subscribe({
+          next: (event) => collected.push(event),
+          error: reject,
+          complete: () => resolve(),
+        });
     });
     return collected;
   }
@@ -109,7 +117,9 @@ export class RelayPool implements NostrNetworkInterface {
       };
     }
     const targets = resolveRelays(relays, this.defaultRelays);
-    return this.#pool.subscription(targets, filters);
+    return this.#pool.subscription(targets, filters, {
+      onAuthRequired: this.#onAuthRequired,
+    });
   }
 
   async getUserInboxRelays(pubkey: string): Promise<string[]> {
@@ -128,8 +138,6 @@ export class RelayPool implements NostrNetworkInterface {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    this.#relayAuth?.unsubscribe();
-    this.#relayAuth = undefined;
     this.#directory.close();
     this.#pool.close();
   }

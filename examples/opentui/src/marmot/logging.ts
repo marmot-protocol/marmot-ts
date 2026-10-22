@@ -1,3 +1,9 @@
+import {
+  enableLoggerNamespaces,
+  getLoggerNamespaces,
+  getLoggerSink,
+  setLoggerSink,
+} from "applesauce-core";
 import createDebug from "debug";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -20,7 +26,17 @@ export function redirectDebugToFile(logPath: string): LogFile {
   const stream: WriteStream = createWriteStream(path, { flags: "a" });
   let closed = false;
 
-  createDebug.enable(process.env.DEBUG || "*");
+  const previousNamespaces = getLoggerNamespaces();
+  const previousSink = getLoggerSink();
+  const namespaces = process.env.DEBUG || "*";
+  enableLoggerNamespaces(namespaces);
+  setLoggerSink((message) => {
+    if (!closed)
+      stream.write(
+        `${new Date().toISOString()} ${message.replace(ANSI, "")}\n`,
+      );
+  });
+  createDebug.enable(namespaces);
   createDebug.inspectOpts ??= {};
   createDebug.inspectOpts.hideDate = true;
   createDebug.log = (...args: unknown[]): void => {
@@ -41,6 +57,8 @@ export function redirectDebugToFile(logPath: string): LogFile {
     close: () => {
       if (closed) return;
       closed = true;
+      setLoggerSink(previousSink);
+      enableLoggerNamespaces(previousNamespaces);
       stream.end();
     },
   };

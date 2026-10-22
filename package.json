@@ -117,8 +117,8 @@
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@scure/base": "^2.2.0",
-    "applesauce-common": "^6.2.0",
-    "applesauce-core": "^6.2.0",
+    "applesauce-common": "^7.0.0",
+    "applesauce-core": "^7.0.3",
     "debug": "^4.4.3",
     "eventemitter3": "^5.0.4"
   },
@@ -149,7 +149,7 @@
   "devDependencies": {
     "@types/debug": "^4.1.13",
     "@types/node": "^24.13.2",
-    "applesauce-accounts": "^6.2.0",
+    "applesauce-accounts": "^7.0.2",
     "prettier": "^3.9.3",
     "rimraf": "~6.0.1",
     "ts-mls": "workspace:*",

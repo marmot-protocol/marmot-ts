@@ -203,14 +203,18 @@ describe("same-epoch race: tip ordering on every selection path", () => {
     const { impl, ctx, adminEpoch1, memberAEpoch1, memberBEpoch1 } =
       await groupAtEpoch1({ admin: 12, memberA: 3, memberB: 9 });
     const peeler = testPeeler(impl);
-    const low = await selfUpdate(ctx, memberAEpoch1);
+    let low = await selfUpdate(ctx, memberAEpoch1);
     let high = await selfUpdate(ctx, memberBEpoch1);
     for (
       let i = 0;
       i < MAX_ATTEMPTS && digestOf(high.commit) > digestOf(low.commit);
       i++
-    )
+    ) {
+      // Redraw both digests: fixing an unusually small low digest makes
+      // repeated high-only attempts fail with probability about 1 / attempts.
+      low = await selfUpdate(ctx, memberAEpoch1);
       high = await selfUpdate(ctx, memberBEpoch1);
+    }
     // The digest favours the higher committer, so a digest-only tie-break
     // would choose the wrong branch.
     expect(digestOf(high.commit) < digestOf(low.commit)).toBe(true);

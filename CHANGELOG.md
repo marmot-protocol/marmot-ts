@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- The OpenTUI example finishes admin changes after the first relay accepts the commit while continuing publication to the other relays. Lost acknowledgments retain the original commit for safe retry instead of stranding the sender behind its peers; `retryPendingPublication()` resumes it without regenerating MLS bytes. Configure a durable `rewindStore` to preserve pending commits across restart.
+
 - KeyPackage publication tags now reflect the supplied signed LeafNode, avoiding overstated capabilities when older KeyPackages are republished. Delayed media messages retain their source epoch in durable delivery evidence, so their attachments can resolve after restart.
 - Accept valid MDK Welcomes whose groups do not require `self_remove`, a group profile, or lifecycle-v1. Joining now checks the protocol baseline separately from new-group defaults and applies the same complete-state invariants as commits. Existing groups without lifecycle-v1 remain usable without disbanding. Welcomes containing frozen encrypted-media v1 state are now refused, matching MDK; recreate those groups without that component.
 

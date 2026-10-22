@@ -421,9 +421,15 @@ describe("public disband terminal contract", () => {
         store: new InMemoryKeyValueStore<Uint8Array>(),
       });
       if (publishFailure) {
-        vi.spyOn(network, "publish").mockRejectedValueOnce(
-          new Error("publish crash"),
-        );
+        // An explicit rejecting OK is a definitive failure. A thrown adapter
+        // error is now ACK-uncertain and correctly keeps PendingPublish.
+        vi.spyOn(network, "publish").mockResolvedValueOnce({
+          "wss://relay.test": {
+            from: "wss://relay.test",
+            ok: false,
+            message: "blocked",
+          },
+        });
         expect(await group.disband()).toMatchObject({ kind: "publishFailed" });
         expect((await group.session.disbandRequest())?.status).toBe("pending");
       }

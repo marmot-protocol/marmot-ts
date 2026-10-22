@@ -66,14 +66,36 @@ export class RelayPool implements NostrNetworkInterface {
   ): Promise<Record<string, PublishResponse>> {
     if (this.#closed) return {};
     const targets = resolveRelays(relays, this.defaultRelays);
-    const responses = await this.#pool.publish(targets, event, {
-      onAuthRequired: this.#onAuthRequired,
-    });
     const results: Record<string, PublishResponse> = {};
-    for (const response of responses) {
-      results[response.from] = response;
-    }
-    return results;
+    // Start every permitted target before releasing the first ACK. Outstanding
+    // attempts continue independently and cannot undo a successful publication.
+    return new Promise((resolve) => {
+      const targetsLeft = new Set(targets);
+      if (!targetsLeft.size) resolve({});
+      for (const url of targetsLeft) {
+        void Promise.resolve()
+          .then(() =>
+            this.#pool.relay(url).publish(event, {
+              onAuthRequired: this.#onAuthRequired,
+            }),
+          )
+          .then(
+            (response) => finish(url, response),
+            (error: unknown) =>
+              finish(url, {
+                from: url,
+                ok: false,
+                uncertain: true,
+                message: error instanceof Error ? error.message : String(error),
+              }),
+          );
+      }
+      function finish(url: string, response: PublishResponse): void {
+        results[url] = response;
+        targetsLeft.delete(url);
+        if (response.ok || !targetsLeft.size) resolve({ ...results });
+      }
+    });
   }
 
   async request(

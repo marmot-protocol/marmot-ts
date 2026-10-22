@@ -116,7 +116,8 @@ export type MarmotClientOptions<
   /**
    * Dedicated backend for the per-group full-fork history tree (the single
    * persisted source for fork recovery and the {@link MarmotGroup.forkTree}
-   * API). When provided, the tree is persisted so fork recovery survives a
+   * API) and exact pending commit publication records. When provided, the tree
+   * and pending private MLS states are persisted so recovery survives a
    * restart; back it with the same durable (ideally encrypted) backend as
    * `groupStateStore`. Optional — when omitted, history is in-memory only and is
    * rebuilt from the current tip after each restart.

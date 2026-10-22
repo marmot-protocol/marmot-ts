@@ -209,7 +209,10 @@ describe("SelfRemove member departure (B6)", () => {
     const retryNetwork = recordingNetwork(retriedPublished);
     retryNetwork.publish = async (_relays, event) => {
       publicationAttempts += 1;
-      if (publicationAttempts === 1) throw new Error("relay rejected commit");
+      if (publicationAttempts === 1)
+        return {
+          [RELAY]: { from: RELAY, ok: false, message: "relay rejected commit" },
+        };
       retriedPublished.push(event);
       return { [RELAY]: { from: RELAY, ok: true } };
     };

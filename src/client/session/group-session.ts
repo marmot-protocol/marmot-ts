@@ -1,4 +1,5 @@
 /** @module @category Client - Session */
+import { pendingPublicationKey } from "../runtime/pending-publication.js";
 import {
   mediaSourceStateToken,
   StaleMediaPreparationError,
@@ -1127,7 +1128,10 @@ export class GroupSession<
     const idHex = bytesToHex(this.id);
     await this.#removedMarkerStore?.removeItem(`${idHex}/removed`);
     await this.store.removeItem(idHex);
-    if (this.rewindStore) await GroupHistoryTree.purge(this.rewindStore, idHex);
+    if (this.rewindStore) {
+      await GroupHistoryTree.purge(this.rewindStore, idHex);
+      await this.rewindStore.removeItem(pendingPublicationKey(idHex));
+    }
     if (this.ingestStateStore)
       for (const key of await this.ingestStateStore.keys())
         if (key.startsWith(`${idHex}/`))
@@ -1380,7 +1384,10 @@ export class GroupSession<
     await this.history?.purgeMessages();
     // The decoder requires the tree; retire evidence before its provenance.
     await this.ingestStateStore?.removeItem(this.#deliveredKey());
-    if (this.rewindStore) await GroupHistoryTree.purge(this.rewindStore, idHex);
+    if (this.rewindStore) {
+      await GroupHistoryTree.purge(this.rewindStore, idHex);
+      await this.rewindStore.removeItem(pendingPublicationKey(idHex));
+    }
   }
 
   async #resumeTerminalWork(): Promise<DispositionedIngestResult[]> {
@@ -1407,6 +1414,18 @@ export class GroupSession<
     this.#disposed = true;
     this.#clearPublications();
     this.#engine.dispose();
+  }
+
+  /** @internal Keep recovery writes inside the owner's destruction and retention barriers. */
+  async persistPublication(operation: () => Promise<unknown>): Promise<void> {
+    await this.#write(operation);
+    this.assertOutboundOpen();
+  }
+
+  /** Restore the gate without making the retained pending state canonical. */
+  restorePendingPublication(pending: PendingState): void {
+    this.assertOutboundOpen();
+    this.#engine.restorePendingPublication(pending);
   }
 
   confirmPublished(pending: PendingState): StateNotification[] {

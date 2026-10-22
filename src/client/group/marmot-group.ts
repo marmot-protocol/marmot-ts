@@ -45,6 +45,8 @@ import {
   evaluateKeyPackageForGroup,
   type KeyPackageEligibility,
 } from "../../core/key-package-eligibility.js";
+import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { PendingPublicationStore } from "../runtime/pending-publication.js";
 import { GroupRuntime } from "../runtime/group-runtime.js";
 import { linkPublicationRetention } from "../runtime/publication-retention.js";
 import type {
@@ -937,11 +939,37 @@ export class MarmotGroup<
 
     this.idStr = bytesToHex(this.id);
     this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
+    const publicationStore =
+      options.rewindStore ?? new InMemoryKeyValueStore<Uint8Array>();
     this.runtime = new GroupRuntime({
       welcomeDelivery: new NostrWelcomeDelivery({
         signer: this.signer,
         network: this.network,
       }),
+      pendingPublications: new PendingPublicationStore(
+        {
+          getItem: (key) => publicationStore.getItem(key),
+          setItem: async (key, value) => {
+            await this.session.persistPublication(() =>
+              publicationStore.setItem(key, value),
+            );
+            return value;
+          },
+          removeItem: (key) =>
+            this.session.persistPublication(() =>
+              publicationStore.removeItem(key),
+            ),
+          keys: () => publicationStore.keys(),
+          clear: () =>
+            this.session.persistPublication(() => publicationStore.clear()),
+        },
+        this.idStr,
+      ),
+      restorePending: (pending) =>
+        this.session.restorePendingPublication(pending),
+      isApplied: (pending) =>
+        bytesToHex(this.state.confirmationTag) ===
+        bytesToHex(pending.newState.confirmationTag),
       getNetwork: () => this.network,
       getRelays: () => this.relays,
       getGroupRef: () => this.idStr,
@@ -988,7 +1016,13 @@ export class MarmotGroup<
       ...options,
       ciphersuite: cipherSuite,
     });
-    return group;
+    try {
+      await group.runtime.hydratePublication();
+      return group;
+    } catch (error) {
+      group.dispose();
+      throw error;
+    }
   }
 
   /**
@@ -1186,6 +1220,7 @@ export class MarmotGroup<
     intent: GroupSessionSendIntent,
   ): Promise<GroupPublishResult[]> {
     this.#assertNotDisbanded();
+    await this.runtime.retryPendingPublication();
     await this.session.hydrateLifecycleEvidence();
     if (this.session.removalBlocked)
       throw new Error("Group removed or removal recovery pending");
@@ -1225,6 +1260,12 @@ export class MarmotGroup<
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) abort();
     });
+  }
+
+  /** Retry a retained commit after an uncertain relay result, without regenerating it. */
+  retryPendingPublication(): Promise<GroupPublishResult[]> {
+    this.#assertNotDisbanded();
+    return this.runtime.retryPendingPublication();
   }
 
   /** Atomically enables lifecycle-v1 for a legacy group and publishes it once. */
@@ -1501,6 +1542,7 @@ export class MarmotGroup<
     events: NostrEvent[],
     options?: { maxRetries?: number },
   ): AsyncGenerator<DispositionedIngestResult> {
+    await this.runtime.hydratePublication();
     // The fork-history tree can grow during ingest (new commits / forks) without
     // the canonical state changing — track its size to emit `historyChanged`.
     const historySizeBefore = this.session.historyTree.size;

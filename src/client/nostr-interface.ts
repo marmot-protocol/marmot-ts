@@ -10,6 +10,8 @@ export interface PublishResponse {
   ok: boolean;
   /** A message if the publish failed or succeeded */
   message?: string;
+  /** Transport failure cannot exclude external acceptance; retry the exact bytes. */
+  uncertain?: boolean;
 }
 
 /** Generic interface for a writable nostr relay pool */

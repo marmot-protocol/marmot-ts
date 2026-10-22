@@ -2409,6 +2409,46 @@ export class MarmotGroupEngine<TEnvelope> {
     }
   }
 
+  /** Restore an unapplied, locally persisted exact publish obligation. */
+  restorePendingPublication(pending: PendingState): void {
+    this.#assertMutationAllowed();
+    if (
+      !pending.parentState ||
+      !pending.commitMessage ||
+      !pending.ownCommitStamp ||
+      (pending.kind !== "commit" && pending.kind !== "selfUpdate")
+    )
+      throw new Error("Incomplete pending publication recovery state");
+    const parentTag = bytesToHex(pending.parentState.confirmationTag);
+    if (
+      this.#lifecycle !== groupLifecycleStates.stable ||
+      mediaSourceStateToken(pending.parentState) !==
+        mediaSourceStateToken(this.#state) ||
+      framedEpoch(pending.commitMessage) !==
+        pending.parentState.groupContext.epoch ||
+      bytesToHex(pending.newState.groupContext.groupId) !==
+        bytesToHex(this.#state.groupContext.groupId) ||
+      bytesToHex(pending.parentState.groupContext.groupId) !==
+        bytesToHex(this.#state.groupContext.groupId) ||
+      pending.newState.groupContext.epoch !==
+        this.#state.groupContext.epoch + 1n
+    )
+      throw new Error("Pending publication does not match canonical parent");
+    this.#rememberSent(pending.commitMessage);
+    this.#pendingConfirmations.add(pending);
+    this.#stagedCommit = {
+      parentTag,
+      sourceEpoch: Number(pending.parentState.groupContext.epoch),
+      childTag: bytesToHex(pending.newState.confirmationTag),
+      contentId: contentDedupId(pending.commitMessage),
+    };
+    this.#transitionLifecycle(
+      groupLifecycleStates.pendingPublish,
+      "restore_pending",
+      pending.kind,
+    );
+  }
+
   /**
    * Applies staged state after publish confirmation (publish-before-apply).
    *

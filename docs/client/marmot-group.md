@@ -246,6 +246,29 @@ group.on("removed", (g) => {
 });
 ```
 
+## Recovering commit publication
+
+A commit becomes canonical only after a relay accepts its signed event with a positive NIP-01 `OK`. The OpenTUI adapter returns on the first acceptance while continuing attempts to every selected relay; a slow relay no longer delays admin changes after another has accepted them. A returned response map contains the responses available at that point, rather than necessarily every target.
+
+If the transport throws after publication could have started, or reports a failure with `uncertain: true`, the group keeps the original signed event, relay targets and pending MLS state. It throws `PublicationUncertainError` and remains `PendingPublish`. Own-event echoes do not count as acknowledgments. Retry the retained obligation rather than preparing another commit:
+
+```ts
+import { PublicationUncertainError } from "@internet-privacy/marmot-ts/client";
+
+try {
+  await client.groups.commit(group.id, options);
+} catch (error) {
+  if (!(error instanceof PublicationUncertainError)) throw error;
+  await group.retryPendingPublication();
+}
+```
+
+The retry publishes the same event, applies the exact pending state after acceptance, and resumes held inbound messages. Concurrent retries share one attempt. A later rejection cannot erase an earlier uncertain delivery. Cancellation after an external attempt cannot discard that uncertainty. A definitive initial rejection still follows the normal publication-failure rule.
+
+Pending commit records, including private MLS state, live in `rewindStore`; use the same storage protections as for `groupStateStore`. With a durable store, loading restores the pending gate before admitting inbound or outbound work. The TUI attempts recovery when attaching a loaded group and retries an uncertain admin change once; custom clients can call `retryPendingPublication()` after loading or reconnecting. New facade sends attempt outstanding recovery before preparing fresh work. Without `rewindStore`, recovery records are in memory and do not survive unload or process exit. Corrupt or mismatched records fail loading rather than silently discarding possibly published work.
+
+These rules follow Marmot's [publish lifecycle](https://github.com/marmot-protocol/marmot/blob/master/protocol-core/publish-lifecycle.md), [durability boundaries](https://github.com/marmot-protocol/marmot/blob/master/protocol-core/durability.md), and [Nostr acknowledgment and fanout rules](https://github.com/marmot-protocol/marmot/blob/master/transports/nostr.md#publish-targets-and-acknowledgements). No wire encoding or admin authorization changes are involved. The reference review used MDK `d274dd22`; the local regression tests exercise this library and loopback Nostr relays, rather than claiming a new Android-device test.
+
 ## Session and runtime
 
 For advanced integrations, `group.session` (a [`GroupSession`](https://github.com/marmot-protocol/marmot-ts/blob/master/src/client/session/group-session.ts)) is the protocol-state owner and `group.runtime` is the transport publisher. The facade methods delegate to these. Prefer the facade and manager APIs unless you are building a custom transport or persistence layer — in which case see the [Engine module](/guide/architecture#engine-module).

@@ -20,7 +20,12 @@ afterEach(() => {
 });
 
 /** Local relay exercises the real v7 retry/auth lifecycle without public networking. */
-function setup({ requiresAuth = true, rejectsAuth = false } = {}) {
+function setup({
+  requiresAuth = true,
+  rejectsAuth = false,
+  ignorePublish = false,
+} = {}) {
+  let publishes = 0;
   let authAttempts = 0;
   const server = Bun.serve<{ authenticated: boolean }>({
     hostname: "127.0.0.1",
@@ -56,6 +61,8 @@ function setup({ requiresAuth = true, rejectsAuth = false } = {}) {
             ws.send(JSON.stringify(["EOSE", value]));
           }
         } else if (verb === "EVENT") {
+          publishes++;
+          if (ignorePublish) return;
           const ok = !requiresAuth || ws.data.authenticated;
           ws.send(
             JSON.stringify([
@@ -82,7 +89,12 @@ function setup({ requiresAuth = true, rejectsAuth = false } = {}) {
     pool.close();
     store.dispose();
   });
-  return { pool, url, authAttempts: () => authAttempts };
+  return {
+    pool,
+    url,
+    authAttempts: () => authAttempts,
+    publishes: () => publishes,
+  };
 }
 
 describe("operation-scoped relay authentication", () => {
@@ -116,6 +128,28 @@ describe("operation-scoped relay authentication", () => {
     expect(responses[url]?.ok).toBe(true);
     expect(authAttempts()).toBe(1);
   });
+
+  test("first accepted OK releases publication while every relay is attempted", async () => {
+    const fast = setup({ requiresAuth: false });
+    const slow = setup({ requiresAuth: false, ignorePublish: true });
+    const store = new EventStore();
+    const pool = new RelayPool(
+      new ApplesauceRelayPool({ keepAlive: 0 }),
+      [],
+      new Directory(store),
+    );
+    cleanup.push(() => {
+      pool.close();
+      store.dispose();
+    });
+    const response = await pool.publish([fast.url, slow.url], event);
+    expect(response[fast.url]?.ok).toBe(true);
+    // Both socket attempts were launched before the first ACK resolved. Allow
+    // the second loopback socket to deliver its bytes, without waiting for OK.
+    for (let i = 0; i < 100 && !slow.publishes(); i++) await Bun.sleep(5);
+    expect(slow.publishes()).toBe(1);
+    expect(response[slow.url]).toBeUndefined();
+  }, 2000);
 
   test("a refused subscription authenticates and delivers events", async () => {
     const { pool, authAttempts } = setup();

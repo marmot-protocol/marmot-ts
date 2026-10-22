@@ -20,6 +20,7 @@ import {
   type MarmotClient,
   type MarmotGroup,
   Proposals,
+  PublicationUncertainError,
   type UnreadInvite,
   type Unsubscribable,
   type WelcomeRecipient,
@@ -1124,9 +1125,26 @@ export class MarmotController {
         adminPubkeys: next,
       })(group.session.proposalContext());
       if (!proposal) return;
-      await this.#client.groups.commit(group.id, {
-        extraProposals: [proposal],
-      });
+      try {
+        await this.#client.groups.commit(group.id, {
+          extraProposals: [proposal],
+        });
+      } catch (error) {
+        if (!(error instanceof PublicationUncertainError)) throw error;
+        this.log(
+          "commit acknowledgement lost; retrying the original signed commit",
+        );
+        await group.retryPendingPublication();
+      }
+      if (group.lifecycle === "PendingPublish")
+        await group.retryPendingPublication();
+      if (
+        makeAdmin !== (group.groupData?.adminPubkeys.includes(pubkey) ?? false)
+      ) {
+        throw new Error(
+          "Admin commit has not been applied locally; retry pending publication before changing roles again",
+        );
+      }
       this.log(
         `${makeAdmin ? "promoted" : "demoted"} ${npubShort(pubkey)} ${makeAdmin ? "to" : "from"} admin`,
       );
@@ -1811,6 +1829,9 @@ export class MarmotController {
     if (this.#watchAbort) return;
     const id = group.idStr;
     this.#groups.set(id, group);
+    // Re-publish an ACK-uncertain commit byte-for-byte after restart. The
+    // hydrated session stays PendingPublish until the relay really accepts it.
+    void group.retryPendingPublication().catch((error) => this.logError(error));
     if (!this.#messages.has(id)) this.#messages.set(id, []);
     if (!this.#bound.has(id)) {
       group.on("stateChanged", () => this.#publish());

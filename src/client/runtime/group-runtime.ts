@@ -1,4 +1,5 @@
 /** @module @category Client - Runtime */
+import { protocolVersions, wireformats } from "ts-mls";
 import type { Debugger } from "debug";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 
@@ -13,7 +14,10 @@ import {
 import type { PendingState } from "../../engine/types.js";
 import type { StateNotification } from "../../engine/state-notifications.js";
 import { confirmPublicationRetention } from "./publication-retention.js";
-import { hasAck } from "../../utils/index.js";
+import {
+  PendingPublicationStore,
+  type PendingPublication,
+} from "./pending-publication.js";
 import type {
   GroupEffects,
   GroupPublishResult,
@@ -38,6 +42,10 @@ export type GroupRuntimeOptions = {
   confirmPublished: (pending: PendingState) => StateNotification[];
   publishFailed: (pending: PendingState) => void;
   save: () => Promise<void>;
+  /** @internal Recovery storage supplied by the group owner. */
+  pendingPublications?: PendingPublicationStore;
+  restorePending?: (pending: PendingState) => void;
+  isApplied?: (pending: PendingState) => boolean;
   /** Owner admission fence, checked before transport and after awaits. */
   assertOpen?: () => void;
   log?: Debugger;
@@ -55,9 +63,26 @@ export type PublishCommitOptions = {
   signal?: AbortSignal;
 };
 
+/** An exact commit remains pending; retry it rather than preparing a replacement. */
+export class PublicationUncertainError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "PublicationUncertainError";
+  }
+}
+
 /** Drives group publish effects through Nostr and confirms or rolls back state. */
 export class GroupRuntime {
   readonly welcomeDelivery: NostrWelcomeDelivery;
+
+  readonly #pendingPublications?: PendingPublicationStore;
+  readonly #restorePending?: (pending: PendingState) => void;
+  readonly #isApplied?: (pending: PendingState) => boolean;
+  #recovery?: PendingPublication;
+  #recoveryApplied = false;
+  #hydration?: Promise<void>;
+  readonly #publishing = new Map<string, Promise<GroupPublishResult>>();
+  #resume?: Promise<GroupPublishResult[]>;
 
   readonly #getNetwork: () => NostrNetworkInterface;
   readonly #getRelays: () => string[] | undefined;
@@ -71,6 +96,9 @@ export class GroupRuntime {
   readonly #audit?: AuditEmitter;
 
   constructor(options: GroupRuntimeOptions) {
+    this.#pendingPublications = options.pendingPublications;
+    this.#restorePending = options.restorePending;
+    this.#isApplied = options.isApplied;
     this.welcomeDelivery = options.welcomeDelivery;
     this.#getNetwork = options.getNetwork;
     this.#getRelays = options.getRelays;
@@ -88,6 +116,79 @@ export class GroupRuntime {
     );
   }
 
+  /** Restore the publish gate before admitting inbound or new outbound work. */
+  hydratePublication(): Promise<void> {
+    return (this.#hydration ??= this.#hydratePublication());
+  }
+
+  async #hydratePublication(): Promise<void> {
+    if (this.#recovery || !this.#pendingPublications) return;
+    const record = await this.#pendingPublications.read();
+    if (!record) return;
+    if (this.#isApplied?.(record.work.pending)) {
+      await this.#pendingPublications.clear();
+      return;
+    }
+    this.#restorePending?.(record.work.pending);
+    this.#recovery = record;
+  }
+
+  /** Retry the original signed event and exact pending state after a lost ACK. */
+  retryPendingPublication(): Promise<GroupPublishResult[]> {
+    if (this.#resume) return this.#resume;
+    const resume = this.#retryPendingPublication();
+    this.#resume = resume;
+    void resume
+      .finally(() => {
+        if (this.#resume === resume) this.#resume = undefined;
+      })
+      .catch(() => {});
+    return resume;
+  }
+
+  async #retryPendingPublication(): Promise<GroupPublishResult[]> {
+    await this.hydratePublication();
+    if (!this.#recovery) return [];
+    if (
+      this.#recoveryApplied ||
+      this.#isApplied?.(this.#recovery.work.pending)
+    ) {
+      await this.#save();
+      await this.#clearPublication();
+      return [];
+    }
+    return this.publishEffects({ publish: [this.#recovery.work] });
+  }
+
+  async #preparePublication(work: PendingPublication["work"]): Promise<void> {
+    if (!this.#pendingPublications) return;
+    if (this.#recovery) {
+      if (this.#recovery.work.envelope.id !== work.envelope.id)
+        throw new PublicationUncertainError(
+          "A prior commit requires byte-identical publication retry",
+        );
+      return;
+    }
+    const relays = this.#getRelays();
+    if (!relays?.length)
+      throw new Error("Group has no relays available to send messages.");
+    const retainedWork =
+      work.kind === "groupEvolution" ? { ...work, signal: undefined } : work;
+    const record = {
+      work: retainedWork,
+      relays: [...relays],
+      acknowledged: false,
+    };
+    await this.#pendingPublications.write(record);
+    this.#recovery = record;
+  }
+
+  async #clearPublication(): Promise<void> {
+    await this.#pendingPublications?.clear();
+    this.#recovery = undefined;
+    this.#recoveryApplied = false;
+  }
+
   async publishEffects(effects: GroupEffects): Promise<GroupPublishResult[]> {
     const results: GroupPublishResult[] = [];
     for (const work of effects.publish) {
@@ -96,7 +197,22 @@ export class GroupRuntime {
     return results;
   }
 
-  async #publishWorkResult(
+  #publishWorkResult(work: GroupPublishWork): Promise<GroupPublishResult> {
+    const id = work.envelope.id;
+    const active = this.#publishing.get(id);
+    if (active) return active;
+    const publication = this.#executeWorkResult(work);
+    this.#publishing.set(id, publication);
+    void publication
+      .finally(() => {
+        if (this.#publishing.get(id) === publication)
+          this.#publishing.delete(id);
+      })
+      .catch(() => {});
+    return publication;
+  }
+
+  async #executeWorkResult(
     work: GroupPublishWork,
   ): Promise<GroupPublishResult> {
     switch (work.kind) {
@@ -245,6 +361,7 @@ export class GroupRuntime {
     // otherwise the engine is stuck and can never prepare another commit.
     let response: Record<string, PublishResponse>;
     try {
+      await this.#preparePublication({ kind: "selfUpdate", envelope, pending });
       response = await this.#publishToGroupRelays(
         envelope,
         "Failed to publish commit event",
@@ -258,6 +375,8 @@ export class GroupRuntime {
     try {
       this.#assertOpen();
       notifications = this.#confirmPublished(pending);
+      if (this.#recovery?.work.pending === pending)
+        this.#recoveryApplied = true;
     } catch (error) {
       this.#assertOpen();
       return {
@@ -287,13 +406,27 @@ export class GroupRuntime {
     let response: Record<string, PublishResponse>;
     try {
       options.signal?.throwIfAborted();
+      await this.#preparePublication({
+        kind: "groupEvolution",
+        ...options,
+        welcome: options.welcome?.welcome
+          ? {
+              version: protocolVersions.mls10,
+              wireformat: wireformats.mls_welcome,
+              welcome: options.welcome.welcome,
+            }
+          : undefined,
+      });
       response = await this.#publishToGroupRelays(
         options.envelope,
         "Failed to publish commit",
         options.signal,
       );
     } catch (err) {
+      this.#assertOpen();
+      if (this.#recovery && err instanceof PublicationUncertainError) throw err;
       this.#publishFailed(options.pending);
+      await this.#clearPublication();
       throw err;
     }
 
@@ -301,6 +434,8 @@ export class GroupRuntime {
     try {
       this.#assertOpen();
       notifications = this.#confirmPublished(options.pending);
+      if (this.#recovery?.work.pending === options.pending)
+        this.#recoveryApplied = true;
     } catch (error) {
       this.#assertOpen();
       return {
@@ -340,6 +475,7 @@ export class GroupRuntime {
     let persistence: GroupPublishResult["persistence"];
     try {
       await this.#save();
+      if (this.#recoveryApplied) await this.#clearPublication();
       persistence = { kind: "succeeded" };
     } catch (error) {
       persistence = { kind: "failed", error: errorDetail(error) };
@@ -354,23 +490,39 @@ export class GroupRuntime {
     signal?: AbortSignal,
   ): Promise<Record<string, PublishResponse>> {
     this.#assertOpen();
-    const relays = this.#getRelays();
+    const record =
+      this.#recovery?.work.envelope.id === envelope.id
+        ? this.#recovery
+        : undefined;
+    const relays = record?.relays ?? this.#getRelays();
     if (!relays)
       throw new Error("Group has no relays available to send messages.");
 
     this.#emitPublishAttempt(envelope, "group", relays);
     let response: Record<string, PublishResponse>;
+    // Audit callbacks can synchronously cancel before any external attempt.
+    signal?.throwIfAborted();
     try {
       const network = this.#getNetwork();
       signal?.throwIfAborted();
-      response = await network.publish(relays, envelope);
+      response = record?.acknowledged
+        ? record.response!
+        : await network.publish(relays, envelope);
       this.#assertOpen();
     } catch (error) {
       this.#emitPublishFailure(envelope, "group", relays, "adapter", error);
+      this.#assertOpen();
+      if (record) {
+        record.uncertain = true;
+        throw new PublicationUncertainError(
+          "Commit publication is uncertain; retry the retained commit",
+          { cause: error },
+        );
+      }
       throw error;
     }
     const acked = Object.entries(response)
-      .filter(([, r]) => r.ok)
+      .filter(([url, r]) => r.ok && (!record || relays.includes(url)))
       .map(([url]) => url);
     this.#log?.(
       "publish kind-%d eventId=%s relays=%o acked=%o",
@@ -379,7 +531,7 @@ export class GroupRuntime {
       relays,
       acked,
     );
-    if (!hasAck(response)) {
+    if (!acked.length) {
       const errors = Object.values(response)
         .filter((r) => !r.ok && r.message)
         .map((r) => r.message)
@@ -392,9 +544,31 @@ export class GroupRuntime {
         "required_acks",
         errors || "no relay acknowledged",
       );
-      throw new Error(`${failurePrefix}: ${errors || "no relay acknowledged"}`);
+      const message = `${failurePrefix}: ${errors || "no relay acknowledged"}`;
+      if (
+        record &&
+        (record.uncertain || Object.values(response).some((r) => r.uncertain))
+      ) {
+        record.uncertain = true;
+        throw new PublicationUncertainError(message);
+      }
+      throw new Error(message);
     }
 
+    if (record && !record.acknowledged) {
+      // Persist the real ACK before canonical apply. A failed write leaves the
+      // exact pending obligation recoverable and safe to republish.
+      record.response = response;
+      record.acknowledged = true;
+      try {
+        await this.#pendingPublications!.write(record);
+      } catch (error) {
+        throw new PublicationUncertainError(
+          "Could not retain publication acknowledgement",
+          { cause: error },
+        );
+      }
+    }
     this.#emitPublishOutcome(envelope, "group", response, true);
     confirmPublicationRetention(this, envelope.id);
     return response;

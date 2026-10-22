@@ -1,11 +1,12 @@
 import type { SelectOption } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
+import { useEffect } from "react";
 
 import type {
   KeyPackageDetails,
   KeyPackageSummary,
 } from "../marmot/controller.js";
-import { shortHex } from "../marmot/format.js";
+import { relativeTime, short, shortHex } from "../marmot/format.js";
 import { ModalOverlay, Row } from "./primitives.js";
 
 function valueList(values: string[]): string {
@@ -58,17 +59,49 @@ function extensionRows(
   );
 }
 
+function otherDeviceRows(summary: KeyPackageSummary) {
+  return (
+    <box flexDirection="column" marginTop={1}>
+      <text fg="#FFD700">other devices</text>
+      {summary.otherDevices.length ? (
+        summary.otherDevices.map((device) => (
+          <text key={device.slot}>
+            <span fg="#d7dde8">{short(device.slot)}</span>
+            <span fg="#666">
+              {` · ${relativeTime(device.createdAt)} · ref ${device.refHex ? short(device.refHex) : "?"}`}
+            </span>
+          </text>
+        ))
+      ) : (
+        <text fg="#666">
+          {summary.otherDevicesLoading
+            ? "looking up your other devices…"
+            : "no other devices have published a KeyPackage"}
+        </text>
+      )}
+    </box>
+  );
+}
+
 export function KeyPackageModal(props: {
   summary: KeyPackageSummary;
-  onPublish: () => void;
+  clientId: string;
+  onRefresh: () => void;
   onRotate: () => void;
   onCancel: () => void;
 }) {
-  const details = props.summary.current;
+  const { summary, onRefresh } = props;
+  const details = summary.current;
   const options: SelectOption[] = [
-    { name: "Publish a fresh KeyPackage", description: "" },
-    { name: "Rotate this device's KeyPackage", description: "" },
+    {
+      name: details
+        ? "Rotate this device's KeyPackage"
+        : "Publish this device's KeyPackage",
+      description: "",
+    },
   ];
+
+  useEffect(() => onRefresh(), [onRefresh]);
 
   useKeyboard((key) => {
     if (key.name === "escape") props.onCancel();
@@ -78,17 +111,20 @@ export function KeyPackageModal(props: {
     <ModalOverlay
       title="key package"
       width={84}
-      footer="up/down: choose | enter: select | esc: cancel"
+      footer="enter: select | esc: cancel"
     >
-      <text fg="#FFD700">current app KeyPackage</text>
-      <Row label="stored" value={props.summary.total} />
-      <Row label="unused" value={props.summary.unused} />
+      <text fg="#FFD700">this device</text>
+      <Row label="slot" value={props.clientId} />
 
       {details ? (
         <box flexDirection="column">
-          <Row label="slot" value={details.slot ?? "none"} />
+          <Row
+            label="published"
+            value={
+              summary.publishedAt ? relativeTime(summary.publishedAt) : "never"
+            }
+          />
           <Row label="used" value={details.used} />
-          <Row label="published events" value={details.publishedCount} />
           <Row label="ref" value={details.refHex} />
           <Row label="cipher suite" value={details.cipherSuite} />
           <Row label="init key" value={shortHex(details.initKeyHex)} />
@@ -123,8 +159,10 @@ export function KeyPackageModal(props: {
           </box>
         </box>
       ) : (
-        <text fg="#666">no local KeyPackage found yet</text>
+        <text fg="#666">this device has not published a KeyPackage yet</text>
       )}
+
+      {otherDeviceRows(summary)}
 
       <box marginTop={1} flexDirection="column">
         <text fg="#888">actions</text>
@@ -133,10 +171,7 @@ export function KeyPackageModal(props: {
           height={options.length}
           showDescription={false}
           options={options}
-          onSelect={(index: number) => {
-            if (index === 0) props.onPublish();
-            else props.onRotate();
-          }}
+          onSelect={() => props.onRotate()}
         />
       </box>
     </ModalOverlay>

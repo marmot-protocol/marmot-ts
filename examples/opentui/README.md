@@ -208,9 +208,9 @@ the footer shows the keys that apply right now.
   highlighted). **i** invites to the active group, **m** opens the
   members list, **g** opens the group debug view, **e** edits the active
   group's info when you are an admin, **R** opens relay settings, **p** opens
-  profile settings, and **K** opens the KeyPackage publish/rotate chooser.
+  profile settings, and **K** shows this device's KeyPackage (and rotates it) alongside your other devices' KeyPackages.
 - **Profile** — **i** shows your invite QR, **p** edits your profile, **r** edits
-  your relays, **K** opens the KeyPackage chooser, and **o** logs out and creates
+  your relays, **K** opens this device's KeyPackage, and **o** logs out and creates
   a fresh account (prompting for a name and optional relays).
 
 Text prompts use **Enter** to confirm and **Esc** to cancel. Clicking a panel
@@ -231,8 +231,8 @@ Enter in the Relays modal re-signs and republishes both lists; the values are
 normalised, de-duplicated, and stripped of invalid URLs before publishing.
 
 If discovery finds no lists (or only the outbox list), the app does not treat
-that as final — it retries the next time you create a group, or publish or
-rotate a KeyPackage. Publishing or rotating a KeyPackage requires both lists
+that as final — it retries the next time you create a group, or rotate this
+device's KeyPackage. Publishing or rotating a KeyPackage requires both lists
 to be known, and opens the Relays editor automatically when either is
 missing. The new-group prompt offers "Use my outbox relays" only once the
 outbox list is known; otherwise it offers manual entry or relay setup instead

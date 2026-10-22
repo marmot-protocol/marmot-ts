@@ -1,3 +1,5 @@
+import { useCallback } from "react";
+
 import { useChat, useController } from "../hooks/use-marmot.js";
 import { useNavigation } from "../hooks/use-navigation.js";
 import { useProfile } from "../hooks/use-profile.js";
@@ -51,10 +53,20 @@ export function ModalHost(props: {
 }) {
   const { modal, setModal } = props;
   const controller = useController();
-  const { me, outboxRelays, inboxRelays, relayListStatus, keyPackages } =
-    useChat();
+  const {
+    me,
+    outboxRelays,
+    inboxRelays,
+    relayListStatus,
+    keyPackages,
+    clientId,
+  } = useChat();
   const nav = useNavigation();
   const myProfile = useProfile(me.pubkey);
+  const refreshOtherDevices = useCallback(
+    () => void controller.refreshOtherDeviceKeyPackages(),
+    [controller],
+  );
 
   if (!modal) return null;
 
@@ -241,10 +253,8 @@ export function ModalHost(props: {
       return (
         <KeyPackageModal
           summary={keyPackages}
-          onPublish={() => {
-            setModal(null);
-            void controller.publishKeyPackage();
-          }}
+          clientId={clientId}
+          onRefresh={refreshOtherDevices}
           onRotate={() => {
             setModal(null);
             void controller.rotateKeyPackage();

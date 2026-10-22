@@ -103,12 +103,10 @@ export function ProfilePanel() {
 
       <box height={1} />
       <text fg="#888">key package</text>
-      <Row label="slot" value={keyPackages.slot ?? clientId} />
-      <Row label="stored" value={keyPackages.total} />
-      <Row label="unused" value={keyPackages.unused} />
-      <Row label="published" value={ageLabel(keyPackages.newestPublishedAt)} />
-      {keyPackages.newestPublishedId ? (
-        <Row label="latest id" value={short(keyPackages.newestPublishedId)} />
+      <Row label="slot" value={short(clientId)} />
+      <Row label="published" value={ageLabel(keyPackages.publishedAt)} />
+      {keyPackages.publishedId ? (
+        <Row label="latest id" value={short(keyPackages.publishedId)} />
       ) : null}
 
       <box height={1} />

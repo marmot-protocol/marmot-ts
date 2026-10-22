@@ -169,6 +169,18 @@ function requiredCapabilitiesDetails(
   };
 }
 
+function latestPublished(pkg: ListedKeyPackage): NostrEvent | null {
+  return (pkg.published ?? []).reduce<NostrEvent | null>(
+    (newest, event) =>
+      !newest || event.created_at > newest.created_at ? event : newest,
+    null,
+  );
+}
+
+function publishedAt(pkg: ListedKeyPackage): number {
+  return latestPublished(pkg)?.created_at ?? 0;
+}
+
 function keyPackageDetails(pkg: ListedKeyPackage): KeyPackageDetails {
   const capabilities = pkg.publicPackage.leafNode.capabilities;
   const keyPackageExtensions = extensionDetails(pkg.publicPackage.extensions);
@@ -178,7 +190,6 @@ function keyPackageDetails(pkg: ListedKeyPackage): KeyPackageDetails {
 
   return {
     refHex: hex(pkg.keyPackageRef),
-    slot: pkg.identifier ?? null,
     used: pkg.used === true,
     publishedCount: pkg.published?.length ?? 0,
     cipherSuite: codePointHex(pkg.publicPackage.cipherSuite),
@@ -347,14 +358,31 @@ export interface StatusLine {
   at: number;
 }
 
+/**
+ * This client's single KeyPackage (the one in its `clientId` slot) plus the
+ * KeyPackages the account's other devices have published to its outbox relays.
+ */
 export interface KeyPackageSummary {
-  total: number;
-  unused: number;
-  slot: string | null;
-  newestPublishedAt: number | null;
-  /** Event id (hex) of the most recently published KeyPackage, if any. */
-  newestPublishedId: string | null;
+  /** This client's KeyPackage, or null before one has been published. */
   current: KeyPackageDetails | null;
+  /** When this client's KeyPackage was last published (seconds), if known. */
+  publishedAt: number | null;
+  /** Event id (hex) of this client's latest published KeyPackage, if any. */
+  publishedId: string | null;
+  /** The newest KeyPackage per other-device slot, newest first. */
+  otherDevices: DeviceKeyPackage[];
+  /** True while the other devices' KeyPackages are being fetched. */
+  otherDevicesLoading: boolean;
+}
+
+/** Another device's published KeyPackage (kind 30443) for this account. */
+export interface DeviceKeyPackage {
+  /** The device's addressable slot (`d` tag). */
+  slot: string;
+  eventId: string;
+  createdAt: number;
+  /** The KeyPackageRef (`i` tag) hex, if present. */
+  refHex: string | null;
 }
 
 export interface KeyPackageExtensionDetails {
@@ -370,7 +398,6 @@ export interface RequiredCapabilitiesDetails {
 
 export interface KeyPackageDetails {
   refHex: string;
-  slot: string | null;
   used: boolean;
   publishedCount: number;
   cipherSuite: string;
@@ -587,12 +614,11 @@ export class MarmotController {
   #status: StatusLine[] = [];
   #activeId: string | null = null;
   #keyPackages: KeyPackageSummary = {
-    total: 0,
-    unused: 0,
-    slot: null,
-    newestPublishedAt: null,
-    newestPublishedId: null,
     current: null,
+    publishedAt: null,
+    publishedId: null,
+    otherDevices: [],
+    otherDevicesLoading: false,
   };
   /**
    * Advertised NIP-65 outbox list (kind 10002) — the user's own write relays,
@@ -1308,37 +1334,78 @@ export class MarmotController {
     return state;
   }
 
-  async publishKeyPackage(): Promise<void> {
+  /**
+   * Replaces this client's KeyPackage with a fresh one in the same `clientId`
+   * slot (relays supersede the old event), or publishes the first one when
+   * this client has none yet. Other devices' KeyPackages are never touched.
+   */
+  async rotateKeyPackage(): Promise<void> {
     await this.#withBusy(async () => {
       const relays = await this.#requireKeyPackageRelays();
       if (!relays) return;
-      const kp = await this.#client.keyPackages.create({ relays });
+      const current = this.#currentKeyPackage(
+        await this.#client.keyPackages.list(),
+      );
+      const next = current
+        ? await this.#client.keyPackages.rotate(current.keyPackageRef, {
+            relays,
+            d: this.#clientId,
+          })
+        : await this.#client.keyPackages.create({
+            relays,
+            identifier: this.#clientId,
+          });
+      await this.#dropStaleKeyPackages(next.keyPackageRef);
       await this.#refreshKeyPackageSummary();
       this.log(
-        `published KeyPackage ${hexShort(kp.keyPackageRef)} (slot ${kp.identifier ?? "?"}) to ${relays.join(", ")}`,
+        current
+          ? `rotated KeyPackage ${hexShort(current.keyPackageRef)} → ${hexShort(next.keyPackageRef)}`
+          : `published KeyPackage ${hexShort(next.keyPackageRef)} to ${relays.join(", ")}`,
       );
     });
   }
 
-  async rotateKeyPackage(): Promise<void> {
-    await this.#withBusy(async () => {
-      const list = await this.#client.keyPackages.list();
-      const current =
-        list.find((p) => !p.used && p.identifier === this.#clientId) ??
-        list.find((p) => !p.used) ??
-        list[0];
-      if (!current) throw new Error("no KeyPackage to rotate");
-      const relays = await this.#requireKeyPackageRelays();
-      if (!relays) return;
-      const rotated = await this.#client.keyPackages.rotate(
-        current.keyPackageRef,
-        { relays },
+  /**
+   * Fetches the KeyPackages this account's other devices (any slot other than
+   * this client's) have published to its outbox relays, keeping the newest
+   * event per slot. Failures are logged and leave the previous list in place.
+   */
+  async refreshOtherDeviceKeyPackages(): Promise<void> {
+    if (this.#watchAbort || this.#keyPackages.otherDevicesLoading) return;
+    this.#keyPackages = { ...this.#keyPackages, otherDevicesLoading: true };
+    this.#publish();
+    try {
+      await this.#ensureRelayListsLoaded();
+      const relays = relaySet(this.#outboxRelays, this.#relays);
+      // KeyPackages are public: decline authentication for this lookup.
+      const events = await this.#pool.request(
+        relays,
+        { kinds: [ADDRESSABLE_KEY_PACKAGE_KIND], authors: [this.#pubkey] },
+        { waitForAuth: false },
       );
-      await this.#refreshKeyPackageSummary();
-      this.log(
-        `rotated KeyPackage ${hexShort(current.keyPackageRef)} → ${hexShort(rotated.keyPackageRef)}`,
-      );
-    });
+      const newest = new Map<string, NostrEvent>();
+      for (const event of events) {
+        const slot = getKeyPackageIdentifier(event);
+        if (!slot || slot === this.#clientId) continue;
+        const seen = newest.get(slot);
+        if (!seen || event.created_at > seen.created_at)
+          newest.set(slot, event);
+      }
+      const otherDevices = [...newest.entries()]
+        .map(([slot, event]) => ({
+          slot,
+          eventId: event.id,
+          createdAt: event.created_at,
+          refHex: getKeyPackageReference(event) ?? null,
+        }))
+        .sort((a, b) => b.createdAt - a.createdAt);
+      this.#keyPackages = { ...this.#keyPackages, otherDevices };
+    } catch (err) {
+      this.logError(err);
+    } finally {
+      this.#keyPackages = { ...this.#keyPackages, otherDevicesLoading: false };
+      this.#publish();
+    }
   }
 
   /**
@@ -1624,25 +1691,64 @@ export class MarmotController {
     this.#eventStore.add(event);
   }
 
+  /**
+   * Makes sure this client's slot holds an unused, current KeyPackage so others
+   * can invite it: keeps a usable one, rotates a consumed or non-current one,
+   * or publishes the first one. Idempotent; safe to call on every startup.
+   */
   async #ensureKeyPackage(): Promise<void> {
     const existing = await this.#client.keyPackages.list();
     if (this.#watchAbort) return;
-    if (existing.some((pkg) => !pkg.used)) {
+    const current = this.#currentKeyPackage(existing);
+    if (current && !current.used && !current.nonCurrent) {
       this.#setKeyPackageSummary(existing);
       return;
     }
-    // We have no unused KeyPackage to offer, so publish a fresh one — to the
-    // user's OWN outbox relays, and only once both relay lists are known
-    // (R3); #requireKeyPackageRelays has already logged + signalled setup
-    // when they aren't.
+    // This client has no usable KeyPackage to offer, so publish a fresh one —
+    // to the user's OWN outbox relays, and only once both relay lists are
+    // known (R3); #requireKeyPackageRelays has already logged + signalled
+    // setup when they aren't.
     const relays = await this.#requireKeyPackageRelays();
     if (this.#watchAbort || !relays) return;
-    await this.#client.keyPackages.create({ relays });
+    const next = current
+      ? await this.#client.keyPackages.rotate(current.keyPackageRef, {
+          relays,
+          d: this.#clientId,
+        })
+      : await this.#client.keyPackages.create({
+          relays,
+          identifier: this.#clientId,
+        });
     if (this.#watchAbort) return;
+    await this.#dropStaleKeyPackages(next.keyPackageRef);
     await this.#refreshKeyPackageSummary();
     this.log(
       `published a fresh KeyPackage to ${relays.join(", ")} so others can invite you`,
     );
+  }
+
+  /** This client's KeyPackage: the newest-published entry in its slot. */
+  #currentKeyPackage(packages: ListedKeyPackage[]): ListedKeyPackage | null {
+    let current: ListedKeyPackage | null = null;
+    for (const pkg of packages) {
+      if (pkg.identifier !== this.#clientId) continue;
+      if (!current || publishedAt(pkg) > publishedAt(current)) current = pkg;
+    }
+    return current;
+  }
+
+  /**
+   * Removes local private material for older KeyPackages in this client's
+   * slot. Their relay events are already superseded by the newer one in the
+   * same `d` slot, so this is local-only.
+   */
+  async #dropStaleKeyPackages(keepRef: Uint8Array): Promise<void> {
+    const keep = hex(keepRef);
+    for (const pkg of await this.#client.keyPackages.list()) {
+      if (pkg.identifier !== this.#clientId) continue;
+      if (hex(pkg.keyPackageRef) === keep) continue;
+      await this.#client.keyPackages.remove(pkg.keyPackageRef);
+    }
   }
 
   async #refreshKeyPackageSummary(): Promise<void> {
@@ -1650,27 +1756,14 @@ export class MarmotController {
     this.#publish();
   }
 
-  #setKeyPackageSummary(
-    packages: Awaited<ReturnType<MarmotClient["keyPackages"]["list"]>>,
-  ): void {
-    const current =
-      packages.find((pkg) => !pkg.used && pkg.identifier === this.#clientId) ??
-      packages.find((pkg) => !pkg.used) ??
-      packages[0];
-    const newestPublished = packages
-      .flatMap((pkg) => pkg.published ?? [])
-      .reduce<NostrEvent | null>(
-        (newest, event) =>
-          !newest || event.created_at > newest.created_at ? event : newest,
-        null,
-      );
+  #setKeyPackageSummary(packages: ListedKeyPackage[]): void {
+    const current = this.#currentKeyPackage(packages);
+    const latest = current ? latestPublished(current) : null;
     this.#keyPackages = {
-      total: packages.length,
-      unused: packages.filter((pkg) => !pkg.used).length,
-      slot: current?.identifier ?? null,
-      newestPublishedAt: newestPublished?.created_at ?? null,
-      newestPublishedId: newestPublished?.id ?? null,
+      ...this.#keyPackages,
       current: current ? keyPackageDetails(current) : null,
+      publishedAt: latest?.created_at ?? null,
+      publishedId: latest?.id ?? null,
     };
   }
 

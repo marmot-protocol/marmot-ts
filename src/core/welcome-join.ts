@@ -21,7 +21,6 @@ import { isReusableKeyPackage } from "./key-package-dictionary.js";
 import { defaultMarmotClientConfig } from "./client-config.js";
 import { type MarmotGroupView, getMarmotGroupView } from "./client-state.js";
 import { getWelcome } from "./welcome-event.js";
-import { marmotRequiredCapabilitiesExtension } from "./capabilities.js";
 import { defaultCapabilities } from "./default-capabilities.js";
 import { getCredentialPubkey } from "./credential.js";
 import { getGroupMemberPubkeys } from "./group-members.js";
@@ -29,7 +28,10 @@ import {
   assertCurrentGroupAccountIdentityProofProfile,
   validateGroupMemberAccountIdentityProofs,
 } from "./components/account-identity-proof.js";
-import { validateAdminLeafCoupling } from "./components/integrity.js";
+import {
+  validateAdminLeafCoupling,
+  validateResultingProfileInvariants,
+} from "./components/integrity.js";
 import {
   getAdminPolicy,
   getAppComponents,
@@ -44,7 +46,7 @@ import {
 } from "./components/dictionary.js";
 import {
   ACCOUNT_IDENTITY_PROOF_COMPONENT_ID,
-  DEFAULT_GROUP_COMPONENT_IDS,
+  GROUP_ADMIN_POLICY_COMPONENT_ID,
   GROUP_BLOSSOM_IMAGE_COMPONENT_ID,
   SAFE_AAD_COMPONENT_ID,
   SUPPORTED_APP_COMPONENT_IDS,
@@ -65,10 +67,17 @@ export function validateWelcomeGroup(
   );
   const dictionary = getAppDataDictionary(extensions);
   if (!dictionary) throw new Error("Welcome lacks Marmot dictionary");
+  const invariantViolation = validateResultingProfileInvariants({
+    resultingExtensions: extensions,
+    resultingTree: state.ratchetTree,
+  });
+  if (invariantViolation) throw new Error(invariantViolation.detail);
   const required = getAppComponents(extensions);
   if (
     !required ||
-    DEFAULT_GROUP_COMPONENT_IDS.some((id) => !required.includes(id))
+    [GROUP_ADMIN_POLICY_COMPONENT_ID, ACCOUNT_IDENTITY_PROOF_COMPONENT_ID].some(
+      (id) => !required.includes(id),
+    )
   )
     throw new Error("Welcome lacks mandatory required components");
   for (const id of required) {
@@ -98,25 +107,25 @@ export function validateWelcomeGroup(
   getEncryptedMediaPolicy(extensions);
   const roles = getAgentTextStreamPolicy(extensions)?.requiredMemberRoles ?? 0;
   if (
-    getGroupLifecycle(extensions) !== "active" ||
+    getGroupLifecycle(extensions) === "disbanded" ||
     state.groupActiveState.kind !== "active"
   )
     throw new Error("Welcome group is not active");
-  const baseline = marmotRequiredCapabilitiesExtension().extensionData;
+  // Creation defaults are stronger than the current-profile join baseline.
+  // In particular, MDK need not require self_remove, a profile component, or
+  // lifecycle-v1 on an existing group (app-components/group-lifecycle-v1.md).
   const capabilityExtension = extensions.find(
     (extension) =>
       extension.extensionType === defaultExtensionTypes.required_capabilities,
   );
   const declared = capabilityExtension?.extensionData as
-    typeof baseline | undefined;
-  if (
-    !declared ||
-    baseline.extensionTypes.some(
-      (id) => !declared.extensionTypes.includes(id),
-    ) ||
-    baseline.proposalTypes.some((id) => !declared.proposalTypes.includes(id))
-  )
-    throw new Error("Welcome lacks mandatory MLS required capabilities");
+    | {
+        extensionTypes: number[];
+        proposalTypes: number[];
+        credentialTypes: number[];
+      }
+    | undefined;
+  if (!declared) throw new Error("Welcome lacks MLS required capabilities");
   const supported = defaultCapabilities();
   if (
     declared.extensionTypes.some((id) => !supported.extensions.includes(id)) ||

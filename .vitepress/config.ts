@@ -20,6 +20,7 @@ export default defineConfig({
         items: [
           { text: "Getting Started", link: "/getting-started" },
           { text: "Architecture", link: "/guide/architecture" },
+          { text: "MDK Compatibility", link: "/guide/mdk-compatibility" },
         ],
       },
       {

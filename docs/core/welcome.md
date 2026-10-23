@@ -76,7 +76,7 @@ const giftWrap = await createGiftWrap({
 await network.publish(recipientInboxRelays, giftWrap);
 ```
 
-The rumor and the kind 13 seal are authored by the inviter's account key. Only the outer kind 1059 wrap uses an ephemeral key, which NIP-59 generates for you. If the recipient has no kind 10050 list, the spec only lets the sender use contextual relay hints ([`transports/nostr.md`](https://github.com/marmot-protocol/marmot/blob/master/transports/nostr.md)). The marmot-ts client falls back to the group relays in that case.
+The rumor and the kind 13 seal are authored by the inviter's account key. Only the outer kind 1059 wrap uses an ephemeral key, which NIP-59 generates for you. If the recipient has no kind 10050 list, the spec only lets the sender use contextual relay hints ([`transports/nostr.md`](https://github.com/marmot-protocol/marmot/blob/master/transports/nostr.md)). The marmot-ts client falls back to the group relays when `getUserInboxRelays` throws. Returning an empty list fails Welcome delivery for that recipient; an adapter that uses contextual fallback hints must return those relays explicitly. See [Network](/client/network#contract).
 
 ## Extracting Welcome Messages
 

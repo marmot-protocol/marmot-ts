@@ -31,7 +31,7 @@ export interface CreateGiftWrapOptions {
 /**
  * Creates a gift wrap event (kind 1059) for a welcome message.
  *
- * Uses applesauce-factory's GiftWrapBlueprint to create the gift wrap event
+ * Uses applesauce-common's GiftWrapFactory to create the gift wrap event
  * for the recipient, providing privacy and unlinkability (NIP-59).
  *
  * @param options - Configuration for creating the gift wrap

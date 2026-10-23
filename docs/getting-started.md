@@ -55,7 +55,7 @@ yarn add @internet-privacy/marmot-ts
 
 :::
 
-The examples below also import types from `applesauce-core`. It is a dependency of marmot-ts, but package managers such as pnpm won't let your app import it unless you add it too (`pnpm add applesauce-core`).
+The examples below also import types from `applesauce-core`. It is a dependency of marmot-ts, but package managers such as pnpm won't let your app import it unless you add it too (`pnpm add applesauce-core@^7`). marmot-ts v0.8 uses Applesauce v7; upgrade any Applesauce packages your application uses to v7 together. Nostr-specific gift-wrap helpers and factories live in `applesauce-common`.
 
 ## Setup Storage
 
@@ -78,7 +78,7 @@ Production apps need durable stores: IndexedDB in the browser, the file system i
 
 ## Setup Network Interface
 
-Implement the `NostrNetworkInterface` so the client can talk to relays. It has four methods:
+Implement the `NostrNetworkInterface` so the client can talk to relays. It has four methods. In this sketch, `myPool` represents your adapter: its `publish` returns a record of relay outcomes and its `request` returns a promise of events. A raw Applesauce `RelayPool` needs conversion because its `publish` returns an array and its `request` returns an RxJS observable.
 
 ```typescript
 import type {
@@ -131,7 +131,7 @@ const network: NostrNetworkInterface = {
 ```
 
 ::: tip Reference adapter
-The [`opentui` example](https://github.com/marmot-protocol/marmot-ts/tree/master/examples/opentui) wraps [`applesauce-relay`](https://hzrd149.github.io/applesauce/) in a complete `NostrNetworkInterface`. See [Network](/client/network) for the full contract.
+The [`opentui` example](https://github.com/marmot-protocol/marmot-ts/tree/master/examples/opentui) wraps [`applesauce-relay`](https://applesauce.build/) in a complete `NostrNetworkInterface`. See [Network](/client/network) for the full contract and Applesauce v7 authentication guidance.
 :::
 
 ## Initialize the Client

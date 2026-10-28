@@ -1326,3 +1326,56 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     expect(records).toEqual([]);
   });
 });
+
+describe("GroupsManager.connectAll reconnect", () => {
+  const waitFor = async (check: () => boolean, ms = 3000) => {
+    const deadline = Date.now() + ms;
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error("timed out waiting");
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  };
+
+  it("retries a group whose every relay failed, then subscribes live", async () => {
+    const network = new PagingNetwork([RELAY]);
+    const { manager } = await groupWithHistory(network, 2, nowSeconds() - 60);
+    network.unreachable.add(RELAY);
+    network.requests.length = 0;
+    network.subscriptions.length = 0;
+
+    const handle = manager.connectAll({ reconnectDelayMs: 10 });
+    await waitFor(() => network.requests.length >= 2);
+    expect(network.subscriptions).toHaveLength(0);
+
+    network.unreachable.clear();
+    await waitFor(() => network.subscriptions.length > 0);
+    handle.unsubscribe();
+  });
+
+  it("stops retrying once the handle is unsubscribed", async () => {
+    const network = new PagingNetwork([RELAY]);
+    const { manager } = await groupWithHistory(network, 1, nowSeconds() - 60);
+    network.unreachable.add(RELAY);
+    network.requests.length = 0;
+
+    const handle = manager.connectAll({ reconnectDelayMs: 10 });
+    await waitFor(() => network.requests.length >= 1);
+    handle.unsubscribe();
+    const seen = network.requests.length;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(network.requests.length).toBe(seen);
+  });
+
+  it("does not retry when reconnectDelayMs is 0", async () => {
+    const network = new PagingNetwork([RELAY]);
+    const { manager } = await groupWithHistory(network, 1, nowSeconds() - 60);
+    network.unreachable.add(RELAY);
+    network.requests.length = 0;
+
+    const handle = manager.connectAll({ reconnectDelayMs: 0 });
+    await waitFor(() => network.requests.length >= 1);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(network.requests).toHaveLength(1);
+    handle.unsubscribe();
+  });
+});

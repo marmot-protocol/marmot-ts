@@ -10,6 +10,7 @@
 
 - Key-package, invite, and history watchers now close immediately on `return()` or abort, even while waiting or reading storage, and no longer miss changes that arrive while your loop body is running.
 - `watchInvites()` now updates an invite's `joinable` flag when key packages are added, removed, or updated.
+- `connectAll()` retries a group whose connect failed, with backoff (`reconnectDelayMs`, default 2 s, doubling up to 32×; `0` disables it). A group whose every relay rejected the backfill, as on a device that starts offline, previously got no live subscription until the application called `connectAll()` again.
 
 ## 0.9.0
 

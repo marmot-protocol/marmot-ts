@@ -1,5 +1,6 @@
 /** @module @category Client - Group Media */
 import { EventEmitter } from "eventemitter3";
+import { watchCurrent } from "../../utils/watch-current.js";
 import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import type { MediaAttachment } from "../../core/media.js";
@@ -123,42 +124,27 @@ export class GroupMediaStore
    * immediately on subscription, then again after every `mediaAdded`,
    * `mediaRemoved`, or `cleared` event.
    *
-   * The generator runs until the caller breaks out of the loop or the
-   * consuming iterator is garbage-collected (via the `finally` cleanup).
+   * Changes during reads or paused consumption are coalesced. Abort, return,
+   * throw, or async disposal promptly releases listeners, even while a storage
+   * read is pending. Explicitly close iterators when no longer needed.
    */
-  async *subscribe(): AsyncGenerator<MediaAttachment[]> {
-    let pending = false;
-    let nextResolve: (() => void) | null = null;
-
-    const notify = () => {
-      if (nextResolve) {
-        nextResolve();
-        nextResolve = null;
-      } else {
-        pending = true;
-      }
-    };
-
-    this.on("mediaAdded", notify);
-    this.on("mediaRemoved", notify);
-    this.on("cleared", notify);
-
-    try {
-      yield await this.listMedia();
-
-      while (true) {
-        if (!pending) {
-          await new Promise<void>((r) => {
-            nextResolve = r;
-          });
-        }
-        pending = false;
-        yield await this.listMedia();
-      }
-    } finally {
-      this.off("mediaAdded", notify);
-      this.off("mediaRemoved", notify);
-      this.off("cleared", notify);
-    }
+  subscribe(
+    options: { signal?: AbortSignal } = {},
+  ): AsyncGenerator<MediaAttachment[]> {
+    return watchCurrent({
+      ...options,
+      discardStale: true,
+      read: () => this.listMedia(),
+      subscribe: (changed) => {
+        this.on("mediaAdded", changed);
+        this.on("mediaRemoved", changed);
+        this.on("cleared", changed);
+        return () => {
+          this.off("mediaAdded", changed);
+          this.off("mediaRemoved", changed);
+          this.off("cleared", changed);
+        };
+      },
+    });
   }
 }

@@ -59,6 +59,7 @@ import {
 // existing imports from this module keep working.
 export {
   KeyPackageNotFoundError,
+  KeyPackagePublishError,
   KeyPackageRotatePreconditionError,
   MissingRelayError,
   MissingSlotIdentifierError,
@@ -322,7 +323,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   }
 
   /**
-   * Ensures this client has at least one unused, current KeyPackage published,
+   * Ensures the requested slot has at least one unused, current KeyPackage published,
    * so peers can always invite it. A no-op (returning the existing unused
    * current KeyPackage) when one already exists; otherwise creates and
    * publishes a fresh one to `options.relays` via {@link create}. Idempotent —
@@ -340,11 +341,13 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   async ensurePublished(
     options: CreateKeyPackageOptions,
   ): Promise<ListedKeyPackage> {
-    if (options.identifier !== undefined)
-      validateKeyPackageSlot(options.identifier);
+    const identifier = options.identifier ?? this.clientId;
+    if (identifier === undefined) throw new MissingSlotIdentifierError();
+    validateKeyPackageSlot(identifier);
     const existing = await this.list();
     const unused = existing.find((pkg) => {
-      if (pkg.used || pkg.nonCurrent) return false;
+      if (pkg.identifier !== identifier || pkg.used || pkg.nonCurrent)
+        return false;
       try {
         return (
           getAppComponents(
@@ -359,10 +362,9 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     if (unused) return unused;
     // Replace the same addressable publication slot without deleting any old
     // private bundle: a delayed Welcome may still reference it.
-    const previous = existing.find((pkg) => !pkg.used && !pkg.nonCurrent);
     return this.create({
       ...options,
-      identifier: options.identifier ?? previous?.identifier ?? this.clientId,
+      identifier,
     });
   }
 

@@ -7,6 +7,7 @@ import type { StoredKeyPackage } from "../key-package-manager.js";
 import type { SerializedClientState } from "../../core/client-state.js";
 import type { UnreadInvite } from "../invite-manager.js";
 import { GroupRumorHistory } from "../group/group-rumor-history.js";
+import { GroupMediaStore } from "../group/group-media-store.js";
 
 function fixture() {
   const store = new InMemoryKeyValueStore<StoredKeyPackage>();
@@ -23,6 +24,7 @@ function fixture() {
     clear: async () => {},
   };
   const history = new GroupRumorHistory(backend);
+  const media = new GroupMediaStore();
   return [
     {
       name: "key packages",
@@ -60,11 +62,18 @@ function fixture() {
       changed: () => history.emit("cleared"),
       block: () => vi.spyOn(backend, "queryRumors"),
     },
+    {
+      name: "media",
+      watch: (signal?: AbortSignal) => media.subscribe({ signal }),
+      count: () => media.listenerCount("cleared"),
+      changed: () => media.emit("cleared"),
+      block: () => vi.spyOn(media, "listMedia"),
+    },
   ];
 }
 
 describe("public watcher cancellation", () => {
-  for (let index = 0; index < 5; index++) {
+  for (let index = 0; index < fixture().length; index++) {
     const name = fixture()[index]!.name;
     for (const end of ["return", "abort"] as const) {
       it(`${name}: ${end} closes idle pulls and leaves other watchers working`, async () => {
@@ -151,9 +160,9 @@ describe("public watcher cancellation", () => {
       f.changed();
       resolve([]);
       expect((await first).done).toBe(false);
-      // History discards overtaken queries; the other watchers emit another
+      // History and media discard overtaken queries; the other watchers emit another
       // current snapshot on the next pull.
-      if (index !== 4) expect((await watcher.next()).done).toBe(false);
+      if (index < 4) expect((await watcher.next()).done).toBe(false);
       await watcher.return(undefined);
     });
 

@@ -24,6 +24,7 @@ import {
 } from "../core/key-package.js";
 import { logger } from "../utils/debug.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
+import { KeyPackagePublishError } from "./key-package-errors.js";
 
 /** Options for constructing a {@link KeyPackagePublisher}. */
 export type KeyPackagePublisherOptions = {
@@ -122,7 +123,8 @@ export class KeyPackagePublisher {
 
   /**
    * Builds, signs and publishes a kind-30443 key package event to the given
-   * relays, returning the signed event.
+   * relays, returning the signed event after at least one requested relay ACKs.
+   * @throws {KeyPackagePublishError} if no requested relay accepts the event
    */
   async publish(options: PublishKeyPackageOptions): Promise<NostrEvent> {
     const eventTemplate = await createKeyPackageEvent({
@@ -133,7 +135,7 @@ export class KeyPackagePublisher {
       protected: options.protected,
     });
     const signed = await this.#signer.signEvent(eventTemplate);
-    await this.#network.publish(options.relays, signed);
+    await this.#publishAcknowledged(options.relays, signed);
     this.#log(
       "published key package event %s with slot %s",
       signed.id,
@@ -144,18 +146,30 @@ export class KeyPackagePublisher {
 
   /**
    * Builds, signs and publishes a single NIP-09 deletion covering the given
-   * key package events to the given relays, returning the signed event.
+   * key package events to the given relays, returning the signed event after at
+   * least one requested relay ACKs. An ACK does not prove all copies were erased.
+   * @throws {KeyPackagePublishError} if no requested relay accepts the event
    */
   async delete(events: NostrEvent[], relays: string[]): Promise<NostrEvent> {
     const draft = createDeleteKeyPackageEvent({ events });
     const signed = await this.#signer.signEvent(draft);
-    await this.#network.publish(relays, signed);
+    await this.#publishAcknowledged(relays, signed);
     this.#log(
       "published delete event %s for %d events",
       signed.id,
       events.length,
     );
     return signed;
+  }
+
+  async #publishAcknowledged(
+    relays: string[],
+    event: NostrEvent,
+  ): Promise<void> {
+    const responses = await this.#network.publish(relays, event);
+    if (!relays.some((relay) => responses[relay]?.ok === true)) {
+      throw new KeyPackagePublishError(event, relays, responses);
+    }
   }
 
   async #getCiphersuiteImpl(name?: CiphersuiteName) {

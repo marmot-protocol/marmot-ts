@@ -8,6 +8,9 @@
 
 ### Fixed
 
+- KeyPackage publication, rotation, and purge now reject when no requested relay acknowledges the event, preserving private keys after rejected replacements or deletions. `KeyPackagePublishError` exposes the signed event and relay responses; transport errors still propagate unchanged.
+- `ensurePublished()` now selects only the explicit slot or manager `clientId`, rather than returning another device's package. Configure one of these identifiers even when local packages already exist.
+- Media-store subscriptions now close promptly during idle pulls or pending reads and accept an optional `{ signal }` for cancellation.
 - Key-package, invite, and history watchers now close immediately on `return()` or abort, even while waiting or reading storage, and no longer miss changes that arrive while your loop body is running.
 - `watchInvites()` now updates an invite's `joinable` flag when key packages are added, removed, or updated.
 

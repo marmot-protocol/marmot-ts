@@ -130,6 +130,10 @@ while their retained obligations remain available.
 
 When someone invites you to a group, they send you a [Welcome message](/core/welcome) (encrypted via NIP-59 gift wrap). After decrypting it, use the client to initialize your group state:
 
+With a durable `inviteStore`, `client.invites` retains received envelopes through signer rejection, cancellation, and storage failures. `listen()` automatically attempts each envelope only once, including across reconnects and restarts. After restoring the signer or storage, deliberately call `decryptGiftWrap(id)` or `decryptGiftWraps()` to retry; these calls can prompt the signer again. There is no background retry timer. Invalid decrypted payloads are retired, while ambiguous signer errors (including ciphertext rejection) remain available for explicit retry in `getReceived()`.
+
+Validated Welcomes are journaled before writing unread storage. Recovery resumes those writes and source cleanup without another signer prompt or duplicate `decrypted` notification. If an unread write succeeds but reports failure, retrying refreshes active unread watchers without replaying `decrypted`, even if source cleanup still fails. If source cleanup fails after unread persistence, the invite is still returned and observable as unread; `markAsRead()` finishes source cleanup before acknowledging it and rejects if that cleanup fails. Use one invite manager per store: the generic storage interface cannot coordinate concurrent managers. After a restart, read `getUnread()` or watch the current unread list rather than relying on replayed `decrypted` notifications.
+
 ```typescript
 const { group } = await client.joinGroupFromWelcome({
   welcomeRumor,

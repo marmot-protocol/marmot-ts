@@ -6,7 +6,7 @@ import {
 } from "applesauce-core/helpers";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InviteManager } from "../invite-manager.js";
 import type {
   ReceivedGiftWrap,
@@ -232,9 +232,9 @@ describe("InviteManager", () => {
       expect(unread).toHaveLength(0);
       expect(errorEmitted).toBe(true);
 
-      // Should be removed from received even on failure
+      // A signer rejection is ambiguous and must remain explicitly retryable.
       const received = await inviteManager.getReceived();
-      expect(received).toHaveLength(0);
+      expect(received).toHaveLength(1);
     });
   });
 
@@ -385,7 +385,8 @@ describe("InviteManager", () => {
       const initial = await generator.next();
       expect(initial.value).toHaveLength(1);
 
-      // Process received in background (will fail to decrypt but still remove)
+      // Successfully decrypted but invalid plaintext is permanently processed.
+      vi.spyOn(account.signer.nip44!, "decrypt").mockResolvedValueOnce("{}");
       setTimeout(async () => {
         await inviteManager.decryptGiftWraps();
       }, 10);
@@ -430,7 +431,8 @@ describe("InviteManager", () => {
         emittedId = inviteId;
       });
 
-      // This will fail to decrypt but should still emit processed
+      // Invalid plaintext (not a signer failure) should emit processed.
+      vi.spyOn(account.signer.nip44!, "decrypt").mockResolvedValueOnce("{}");
       await inviteManager.decryptGiftWraps();
 
       expect(eventEmitted).toBe(true);

@@ -39,7 +39,16 @@ export interface UnreadInvite extends Rumor {}
  */
 export type StoredInviteEntry =
   | { type: "seen"; ids: string[] }
-  | { type: "received"; giftwrap: ReceivedGiftWrap }
+  | {
+      type: "received";
+      giftwrap: ReceivedGiftWrap;
+      /** Written before prompting; automatic listening never retries an attempt. */
+      attempted?: boolean;
+      /** Validated transition journal; survives a failed unread write or cleanup. */
+      rumor?: UnreadInvite;
+      /** Permanently invalid plaintext; only source cleanup remains. */
+      invalid?: boolean;
+    }
   | { type: "unread"; rumor: UnreadInvite };
 
 const SEEN_KEY = "__seen";
@@ -63,7 +72,7 @@ export type InviteManagerEvents = {
   /** Emitted when an invite is marked as read and removed */
   read: (inviteId: string) => void;
 
-  /** Emitted when a received gift wrap is processed (decrypted or failed) */
+  /** Emitted when a received gift wrap is retired or permanently quarantined */
   processed: (inviteId: string) => void;
 
   /** Emitted when an event fails to decrypt or parse */
@@ -118,7 +127,7 @@ export interface InviteManagerOptions {
  *
  * Store layout:
  * - `__seen` key holds a serialized set of all seen event IDs
- * - `received:<eventId>` keys hold undecrypted gift wraps
+ * - `received:<eventId>` keys hold gift wraps and optional retry/transition state
  * - `unread:<rumorId>` keys hold decrypted welcome rumors
  */
 export class InviteManager extends EventEmitter<InviteManagerEvents> {
@@ -126,6 +135,12 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
   private store: GenericKeyValueStore<StoredInviteEntry>;
   private network: NostrNetworkInterface;
   private seenCache: Set<string> | null = null;
+  // Snapshot invalidation is separate from the public, non-replayed delivery event.
+  private readonly unreadRecovery = new EventEmitter<{ changed: () => void }>();
+  // Serialize transitions and reads' acknowledgement within this manager. The
+  // store interface has no compare-and-swap; sharing a store between managers
+  // still requires external serialization.
+  private processing: Promise<unknown> = Promise.resolve();
   /** The injectable event verifier gating the 1059 outer event (SEC-01). */
   readonly #verifyEvent: VerifyEventMethod;
 
@@ -144,8 +159,10 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    * the given relays — the inbound counterpart the app would otherwise hand-wire.
    * Each new gift wrap is {@link ingestEvent | ingested} (de-duplicated) and then
    * {@link decryptGiftWraps | decrypted}, so `watchUnread` / the `decrypted` event
-   * update on their own. Any already-stored gift wraps are decrypted once on
-   * start. Call `.unsubscribe()` on the result to stop listening.
+   * update on their own. Previously unattempted gift wraps are tried once on
+   * start. Failed/interrupted attempts require an explicit decrypt call, even
+   * after reconnect or restart; journaled transitions resume without prompting.
+   * Call `.unsubscribe()` on the result to stop listening.
    *
    * `relays` should be the account's advertised kind-10050 inbox relays — where
    * inviters deliver Welcomes. Subscribing elsewhere silently misses invites.
@@ -156,7 +173,8 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
     const handle = async (event: NostrEvent): Promise<void> => {
       try {
         const added = await this.ingestEvent(event);
-        if (added) await this.decryptGiftWraps();
+        if (added)
+          await this.serialize(() => this.processGiftWrap(event.id, true));
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.emit("error", err, event.id);
@@ -168,11 +186,9 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
       .subscribe({ next: (event) => void handle(event) });
 
     // Decrypt anything already stored so the unread list is populated on start.
-    void this.getReceived()
-      .then((received) =>
-        received.length ? this.decryptGiftWraps() : undefined,
-      )
-      .catch((err) => this.#log("startup decrypt failed: %O", err));
+    void this.serialize(() => this.decryptStoredGiftWraps(true)).catch((err) =>
+      this.#log("startup decrypt failed: %O", err),
+    );
 
     return { unsubscribe: () => sub.unsubscribe() };
   }
@@ -270,63 +286,135 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    * Process a single received (undecrypted) gift wrap by event ID.
    *
    * Attempts to decrypt and parse the specified event.
-   * - On success: moves to 'unread' state and emits 'newInvite' event
-   * - On failure: emits 'error' event (event remains in 'seen' to prevent retry)
+   * - On success: journals the validated rumor, persists unread, then retires received.
+   * - Signer/cancellation/storage failures emit 'error' and retain the source.
+   * - Invalid decrypted payloads are retired (or quarantined until cleanup succeeds).
    *
-   * This method prompts the user via signer for decryption.
+   * This is an explicit retry, which may prompt the signer again. A journaled
+   * rumor is resumed without prompting or emitting a duplicate 'decrypted' event.
    *
    * @param eventId - The gift wrap event ID to decrypt, or the gift wrap event itself
-   * @returns The decrypted welcome rumor, or null if failed to decrypt
-   * @throws Error if the event is not found in received store
+   * @returns A newly persisted unread rumor, or null on failure/already delivered
+   * @throws Error if an event ID is not found in received storage
    */
   async decryptGiftWrap(
     eventId: string | ReceivedGiftWrap,
   ): Promise<UnreadInvite | null> {
-    let giftwrap: ReceivedGiftWrap | null;
-    if (typeof eventId === "string") {
-      const entry = await this.store.getItem(`${RECEIVED_PREFIX}${eventId}`);
-      giftwrap = entry?.type === "received" ? entry.giftwrap : null;
-    } else {
-      giftwrap = eventId;
-    }
+    return this.serialize(async () => {
+      // Object input must use the same durable, verified lifecycle as ID input.
+      if (typeof eventId !== "string") await this.ingestEvent(eventId);
+      const id = typeof eventId === "string" ? eventId : eventId.id;
+      return this.processGiftWrap(id, false, typeof eventId === "string");
+    });
+  }
 
-    if (!giftwrap) {
-      throw new Error(`Event ${eventId} not found in received store`);
-    }
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.processing.then(operation);
+    this.processing = result.catch(() => undefined);
+    return result;
+  }
 
-    this.#log("decrypting gift wrap %s", giftwrap.id);
+  private async processGiftWrap(
+    id: string,
+    automatic: boolean,
+    required = false,
+  ): Promise<UnreadInvite | null> {
+    const key = `${RECEIVED_PREFIX}${id}`;
+    const stored = await this.store.getItem(key);
+    if (stored?.type !== "received") {
+      if (required) throw new Error(`Event ${id} not found in received store`);
+      return null;
+    }
+    let entry = stored;
+    const giftwrap = entry.giftwrap;
+    const report = (error: unknown): void => {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.emit("error", err, id);
+    };
+
     try {
-      const rumor = await unlockGiftWrap(giftwrap, this.signer);
+      if (entry.invalid) {
+        await this.store.removeItem(key);
+        return null;
+      }
+      if (!entry.rumor) {
+        if (automatic && entry.attempted) return null;
+        // Persist BEFORE touching the signer. A restart/reconnect must not turn
+        // a declined prompt (or an interrupted attempt) into an automatic loop.
+        entry = { ...entry, attempted: true };
+        await this.store.setItem(key, entry);
 
-      if (rumor.kind !== WELCOME_EVENT_KIND) {
-        throw new Error(
-          `Expected kind ${WELCOME_EVENT_KIND} Welcome, got kind ${rumor.kind}`,
-        );
+        let rumor: UnreadInvite;
+        let signerFailed = false;
+        const nip44 = this.signer.nip44;
+        if (!nip44) throw new Error("Signer does not support nip44 encryption");
+        // Signers don't expose a common error taxonomy. Track the boundary,
+        // not error strings: even malformed-ciphertext rejections are retained
+        // for explicit retry, never automatically re-prompted.
+        const signer: EventSigner = {
+          ...this.signer,
+          getPublicKey: () => this.signer.getPublicKey(),
+          signEvent: (event) => this.signer.signEvent(event),
+          nip44: {
+            encrypt: (pubkey, plaintext) => nip44.encrypt(pubkey, plaintext),
+            decrypt: async (pubkey, ciphertext) => {
+              try {
+                return await nip44.decrypt(pubkey, ciphertext);
+              } catch (error) {
+                signerFailed = true;
+                throw error;
+              }
+            },
+          },
+        };
+        try {
+          rumor = await unlockGiftWrap(giftwrap, signer);
+          if (rumor.kind !== WELCOME_EVENT_KIND) {
+            throw new Error(
+              `Expected kind ${WELCOME_EVENT_KIND} Welcome, got kind ${rumor.kind}`,
+            );
+          }
+          getWelcome(rumor);
+        } catch (error) {
+          if (signerFailed) throw error;
+          // Only failures AFTER successful signer calls are permanent payload
+          // errors. Persist quarantine before attempting destructive cleanup.
+          entry = { ...entry, invalid: true };
+          await this.store.setItem(key, entry);
+          report(error);
+          this.emit("processed", id);
+          await this.store.removeItem(key);
+          return null;
+        }
+
+        entry = { ...entry, rumor };
+        await this.store.setItem(key, entry);
+      }
+      const rumor = entry.rumor!;
+      const unreadKey = `${UNREAD_PREFIX}${rumor.id}`;
+      const existing = await this.store.getItem(unreadKey);
+      const isNew = existing?.type !== "unread";
+      if (isNew) {
+        await this.store.setItem(unreadKey, { type: "unread", rumor });
+        // Notify as soon as unread is durable, even if source cleanup fails.
+        this.emit("decrypted", rumor);
+      } else {
+        // A previous write may have succeeded without acknowledging it. Refresh
+        // active snapshots before cleanup, without replaying a delivery event.
+        this.unreadRecovery.emit("changed");
       }
 
-      // Parse and validate the Welcome message
-      getWelcome(rumor);
-
-      this.#log("decrypted gift wrap %s → rumor %s", giftwrap.id, rumor.id);
-
-      // Move to unread state
-      await this.store.setItem(`${UNREAD_PREFIX}${rumor.id}`, {
-        type: "unread",
-        rumor,
-      });
-      await this.store.removeItem(`${RECEIVED_PREFIX}${giftwrap.id}`);
-      this.emit("processed", giftwrap.id);
-
-      this.emit("decrypted", rumor);
-      return rumor;
+      try {
+        await this.store.removeItem(key);
+        this.emit("processed", giftwrap.id);
+      } catch (error) {
+        // Unread is already durable. Report cleanup separately without hiding
+        // the successfully delivered invite from this call's result.
+        report(error);
+      }
+      return isNew ? rumor : null;
     } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      this.emit("error", err, giftwrap.id);
-
-      // Remove from received (failed to process)
-      await this.store.removeItem(`${RECEIVED_PREFIX}${giftwrap.id}`);
-      this.emit("processed", giftwrap.id);
-
+      report(error);
       return null;
     }
   }
@@ -335,8 +423,8 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    * Decrypts all received gift wraps.
    *
    * Attempts to decrypt and parse each received gift wrap.
-   * - On success: moves to 'unread' state and emits 'newInvite' event
-   * - On failure: emits 'error' event (event remains in 'seen' to prevent retry)
+   * - On success: moves to 'unread' state and emits 'decrypted'.
+   * - On retryable failure: emits 'error' and retains received for explicit retry.
    *
    * This method prompts the user via signer for each decryption,
    * so it should be called deliberately by the app (not automatically).
@@ -344,6 +432,12 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    * @returns Array of successfully decrypted welcome rumors
    */
   async decryptGiftWraps(): Promise<UnreadInvite[]> {
+    return this.serialize(() => this.decryptStoredGiftWraps(false));
+  }
+
+  private async decryptStoredGiftWraps(
+    automatic: boolean,
+  ): Promise<UnreadInvite[]> {
     const allKeys = await this.store.keys();
     const receivedIds = allKeys
       .filter((k) => k.startsWith(RECEIVED_PREFIX))
@@ -352,10 +446,14 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
     const newInvites: UnreadInvite[] = [];
     for (const id of receivedIds) {
       try {
-        const rumor = await this.decryptGiftWrap(id);
+        const rumor = await this.processGiftWrap(id, automatic);
         if (rumor) newInvites.push(rumor);
       } catch (error) {
-        // Event not found in received store (already processed by another call)
+        this.emit(
+          "error",
+          error instanceof Error ? error : new Error(String(error)),
+          id,
+        );
         continue;
       }
     }
@@ -393,7 +491,8 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
     for (const key of allKeys) {
       if (!key.startsWith(RECEIVED_PREFIX)) continue;
       const entry = await this.store.getItem(key);
-      if (entry?.type === "received") invites.push(entry.giftwrap);
+      if (entry?.type === "received" && !entry.invalid)
+        invites.push(entry.giftwrap);
     }
 
     return invites;
@@ -407,16 +506,28 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    * @param inviteId - The rumor ID (from the welcome rumor)
    */
   async markAsRead(inviteId: string): Promise<void> {
-    this.#log("marking invite %s as read", inviteId);
-    await this.store.removeItem(`${UNREAD_PREFIX}${inviteId}`);
-    this.emit("read", inviteId);
+    return this.serialize(async () => {
+      // A crash or failed source removal can leave both copies. Retire ALL
+      // matching journals before acknowledging unread, or recovery could
+      // resurrect an already-read invite. On failure unread remains available.
+      for (const key of await this.store.keys()) {
+        if (!key.startsWith(RECEIVED_PREFIX)) continue;
+        const entry = await this.store.getItem(key);
+        if (entry?.type === "received" && entry.rumor?.id === inviteId) {
+          await this.store.removeItem(key);
+          this.emit("processed", entry.giftwrap.id);
+        }
+      }
+      await this.store.removeItem(`${UNREAD_PREFIX}${inviteId}`);
+      this.emit("read", inviteId);
+    });
   }
 
   /**
    * Watch for unread invites.
    *
    * Yields the current array of unread invites, then yields again
-   * whenever the unread list changes (via 'decrypted' or 'read' events).
+   * whenever the unread list changes or a recovery confirms persisted unread.
    *
    * This does NOT automatically mark invites as read - the app must
    * call markAsRead() after processing each invite.
@@ -443,9 +554,11 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
   onUnreadChanged(changed: () => void): () => void {
     this.on("decrypted", changed);
     this.on("read", changed);
+    this.unreadRecovery.on("changed", changed);
     return () => {
       this.off("decrypted", changed);
       this.off("read", changed);
+      this.unreadRecovery.off("changed", changed);
     };
   }
 

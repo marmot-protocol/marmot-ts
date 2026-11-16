@@ -11,20 +11,23 @@ hero:
       text: Get Started
       link: /getting-started
     - theme: alt
+      text: Concepts
+      link: /guide/concepts
+    - theme: alt
       text: View on GitHub
       link: https://github.com/marmot-protocol/marmot-ts
 
 features:
   - title: End-to-End Encrypted
-    details: Built on MLS (RFC 9420) for group messaging security with forward secrecy and post-compromise security
+    details: Built on MLS (RFC 9420), with forward secrecy and post-compromise security for every group.
   - title: Decentralized
-    details: Uses Nostr relays for message distribution - no central server required, censorship-resistant
-  - title: Privacy-First
-    details: Ephemeral signing keys and gift-wrapped welcome messages protect metadata and provide unlinkability
-  - title: Type-Safe
-    details: Comprehensive TypeScript support with generic types for flexible, extensible implementations
-  - title: Pluggable Architecture
-    details: Bring your own storage, network layer, and history backends - works with any Nostr client library
-  - title: Protocol Compliant
-    details: Implements the Marmot v2 specification (identity, key packages, group setup, joining, messaging, convergence) and is wire-compatible with the darkmatter reference implementation
+    details: Group messages, key packages and invites travel over ordinary Nostr relays. No central server.
+  - title: Metadata Protection
+    details: Group events are signed with fresh ephemeral keys, and invites are delivered as NIP-59 gift wraps.
+  - title: Bring Your Own Infrastructure
+    details: Plug in your own storage, Nostr relay client and message history backend.
+  - title: High-Level Client
+    details: MarmotClient handles key packages, invites, group sync and concurrent-commit convergence for you.
+  - title: Marmot Protocol
+    details: Implements the Marmot specification and interoperates with other Marmot clients.
 ---

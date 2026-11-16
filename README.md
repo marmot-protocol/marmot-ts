@@ -251,15 +251,12 @@ backends are optional peer dependencies, needed only for those ciphersuites.
 Full documentation is in `docs/` and served via VitePress. Run `pnpm docs:dev` to browse locally.
 
 - **[Getting Started](docs/getting-started.md)** — first-run walkthrough
-- **[Architecture](docs/guide/architecture.md)** — component overview and Nostr/MLS mapping
-- **[Client Module](docs/client/index.md)** — `MarmotClient`, `MarmotGroup`, storage, network, UI integration
-- **[Core Module](docs/core/index.md)** — protocol, credentials, key packages, groups, messages, welcome
+- **[Concepts](docs/guide/concepts.md)** — terms, module layers, and event kinds
+- **Setup** — [network](docs/client/network.md), [storage](docs/client/storage.md), [multiple accounts](docs/client/multi-account.md)
+- **Guides** — [key packages](docs/client/key-packages.md), [groups](docs/client/groups.md), [invites](docs/client/invites.md), [messages](docs/client/messages.md), [history](docs/client/history.md), [media](docs/client/media.md), [UI frameworks](docs/client/ui-frameworks.md), [production checklist](docs/client/best-practices.md)
+- **[Low-level API](docs/advanced/low-level.md)** — using `core` and `engine` directly
 
-`pnpm docs:build` also generates the API reference beside the topic guides. See
-[message helpers](docs/core/messages.md#message-classification),
-[founding retries](docs/client/marmot-group.md#founding-welcome-delivery-and-retry),
-and [storage upgrades](docs/client/storage.md#upgrading-existing-stores) for the
-verified narrowing, delivery, and checkpoint boundaries.
+`pnpm docs:build` also generates the TypeDoc API reference beside the guides.
 
 ## Development
 

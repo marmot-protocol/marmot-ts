@@ -1,13 +1,12 @@
 # Network interface
 
-Marmot does not connect to relays itself. You pass a `NostrNetworkInterface` into `MarmotClient`; that same object is used by `KeyPackageManager`, `GroupsManager`, and each `MarmotGroup`. Event and filter types are applesauce's `NostrEvent` and `Filter`; nostr-tools' `Event` and `Filter` are structurally compatible.
+Marmot never opens relay connections itself. You give `MarmotClient` a `NostrNetworkInterface` adapter over your relay library, and every manager and group uses it to publish, fetch and subscribe.
 
-## Contract
+## The contract
 
 ```typescript
-import type { NostrEvent } from "applesauce-core/helpers/event";
-import type { Filter } from "applesauce-core/helpers/filter";
 import type {
+  NostrNetworkInterface,
   PublishResponse,
   Subscribable,
 } from "@internet-privacy/marmot-ts/client";
@@ -17,201 +16,145 @@ interface NostrNetworkInterface {
     relays: string[],
     event: NostrEvent,
   ): Promise<Record<string, PublishResponse>>;
-
   request(relays: string[], filters: Filter | Filter[]): Promise<NostrEvent[]>;
-
   subscription(
     relays: string[],
     filters: Filter | Filter[],
   ): Subscribable<NostrEvent>;
-
   getUserInboxRelays(pubkey: string): Promise<string[]>;
 }
 ```
 
-`Subscribable` is `{ subscribe(observer) → { unsubscribe() } }`; RxJS observables fit if they expose that shape.
+`NostrEvent` and `Filter` are applesauce's types; nostr-tools' `Event` and `Filter` are structurally compatible. `Subscribable` is anything with `subscribe(observer)` returning `{ unsubscribe() }`, so RxJS observables fit directly.
 
-- **`publish`** — Publish signed events to the listed relays. Return per-relay `ok` / `message` so failures surface after commits and welcomes. Used by `KeyPackageManager` (key packages, deletes), each group's `GroupRuntime` (MLS traffic, app messages), and Welcome delivery (gift wraps).
+The rules that matter:
 
-- **`request`** — One-shot REQ until EOSE; dedupe by `id` if you merge multiple filters. Used by `client.groups.connect()` / `connectAll()` to backfill a group's kind 445 history, one relay and one `limit`-sized page per call. Reject the promise when the relay fails, closes the request, or times out: a resolved empty array means the relay holds nothing more in that window, and the backfill records it as read. The client keeps at most `limit` events of each response, but the adapter receives every response whole: to bound memory against a relay that ignores `limit`, stop collecting in the adapter once it has `limit` events. A backfill can hold up to `backfillPageSize * backfillMaxPages` events per relay in memory (about 25,000 with the defaults); see [Bounded backfill](/client/marmot-client#bounded-backfill) for tuning them on mobile.
+- **`publish`** returns one `PublishResponse` (`{ from, ok, message? }`) per relay, keyed by relay URL. Report failures as `ok: false` rather than throwing. Set `uncertain: true` when a transport error means the relay might still have accepted the event.
+- **`request`** is a one-shot query that resolves after EOSE. **Reject** when the relay errors, closes the request or times out. Group backfill treats a resolved empty array as "this relay has nothing more" and moves its cursor past that window. If you swallow errors and return `[]`, history is silently skipped.
+- **`subscription`** emits one event per `next` for as long as the caller stays subscribed. It carries live group traffic (kind 445) and incoming invites (kind 1059).
+- **`getUserInboxRelays`** returns the relays from the user's kind 10050 inbox list, which is where Welcomes are delivered. If it **throws**, the client falls back to the group's relays. If it **returns `[]`**, Welcome delivery to that user fails. Return `[]` only when you know the user has no inbox list, and throw when the lookup itself failed.
 
-- **`subscription`** — Live updates; emit one event per `next`. Used by `client.groups.connect()` / `connectAll()` for live kind 445 traffic and by `client.invites.listen()`.
+::: warning A relay ack is not delivery
+`ok: true` means a relay accepted the event, not that the recipient received it. An invite sent to fallback relays is only received if the recipient also listens there. Check `group.snapshot.pendingWelcomes` for invites that are still undelivered (see [Groups](/client/groups)).
+:::
 
-- **`getUserInboxRelays`** — Where `pubkey` receives gift-wrapped Welcomes (kind 1059), read from their kind 10050 `relay` tags. Welcome delivery calls it for each invitee. If it **throws**, delivery falls back to the group's relays. If it returns an **empty list**, delivery for that invitee fails and is reported as a failed Welcome outcome. Return `[]` only when the user really has no inbox list.
+## Wire up Applesauce (v7)
 
-## Wiring Applesauce v7
-
-The [OpenTUI adapter](https://github.com/marmot-protocol/marmot-ts/blob/master/examples/opentui/src/helpers/relay-pool.ts) implements this contract with `applesauce-relay` v7. Convert relay publish responses to a record keyed by URL, subscribe to one-shot request observables until completion, and forward live subscription observables directly. Propagate request failures instead of treating them as empty history.
-
-For NIP-42, pass an `onAuthRequired` handler to each `publish`, `request`, and `subscription` operation that may authenticate. The example handler calls `relay.authenticate(signer)` and throws if AUTH is rejected. A bare AUTH challenge does not trigger signing; authentication starts after the relay refuses an operation with `auth-required`. Signing AUTH reveals the account's pubkey to that relay.
-
-Use `waitForAuth: false` for public lookups that should fail if refused rather than authenticate, such as KeyPackage discovery. Authentication is scoped to the operation in v7, so an unrelated public request can proceed on the same connection. Keep the returned live subscription handles and unsubscribe during teardown; dispose the shared EventStore and close the relay pool when the application shuts down.
-
-## Wiring `nostr-tools`
-
-Minimal `SimplePool` adapter sketch:
+`applesauce-relay`'s `RelayPool` covers most of the contract. The main work is converting its responses:
 
 ```typescript
-import type { Event } from "nostr-tools";
-import type { Filter } from "nostr-tools/filter";
+import { RelayPool } from "applesauce-relay";
+import { lastValueFrom, toArray } from "rxjs";
+import { getInboxRelays } from "@internet-privacy/marmot-ts";
 import type {
   NostrNetworkInterface,
   PublishResponse,
-  Subscribable,
-  Unsubscribable,
 } from "@internet-privacy/marmot-ts/client";
-import { getInboxRelays } from "@internet-privacy/marmot-ts";
+
+const pool = new RelayPool();
+const LOOKUP_RELAYS = ["wss://purplepag.es", "wss://relay.damus.io"];
+
+export const network: NostrNetworkInterface = {
+  async publish(relays, event) {
+    const responses = await pool.publish(relays, event);
+    const out: Record<string, PublishResponse> = {};
+    for (const { from, ok, message } of responses)
+      out[from] = { from, ok, message };
+    return out;
+  },
+
+  // Errors propagate, so a failed relay rejects instead of returning [].
+  request(relays, filters) {
+    return lastValueFrom(pool.request(relays, filters).pipe(toArray()));
+  },
+
+  subscription(relays, filters) {
+    return pool.subscription(relays, filters);
+  },
+
+  async getUserInboxRelays(pubkey) {
+    const events = await lastValueFrom(
+      pool
+        .request(LOOKUP_RELAYS, { kinds: [10050], authors: [pubkey] })
+        .pipe(toArray()),
+    );
+    const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
+    return latest ? getInboxRelays(latest) : [];
+  },
+};
+```
+
+For relays that require NIP-42 authentication, pass an `onAuthRequired` handler as the options argument to `publish`, `request` and `subscription`. The handler should call `relay.authenticate(signer)`. AUTH is only signed after a relay refuses an operation with `auth-required`, and signing it reveals the account's pubkey to that relay.
+
+The [OpenTUI example's adapter](https://github.com/marmot-protocol/marmot-ts/blob/master/examples/opentui/src/helpers/relay-pool.ts) is a complete reference: it adds per-relay publish handling, AUTH, default relays and shutdown. When the app shuts down, unsubscribe your live subscriptions and close the pool.
+
+## Wire up nostr-tools
+
+```typescript
 import { SimplePool } from "nostr-tools/pool";
+import { getInboxRelays } from "@internet-privacy/marmot-ts";
+import type {
+  NostrNetworkInterface,
+  PublishResponse,
+} from "@internet-privacy/marmot-ts/client";
 
 const pool = new SimplePool();
-const METADATA_RELAYS = ["wss://relay.damus.io"];
+const LOOKUP_RELAYS = ["wss://purplepag.es", "wss://relay.damus.io"];
 
-function dedupeById(events: Event[]): Event[] {
-  const seen = new Set<string>();
-  return events.filter((e) =>
-    seen.has(e.id) ? false : (seen.add(e.id), true),
-  );
-}
-
-export function nostrToolsNetwork(): NostrNetworkInterface {
-  return {
-    async publish(relays, event) {
-      const out: Record<string, PublishResponse> = {};
-      const pending = pool.publish(relays, event);
-      await Promise.all(
-        relays.map(async (url, i) => {
-          try {
-            const reason = await pending[i];
-            const msg = String(reason);
-            const softFail = msg.startsWith("connection failure:");
-            out[url] = {
-              from: url,
-              ok: !softFail,
-              message: softFail ? msg : msg || undefined,
-            };
-          } catch (err) {
-            out[url] = {
-              from: url,
-              ok: false,
-              message: err instanceof Error ? err.message : String(err),
-            };
-          }
-        }),
-      );
-      return out;
-    },
-
-    async request(relays, filters) {
-      const list = Array.isArray(filters) ? filters : [filters];
-      const all: Event[] = [];
-      for (const f of list) {
-        all.push(...(await pool.querySync(relays, f)));
-      }
-      return dedupeById(all);
-    },
-
-    subscription(relays, filters): Subscribable<Event> {
-      const list = Array.isArray(filters) ? filters : [filters];
-      return {
-        subscribe(observer): Unsubscribable {
-          const subs = list.map((f) =>
-            pool.subscribe(relays, f, {
-              onevent(ev) {
-                observer.next?.(ev);
-              },
-            }),
-          );
-          return { unsubscribe: () => subs.forEach((s) => void s.close()) };
-        },
-      };
-    },
-
-    async getUserInboxRelays(pubkey) {
-      const ev = await pool.get(METADATA_RELAYS, {
-        kinds: [10050],
-        authors: [pubkey],
-        limit: 1,
-      });
-      if (!ev) return [];
-      return getInboxRelays(ev);
-    },
-  };
-}
-```
-
-KeyPackage discovery uses the account's kind 10002 NIP-65 write relays (`getNip65Relays(event, "write")`); Welcome delivery uses kind 10050 inbox relays (`getInboxRelays(event)`). See [`transports/nostr.md`](https://github.com/marmot-protocol/marmot/blob/master/transports/nostr.md).
-
-## Connecting groups
-
-`await client.groups.connect(groupId, options?)` backfills kind 445 events, fully drains that batch, then installs a live subscription. It returns an `Unsubscribable`. `client.groups.connectAll(options?)` returns its handle immediately and follows the set of loaded groups, starting and stopping their connections as groups are loaded, joined, removed, or unloaded.
-
-Both APIs accept `{ signal?: AbortSignal, fallbackRelays?: string[] }`, plus the backfill bounds `backfillSlackSeconds`, `backfillPageSize` and `backfillMaxPages` (see [Bounded backfill](/client/marmot-client#bounded-backfill)). Group relays take precedence over fallback relays; groups with neither are skipped. Use an `AbortSignal` to stop a direct connection while its backfill request is still pending:
-
-```typescript
-const controller = new AbortController();
-const pendingConnection = client.groups.connect(group.id, {
-  signal: controller.signal,
-});
-
-// On application teardown, even before pendingConnection resolves:
-controller.abort();
-const connection = await pendingConnection;
-connection.unsubscribe(); // also safe after abort
-```
-
-Cancellation stops intake; it does not cancel the network adapter's outstanding `request` promise. When that request resolves, cancelled backfill is not admitted and no live subscription is installed. `connectAll().unsubscribe()` also cancels connections whose backfill is pending.
-
-### Serialization and disconnect
-
-Backfill and live events enter one queue per group, shared by every connection handle for that group. Each admitted batch's `ingest()` generator is completely drained before the next starts. A failed batch does not permanently stall the queue, and another group can proceed independently. Signature verification and exact singleton `h` routing validation precede insertion into the shared bounded dedup cache.
-
-`unsubscribe()` or abort closes intake immediately. Already admitted batches still run and finish reconciliation; their results remain observable while they drain. The result listener is released when no connection or admitted work remains. The unsubscribe handle is synchronous and supplies no promise for drain completion. Keep application result handlers alive while observing that final work.
-
-This queue covers manager-owned connection intake. If you also call `group.ingest()` directly, serialize those calls with your other operations and consume every yielded result before starting another batch; an abandoned generator has not completed ingestion.
-
-### Connection results and invalidation
-
-Subscribe before connecting:
-
-```typescript
-client.groups.on("ingestResult", (groupId, result) => {
-  if (result.kind === "invalidated") {
-    recordForkRetraction(groupId, {
-      rumorId: result.rumorId,
-      transportId: result.transportId,
-      losingTag: result.tag,
-      losingEpoch: result.epoch,
-      producingCommit: result.commitDigest,
+export const network: NostrNetworkInterface = {
+  async publish(relays, event) {
+    const settled = await Promise.allSettled(pool.publish(relays, event));
+    const out: Record<string, PublishResponse> = {};
+    settled.forEach((result, i) => {
+      const from = relays[i];
+      // SimplePool resolves connection errors as "connection failure: ..."
+      const message =
+        result.status === "fulfilled" ? result.value : String(result.reason);
+      const ok =
+        result.status === "fulfilled" &&
+        !message.startsWith("connection failure:");
+      out[from] = { from, ok, message: message || undefined };
     });
-  }
-});
-const connections = client.groups.connectAll();
+    return out;
+  },
+
+  async request(relays, filters) {
+    const list = Array.isArray(filters) ? filters : [filters];
+    const results = await Promise.all(
+      list.map((f) => pool.querySync(relays, f)),
+    );
+    const byId = new Map(results.flat().map((e) => [e.id, e]));
+    return [...byId.values()];
+  },
+
+  subscription(relays, filters) {
+    const list = Array.isArray(filters) ? filters : [filters];
+    return {
+      subscribe(observer) {
+        const subs = list.map((f) =>
+          pool.subscribe(relays, f, {
+            onevent: (event) => observer.next?.(event),
+          }),
+        );
+        return { unsubscribe: () => subs.forEach((s) => s.close()) };
+      },
+    };
+  },
+
+  async getUserInboxRelays(pubkey) {
+    const event = await pool.get(LOOKUP_RELAYS, {
+      kinds: [10050],
+      authors: [pubkey],
+    });
+    return event ? getInboxRelays(event) : [];
+  },
+};
 ```
 
-The manager forwards the facade's reconciled result once per connected group, including live, timer-driven, and explicit convergence results. Consuming ingest yields does not produce a second manager notification. Existing `unreadable` and trust-boundary `rejected` events remain available.
+`querySync` resolves on EOSE or timeout and does not report relay errors. If complete history matters to you, use a request path that can reject.
 
-For `invalidated`, `rumorId` is the strict canonical inner rumor ID; `transportId` is the signed envelope ID and `event` retains that envelope. `payload` contains decrypted application bytes, and `message` contains the MLS application message. `tag` and `epoch` name the losing delivery state. Optional `commitDigest: Uint8Array` identifies the edge that produced that losing state. It never identifies the commit that triggered reconciliation or the winning branch; root states have no producing commit. The optional fields preserve compatibility, so consumers must handle absent evidence.
+## Next steps
 
-Supported history removal completes before the public result when persistence succeeds. Backend errors emit `historyError` and preserve the invalidation and pending retry evidence. Restart attribution requires persisted ingestion state and rewind history; plaintext history alone is insufficient. See [History](/client/history#fork-invalidated-messages) for custom-store migration and failure handling.
-
-## Cancellable group watches
-
-`client.groups.watch({ signal })` yields fresh group-list arrays. Abort finishes an idle or loading watch promptly without waiting for an update. Returning the iterator also wakes a pending `next()` before completion and removes listeners; `throw()` and async disposal perform the same cleanup. A storage request already in progress may finish later, with its rejection handled. Updates arriving during loading or between pulls remain pending for a later snapshot.
-
-```typescript
-const controller = new AbortController();
-const updates = client.groups.watch({ signal: controller.signal });
-const observing = (async () => {
-  for await (const groups of updates) renderGroups(groups);
-})();
-
-// On view teardown:
-controller.abort();
-await observing;
-```
-
-## Production convergence policy
-
-Keep the existing finite profile-1 default (`maxRewindCommits: 5`) for production unless you have deliberately chosen another bounded horizon. Configure a policy at the client boundary to pass it to groups. The horizon controls rollback eligibility; it does not promise complete pruning of every full-history tree or plaintext history record.
-
-`maxRewindCommits: Infinity` is an explicit debugging or forensic choice that keeps arbitrarily old forks eligible and can retain unbounded evidence. It is not production guidance. Broader history-tree, delivery-evidence, and memory-retention pruning remains separate work. See [`protocol-core/convergence.md`](https://github.com/marmot-protocol/marmot/blob/master/protocol-core/convergence.md) and [`protocol-core/retained-history.md`](https://github.com/marmot-protocol/marmot/blob/master/protocol-core/retained-history.md).
+- [Storage](/client/storage): the other adapter `MarmotClient` needs
+- [Messages](/client/messages): `connectAll()` uses `request` and `subscription` to keep groups in sync
+- [Key packages](/client/key-packages): NIP-65 write relays and kind 10050 inbox relay helpers

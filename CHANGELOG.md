@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- `ensurePublished()` now replaces expired or not-yet-valid KeyPackages instead of treating them as current. Signed lifetimes must be within the protocol range cap; existing private bundles are preserved for separate retirement maintenance.
 - Received Welcomes now survive temporary signer and storage failures. Explicit decryption retries resume safely after restart; automatic listening does not repeatedly prompt for failed envelopes or duplicate delivery notifications. Recovery refreshes unread watchers even when an earlier write succeeded but reported failure.
 - KeyPackage publication, rotation, and purge now reject when no requested relay acknowledges the event, preserving private keys after rejected replacements or deletions. `KeyPackagePublishError` exposes the signed event and relay responses; transport errors still propagate unchanged.
 - `ensurePublished()` now selects only the explicit slot or manager `clientId`, rather than returning another device's package. Configure one of these identifiers even when local packages already exist.

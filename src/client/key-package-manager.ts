@@ -27,6 +27,7 @@ import { GenericKeyValueStore } from "../utils/key-value.js";
 import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import {
   isLifetimeCurrentWithGrace,
+  isLifetimeValid,
   isLifetimeWithinCap,
 } from "../utils/timestamp.js";
 import {
@@ -329,6 +330,11 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    * publishes a fresh one to `options.relays` via {@link create}. Idempotent —
    * safe to call on every startup.
    *
+   * Local selection requires the signed leaf lifetime to include the current
+   * time (inclusive bounds, without inbound clock-skew grace) and fit the
+   * protocol range cap. Publication freshness is separate from lifetime validity.
+   * Replacing an expired package does not retire its stored private material.
+   *
    * Stored entries flagged `nonCurrent` (D-09) — for example a KeyPackage
    * published by a pre-v2 release that lacks a valid `0x8009` proof — are
    * skipped and left stored as-is; nothing is deleted and no relay deletion
@@ -349,6 +355,15 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
       if (pkg.identifier !== identifier || pkg.used || pkg.nonCurrent)
         return false;
       try {
+        const lifetime = pkg.publicPackage.leafNode.lifetime;
+        // Local upkeep uses strict signed lifetime bounds, not the inbound
+        // clock-skew grace. Expired/future bundles remain stored for recovery.
+        if (
+          !lifetime ||
+          !isLifetimeWithinCap(lifetime) ||
+          !isLifetimeValid(lifetime)
+        )
+          return false;
         return (
           getAppComponents(
             pkg.publicPackage.leafNode

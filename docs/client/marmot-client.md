@@ -352,6 +352,21 @@ const myNip65WriteRelays = getNip65Relays(myRelayListEvent, "write");
 await client.keyPackages.ensurePublished({ relays: myNip65WriteRelays });
 ```
 
+`ensurePublished()` only reuses a package whose signed leaf lifetime includes
+the current time, with inclusive `notBefore`/`notAfter` bounds and a maximum
+range of 7,261,200 seconds, per
+[`foundation/key-packages.md`](https://github.com/marmot-protocol/marmot/blob/master/foundation/key-packages.md).
+Expired, future-dated, missing, or oversized lifetimes do not suppress replacement.
+Local upkeep does not apply the inbound validator's clock-skew grace. Publication
+freshness (such as the 30-day selection preference) is separate from validity;
+this operation does not implement weekly refresh scheduling or private-key
+retirement. Replaced bundles remain stored, and failed publication rejects.
+
+Compatibility note: MDK/OpenMLS currently treats `notAfter` as exclusive
+(`crates/cgka-engine/src/key_package.rs`, reviewed at MDK `0b758ccde`). This local
+selection check follows Marmot's inclusive wording and the existing TypeScript
+`isLifetimeValid()` helper instead; inbound validation is unchanged.
+
 ::: tip Key Package Lifecycle
 KeyPackages are created as last-resort by default, so the single package in your device's slot can accept several invites. Kind 30443 is addressable, so repeated `create()` calls in the same `d` slot replace each other on relays and only one stays discoverable. Rotate the package after it has been used (see [Joining an Existing Group](#joining-an-existing-group)). To publish more than one KeyPackage at a time, create extra slots with distinct random `identifier` values.
 :::

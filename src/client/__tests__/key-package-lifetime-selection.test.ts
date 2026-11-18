@@ -2,11 +2,8 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Lifetime } from "ts-mls";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
-import {
-  KeyPackageManager,
-  type StoredKeyPackage,
-} from "../key-package-manager.js";
+import { memoryStorage } from "../../utils/storage.js";
+import { KeyPackageManager } from "../key-package-manager.js";
 
 const SLOT = "ab".repeat(32);
 const OPTIONS = { identifier: SLOT, relays: ["wss://relay.test/"] };
@@ -16,15 +13,15 @@ async function fixture() {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(Number(NOW) * 1000);
   const network = new MockNetwork();
-  const store = new InMemoryKeyValueStore<StoredKeyPackage>();
+  const storage = memoryStorage();
   const manager = new KeyPackageManager({
-    store,
+    storage,
     signer: PrivateKeyAccount.generateNew().signer,
     network,
     clientId: SLOT,
   });
   const original = await manager.create(OPTIONS);
-  return { manager, network, store, original };
+  return { manager, network, storage, original };
 }
 
 afterEach(() => {

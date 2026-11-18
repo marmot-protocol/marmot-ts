@@ -4,9 +4,7 @@ import { getEventHash } from "applesauce-core/helpers/event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApplicationMessageIntent } from "../../client/group/application-message.js";
 import { MarmotClient } from "../../client/marmot-client.js";
-import {
-  getNostrGroupIdHex,
-} from "../../core/client-state.js";
+import { getNostrGroupIdHex } from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,

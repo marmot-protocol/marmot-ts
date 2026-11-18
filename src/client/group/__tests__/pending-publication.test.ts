@@ -4,7 +4,7 @@ import { seamGroup } from "../../../__tests__/helpers/engine-seam-fixtures.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import { MockNetwork } from "../../../__tests__/helpers/mock-network.js";
 import { deserializeClientState } from "../../../core/client-state.js";
-import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../../utils/storage.js";
 import { MarmotGroup } from "../marmot-group.js";
 import { proposeUpdateMetadata } from "../proposals/update-metadata.js";
 import {
@@ -20,17 +20,13 @@ async function setup() {
     ciphersuite: fixture.impl,
     network,
     signer: testAccount(6).signer,
-    store: new InMemoryKeyValueStore<Uint8Array>(),
-    ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-    rewindStore: new InMemoryKeyValueStore<Uint8Array>(),
+    storage: memoryStorage(),
   };
   const sender = new MarmotGroup(fixture.adminEpoch1, options);
   const peer = new MarmotGroup(fixture.admin2Epoch1, {
     ...options,
     signer: testAccount(0).signer,
-    store: new InMemoryKeyValueStore<Uint8Array>(),
-    ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-    rewindStore: new InMemoryKeyValueStore<Uint8Array>(),
+    storage: memoryStorage(),
   });
   await sender.save(true);
   const proposals = await proposeUpdateMetadata({
@@ -124,7 +120,7 @@ describe("exact pending publication recovery", () => {
       });
       sender.session.dispose();
       const prior = deserializeClientState(
-        (await options.store.getItem(sender.idStr))!,
+        (await options.storage.get(`${sender.idStr}/state`))!,
       );
       restarted = await MarmotGroup.fromClientState(prior, options);
       expect(restarted.lifecycle).toBe("PendingPublish");
@@ -141,8 +137,8 @@ describe("exact pending publication recovery", () => {
         bytesToHex(prior.confirmationTag),
       );
       expect(
-        (await options.rewindStore.keys()).some((k) =>
-          k.endsWith("pending-publication/v1"),
+        (await options.storage.list("")).some((k) =>
+          k.endsWith("/publication"),
         ),
       ).toBe(false);
     } finally {
@@ -167,7 +163,9 @@ describe("exact pending publication recovery", () => {
       expect(Number(sender.state.groupContext.epoch)).toBe(1);
       sender.session.dispose();
       restarted = await MarmotGroup.fromClientState(
-        deserializeClientState((await options.store.getItem(sender.idStr))!),
+        deserializeClientState(
+          (await options.storage.get(`${sender.idStr}/state`))!,
+        ),
         options,
       );
       expect(restarted.lifecycle).toBe("PendingPublish");
@@ -223,17 +221,19 @@ describe("exact pending publication recovery", () => {
       await expect(sender.submitIntent(intent)).rejects.toMatchObject({
         name: "PublicationUncertainError",
       });
-      const key = (await options.rewindStore.keys()).find((k) =>
-        k.endsWith("pending-publication/v1"),
+      const key = (await options.storage.list("")).find((k) =>
+        k.endsWith("/publication"),
       )!;
-      await options.rewindStore.setItem(
+      await options.storage.set(
         key,
         new TextEncoder().encode('{"version":999}'),
       );
       sender.session.dispose();
       await expect(
         MarmotGroup.fromClientState(
-          deserializeClientState((await options.store.getItem(sender.idStr))!),
+          deserializeClientState(
+            (await options.storage.get(`${sender.idStr}/state`))!,
+          ),
           options,
         ),
       ).rejects.toThrow("Invalid pending publication record");
@@ -272,9 +272,9 @@ describe("exact pending publication recovery", () => {
 
   it("does not contact a relay if pending-state persistence fails", async () => {
     const { sender, peer, options, intent, network } = await setup();
-    const set = options.rewindStore.setItem.bind(options.rewindStore);
-    options.rewindStore.setItem = async (key, value) => {
-      if (key.endsWith("pending-publication/v1")) throw new Error("disk full");
+    const set = options.storage.set.bind(options.storage);
+    options.storage.set = async (key, value) => {
+      if (key.endsWith("/publication")) throw new Error("disk full");
       return set(key, value);
     };
     const publish = vi.spyOn(network, "publish");

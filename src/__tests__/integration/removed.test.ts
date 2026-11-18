@@ -23,17 +23,15 @@ import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import {
   deserializeClientState,
   serializeClientState,
-  SerializedClientState,
 } from "../../core/client-state.js";
 import { commitDigest } from "../../core/convergence.js";
 import { createCredential } from "../../core/credential.js";
 import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import { testAccount } from "../helpers/test-accounts.js";
 import { GroupHistoryTree } from "../../engine/history-tree.js";
-import type { GenericKeyValueStore } from "../../utils/key-value.js";
+import { memoryStorage, type MarmotStorage } from "../../utils/storage.js";
 import type { DispositionedIngestResult } from "../../client/session/group-session.js";
 
 const RELAY = "wss://relay.test";
@@ -62,11 +60,10 @@ function marmotGroup(
   pubkey: string,
   impl: CiphersuiteImpl,
   published: NostrEvent[],
-  store: GenericKeyValueStore<SerializedClientState> = new InMemoryKeyValueStore<SerializedClientState>(),
-  removedMarkerStore?: GenericKeyValueStore<boolean>,
+  storage: MarmotStorage = memoryStorage(),
 ) {
   return new MarmotGroup(state, {
-    store,
+    storage,
     signer: {
       getPublicKey: async () => pubkey,
       signEvent: async () => {
@@ -75,9 +72,11 @@ function marmotGroup(
     },
     ciphersuite: impl,
     network: recordingNetwork(published),
-    removedMarkerStore,
   });
 }
+
+const MARKER = Uint8Array.of(1);
+const isMarkerKey = (key: string) => key.endsWith("/removed");
 
 /**
  * Builds a 3-member group (admin "a", "d", "e"), then has the admin commit a
@@ -254,86 +253,39 @@ describe("involuntary removal signal", () => {
   it("keeps removal markers in a group-scoped namespace on a shared backend (WR-19)", async () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();
-    const shared = new InMemoryKeyValueStore<SerializedClientState | boolean>();
-    // Both typed adapters deliberately share one backend: namespace isolation
-    // is the behavior under test, so do not replace it with separate stores.
-    const stateStore: GenericKeyValueStore<SerializedClientState> = {
-      getItem: async (key) => {
-        const value = await shared.getItem(key);
-        if (typeof value === "boolean")
-          throw new Error("Marker overwrote MLS state");
-        return value;
-      },
-      setItem: async (key, value) => {
-        await shared.setItem(key, value);
-        return value;
-      },
-      removeItem: (key) => shared.removeItem(key),
-      clear: () => shared.clear(),
-      keys: () => shared.keys(),
-    };
-    const markerStore: GenericKeyValueStore<boolean> = {
-      getItem: async (key) => {
-        const value = await shared.getItem(key);
-        if (value !== null && typeof value !== "boolean")
-          throw new Error("MLS state overwrote marker");
-        return value;
-      },
-      setItem: async (key, value) => {
-        await shared.setItem(key, value);
-        return value;
-      },
-      removeItem: (key) => shared.removeItem(key),
-      clear: () => shared.clear(),
-      keys: () => shared.keys(),
-    };
-    const group = marmotGroup(
-      eEpoch1,
-      ePubkey,
-      impl,
-      [],
-      stateStore,
-      markerStore,
-    );
+    // State and marker deliberately share one backend: namespace isolation is
+    // the behavior under test.
+    const storage = memoryStorage();
+    const group = marmotGroup(eEpoch1, ePubkey, impl, [], storage);
     await group.save(true);
 
     for await (const _ of group.ingest([removeCommitEvent])) void _;
 
-    const persisted = await stateStore.getItem(group.idStr);
-    expect(persisted).not.toBeNull();
+    const persisted = await storage.get(`${group.idStr}/state`);
+    expect(persisted).toBeDefined();
     expect(deserializeClientState(persisted!).groupActiveState.kind).toBe(
       "removedFromGroup",
     );
-    expect(await markerStore.getItem(`${group.idStr}/removed`)).toBe(true);
+    expect(await storage.get(`${group.idStr}/removed`)).toEqual(MARKER);
   });
 
   it("forwards persisted multi-tip removal before the public loaded event (CR-01)", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
-    const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
-    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const storage = memoryStorage();
     const groupId = bytesToHex(fixture.eEpoch1.groupContext.groupId);
     const rootTag = bytesToHex(fixture.eEpoch1.confirmationTag);
     const tree = new GroupHistoryTree(fixture.eEpoch1);
     tree.recordCommit(rootTag, fixture.canonicalCommit, fixture.removedState);
     tree.recordCommit(rootTag, fixture.competingCommit, fixture.competingState);
-    tree.bindStore(rewindStore);
+    tree.bindStore(storage);
     await tree.flush();
-    await stateStore.setItem(
-      groupId,
+    await storage.set(
+      `${groupId}/state`,
       serializeClientState(fixture.removedState),
     );
 
     const manager = new GroupsManager({
-      store: stateStore,
-      ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-      lifecycleStore: new InMemoryKeyValueStore<Uint8Array>(),
-      ingestPersistence: {
-        kind: "ephemeral",
-        reason: "ingest_state_store_omitted",
-      },
-      rewindStore,
-      removedMarkerStore,
+      storage,
       signer: testAccount(11).signer,
       network: recordingNetwork([]),
       cryptoProvider: defaultCryptoProvider,
@@ -347,36 +299,27 @@ describe("involuntary removal signal", () => {
 
     expect(loaded.state.groupActiveState.kind).toBe("removedFromGroup");
     expect(removed).toHaveBeenCalledOnce();
-    expect(await removedMarkerStore.getItem(`${groupId}/removed`)).toBe(true);
+    expect(await storage.get(`${groupId}/removed`)).toEqual(MARKER);
     expect(events).toEqual(["removed", "loaded"]);
   });
 
   it("single-flights overlapping removal realization and emits once (WR-01)", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
-    let releaseRead!: (value: boolean | null) => void;
-    const read = new Promise<boolean | null>(
+    let releaseRead!: (value: Uint8Array | undefined) => void;
+    const read = new Promise<Uint8Array | undefined>(
       (resolve) => (releaseRead = resolve),
     );
-    const getItem = vi.fn<GenericKeyValueStore<boolean>["getItem"]>(
-      async () => read,
-    );
-    const setItem = vi.fn<GenericKeyValueStore<boolean>["setItem"]>(
-      async (_key, value) => value,
-    );
-    const removedMarkerStore: GenericKeyValueStore<boolean> = {
-      getItem,
-      setItem,
-      removeItem: vi.fn(async () => undefined),
-      clear: vi.fn(async () => undefined),
-      keys: vi.fn(async () => []),
-    };
+    const storage = memoryStorage();
+    const get = storage.get.bind(storage);
+    const markerReads = vi.fn(async () => read);
+    storage.get = (key) => (isMarkerKey(key) ? markerReads() : get(key));
+    const set = vi.spyOn(storage, "set");
     const group = marmotGroup(
       fixture.removedState,
       fixture.ePubkey,
       fixture.impl,
       [],
-      undefined,
-      removedMarkerStore,
+      storage,
     );
     const removed = vi.fn();
     group.on("removed", removed);
@@ -384,36 +327,30 @@ describe("involuntary removal signal", () => {
     const first = group.realizeRemovalIfNeeded();
     const second = group.realizeRemovalIfNeeded();
     await Promise.resolve();
-    expect(getItem).toHaveBeenCalledOnce();
-    releaseRead(null);
+    expect(markerReads).toHaveBeenCalledOnce();
+    releaseRead(undefined);
     await Promise.all([first, second]);
 
-    expect(setItem).toHaveBeenCalledOnce();
+    expect(set.mock.calls.filter(([key]) => isMarkerKey(key))).toHaveLength(1);
     expect(removed).toHaveBeenCalledOnce();
   });
 
   it("retries removal realization after an in-flight marker failure (WR-01)", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
-    const getItem = vi
-      .fn<GenericKeyValueStore<boolean>["getItem"]>()
+    const storage = memoryStorage();
+    const get = storage.get.bind(storage);
+    const markerReads = vi
+      .fn<() => Promise<Uint8Array | undefined>>()
       .mockRejectedValueOnce(new Error("marker unavailable"))
-      .mockResolvedValueOnce(null);
-    const setItem = vi.fn<GenericKeyValueStore<boolean>["setItem"]>(
-      async (_key, value) => value,
-    );
+      .mockResolvedValueOnce(undefined);
+    storage.get = (key) => (isMarkerKey(key) ? markerReads() : get(key));
+    const set = vi.spyOn(storage, "set");
     const group = marmotGroup(
       fixture.removedState,
       fixture.ePubkey,
       fixture.impl,
       [],
-      undefined,
-      {
-        getItem,
-        setItem,
-        removeItem: vi.fn(async () => undefined),
-        clear: vi.fn(async () => undefined),
-        keys: vi.fn(async () => []),
-      },
+      storage,
     );
     const removed = vi.fn();
     group.on("removed", removed);
@@ -423,22 +360,23 @@ describe("involuntary removal signal", () => {
     );
     await group.realizeRemovalIfNeeded();
 
-    expect(getItem).toHaveBeenCalledTimes(2);
-    expect(setItem).toHaveBeenCalledOnce();
+    expect(markerReads).toHaveBeenCalledTimes(2);
+    expect(set.mock.calls.filter(([key]) => isMarkerKey(key))).toHaveLength(1);
     expect(removed).toHaveBeenCalledOnce();
   });
 
   it("completes durable removal when an application listener throws", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
-    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
-    const setItem = vi.spyOn(removedMarkerStore, "setItem");
+    const storage = memoryStorage();
+    const set = vi.spyOn(storage, "set");
+    const markerWrites = () =>
+      set.mock.calls.filter(([key]) => isMarkerKey(key));
     const group = marmotGroup(
       fixture.removedState,
       fixture.ePubkey,
       fixture.impl,
       [],
-      undefined,
-      removedMarkerStore,
+      storage,
     );
     Object.defineProperty(group.session, "convergenceStatus", {
       configurable: true,
@@ -463,28 +401,25 @@ describe("involuntary removal signal", () => {
     const queuedError = await queuedRejection;
     expect(queuedError).toBeInstanceOf(Error);
     expect((queuedError as Error).message).toMatch(/removed/i);
-    expect(await removedMarkerStore.getItem(`${group.idStr}/removed`)).toBe(
-      true,
-    );
+    expect(await storage.get(`${group.idStr}/removed`)).toEqual(MARKER);
     expect(throwing).toHaveBeenCalledOnce();
     expect(observer).toHaveBeenCalledOnce();
 
     await expect(group.realizeRemovalIfNeeded()).resolves.toBeUndefined();
-    expect(setItem).toHaveBeenCalledOnce();
+    expect(markerWrites()).toHaveLength(1);
     expect(throwing).toHaveBeenCalledOnce();
     expect(observer).toHaveBeenCalledOnce();
   });
 
   it("preserves removed listener context, order, and once semantics", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
-    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const storage = memoryStorage();
     const group = marmotGroup(
       fixture.removedState,
       fixture.ePubkey,
       fixture.impl,
       [],
-      undefined,
-      removedMarkerStore,
+      storage,
     );
     const order: string[] = [];
     const onContext = { name: "on-context" };
@@ -518,9 +453,7 @@ describe("involuntary removal signal", () => {
 
     await expect(group.realizeRemovalIfNeeded()).resolves.toBeUndefined();
 
-    expect(await removedMarkerStore.getItem(`${group.idStr}/removed`)).toBe(
-      true,
-    );
+    expect(await storage.get(`${group.idStr}/removed`)).toEqual(MARKER);
     expect(order).toEqual(["on", "once", "observer"]);
 
     group.off("removed", throwing, onContext);
@@ -534,8 +467,8 @@ describe("involuntary removal signal", () => {
 
     // "e" ingests the commit that removes it.
     const ePublished: NostrEvent[] = [];
-    const eStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const eGroup = marmotGroup(eEpoch1, ePubkey, impl, ePublished, eStore);
+    const storage = memoryStorage();
+    const eGroup = marmotGroup(eEpoch1, ePubkey, impl, ePublished, storage);
     await eGroup.save(true); // persist initial state so we can assert it survives
 
     let removedEmitted = false;
@@ -552,7 +485,7 @@ describe("involuntary removal signal", () => {
     // State is the tombstone, and it was NOT auto-destroyed: the store still
     // holds the (now removed) group state.
     expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    expect(await eStore.getItem(eGroup.idStr)).not.toBeNull();
+    expect(await storage.get(`${eGroup.idStr}/state`)).toBeDefined();
   });
 
   /**
@@ -571,38 +504,28 @@ describe("involuntary removal signal", () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();
 
-    const eStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const inner = new InMemoryKeyValueStore<boolean>();
+    const storage = memoryStorage();
 
-    // Snapshots whatever the state store holds at the exact moment the marker
-    // is written.
-    let persistedAtMarkerWrite: SerializedClientState | null | undefined;
+    // Snapshots whatever the storage holds as canonical state at the exact
+    // moment the marker is written.
+    let persistedAtMarkerWrite: Uint8Array | undefined;
     let idHex = "";
-    const removedMarkerStore: GenericKeyValueStore<boolean> = {
-      getItem: (key) => inner.getItem(key),
-      setItem: async (key, value) => {
-        persistedAtMarkerWrite = await eStore.getItem(idHex);
-        return await inner.setItem(key, value);
-      },
-      removeItem: (key) => inner.removeItem(key),
-      clear: () => inner.clear(),
-      keys: () => inner.keys(),
+    const set = storage.set.bind(storage);
+    storage.set = async (key, value) => {
+      if (isMarkerKey(key))
+        persistedAtMarkerWrite = await storage.get(`${idHex}/state`);
+      return set(key, value);
     };
 
-    const eGroup = marmotGroup(
-      eEpoch1,
-      ePubkey,
-      impl,
-      [],
-      eStore,
-      removedMarkerStore,
-    );
+    const eGroup = marmotGroup(eEpoch1, ePubkey, impl, [], storage);
     idHex = eGroup.idStr;
     await eGroup.save(true);
 
     for await (const _ of eGroup.ingest([removeCommitEvent])) void _;
 
-    expect(await inner.getItem(`${idHex}/removed`)).toBe(true);
+    for await (const _ of eGroup.ingest([removeCommitEvent])) void _;
+
+    expect(await storage.get(`${idHex}/removed`)).toEqual(MARKER);
     expect(persistedAtMarkerWrite).toBeTruthy();
     expect(
       deserializeClientState(persistedAtMarkerWrite!).groupActiveState.kind,
@@ -640,28 +563,28 @@ describe("involuntary removal signal", () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();
 
-    const eStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const storage = memoryStorage();
 
-    // Build the removed tombstone WITHOUT a marker store wired, simulating a
-    // process that applied the removing commit and then exited before
-    // persisting realization state (a crash between commit-apply and
-    // notification — D-12's motivating scenario).
-    const liveGroup = marmotGroup(eEpoch1, ePubkey, impl, [], eStore);
+    // A live group applies the removing commit; realization durably marks it.
+    const liveGroup = marmotGroup(eEpoch1, ePubkey, impl, [], storage);
     await liveGroup.save(true);
     for await (const _ of liveGroup.ingest([removeCommitEvent])) void _;
     await liveGroup.save(true);
     expect(liveGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    expect(
-      await removedMarkerStore.getItem(`${liveGroup.idStr}/removed`),
-    ).toBeNull();
+    const markerKey = `${liveGroup.idStr}/removed`;
+    expect(await storage.get(markerKey)).toEqual(MARKER);
+    liveGroup.dispose();
+
+    // Simulate a process that persisted the tombstone and then exited before
+    // the marker write (a crash between commit-apply and notification —
+    // D-12's motivating scenario; the tombstone always precedes the marker).
+    await storage.delete(markerKey);
 
     // Construction is deliberately side-effect free. The owning registry
     // attaches its forwarding listener first, then invokes this explicit
     // realization boundary so the consumer can observe the event.
     const firstLoad = await MarmotGroup.fromClientState(liveGroup.state, {
-      store: eStore,
-      removedMarkerStore,
+      storage,
       signer: testAccount(11).signer,
       network: recordingNetwork([]),
     });
@@ -670,15 +593,12 @@ describe("involuntary removal signal", () => {
     await firstLoad.realizeRemovalIfNeeded();
 
     expect(firstRemoved).toHaveBeenCalledOnce();
-    expect(await removedMarkerStore.getItem(`${liveGroup.idStr}/removed`)).toBe(
-      true,
-    );
+    expect(await storage.get(markerKey)).toEqual(MARKER);
 
     // Second load, same marker store: marker is already set, so explicit
     // realization is a no-op — zero `removed` emissions.
     const secondLoad = await MarmotGroup.fromClientState(liveGroup.state, {
-      store: eStore,
-      removedMarkerStore,
+      storage,
       signer: testAccount(11).signer,
       network: recordingNetwork([]),
     });
@@ -706,17 +626,9 @@ describe("involuntary removal signal", () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();
 
-    const eStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const storage = memoryStorage();
 
-    const eGroup = marmotGroup(
-      eEpoch1,
-      ePubkey,
-      impl,
-      [],
-      eStore,
-      removedMarkerStore,
-    );
+    const eGroup = marmotGroup(eEpoch1, ePubkey, impl, [], storage);
     const idHex = eGroup.idStr;
     await eGroup.save(true);
 
@@ -726,7 +638,7 @@ describe("involuntary removal signal", () => {
     // A genuine removal: tombstone persisted, marker written, `removed` once.
     for await (const _ of eGroup.ingest([removeCommitEvent])) void _;
     expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    expect(await removedMarkerStore.getItem(`${idHex}/removed`)).toBe(true);
+    expect(await storage.get(`${idHex}/removed`)).toEqual(MARKER);
     expect(removedEmissions).toBe(1);
 
     // Now a rewind that withdraws that removal's `selfRemoved` notification
@@ -747,41 +659,28 @@ describe("involuntary removal signal", () => {
 
     // Membership was never restored, so the marker must survive...
     expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    expect(await removedMarkerStore.getItem(`${idHex}/removed`)).toBe(true);
+    expect(await storage.get(`${idHex}/removed`)).toEqual(MARKER);
     // ...and no duplicate `removed` is emitted for what is one removal.
     expect(removedEmissions).toBe(1);
   });
 
   /**
-   * CR-10 regression: `removedMarkerStore` must be reachable through the
-   * public client API, not only by hand-constructing a {@link MarmotGroup}.
-   * `GroupsManagerOptions` now carries it and forwards it to both the
-   * `GroupRegistry` (load path) and the `GroupFactory` (create path), so the
-   * D-12 marker is durable for real consumers.
-   *
-   * Without the plumbing, `MarmotGroup` falls back to
-   * `#removalRealizedInMemory`, which is reset by process exit — so the
-   * marker store stays empty and a "restart" (a second `GroupsManager` over
-   * the same backing stores) realizes the removal a second time, emitting a
-   * duplicate `removed`. Both assertions below fail on the unplumbed code.
+   * CR-10 regression: the removal marker must be durable through the public
+   * client API, not only by hand-constructing a {@link MarmotGroup}. The
+   * `GroupsManager` storage reaches both the `GroupRegistry` (load path) and
+   * the `GroupFactory` (create path), so the D-12 marker survives a restart
+   * and a second `GroupsManager` over the same storage does not realize the
+   * removal a second time.
    */
-  it("plumbs removedMarkerStore through GroupsManager so realization survives a restart (CR-10)", async () => {
+  it("persists the removal marker through GroupsManager so realization survives a restart (CR-10)", async () => {
     const { eEpoch1, removeCommitEvent } = await buildRemovalFixture();
 
     // Backing stores shared across the simulated restart.
-    const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const storage = memoryStorage();
     const signer = testAccount(11).signer;
 
     const managerOptions = {
-      store: stateStore,
-      ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-      lifecycleStore: new InMemoryKeyValueStore<Uint8Array>(),
-      ingestPersistence: {
-        kind: "ephemeral",
-        reason: "ingest_state_store_omitted",
-      } as const,
-      removedMarkerStore,
+      storage,
       signer,
       network: recordingNetwork([]),
       cryptoProvider: defaultCryptoProvider,
@@ -793,7 +692,7 @@ describe("involuntary removal signal", () => {
     const idHex = group.idStr;
 
     // Sanity: the group is live and unmarked before the removing commit.
-    expect(await removedMarkerStore.getItem(`${idHex}/removed`)).toBeNull();
+    expect(await storage.get(`${idHex}/removed`)).toBeUndefined();
 
     const kinds: string[] = [];
     for await (const r of manager1.ingest(group.id, [removeCommitEvent]))
@@ -802,8 +701,8 @@ describe("involuntary removal signal", () => {
     expect(group.state.groupActiveState.kind).toBe("removedFromGroup");
 
     // The marker reached the durable store through the manager — this is the
-    // plumbing CR-10 was about. Unplumbed, this is still `null`.
-    expect(await removedMarkerStore.getItem(`${idHex}/removed`)).toBe(true);
+    // durability CR-10 was about.
+    expect(await storage.get(`${idHex}/removed`)).toEqual(MARKER);
 
     // --- process 2: a fresh manager over the same stores (a "restart").
     // `MarmotGroup.fromClientState` realizes internally before returning, so
@@ -819,8 +718,7 @@ describe("involuntary removal signal", () => {
       // Still the tombstone...
       expect(reloaded.state.groupActiveState.kind).toBe("removedFromGroup");
       // ...but realization already happened in process 1 and the marker is
-      // durable, so the load must NOT re-emit `removed`. With the in-memory
-      // fallback this fires again — a duplicate removal for the app.
+      // durable, so the load must NOT re-emit `removed`.
       const removedEmissions = emitSpy.mock.calls.filter(
         (call) => call[0] === "removed",
       ).length;

@@ -16,6 +16,7 @@ import { generateKeyPackage } from "../../core/key-package.js";
 import { contentDedupId } from "../message-dedup.js";
 import { MarmotGroupEngine } from "../group-engine.js";
 import { DEFAULT_CONVERGENCE_POLICY } from "../../core/convergence.js";
+import { memoryStorage } from "../../utils/storage.js";
 
 async function identityEngine(maxRewindCommits = 1) {
   const account = testAccount(6);
@@ -62,25 +63,7 @@ async function identityEngine(maxRewindCommits = 1) {
       idOf: (envelope) => envelope.id,
     },
   });
-  const values = new Map<string, Uint8Array>();
-  engine.history.bindStore({
-    async getItem(key) {
-      return values.get(key) ?? null;
-    },
-    async setItem(key, value) {
-      values.set(key, value);
-      return value;
-    },
-    async removeItem(key) {
-      values.delete(key);
-    },
-    async keys() {
-      return [...values.keys()];
-    },
-    async clear() {
-      values.clear();
-    },
-  });
+  engine.history.bindStore(memoryStorage());
   async function advance() {
     const sent = await engine.send({ kind: "selfUpdate" });
     if (sent.kind !== "selfUpdate") throw new Error("expected self-update");

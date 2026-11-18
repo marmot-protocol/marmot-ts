@@ -13,12 +13,11 @@ import {
 } from "ts-mls";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { SerializedClientState } from "../../../core/client-state.js";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { serializeApplicationRumor } from "../../../core/group-message.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
+import { memoryStorage, type StorageOp } from "../../../utils/storage.js";
 import { GroupSession } from "../group-session.js";
 import type { UnreadableIngestResult } from "../group-session.js";
 import type { IngestResult as EngineIngestResult } from "../../../engine/types.js";
@@ -56,7 +55,7 @@ describe("expected canonical parent at preparation", () => {
     return new GroupSession({
       state: await createAdminState(ciphersuite),
       ciphersuite,
-      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      storage: memoryStorage(),
     });
   };
   it("rejects a stale expected parent before preparing a commit", async () => {
@@ -65,7 +64,7 @@ describe("expected canonical parent at preparation", () => {
     const session = new GroupSession({
       state,
       ciphersuite,
-      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      storage: memoryStorage(),
     });
     const before = session.state;
     const intent = {
@@ -221,20 +220,18 @@ describe("durable delivered evidence validation", () => {
   it("restores root evidence without inventing a digest and rejects malformed provenance", async () => {
     const ciphersuite = await getImpl();
     const state = await createAdminState(ciphersuite);
-    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
+    const storage = memoryStorage();
     const session = new GroupSession({
       state,
       ciphersuite,
-      store: new InMemoryKeyValueStore<SerializedClientState>(),
-      ingestStateStore,
-      rewindStore: new InMemoryKeyValueStore<Uint8Array>(),
+      storage,
     });
     await session.send({
       kind: "applicationMessage",
       payload: serializeApplicationRumor(rumorFrom(ADMIN, "root evidence")),
     });
-    const bytes = (await ingestStateStore.getItem(
-      `${bytesToHex(session.id)}/delivered-payloads/v1`,
+    const bytes = (await storage.get(
+      `${bytesToHex(session.id)}/ingest/delivered`,
     ))!;
     const evidence = decodeDeliveredEvidence(bytes, session.historyTree);
     expect(evidence.entries).toHaveLength(1);
@@ -383,16 +380,12 @@ async function createTwoMemberStates(impl: CiphersuiteImpl) {
 function makeSession(
   state: import("ts-mls").ClientState,
   impl: CiphersuiteImpl,
-  overrides: Partial<
-    import("../group-session.js").GroupSessionOptions<
-      import("../group-session.js").GroupSessionHistory
-    >
-  > = {},
+  overrides: Partial<import("../group-session.js").GroupSessionOptions> = {},
 ) {
   return new GroupSession({
     state,
     ciphersuite: impl,
-    store: new InMemoryKeyValueStore<SerializedClientState>(),
+    storage: memoryStorage(),
     ...overrides,
   });
 }
@@ -410,18 +403,14 @@ describe("GroupSession send intent effects", () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
     const id = bytesToHex(state.groupContext.groupId);
-    const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
-    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
-    const session = makeSession(state, impl, {
-      lifecycleStore,
-      ingestStateStore,
-    });
+    const storage = memoryStorage();
+    const session = makeSession(state, impl, { storage });
     await session.hydrateLifecycleEvidence();
-    await lifecycleStore.setItem("other/disband/request", new Uint8Array([1]));
+    await storage.set("other/disband/request", new Uint8Array([1]));
     const entered = deferred();
     const release = deferred();
-    const write = lifecycleStore.setItem.bind(lifecycleStore);
-    vi.spyOn(lifecycleStore, "setItem").mockImplementation(
+    const write = storage.set.bind(storage);
+    vi.spyOn(storage, "set").mockImplementation(
       async (key: string, value: Uint8Array) => {
         if (key === `${id}/disband/request`) {
           entered.resolve();
@@ -441,13 +430,8 @@ describe("GroupSession send intent effects", () => {
     expect(destroyed).toBe(false);
     release.resolve();
     await Promise.all([destruction, rejected]);
-    expect(
-      (await lifecycleStore.keys()).filter((key: string) =>
-        key.startsWith(`${id}/`),
-      ),
-    ).toEqual([]);
-    expect(await ingestStateStore.keys()).toEqual([]);
-    expect(await lifecycleStore.getItem("other/disband/request")).toEqual(
+    expect(await storage.list(`${id}/`)).toEqual([]);
+    expect(await storage.get("other/disband/request")).toEqual(
       new Uint8Array([1]),
     );
     for (const call of [
@@ -460,7 +444,7 @@ describe("GroupSession send intent effects", () => {
       await expect(call()).rejects.toThrow("Group destroyed");
     await session.hydrateLifecycleEvidence();
     expect(await session.markDisbandNotificationDelivered()).toBeUndefined();
-    expect(await lifecycleStore.keys()).toEqual(["other/disband/request"]);
+    expect(await storage.list("")).toEqual(["other/disband/request"]);
   });
 
   it.each(["selection", "notification"] as const)(
@@ -468,8 +452,8 @@ describe("GroupSession send intent effects", () => {
     async (boundary) => {
       const impl = await getImpl();
       const state = await createAdminState(impl);
-      const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
-      const session = makeSession(state, impl, { lifecycleStore });
+      const storage = memoryStorage();
+      const session = makeSession(state, impl, { storage });
       const evidence = {
         commitDigest: new Uint8Array(32).fill(9),
         actorPubkey: ADMIN,
@@ -482,12 +466,27 @@ describe("GroupSession send intent effects", () => {
         await session.persistSelectedDisband(evidence);
       const entered = deferred();
       const release = deferred();
-      const write = lifecycleStore.setItem.bind(lifecycleStore);
-      vi.spyOn(lifecycleStore, "setItem").mockImplementation(
+      // Gate the first durable write the operation admits: the terminal
+      // projection batch (selection) or the notification-state set.
+      let gated = false;
+      const gate = async () => {
+        if (gated) return;
+        gated = true;
+        entered.resolve();
+        await release.promise;
+      };
+      const write = storage.set.bind(storage);
+      vi.spyOn(storage, "set").mockImplementation(
         async (key: string, value: Uint8Array) => {
-          entered.resolve();
-          await release.promise;
+          await gate();
           return write(key, value);
+        },
+      );
+      const commit = storage.batch.bind(storage);
+      vi.spyOn(storage, "batch").mockImplementation(
+        async (ops: readonly StorageOp[]) => {
+          await gate();
+          return commit(ops);
         },
       );
       const operation =
@@ -504,7 +503,7 @@ describe("GroupSession send intent effects", () => {
       expect(destroyed).toBe(false);
       release.resolve();
       await Promise.all([destruction, rejected]);
-      expect(await lifecycleStore.keys()).toEqual([]);
+      expect(await storage.list("")).toEqual([]);
       await expect(session.persistSelectedDisband(evidence)).rejects.toThrow(
         "Group destroyed",
       );
@@ -514,9 +513,9 @@ describe("GroupSession send intent effects", () => {
   it("does not recreate registry state when terminal hydration finishes after closure", async () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
-    const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
+    const storage = memoryStorage();
     const key = disbandTombstoneKey(bytesToHex(state.groupContext.groupId));
-    await lifecycleStore.setItem(
+    await storage.set(
       key,
       encodeDisbandTombstone({
         groupId: state.groupContext.groupId,
@@ -528,25 +527,29 @@ describe("GroupSession send intent effects", () => {
     );
     const entered = deferred();
     const release = deferred();
-    const read = lifecycleStore.getItem.bind(lifecycleStore);
-    vi.spyOn(lifecycleStore, "getItem").mockImplementation(
-      async (itemKey: string) => {
-        const value = await read(itemKey);
-        if (itemKey === key) {
-          entered.resolve();
-          await release.promise;
-        }
-        return value;
-      },
-    );
-    const writes = vi.spyOn(lifecycleStore, "setItem");
-    const session = makeSession(state, impl, { lifecycleStore });
+    const read = storage.get.bind(storage);
+    vi.spyOn(storage, "get").mockImplementation(async (itemKey: string) => {
+      const value = await read(itemKey);
+      if (itemKey === key) {
+        entered.resolve();
+        await release.promise;
+      }
+      return value;
+    });
+    const writes = vi.spyOn(storage, "set");
+    const batches = vi.spyOn(storage, "batch");
+    const session = makeSession(state, impl, { storage });
     await entered.promise;
     const destruction = session.destroyLocalState();
     release.resolve();
     await destruction;
     expect(writes).not.toHaveBeenCalled();
-    expect(await lifecycleStore.keys()).toEqual([]);
+    expect(
+      batches.mock.calls
+        .flatMap(([ops]) => ops)
+        .filter((op) => op.type === "set"),
+    ).toEqual([]);
+    expect(await storage.list("")).toEqual([]);
   });
 
   it("writes selected terminal evidence before clearing live and work state", async () => {
@@ -554,11 +557,9 @@ describe("GroupSession send intent effects", () => {
     const state = await createAdminState(impl);
     const id = bytesToHex(state.groupContext.groupId);
     const operations: string[] = [];
-    const stateStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
-    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
-    await stateStore.setItem(id, new Uint8Array([1]));
-    await lifecycleStore.setItem(
+    const storage = memoryStorage();
+    await storage.set(`${id}/state`, new Uint8Array([1]));
+    await storage.set(
       `${id}/disband/request`,
       encodeDisbandRequest({
         status: "pending",
@@ -566,22 +567,26 @@ describe("GroupSession send intent effects", () => {
         lastPreparedEpoch: null,
       }),
     );
-    await ingestStateStore.setItem(`${id}/effect/work`, new Uint8Array([1]));
-    vi.spyOn(lifecycleStore, "setItem").mockImplementation(
-      async (key, value) => {
-        operations.push(`set:${key}`);
-        return value;
+    await storage.set(`${id}/ingest/effect/work`, new Uint8Array([1]));
+    const commit = storage.batch.bind(storage);
+    vi.spyOn(storage, "batch").mockImplementation(
+      async (ops: readonly StorageOp[]) => {
+        for (const op of ops) operations.push(`${op.type}:${op.key}`);
+        return commit(ops);
       },
     );
-    vi.spyOn(stateStore, "removeItem").mockImplementation(async (key) => {
-      operations.push(`remove-state:${key}`);
+    const write = storage.set.bind(storage);
+    vi.spyOn(storage, "set").mockImplementation(async (key, value) => {
+      operations.push(`set:${key}`);
+      return write(key, value);
+    });
+    const remove = storage.delete.bind(storage);
+    vi.spyOn(storage, "delete").mockImplementation(async (key) => {
+      operations.push(`delete:${key}`);
+      return remove(key);
     });
 
-    const session = makeSession(state, impl, {
-      store: stateStore,
-      lifecycleStore,
-      ingestStateStore,
-    });
+    const session = makeSession(state, impl, { storage });
     await session.persistSelectedDisband({
       commitDigest: new Uint8Array(32).fill(9),
       actorPubkey: ADMIN,
@@ -591,19 +596,19 @@ describe("GroupSession send intent effects", () => {
     });
 
     expect(operations[0]).toBe(`set:${disbandTerminalIntentKey(id)}`);
-    expect(await lifecycleStore.getItem(`${id}/disband/request`)).toBeNull();
-    expect(await ingestStateStore.getItem(`${id}/effect/work`)).toEqual(
+    expect(await storage.get(`${id}/disband/request`)).toBeUndefined();
+    expect(await storage.get(`${id}/ingest/effect/work`)).toEqual(
       new Uint8Array([1]),
     );
-    expect(operations).toContain(`remove-state:${id}`);
+    expect(operations.indexOf(`delete:${id}/state`)).toBeGreaterThan(0);
   });
 
   it("hydrates terminal authority over stale live state and rejects corrupt evidence", async () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
     const id = bytesToHex(state.groupContext.groupId);
-    const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
-    const session = makeSession(state, impl, { lifecycleStore });
+    const storage = memoryStorage();
+    const session = makeSession(state, impl, { storage });
     await session.persistSelectedDisband({
       commitDigest: new Uint8Array(32).fill(8),
       actorPubkey: ADMIN,
@@ -612,14 +617,14 @@ describe("GroupSession send intent effects", () => {
       terminalOutcome: "disbanded",
     });
 
-    const restarted = makeSession(state, impl, { lifecycleStore });
+    const restarted = makeSession(state, impl, { storage });
     expect((await restarted.disbandTombstone())?.actorPubkey).toBe(ADMIN);
 
-    await lifecycleStore.setItem(
+    await storage.set(
       disbandTombstoneKey(id),
       new TextEncoder().encode('{"version":99}'),
     );
-    const corrupt = makeSession(state, impl, { lifecycleStore });
+    const corrupt = makeSession(state, impl, { storage });
     await expect(corrupt.disbandTombstone()).rejects.toThrow(
       "Invalid disband tombstone",
     );
@@ -627,17 +632,15 @@ describe("GroupSession send intent effects", () => {
 
   it("persists a disband request before exposing its candidate and gates later sends", async () => {
     const impl = await getImpl();
-    const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
+    const storage = memoryStorage();
     const session = makeSession(await createAdminState(impl), impl, {
-      lifecycleStore,
+      storage,
     });
 
     const effects = await session.requestDisband();
     expect(effects.publish).toHaveLength(1);
     expect(
-      (await lifecycleStore.keys()).some((key) =>
-        key.endsWith("/disband/request"),
-      ),
+      (await storage.list("")).some((key) => key.endsWith("/disband/request")),
     ).toBe(true);
     await expect(
       session.send({
@@ -898,14 +901,8 @@ describe("GroupSession save lifecycle", () => {
   it("destroy waits for ledger hydration and prevents late hydration or saves from recreating plaintext", async () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
-    const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
-    const original = makeSession(state, impl, {
-      store,
-      ingestStateStore,
-      rewindStore,
-    });
+    const storage = memoryStorage();
+    const original = makeSession(state, impl, { storage });
     await original.send({
       kind: "applicationMessage",
       payload: serializeApplicationRumor(rumorFrom(ADMIN, "private hydration")),
@@ -914,18 +911,14 @@ describe("GroupSession save lifecycle", () => {
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const get = ingestStateStore.getItem.bind(ingestStateStore);
-    vi.spyOn(ingestStateStore, "getItem").mockImplementation(
-      async (key: string) => {
-        const bytes = await get(key);
-        if (key.endsWith("/delivered-payloads/v1")) await blocked;
-        return bytes;
-      },
-    );
+    const get = storage.get.bind(storage);
+    vi.spyOn(storage, "get").mockImplementation(async (key: string) => {
+      const bytes = await get(key);
+      if (key.endsWith("/ingest/delivered")) await blocked;
+      return bytes;
+    });
     const session = makeSession(original.state, impl, {
-      store,
-      ingestStateStore,
-      rewindStore,
+      storage,
       historyTree: original.historyTree,
     });
     const destruction = session.destroyLocalState();
@@ -933,9 +926,7 @@ describe("GroupSession save lifecycle", () => {
     await destruction;
     await session.hydrateLifecycleEvidence();
     await session.save(true);
-    expect(await ingestStateStore.keys()).toEqual([]);
-    expect(await store.keys()).toEqual([]);
-    expect(await rewindStore.keys()).toEqual([]);
+    expect(await storage.list("")).toEqual([]);
     await expect(
       session.send({
         kind: "applicationMessage",
@@ -949,19 +940,33 @@ describe("GroupSession save lifecycle", () => {
   it("only writes to the store when dirty, or when forced", async () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
+    const storage = memoryStorage();
     const onStateSaved = vi.fn();
-    const session = makeSession(state, impl, { store, onStateSaved });
-    const key = bytesToHex(state.groupContext.groupId);
+    const session = makeSession(state, impl, { storage, onStateSaved });
+    const key = `${bytesToHex(state.groupContext.groupId)}/state`;
 
-    // Clean session: a plain save is a no-op.
+    // The fork-history tree is always persisted now: a fresh session's seeded
+    // root is unflushed, so the first save commits it with the canonical state.
+    expect(session.historyTree.isDirty).toBe(true);
     await session.save();
-    expect(await store.getItem(key)).toBeNull();
-    expect(onStateSaved).not.toHaveBeenCalled();
-
-    // Forced save persists the initial state even when not dirty.
-    await session.save(true);
-    expect(await store.getItem(key)).not.toBeNull();
+    expect(await storage.get(key)).toBeDefined();
     expect(onStateSaved).toHaveBeenCalledOnce();
+
+    // Clean session: a plain save does not rewrite the canonical state (only
+    // the delivered-payload evidence, which every save refreshes).
+    const batch = vi.spyOn(storage, "batch");
+    const set = vi.spyOn(storage, "set");
+    const writtenKeys = () => [
+      ...batch.mock.calls.flatMap(([ops]) => ops.map((op) => op.key)),
+      ...set.mock.calls.map(([written]) => written),
+    ];
+    await session.save();
+    expect(writtenKeys()).not.toContain(key);
+    expect(onStateSaved).toHaveBeenCalledOnce();
+
+    // Forced save persists the state even when not dirty.
+    await session.save(true);
+    expect(writtenKeys()).toContain(key);
+    expect(onStateSaved).toHaveBeenCalledTimes(2);
   });
 });

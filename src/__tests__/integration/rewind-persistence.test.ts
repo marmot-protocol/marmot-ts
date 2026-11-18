@@ -18,10 +18,6 @@ import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { GroupRegistry } from "../../client/group-registry.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import {
-  deserializeClientState,
-  SerializedClientState,
-} from "../../core/client-state.js";
-import {
   commitDigest,
   DEFAULT_CONVERGENCE_POLICY,
   selectCanonicalBranch,
@@ -32,7 +28,7 @@ import { createCredential } from "../../core/credential.js";
 import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const NETWORK: NostrNetworkInterface = {
@@ -166,7 +162,7 @@ async function drain(gen: AsyncIterable<unknown>): Promise<void> {
 }
 
 describe("rewind history persistence across restart", () => {
-  it("rewinds to the canonical branch after a restart when the rewind store is persisted", async () => {
+  it("rewinds to the canonical branch after a restart from the persisted history tree", async () => {
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -175,15 +171,13 @@ describe("rewind history persistence across restart", () => {
       await buildForkScenario(impl);
     const groupId = bytesToHex(memberEpoch1.groupContext.groupId);
 
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-    const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
+    const storage = memoryStorage();
 
     // Session 1: follow the losing (higher) branch onto epoch 2, persisting the
     // tip state and the full-fork history tree (which retains epoch 1 + its
     // commit — the bounded rewind window is rebuilt from the tree on load).
     const first = new MarmotGroup(memberEpoch1, {
-      store,
-      rewindStore,
+      storage,
       signer: SIGNER,
       ciphersuite: impl,
       network: NETWORK,
@@ -195,17 +189,12 @@ describe("rewind history persistence across restart", () => {
     first.dispose();
 
     // Sanity: the history tree was actually persisted (per-node edge keys).
-    const persistedKeys = await rewindStore.keys();
-    expect(persistedKeys.some((k) => k.startsWith(`${groupId}/edge/`))).toBe(
-      true,
-    );
+    const persistedKeys = await storage.list(`${groupId}/tree/edge/`);
+    expect(persistedKeys.length).toBeGreaterThan(0);
 
     // "Restart": rehydrate the group through the real load path.
     const registry = new GroupRegistry({
-      store,
-      ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-      lifecycleStore: new InMemoryKeyValueStore<Uint8Array>(),
-      rewindStore,
+      storage,
       signer: SIGNER,
       network: NETWORK,
     });
@@ -238,16 +227,14 @@ describe("rewind history persistence across restart", () => {
     } = await buildForkScenario(impl);
     const groupId = bytesToHex(memberEpoch1.groupContext.groupId);
 
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-    const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
+    const storage = memoryStorage();
 
     // Session 1: follow the losing (higher) branch onto epoch 2, then record the
     // competing canonical (lower) branch into the persisted fork tree WITHOUT
     // converging onto it — simulating a client that captured the rival fork but
     // stopped before the convergence pass (tree flushed, tip still the loser).
     const first = new MarmotGroup(memberEpoch1, {
-      store,
-      rewindStore,
+      storage,
       signer: SIGNER,
       ciphersuite: impl,
       network: NETWORK,
@@ -265,10 +252,7 @@ describe("rewind history persistence across restart", () => {
 
     // "Restart" through the real load path — and ingest NOTHING afterwards.
     const registry = new GroupRegistry({
-      store,
-      ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-      lifecycleStore: new InMemoryKeyValueStore<Uint8Array>(),
-      rewindStore,
+      storage,
       signer: SIGNER,
       network: NETWORK,
     });
@@ -280,41 +264,6 @@ describe("rewind history persistence across restart", () => {
     expect(reloaded.state.confirmationTag).toEqual(canonicalTag);
     expect(reloaded.state.confirmationTag).not.toEqual(losingTag);
     expect(reloaded.lifecycle).toBe("Stable");
-  });
-
-  it("cannot rewind after a restart without a persisted rewind store (the gap this fixes)", async () => {
-    const impl = await getCiphersuiteImpl(
-      "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-      defaultCryptoProvider,
-    );
-    const { memberEpoch1, lowerEvent, higherEvent, canonicalTag, losingTag } =
-      await buildForkScenario(impl);
-    const groupId = bytesToHex(memberEpoch1.groupContext.groupId);
-
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-
-    // Session 1: follow the losing branch (no rewind store → in-memory only).
-    const first = new MarmotGroup(memberEpoch1, {
-      store,
-      signer: SIGNER,
-      ciphersuite: impl,
-      network: NETWORK,
-    });
-    await drain(first.ingest([higherEvent]));
-    first.dispose();
-
-    // "Restart" from the persisted tip only — retained history is gone.
-    const reloaded = new MarmotGroup(
-      deserializeClientState((await store.getItem(groupId))!),
-      { store, signer: SIGNER, ciphersuite: impl, network: NETWORK },
-    );
-
-    await drain(reloaded.ingest([lowerEvent]));
-
-    // The late canonical commit is dropped as beyond-anchor: the client stays on
-    // the losing branch and never converges (documents the pre-fix behavior).
-    expect(reloaded.state.confirmationTag).toEqual(losingTag);
-    expect(reloaded.state.confirmationTag).not.toEqual(canonicalTag);
   });
 
   it("holds a competing-branch app message silently, then reveals it on switch", async () => {
@@ -347,9 +296,8 @@ describe("rewind history persistence across restart", () => {
       ciphersuite: impl,
     });
 
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
     const group = new MarmotGroup(memberEpoch1, {
-      store,
+      storage: memoryStorage(),
       signer: SIGNER,
       ciphersuite: impl,
       network: NETWORK,

@@ -27,7 +27,7 @@ import { commitDigest } from "../../core/convergence.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { getGroupMemberPubkeys } from "../../core/group-members.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { MockNetwork } from "../helpers/mock-network.js";
 import { MarmotConformanceSubject, parseMdkScenarioStep } from "./subject.js";
 import type { CanonicalConformanceSnapshot } from "./snapshot.js";
@@ -342,9 +342,7 @@ async function executeFixture(fixture: Fixture) {
   const auditEvents = new Map<string, MarmotAuditEvent[]>();
   const makeGroup = (actor: Actor, state: ClientState) =>
     new MarmotGroup(state, {
-      store: new InMemoryKeyValueStore(),
-      ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-      rewindStore: new InMemoryKeyValueStore<Uint8Array>(),
+      storage: memoryStorage(),
       signer: accounts.get(actor)!.signer,
       ciphersuite,
       network,

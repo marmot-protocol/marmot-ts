@@ -28,9 +28,7 @@ import type { DispositionedIngestResult } from "../../client/session/group-sessi
 
 import { createApplicationMessageIntent } from "../../client/group/application-message.js";
 import { MarmotClient } from "../../client/marmot-client.js";
-import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { SerializedClientState } from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import {
   createGroupEvent,
@@ -38,15 +36,61 @@ import {
 } from "../../core/group-message.js";
 import { commitDigest } from "../../core/convergence.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { GroupRumorHistory } from "../../client/group/group-rumor-history.js";
-import { KeyValueRumorHistoryBackend } from "../../extra/key-value-rumor-history-backend.js";
+import {
+  EventMemory,
+  type IAsyncEventDatabase,
+} from "applesauce-core/event-store";
+import type { Filter } from "applesauce-core/helpers/filter";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { unixNow } from "../../utils/nostr.js";
-import type { GenericKeyValueStore } from "../../utils/key-value.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import {
+  memoryStorage,
+  scopeStorage,
+  type MemoryStorage,
+} from "../../utils/storage.js";
+import { GROUP_PREFIX, groupKeys } from "../../client/storage-keys.js";
 
 const RELAYS = ["wss://mock-relay.test"];
+
+/** An app-style async rumor database, kept in memory so it survives client restarts. */
+class TestRumorDatabase implements IAsyncEventDatabase<Rumor> {
+  readonly memory = new EventMemory<Rumor>();
+  async hasEvent(id: string) {
+    return this.memory.hasEvent(id);
+  }
+  async getEvent(id: string) {
+    return this.memory.getEvent(id);
+  }
+  async hasReplaceable(kind: number, pubkey: string, identifier?: string) {
+    return this.memory.hasReplaceable(kind, pubkey, identifier);
+  }
+  async getReplaceable(kind: number, pubkey: string, identifier?: string) {
+    return this.memory.getReplaceable(kind, pubkey, identifier);
+  }
+  async getReplaceableHistory(
+    kind: number,
+    pubkey: string,
+    identifier?: string,
+  ) {
+    return this.memory.getReplaceableHistory(kind, pubkey, identifier);
+  }
+  async getByFilters(filters: Filter | Filter[]) {
+    return this.memory.getByFilters(filters);
+  }
+  async getTimeline(filters: Filter | Filter[]) {
+    return this.memory.getTimeline(filters);
+  }
+  async add(event: Rumor) {
+    return this.memory.add(event);
+  }
+  async remove(event: string | Rumor) {
+    return this.memory.remove(event);
+  }
+  async removeByFilters(filters: Filter | Filter[]) {
+    return this.memory.removeByFilters(filters);
+  }
+}
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -71,13 +115,7 @@ describe("connection admission", () => {
       },
     }));
     const manager = new GroupsManager({
-      store: new InMemoryKeyValueStore<SerializedClientState>(),
-      ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-      lifecycleStore: new InMemoryKeyValueStore<Uint8Array>(),
-      ingestPersistence: {
-        kind: "ephemeral",
-        reason: "ingest_state_store_omitted",
-      },
+      storage: memoryStorage(),
       signer: PrivateKeyAccount.generateNew().signer,
       network,
       verifyEvent: fakeVerifyEvent,
@@ -87,8 +125,7 @@ describe("connection admission", () => {
     if (withPeer) {
       const account = PrivateKeyAccount.generateNew();
       const peer = new MarmotClient({
-        groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-        keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+        storage: memoryStorage(),
         signer: account.signer,
         network,
         clientId: "ab".repeat(32),
@@ -290,7 +327,7 @@ describe("connection admission", () => {
       const timedGroup = new MarmotGroup(
         deserializeClientState(serializeClientState(group.state)),
         {
-          store: manager.store,
+          storage: manager.storage,
           signer: manager.signer,
           network,
           ciphersuite: group.ciphersuite,
@@ -360,7 +397,7 @@ describe("connection admission", () => {
 });
 
 /** Resolve on the group's next applicationMessage, decoded; rejects after `ms`. */
-function nextMessage(group: MarmotGroup<any>, ms = 2000): Promise<Rumor> {
+function nextMessage(group: MarmotGroup, ms = 2000): Promise<Rumor> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timed out")), ms);
     group.once("applicationMessage", (bytes: Uint8Array) => {
@@ -389,13 +426,22 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
   let ciphersuite: CiphersuiteImpl;
   let mockNetwork: MockNetwork;
   let adminClient: MarmotClient;
-  let inviteeClient: MarmotClient<GroupRumorHistory>;
-  let memberStore: InMemoryKeyValueStore<SerializedClientState>;
-  let ingestStore: InMemoryKeyValueStore<Uint8Array>;
-  let rewindStore: InMemoryKeyValueStore<Uint8Array>;
-  let historyStore: InMemoryKeyValueStore<Rumor>;
-  const historyFactory = () =>
-    new GroupRumorHistory(new KeyValueRumorHistoryBackend(historyStore));
+  let inviteeClient: MarmotClient;
+  /** The invitee's root storage, shared across restarts. */
+  let memberStorage: MemoryStorage;
+  let historyStore: TestRumorDatabase;
+  const rumorDatabases = () => historyStore;
+  /** The invitee's group-scoped view, as MarmotClient passes to groups. */
+  const groupStorage = () => scopeStorage(memberStorage, GROUP_PREFIX);
+  /** Reads a group's delivered-payload evidence. */
+  const deliveredEvidence = async (groupId: Uint8Array) =>
+    JSON.parse(
+      new TextDecoder().decode(
+        (await memberStorage.get(
+          GROUP_PREFIX + groupKeys.delivered(bytesToHex(groupId)),
+        ))!,
+      ),
+    );
 
   beforeEach(async () => {
     adminAccount = PrivateKeyAccount.generateNew();
@@ -408,22 +454,16 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
-    memberStore = new InMemoryKeyValueStore<SerializedClientState>();
-    ingestStore = new InMemoryKeyValueStore<Uint8Array>();
-    rewindStore = new InMemoryKeyValueStore<Uint8Array>();
-    historyStore = new InMemoryKeyValueStore<Rumor>();
+    memberStorage = memoryStorage();
+    historyStore = new TestRumorDatabase();
     inviteeClient = new MarmotClient({
-      groupStateStore: memberStore,
-      ingestStateStore: ingestStore,
-      rewindStore,
-      historyFactory,
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memberStorage,
+      rumors: rumorDatabases,
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "cd".repeat(32),
@@ -447,10 +487,8 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
           ? new MarmotGroup(
               deserializeClientState(serializeClientState(inviteeGroup.state)),
               {
-                store: memberStore,
-                ingestStateStore: ingestStore,
-                rewindStore,
-                history: historyFactory(),
+                storage: groupStorage(),
+                rumors: rumorDatabases,
                 signer: inviteeAccount.signer,
                 network: mockNetwork,
                 ciphersuite: inviteeGroup.ciphersuite,
@@ -527,11 +565,8 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       if (restart) inviteeClient.groups.unload(inviteeGroup.id);
       const restarted = restart
         ? new MarmotClient({
-            groupStateStore: memberStore,
-            ingestStateStore: ingestStore,
-            rewindStore,
-            historyFactory,
-            keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+            storage: memberStorage,
+            rumors: rumorDatabases,
             signer: inviteeAccount.signer,
             network: mockNetwork,
           })
@@ -551,7 +586,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       const failure = new Error("removal offline");
       const removal =
         path === "failure"
-          ? vi.spyOn(historyStore, "removeItem").mockRejectedValue(failure)
+          ? vi.spyOn(historyStore, "remove").mockRejectedValue(failure)
           : undefined;
       const results: DispositionedIngestResult[] = [];
       const invalidated = deferred();
@@ -616,13 +651,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       if (path === "failure") {
         expect(errors).toContain(failure);
         expect(await restored.history.queryRumors({})).toEqual([rumor]);
-        const saved = JSON.parse(
-          new TextDecoder().decode(
-            (await ingestStore.getItem(
-              `${bytesToHex(restored.id)}/delivered-payloads/v1`,
-            ))!,
-          ),
-        );
+        const saved = await deliveredEvidence(restored.id);
         expect(saved.pending[0]).toMatchObject({
           rumorId: rumor.id,
           transportId: event.id,
@@ -633,11 +662,8 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
         removal!.mockRestore();
         restarted.groups.unload(restored.id);
         const retried = new MarmotClient({
-          groupStateStore: memberStore,
-          ingestStateStore: ingestStore,
-          rewindStore,
-          historyFactory,
-          keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+          storage: memberStorage,
+          rumors: rumorDatabases,
           signer: inviteeAccount.signer,
           network: mockNetwork,
         });
@@ -648,9 +674,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
         expect(await retryGroup.history.queryRumors({})).toEqual([]);
       } else {
         expect((await subscribedTimeline.next()).value).toEqual([]);
-        expect(
-          await new KeyValueRumorHistoryBackend(historyStore).queryRumors({}),
-        ).toEqual([]);
+        expect(await historyStore.getTimeline({})).toEqual([]);
       }
       await subscribedTimeline.return(undefined);
       await current.reconverge();
@@ -734,17 +758,12 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
         ),
       ).toBe(true);
     }
-    const key = `${bytesToHex(receiver.id)}/delivered-payloads/v1`;
-    const snapshot = async () =>
-      JSON.parse(new TextDecoder().decode((await ingestStore.getItem(key))!));
+    const snapshot = () => deliveredEvidence(receiver.id);
     const restart = async () => {
       inviteeClient.groups.unload(receiver.id);
       const client = new MarmotClient({
-        groupStateStore: memberStore,
-        ingestStateStore: ingestStore,
-        rewindStore,
-        historyFactory,
-        keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+        storage: memberStorage,
+        rumors: rumorDatabases,
         signer: inviteeAccount.signer,
         network: mockNetwork,
       });
@@ -777,11 +796,11 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       const { receiver, winningEvent, rumors, snapshot, restart } =
         await losingDeliveries(["one", "two", "three"]);
       expect((await snapshot()).entries).toHaveLength(3);
-      const remove = historyStore.removeItem.bind(historyStore);
+      const remove = historyStore.remove.bind(historyStore);
       let calls = 0;
       let pendingBeforeRemoval = 0;
       const failure = vi
-        .spyOn(historyStore, "removeItem")
+        .spyOn(historyStore, "remove")
         .mockImplementation(async (key) => {
           calls++;
           if (calls > (boundary === "first invalidation" ? 1 : 2))
@@ -789,7 +808,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
           // Every obligation must already be durable before the first history removal.
           if (calls === 1)
             pendingBeforeRemoval = (await snapshot()).pending.length;
-          await remove(key);
+          return remove(key);
         });
       const iterator = receiver.ingest([winningEvent]);
       while (true) {
@@ -886,8 +905,8 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       for await (const result of receiver.ingest([winningEvent])) void result;
       expect((await snapshot()).pending).toHaveLength(1);
       removal.mockRestore();
-      const unrelated = `other-group/delivered-payloads/v1`;
-      await ingestStore.setItem(unrelated, new Uint8Array([42]));
+      const unrelated = `${GROUP_PREFIX}${"ff".repeat(32)}/ingest/delivered`;
+      await memberStorage.set(unrelated, new Uint8Array([42]));
       const id = bytesToHex(receiver.id);
       if (path === "leave") await inviteeClient.groups.leave(receiver.id);
       else if (path === "manager destroy")
@@ -896,21 +915,13 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       await receiver.destroy(); // Repeat cleanup is safe.
       await receiver.save(true); // Stale references must not recreate the group.
       expect(
-        (await ingestStore.keys()).filter((key: string) =>
-          key.startsWith(`${id}/`),
-        ),
+        await memberStorage.list(GROUP_PREFIX + groupKeys.prefix(id)),
       ).toEqual([]);
-      expect(await ingestStore.getItem(unrelated)).toEqual(
-        new Uint8Array([42]),
-      );
-      expect(await memberStore.getItem(id)).toBeNull();
+      expect(await memberStorage.get(unrelated)).toEqual(new Uint8Array([42]));
       expect(await receiver.history.queryRumors({})).toEqual([]);
       const restarted = new MarmotClient({
-        groupStateStore: memberStore,
-        ingestStateStore: ingestStore,
-        rewindStore,
-        historyFactory,
-        keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+        storage: memberStorage,
+        rumors: rumorDatabases,
         signer: inviteeAccount.signer,
         network: mockNetwork,
       });
@@ -927,26 +938,31 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       const entered = deferred();
       const release = deferred();
       if (boundary === "history") {
-        const set = historyStore.setItem.bind(historyStore);
-        vi.spyOn(historyStore, "setItem").mockImplementation(
-          async (key, value) => {
-            entered.resolve();
-            await release.promise;
-            return set(key, value);
-          },
-        );
+        const add = historyStore.add.bind(historyStore);
+        vi.spyOn(historyStore, "add").mockImplementation(async (rumor) => {
+          entered.resolve();
+          await release.promise;
+          return add(rumor);
+        });
       } else {
-        const ledgerStore: GenericKeyValueStore<Uint8Array> = ingestStore;
-        const set = ledgerStore.setItem.bind(ledgerStore);
-        vi.spyOn(ledgerStore, "setItem").mockImplementation(
-          async (key: string, value: Uint8Array) => {
-            if (key.endsWith("/delivered-payloads/v1")) {
-              entered.resolve();
-              await release.promise;
-            }
+        const delivered =
+          GROUP_PREFIX + groupKeys.delivered(bytesToHex(receiver.id));
+        const gate = async () => {
+          entered.resolve();
+          await release.promise;
+        };
+        const set = memberStorage.set.bind(memberStorage);
+        vi.spyOn(memberStorage, "set").mockImplementation(
+          async (key, value) => {
+            if (key === delivered) await gate();
             return set(key, value);
           },
         );
+        const batch = memberStorage.batch.bind(memberStorage);
+        vi.spyOn(memberStorage, "batch").mockImplementation(async (ops) => {
+          if (ops.some((op) => op.key === delivered)) await gate();
+          return batch(ops);
+        });
       }
       const work = winningDelivery(rumors[0]);
       await entered.promise;
@@ -955,22 +971,25 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       await work;
       await destruction;
       expect(
-        (await ingestStore.keys()).filter((key: string) =>
-          key.startsWith(`${bytesToHex(receiver.id)}/`),
+        await memberStorage.list(
+          GROUP_PREFIX + groupKeys.prefix(bytesToHex(receiver.id)),
         ),
       ).toEqual([]);
-      expect(await memberStore.getItem(bytesToHex(receiver.id))).toBeNull();
       expect(await receiver.history.queryRumors({})).toEqual([]);
       for await (const result of receiver.ingest([])) void result;
       await receiver.reconverge();
-      expect(await memberStore.getItem(bytesToHex(receiver.id))).toBeNull();
+      expect(
+        await memberStorage.list(
+          GROUP_PREFIX + groupKeys.prefix(bytesToHex(receiver.id)),
+        ),
+      ).toEqual([]);
     },
   );
 
   /** Admin creates a group and the invitee joins it. */
   async function adminAndInvitee(): Promise<{
     adminGroup: MarmotGroup;
-    inviteeGroup: MarmotGroup<GroupRumorHistory>;
+    inviteeGroup: MarmotGroup;
   }> {
     const adminPubkey = await adminAccount.signer.getPublicKey();
     const inviteePubkey = await inviteeAccount.signer.getPublicKey();

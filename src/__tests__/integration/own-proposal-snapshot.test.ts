@@ -12,13 +12,12 @@ import { describe, expect, it } from "vitest";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { GroupRegistry } from "../../client/group-registry.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
-import { SerializedClientState } from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
 import { getPubkeyLeafNodeIndexes } from "../../core/group-members.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { framedCommitProposals } from "../../engine/wire-format.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://mock-relay.test";
@@ -117,12 +116,10 @@ describe("own staged proposals in the history-tree snapshot (CR-08)", () => {
     const { impl, adminE1 } = await buildAdminState();
     const groupId = bytesToHex(adminE1.groupContext.groupId);
 
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-    const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
+    const storage = memoryStorage();
 
     const group = new MarmotGroup(adminE1, {
-      store,
-      rewindStore,
+      storage,
       signer: SIGNER,
       ciphersuite: impl,
       network: ackingNetwork(),
@@ -161,10 +158,7 @@ describe("own staged proposals in the history-tree snapshot (CR-08)", () => {
 
     // 4. Restart through the real load path.
     const registry = new GroupRegistry({
-      store,
-      ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-      lifecycleStore: new InMemoryKeyValueStore<Uint8Array>(),
-      rewindStore,
+      storage,
       signer: SIGNER,
       network: ackingNetwork(),
     });

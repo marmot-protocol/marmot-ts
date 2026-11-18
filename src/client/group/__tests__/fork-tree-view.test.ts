@@ -10,12 +10,11 @@ import {
 import { describe, expect, it } from "vitest";
 
 import type { NostrNetworkInterface } from "../../nostr-interface.js";
-import type { SerializedClientState } from "../../../core/client-state.js";
 import { createCredential } from "../../../core/credential.js";
 import { createGroupEvent } from "../../../core/group-message.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../../utils/storage.js";
 import { MarmotGroup } from "../marmot-group.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 
@@ -118,7 +117,7 @@ describe("MarmotGroup fork-tree customer API", () => {
       signer: SIGNER,
       ciphersuite: impl,
       network: NETWORK,
-      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      storage: memoryStorage(),
     });
 
     let changes = 0;

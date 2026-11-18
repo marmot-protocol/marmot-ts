@@ -3,15 +3,11 @@ import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
 import { MarmotClient } from "../marmot-client.js";
-import {
-  getMarmotGroupView,
-  type SerializedClientState,
-} from "../../core/client-state.js";
+import { getMarmotGroupView } from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import type { StoredKeyPackage } from "../key-package-manager.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage, type MemoryStorage } from "../../utils/storage.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 
@@ -117,8 +113,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: account.signer,
       network: mockNetwork,
     });
@@ -144,8 +139,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: account.signer,
       network: mockNetwork,
     });
@@ -171,8 +165,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: account.signer,
       network: mockNetwork,
     });
@@ -191,132 +184,48 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
   });
 });
 
-describe("MarmotClient ingest-state persistence capability", () => {
-  it("threads a supplied durable store into created groups", async () => {
-    const account = PrivateKeyAccount.generateNew();
-    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
-    const client = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      ingestStateStore,
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
-      signer: account.signer,
-      network: new MockNetwork(),
-    });
-
-    expect(client.ingestPersistence).toEqual({ kind: "durable" });
-    expect(client.groups.ingestPersistence).toEqual({ kind: "durable" });
-    const group = await client.groups.create("Durable ingest", {
-      relays: ["wss://relay.example.com"],
-    });
-    expect(group.session.ingestStateStore).toBe(ingestStateStore);
-  });
-
-  it("threads the supplied store through import and persisted load paths", async () => {
-    const account = PrivateKeyAccount.generateNew();
-    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
-    const groupStateStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const makeClient = (store: InMemoryKeyValueStore<SerializedClientState>) =>
-      new MarmotClient({
-        groupStateStore: store,
-        ingestStateStore,
-        keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
-        signer: account.signer,
-        network: new MockNetwork(),
-      });
-
-    const source = await makeClient(groupStateStore).groups.create("Source", {
-      relays: ["wss://relay.example.com"],
-    });
-    const loaded = await makeClient(groupStateStore).groups.get(source.id);
-    expect(loaded.session.ingestStateStore).toBe(ingestStateStore);
-
-    const imported = await makeClient(
-      new InMemoryKeyValueStore(),
-    ).groups.import(source.state);
-    expect(imported.session.ingestStateStore).toBe(ingestStateStore);
-  });
-
-  it("shares one explicitly ephemeral fallback across groups", async () => {
-    const account = PrivateKeyAccount.generateNew();
-    const client = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
-      signer: account.signer,
-      network: new MockNetwork(),
-    });
-
-    expect(client.ingestPersistence).toEqual({
-      kind: "ephemeral",
-      reason: "ingest_state_store_omitted",
-    });
-    const first = await client.groups.create("First", {
-      relays: ["wss://relay.example.com"],
-    });
-    const second = await client.groups.create("Second", {
-      relays: ["wss://relay.example.com"],
-    });
-    expect(first.session.ingestStateStore).toBe(
-      second.session.ingestStateStore,
-    );
-  });
-});
-
 describe("MarmotClient lifecycle persistence", () => {
-  it("threads one supplied lifecycle store through create, import, and load", async () => {
+  /** Writes a group-scoped record through the session and reads it at the root. */
+  async function expectLifecycleWrite(
+    group: Awaited<ReturnType<MarmotClient["groups"]["create"]>>,
+    storage: MemoryStorage,
+  ) {
+    expect(await storage.get(`group/${group.idStr}/state`)).toBeDefined();
+    const marker = new Uint8Array([1, 2, 3]);
+    await group.session.storage.set(`${group.idStr}/test/marker`, marker);
+    expect(await storage.get(`group/${group.idStr}/test/marker`)).toEqual(
+      marker,
+    );
+  }
+
+  it("threads the client storage through create, import, and load", async () => {
     const account = PrivateKeyAccount.generateNew();
-    const groupStateStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
-    const makeClient = (store: InMemoryKeyValueStore<SerializedClientState>) =>
+    const storage = memoryStorage();
+    const makeClient = (backend: MemoryStorage) =>
       new MarmotClient({
-        groupStateStore: store,
-        lifecycleStore,
-        keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+        storage: backend,
         signer: account.signer,
         network: new MockNetwork(),
       });
 
-    const writer = makeClient(groupStateStore);
+    const writer = makeClient(storage);
     const created = await writer.groups.create("Lifecycle create", {
       relays: ["wss://relay.example.com"],
     });
-    expect(created.session.lifecycleStore).toBe(lifecycleStore);
+    await expectLifecycleWrite(created, storage);
 
-    const reader = makeClient(groupStateStore);
+    const reader = makeClient(storage);
     const [loaded, concurrent] = await Promise.all([
       reader.groups.get(created.id),
       reader.groups.get(created.id),
     ]);
     expect(loaded).toBe(concurrent);
-    expect(loaded.session.lifecycleStore).toBe(lifecycleStore);
+    await expectLifecycleWrite(loaded, storage);
 
-    const imported = await makeClient(
-      new InMemoryKeyValueStore(),
-    ).groups.import(created.state);
-    expect(imported.session.lifecycleStore).toBe(lifecycleStore);
-  });
-
-  it("defaults lifecycle records to the durable group-state backend", async () => {
-    const account = PrivateKeyAccount.generateNew();
-    const groupStateStore = new InMemoryKeyValueStore<SerializedClientState>();
-    const client = new MarmotClient({
-      groupStateStore,
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
-      signer: account.signer,
-      network: new MockNetwork(),
-    });
-    const group = await client.groups.create("Lifecycle fallback", {
-      relays: ["wss://relay.example.com"],
-    });
-    const marker = new Uint8Array([1, 2, 3]);
-
-    const lifecycleStore = group.session.lifecycleStore;
-    expect(lifecycleStore).toBeDefined();
-    if (!lifecycleStore)
-      throw new Error("expected the default lifecycle store");
-    await lifecycleStore.setItem(`${group.idStr}/disband/request`, marker);
-
-    expect(
-      await groupStateStore.getItem(`${group.idStr}/disband/request`),
-    ).toEqual(marker);
+    const importStorage = memoryStorage();
+    const imported = await makeClient(importStorage).groups.import(
+      created.state,
+    );
+    await expectLifecycleWrite(imported, importStorage);
   });
 });

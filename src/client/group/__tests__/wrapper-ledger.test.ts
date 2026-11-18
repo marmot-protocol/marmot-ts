@@ -1,6 +1,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { describe, expect, it } from "vitest";
-import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
+import { decodeRecord } from "../../../utils/record-codec.js";
+import { memoryStorage, StorageBatch } from "../../../utils/storage.js";
 import {
   ConvergenceEffectLedger,
   TerminalWrapperLedger,
@@ -8,129 +9,148 @@ import {
 
 const id = "ab".repeat(32);
 const digest = new Uint8Array(32).fill(3);
+const wrapperKey = (eventId: string) => `group/ingest/wrapper/${eventId}`;
+const effectKey = `group/ingest/effect/${bytesToHex(digest)}`;
 
-describe("retention-attributed wrapper evidence", () => {
-  it("stores authenticated source separately from local completion", async () => {
-    const store = new InMemoryKeyValueStore<Uint8Array>();
-    const ledger = new TerminalWrapperLedger(store, "group");
-    await ledger.record(id, "accepted", { sourceEpoch: 1 });
-    const value = JSON.parse(
-      new TextDecoder().decode(
-        (await store.getItem(`group/ingest/wrapper/v1/${id}`))!,
-      ),
-    );
-    expect(
-      value.sourceEpoch === 1 && value.completedAtEpoch === undefined,
-    ).toBe(true);
+async function compact(
+  ledger: TerminalWrapperLedger,
+  floorEpoch: number,
+  pinned?: ReadonlySet<string>,
+) {
+  const batch = new StorageBatch(ledger.storage);
+  await ledger.stageCompaction(batch, floorEpoch, pinned);
+  await batch.commit();
+}
+
+async function compactEffects(
+  ledger: ConvergenceEffectLedger,
+  digests: ReadonlySet<string>,
+) {
+  const batch = new StorageBatch(ledger.storage);
+  await ledger.stageCompaction(batch, digests);
+  await batch.commit();
+}
+
+describe("terminal wrapper ledger", () => {
+  it("records the outcome with its epoch", async () => {
+    const storage = memoryStorage();
+    const ledger = new TerminalWrapperLedger(storage, "group");
+    await ledger.record(id, "accepted", 1);
+    expect(decodeRecord(storage.data.get(wrapperKey(id))!)).toEqual({
+      outcome: "accepted",
+      epoch: 1,
+    });
+    expect(await ledger.get(id)).toBe("accepted");
   });
 
-  it("retains equality, pins, unfinished, corrupt and exact-prefix neighbors", async () => {
-    const store = new InMemoryKeyValueStore<Uint8Array>();
-    const ledger = new TerminalWrapperLedger(store, "group");
-    await ledger.compactRetained(2, 3);
-    expect(await store.keys()).toEqual([]);
-    await ledger.record(id, "accepted", { sourceEpoch: 1 });
-    await ledger.compactRetained(2, 3, new Set([id]));
-    expect(await ledger.get(id)).toBe("accepted");
-    await ledger.compactRetained(1, 3);
-    expect(await ledger.get(id)).toBe("accepted");
-    await ledger.compactRetained(2, 3);
+  it("stages records into a caller batch that is durable only on commit", async () => {
+    const storage = memoryStorage();
+    const ledger = new TerminalWrapperLedger(storage, "group");
+    const batch = new StorageBatch(storage);
+    ledger.stage(batch, id, "stale", 2);
     expect(await ledger.get(id)).toBeUndefined();
-    const pending = "cd".repeat(32);
-    await ledger.begin(pending, "prior");
-    await ledger.stageApplied(pending, "prior", "result", "accepted");
-    await store.setItem(
-      `group/ingest/wrapper/v1/${id}`,
-      new TextEncoder().encode(
-        '{"version":4,"state":"terminal","outcome":"accepted","sourceEpoch":-1}',
-      ),
+    await batch.commit();
+    expect(await ledger.get(id)).toBe("stale");
+  });
+
+  it("retains equality, pins, corrupt rows and exact-prefix neighbors", async () => {
+    const storage = memoryStorage();
+    const ledger = new TerminalWrapperLedger(storage, "group");
+    await compact(ledger, 2);
+    expect(await storage.list("")).toEqual([]);
+    await ledger.record(id, "accepted", 1);
+    await compact(ledger, 2, new Set([id]));
+    expect(await ledger.get(id)).toBe("accepted");
+    await compact(ledger, 1);
+    expect(await ledger.get(id)).toBe("accepted");
+    await compact(ledger, 2);
+    expect(await ledger.get(id)).toBeUndefined();
+
+    const corrupt = "cd".repeat(32);
+    await storage.set(
+      wrapperKey(corrupt),
+      new TextEncoder().encode('{"outcome":"accepted","epoch":-1}'),
     );
+    expect(await ledger.get(corrupt)).toBeUndefined();
     const neighbors = [
-      `group/ingest/wrapper/v1/${id}/application`,
-      `group-extra/ingest/wrapper/v1/${id}`,
+      `group/ingest/wrapper/${id}/application`,
+      `group-extra/ingest/wrapper/${id}`,
     ];
-    for (const key of neighbors) await store.setItem(key, new Uint8Array([7]));
-    await ledger.compactRetained(100, 100);
-    expect(await ledger.hasUnfinished()).toBe(true);
+    for (const key of neighbors) await storage.set(key, new Uint8Array([7]));
+    await compact(ledger, 100);
     for (const key of neighbors)
-      expect(await store.getItem(key)).toEqual(new Uint8Array([7]));
-    expect(
-      await store.getItem(`group/ingest/wrapper/v1/${pending}`),
-    ).not.toBeNull();
+      expect(await storage.get(key)).toEqual(new Uint8Array([7]));
+    expect(await storage.get(wrapperKey(corrupt))).toBeDefined();
+  });
+
+  it("rejects invalid records and compaction floors", async () => {
+    const ledger = new TerminalWrapperLedger(memoryStorage(), "group");
     await expect(
-      ledger.record(id, "accepted", {
-        sourceEpoch: Number.MAX_SAFE_INTEGER + 1,
-      }),
-    ).rejects.toThrow("coordinate");
+      ledger.record(id, "accepted", Number.MAX_SAFE_INTEGER + 1),
+    ).rejects.toThrow("Invalid wrapper record");
+    await expect(ledger.record(id, "accepted", -1)).rejects.toThrow(
+      "Invalid wrapper record",
+    );
+    await expect(
+      ledger.stageCompaction(new StorageBatch(ledger.storage), -1),
+    ).rejects.toThrow("retention epoch");
   });
 
-  it("migrates legacy terminals once with a local coordinate across two restarts", async () => {
-    const store = new InMemoryKeyValueStore<Uint8Array>();
-    await new TerminalWrapperLedger(store, "group").record(id, "stale");
-    for (let restart = 0; restart < 2; restart++) {
-      const ledger = new TerminalWrapperLedger(store, "group");
-      await ledger.compactRetained(4, 5 + restart);
-      const value = JSON.parse(
-        new TextDecoder().decode(
-          (await store.getItem(`group/ingest/wrapper/v1/${id}`))!,
-        ),
-      );
-      expect(value.completedAtEpoch).toBe(5);
-      expect(value.sourceEpoch).toBeUndefined();
-    }
-    await new TerminalWrapperLedger(store, "group").compactRetained(6, 7);
-    expect(await store.keys()).toEqual([]);
+  it("clears only its own group's records", async () => {
+    const storage = memoryStorage();
+    const ledger = new TerminalWrapperLedger(storage, "group");
+    await ledger.record(id, "accepted", 1);
+    await storage.set("other/ingest/wrapper/" + id, new Uint8Array([1]));
+    await ledger.clear();
+    expect(await storage.list("")).toEqual([`other/ingest/wrapper/${id}`]);
   });
+});
 
+describe("convergence effect ledger", () => {
   for (const forwarding of ["before", "after"] as const)
     it(`preserves honest effect acknowledgement after ${forwarding} forwarding`, async () => {
-      const store = new InMemoryKeyValueStore<Uint8Array>();
-      const ledger = new ConvergenceEffectLedger(store, "group");
-      await ledger.compactRetained(new Set());
+      const storage = memoryStorage();
+      const ledger = new ConvergenceEffectLedger(storage, "group");
+      await compactEffects(ledger, new Set());
       await ledger.prepareWithdrawal(digest, 0, [
         { kind: "epochAdvanced", commitDigest: digest, from: 0, to: 1 },
       ]);
-      await ledger.compactRetained(new Set());
+      await compactEffects(ledger, new Set());
       expect(await ledger.pending()).toHaveLength(1);
-      const set = store.setItem.bind(store);
-      store.setItem = async (key, value) => {
+      const set = storage.set.bind(storage);
+      storage.set = async (key, value) => {
         if (forwarding === "after") await set(key, value);
         throw new Error("ack crash");
       };
       await expect(ledger.acknowledge(digest, "withdrawal")).rejects.toThrow(
         "ack crash",
       );
-      store.setItem = set;
+      storage.set = set;
       for (let restart = 0; restart < 2; restart++) {
-        const restored = new ConvergenceEffectLedger(store, "group");
+        const restored = new ConvergenceEffectLedger(storage, "group");
         expect((await restored.pending()).length).toBe(
           forwarding === "before" ? 1 : 0,
         );
-        await restored.compactRetained(new Set([bytesToHex(digest)]));
-        expect(
-          await store.getItem(`group/ingest/effect/v1/${bytesToHex(digest)}`),
-        ).not.toBeNull();
+        await compactEffects(restored, new Set([bytesToHex(digest)]));
+        expect(await storage.get(effectKey)).toBeDefined();
       }
       await ledger.acknowledge(digest, "withdrawal");
-      await ledger.compactRetained(new Set());
-      expect(await store.keys()).toEqual([]);
+      await compactEffects(ledger, new Set());
+      expect(await storage.list("")).toEqual([]);
     });
 
-  it("retires legacy effects by exact digest membership and preserves corrupt rows", async () => {
-    const store = new InMemoryKeyValueStore<Uint8Array>();
-    const key = `group/ingest/effect/v1/${bytesToHex(digest)}`;
-    await store.setItem(
-      key,
-      new TextEncoder().encode('{"version":1,"state":"active"}'),
-    );
-    const ledger = new ConvergenceEffectLedger(store, "group");
-    await ledger.compactRetained(new Set([bytesToHex(digest.slice())]));
-    expect(await store.getItem(key)).not.toBeNull();
-    await ledger.compactRetained(new Set());
-    expect(await store.getItem(key)).toBeNull();
-    await store.setItem(key, new Uint8Array([255]));
-    await ledger.compactRetained(new Set());
+  it("retires observed effects by exact digest membership and preserves corrupt rows", async () => {
+    const storage = memoryStorage();
+    const ledger = new ConvergenceEffectLedger(storage, "group");
+    await ledger.prepareWithdrawal(digest, 0, []);
+    await ledger.acknowledge(digest, "withdrawal");
+    await compactEffects(ledger, new Set([bytesToHex(digest.slice())]));
+    expect(await storage.get(effectKey)).toBeDefined();
+    await compactEffects(ledger, new Set());
+    expect(await storage.get(effectKey)).toBeUndefined();
+    await storage.set(effectKey, new Uint8Array([255]));
+    await compactEffects(ledger, new Set());
     expect(await ledger.hasOpaqueDependency()).toBe(true);
-    expect(await store.getItem(key)).toEqual(new Uint8Array([255]));
+    expect(await storage.get(effectKey)).toEqual(new Uint8Array([255]));
   });
 });

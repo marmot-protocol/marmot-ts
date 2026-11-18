@@ -22,7 +22,6 @@ import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import {
   deserializeClientState,
   serializeClientState,
-  type SerializedClientState,
 } from "../../../core/client-state.js";
 import {
   commitDigest,
@@ -33,7 +32,7 @@ import { createCredential } from "../../../core/credential.js";
 import { createGroupEvent } from "../../../core/group-message.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
+import { memoryStorage, type StorageOp } from "../../../utils/storage.js";
 import { GroupHistoryTree } from "../../../engine/history-tree.js";
 import { MarmotGroupEngine } from "../../../engine/group-engine.js";
 import { NostrGroupPeeler } from "../nostr-peeler.js";
@@ -65,11 +64,7 @@ const network: NostrNetworkInterface = {
 };
 function registry(f: Awaited<ReturnType<typeof fixture>>, horizon = 5) {
   return new GroupRegistry({
-    store: f.store,
-    ingestStateStore: f.lifecycleStore,
-    lifecycleStore: f.lifecycleStore,
-    rewindStore: f.rewindStore,
-    removedMarkerStore: f.removedMarkerStore,
+    storage: f.storage,
     signer: { getPublicKey: async () => f.member.pubkey } as EventSigner,
     network,
     convergencePolicy: {
@@ -80,9 +75,7 @@ function registry(f: Awaited<ReturnType<typeof fixture>>, horizon = 5) {
 }
 async function realize(f: Awaited<ReturnType<typeof fixture>>) {
   const group = new MarmotGroup(copy(f.session.state), {
-    store: f.store,
-    lifecycleStore: f.lifecycleStore,
-    removedMarkerStore: f.removedMarkerStore,
+    storage: f.storage,
     ciphersuite: f.impl,
     signer: { getPublicKey: async () => f.member.pubkey } as EventSigner,
     network,
@@ -93,6 +86,74 @@ async function realize(f: Awaited<ReturnType<typeof fixture>>) {
   await group.realizeRemovalIfNeeded();
   expect(removed).toHaveBeenCalledOnce();
   group.dispose();
+}
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+type WriteKind = "authority" | "snapshot" | "release";
+const markerKey = (f: Fixture) => `${f.id}/removed`;
+const stateKey = (f: Fixture) => `${f.id}/state`;
+/** Classifies a storage write by the removal-recovery step it commits. */
+function writeKind(
+  f: Fixture,
+  ops: readonly StorageOp[],
+): WriteKind | undefined {
+  // Marker and attribution are released together in one atomic batch.
+  if (ops.some((op) => op.type === "delete" && op.key === markerKey(f)))
+    return "release";
+  if (ops.some((op) => op.type === "set" && op.key === stateKey(f)))
+    return "snapshot";
+  if (
+    ops.some(
+      (op) =>
+        op.type === "set" &&
+        op.key === removalEvidenceKey(f.id) &&
+        JSON.parse(new TextDecoder().decode(op.value)).recoveryPending,
+    )
+  )
+    return "authority";
+  return undefined;
+}
+/** Routes every write of the fixture storage through `onWrite`; returns a restore. */
+function interceptWrites(
+  f: Fixture,
+  onWrite: (
+    kind: WriteKind | undefined,
+    write: () => Promise<void>,
+    ops: readonly StorageOp[],
+  ) => Promise<void>,
+): () => void {
+  const storage = f.storage;
+  const set = storage.set.bind(storage),
+    remove = storage.delete.bind(storage),
+    batch = storage.batch.bind(storage);
+  storage.set = (key, value) => {
+    const ops: StorageOp[] = [{ type: "set", key, value }];
+    return onWrite(writeKind(f, ops), () => set(key, value), ops);
+  };
+  storage.delete = (key) => {
+    const ops: StorageOp[] = [{ type: "delete", key }];
+    return onWrite(writeKind(f, ops), () => remove(key), ops);
+  };
+  storage.batch = (ops) => onWrite(writeKind(f, ops), () => batch(ops), ops);
+  return () => {
+    storage.set = set;
+    storage.delete = remove;
+    storage.batch = batch;
+  };
+}
+/** Fails the first write of `kind`, optionally after it was forwarded. */
+function failOnce(
+  f: Fixture,
+  kind: WriteKind,
+  message: string,
+  forward = false,
+): () => void {
+  let armed = true;
+  return interceptWrites(f, async (hit, write) => {
+    if (!armed || hit !== kind) return write();
+    armed = false;
+    if (forward) await write();
+    throw new Error(message);
+  });
 }
 async function fixture(depth = 2, losing = false, highRemoval = false) {
   const admin = testAccount(6),
@@ -176,17 +237,11 @@ async function fixture(depth = 2, losing = false, highRemoval = false) {
     state: added.newState,
     ciphersuite: impl,
   });
-  const store = new InMemoryKeyValueStore<SerializedClientState>();
-  const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
-  const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
-  const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+  const storage = memoryStorage();
   const session = new GroupSession({
     state: copy(parent),
     ciphersuite: impl,
-    store,
-    rewindStore,
-    lifecycleStore,
-    removedMarkerStore,
+    storage,
   });
   let adminTip = copy(added.newState),
     memberTip = copy(parent);
@@ -237,12 +292,12 @@ async function fixture(depth = 2, losing = false, highRemoval = false) {
   const removed = results.find((result) => result.kind === "removed")!;
   // Persist the actual tombstone and reload the independent retained tree.
   await session.save(true);
-  tree.bindStore(rewindStore);
+  tree.bindStore(storage);
   await tree.flush();
   const id = bytesToHex(parent.groupContext.groupId);
-  const restartedTree = (await GroupHistoryTree.load(rewindStore, id))!;
+  const restartedTree = (await GroupHistoryTree.load(storage, id))!;
   const engine = new MarmotGroupEngine({
-    state: deserializeClientState((await store.getItem(id))!),
+    state: deserializeClientState((await storage.get(`${id}/state`))!),
     ciphersuite: impl,
     peeler: new NostrGroupPeeler(impl),
     historyTree: restartedTree,
@@ -260,10 +315,7 @@ async function fixture(depth = 2, losing = false, highRemoval = false) {
     memberTip,
     adminTip,
     tree: restartedTree,
-    store,
-    rewindStore,
-    lifecycleStore,
-    removedMarkerStore,
+    storage,
     member,
     id,
     removal,
@@ -459,7 +511,7 @@ describe("authenticated retained-anchor removal recovery", () => {
     const one = await fixture(1);
     const legacy = { ...one.removed.removalAttribution!, version: 1 as const };
     delete legacy.removingCommitter;
-    await one.lifecycleStore.setItem(
+    await one.storage.set(
       removalEvidenceKey(one.id),
       new TextEncoder().encode(
         JSON.stringify({ ...legacy, notificationState: "delivered" }),
@@ -559,7 +611,6 @@ describe("durable removal recovery activation", () => {
   it("checkpoints exact pending removal lineage before releasing recovery authority", async () => {
     const f = await fixture(7);
     const ancientMedia = new GroupMediaService({
-      media: undefined,
       getState: () => f.parent,
       getCiphersuite: () => f.impl,
     });
@@ -572,16 +623,14 @@ describe("durable removal recovery activation", () => {
     await realize(f);
     const r = registry(f);
     const loaded = await r.load(f.id);
-    const fault = vi
-      .spyOn(f.removedMarkerStore, "removeItem")
-      .mockRejectedValueOnce(new Error("marker pending"));
+    const restore = failOnce(f, "release", "marker pending");
     await expect(loaded.session.finishRemovalRecovery()).rejects.toThrow(
       "marker pending",
     );
-    fault.mockRestore();
+    restore();
     expect(loaded.session.removalBlocked).toBe(true);
     await loaded.session.save(true);
-    expect((await f.rewindStore.getItem(`${f.id}/meta`))![0] === 2).toBe(true);
+    expect((await f.storage.get(`${f.id}/tree/meta`))![0] === 2).toBe(true);
     expect(
       await loaded.session.historyTree.stateAt(
         bytesToHex(f.parent.confirmationTag),
@@ -609,7 +658,6 @@ describe("durable removal recovery activation", () => {
         );
       }
       const receiver = new GroupMediaService({
-        media: undefined,
         getState: () => restored.state,
         getCiphersuite: () => f.impl,
         getRetainedStates: () => restored.session.retainedStates(),
@@ -666,44 +714,17 @@ describe("durable removal recovery activation", () => {
     f.session.dispose();
     f.engine.dispose();
   });
-  for (const boundary of ["canonical", "marker", "attribution"] as const)
+  // The marker and attribution are released in one atomic batch.
+  for (const boundary of ["snapshot", "release"] as const)
     for (const forward of [false, true])
       it(`preserves genuine finite removal recovery across two restarts at ${boundary} forwarding=${forward}`, async () => {
         const f = await fixture(7);
         await realize(f);
         const loaded = await registry(f).load(f.id);
-        let armed = true;
-        async function fault<T>(write: () => Promise<T>): Promise<T> {
-          if (!armed) return write();
-          armed = false;
-          if (forward) await write();
-          throw new Error("recovery interruption");
-        }
-        const stateWrite = f.store.setItem.bind(f.store);
-        const markerDelete = f.removedMarkerStore.removeItem.bind(
-          f.removedMarkerStore,
-        );
-        const attributionDelete = f.lifecycleStore.removeItem.bind(
-          f.lifecycleStore,
-        );
-        if (boundary === "canonical")
-          f.store.setItem = async (key, bytes) => {
-            return fault(() => stateWrite(key, bytes));
-          };
-        if (boundary === "marker")
-          f.removedMarkerStore.removeItem = async (key) => {
-            await fault(() => markerDelete(key));
-          };
-        if (boundary === "attribution")
-          f.lifecycleStore.removeItem = async (key) => {
-            if (key === removalEvidenceKey(f.id))
-              await fault(() => attributionDelete(key));
-            else await attributionDelete(key);
-          };
+        const restore = failOnce(f, boundary, "recovery interruption", forward);
         await expect(loaded.session.finishRemovalRecovery()).rejects.toThrow(
           "recovery interruption",
         );
-        expect(armed).toBe(false);
         expect(loaded.session.removalBlocked).toBe(true);
         expect(
           await loaded.session.historyTree.stateAt(
@@ -711,9 +732,7 @@ describe("durable removal recovery activation", () => {
           ),
         ).toBeDefined();
         loaded.dispose();
-        f.store.setItem = stateWrite;
-        f.removedMarkerStore.removeItem = markerDelete;
-        f.lifecycleStore.removeItem = attributionDelete;
+        restore();
         for (let restart = 0; restart < 2; restart++) {
           const restored = await registry(f).load(f.id);
           await restored.session.finishRemovalRecovery();
@@ -735,12 +754,8 @@ describe("durable removal recovery activation", () => {
               .retainedStates()
               .map((state) => Number(state.groupContext.epoch)),
           ).toEqual([8, 7, 6, 5, 4, 3]);
-          expect(
-            await f.lifecycleStore.getItem(removalEvidenceKey(f.id)),
-          ).toBeNull();
-          expect(
-            await f.removedMarkerStore.getItem(`${f.id}/removed`),
-          ).toBeNull();
+          expect(await f.storage.get(removalEvidenceKey(f.id))).toBeUndefined();
+          expect(await f.storage.get(markerKey(f))).toBeUndefined();
           restored.dispose();
         }
         f.session.dispose();
@@ -754,7 +769,6 @@ describe("durable removal recovery activation", () => {
     )[0]!;
     const source = (await f.tree.stateAt(sourceTag))!;
     const sender = new GroupMediaService({
-      media: undefined,
       getState: () => source,
       getCiphersuite: () => f.impl,
     });
@@ -784,7 +798,6 @@ describe("durable removal recovery activation", () => {
         restored.keySchedule.exporterSecret.some((value) => value !== 0),
       ).toBe(true);
       const receiver = new GroupMediaService({
-        media: undefined,
         getState: () => loaded.state,
         getCiphersuite: () => f.impl,
         getRetainedStates: () => loaded.session.retainedStates(),
@@ -828,7 +841,7 @@ describe("durable removal recovery activation", () => {
         .retainedStates()
         .map((state) => Number(state.groupContext.epoch)),
     ).toEqual([8, 7, 6, 5, 4, 3]);
-    expect((await f.rewindStore.getItem(`${f.id}/meta`))![0]).toBe(2);
+    expect((await f.storage.get(`${f.id}/tree/meta`))![0]).toBe(2);
     expect(
       await recovered.session.historyTree.stateAt(
         bytesToHex(f.parent.confirmationTag),
@@ -845,45 +858,43 @@ describe("durable removal recovery activation", () => {
       const f = await fixture();
       await realize(f);
       if (fault === "wrong durable projection") {
-        const write = f.store.setItem.bind(f.store);
-        const corrupt = vi
-          .spyOn(f.store, "setItem")
-          .mockImplementation(async (key, bytes) => {
-            const saved = deserializeClientState(bytes);
-            if (saved.groupActiveState.kind === "active")
-              saved.privatePath.leafIndex =
-                0 as typeof saved.privatePath.leafIndex;
-            return write(key, serializeClientState(saved));
-          });
+        const batch = f.storage.batch.bind(f.storage);
+        const corrupt = interceptWrites(f, async (kind, write, ops) => {
+          if (kind !== "snapshot") return write();
+          await batch(
+            ops.map((op) => {
+              if (op.type !== "set" || op.key !== stateKey(f)) return op;
+              const saved = deserializeClientState(op.value);
+              if (saved.groupActiveState.kind === "active")
+                saved.privatePath.leafIndex =
+                  0 as typeof saved.privatePath.leafIndex;
+              return { ...op, value: serializeClientState(saved) };
+            }),
+          );
+        });
         const r = registry(f),
           loaded = await r.load(f.id);
         await r.track(loaded);
         expect(loaded.status).toBe("removed");
-        expect(await f.removedMarkerStore.getItem(`${f.id}/removed`)).toBe(
-          true,
-        );
-        expect(
-          await f.lifecycleStore.getItem(removalEvidenceKey(f.id)),
-        ).not.toBeNull();
+        expect(await f.storage.get(markerKey(f))).toEqual(Uint8Array.of(1));
+        expect(await f.storage.get(removalEvidenceKey(f.id))).toBeDefined();
         loaded.dispose();
-        corrupt.mockRestore();
+        corrupt();
       } else {
         if (fault === "malformed")
-          await f.lifecycleStore.setItem(
+          await f.storage.set(
             removalEvidenceKey(f.id),
             new TextEncoder().encode("{invalid"),
           );
         else
-          await f.rewindStore.removeItem(
-            `${f.id}/state/${bytesToHex(f.parent.confirmationTag)}`,
+          await f.storage.delete(
+            `${f.id}/tree/state/${bytesToHex(f.parent.confirmationTag)}`,
           );
         const r = registry(f),
           loaded = await r.load(f.id);
         await r.track(loaded);
         expect(loaded.status).toBe("removed");
-        expect(await f.removedMarkerStore.getItem(`${f.id}/removed`)).toBe(
-          true,
-        );
+        expect(await f.storage.get(markerKey(f))).toEqual(Uint8Array.of(1));
         loaded.dispose();
       }
     },
@@ -895,71 +906,66 @@ describe("durable removal recovery activation", () => {
     const parentChild = f.tree.childrenOf(
       bytesToHex(f.parent.confirmationTag),
     )[0];
-    await f.rewindStore.setItem(
-      `${f.id}/commit/${parentChild}`,
+    await f.storage.set(
+      `${f.id}/tree/commit/${parentChild}`,
       encode(mlsMessageEncoder, f.removal.commit),
     );
     const r = registry(f),
       loaded = await r.load(f.id);
     await r.track(loaded);
     expect(loaded.status).toBe("removed");
-    expect(await f.removedMarkerStore.getItem(`${f.id}/removed`)).toBe(true);
+    expect(await f.storage.get(markerKey(f))).toEqual(Uint8Array.of(1));
     loaded.dispose();
   });
   it.each([
     "snapshot before forwarding",
-    "marker before forwarding",
-    "marker after forwarding",
-    "attribution cleanup",
+    "release before forwarding",
+    "release after forwarding",
   ])(
     "restarts after failure at %s with durable authority and outbound fencing",
     async (boundary) => {
       const f = await fixture();
       await realize(f);
-      const originalStateWrite = f.store.setItem.bind(f.store);
-      const originalMarkerClear = f.removedMarkerStore.removeItem.bind(
-        f.removedMarkerStore,
+      const released = boundary === "release after forwarding";
+      const restore = failOnce(
+        f,
+        boundary.startsWith("snapshot") ? "snapshot" : "release",
+        boundary,
+        released,
       );
-      const originalCleanup = f.lifecycleStore.removeItem.bind(
-        f.lifecycleStore,
-      );
-      let failure;
-      if (boundary === "snapshot before forwarding")
-        failure = vi
-          .spyOn(f.store, "setItem")
-          .mockImplementationOnce(async () => {
-            throw new Error(boundary);
-          });
-      else if (boundary.startsWith("marker"))
-        failure = vi
-          .spyOn(f.removedMarkerStore, "removeItem")
-          .mockImplementationOnce(async (key) => {
-            if (boundary === "marker after forwarding")
-              await originalMarkerClear(key);
-            throw new Error(boundary);
-          });
-      else
-        failure = vi
-          .spyOn(f.lifecycleStore, "removeItem")
-          .mockImplementation(async (key) => {
-            if (key === removalEvidenceKey(f.id)) throw new Error(boundary);
-            await originalCleanup(key);
-          });
       const r = registry(f),
         removed = vi.fn();
       r.on("removed", removed);
       const loaded = await r.load(f.id);
       await expect(r.track(loaded)).rejects.toThrow(boundary);
       expect(loaded.status).toBe("removed");
-      const persisted = deserializeClientState((await f.store.getItem(f.id))!);
+      const persisted = deserializeClientState(
+        (await f.storage.get(stateKey(f)))!,
+      );
       expect(persisted.groupActiveState.kind).toBe(
         boundary === "snapshot before forwarding"
           ? "removedFromGroup"
           : "active",
       );
+      restore();
+      if (released) {
+        // The atomic release committed: nothing durable fences the group.
+        expect(await f.storage.get(removalEvidenceKey(f.id))).toBeUndefined();
+        expect(await f.storage.get(markerKey(f))).toBeUndefined();
+        const restarted = registry(f),
+          restartedRemoved = vi.fn();
+        restarted.on("removed", restartedRemoved);
+        const active = await restarted.load(f.id);
+        await restarted.track(active);
+        expect(active.status).toBe("active");
+        expect(removed).not.toHaveBeenCalled();
+        expect(restartedRemoved).not.toHaveBeenCalled();
+        active.dispose();
+        return;
+      }
       const authority = JSON.parse(
         new TextDecoder().decode(
-          (await f.lifecycleStore.getItem(removalEvidenceKey(f.id)))!,
+          (await f.storage.get(removalEvidenceKey(f.id)))!,
         ),
       );
       expect(authority).toMatchObject({
@@ -969,13 +975,7 @@ describe("durable removal recovery activation", () => {
           selectedTip: bytesToHex(f.memberTip.confirmationTag),
         },
       });
-      expect(await f.removedMarkerStore.getItem(`${f.id}/removed`)).toBe(
-        boundary === "snapshot before forwarding" ||
-          boundary === "marker before forwarding"
-          ? true
-          : null,
-      );
-      failure.mockRestore();
+      expect(await f.storage.get(markerKey(f))).toEqual(Uint8Array.of(1));
       // Load without activating first: the durable authority fences a saved active projection.
       const restarted = registry(f),
         restartedRemoved = vi.fn();
@@ -996,29 +996,16 @@ describe("durable removal recovery activation", () => {
         }),
       ).rejects.toThrow(/removed/i);
       const order: string[] = [];
-      vi.spyOn(f.store, "setItem").mockImplementation(async (key, value) => {
-        order.push("snapshot");
-        return originalStateWrite(key, value);
+      const untrace = interceptWrites(f, async (kind, write) => {
+        if (kind) order.push(kind);
+        await write();
       });
-      vi.spyOn(f.removedMarkerStore, "removeItem").mockImplementation(
-        async (key) => {
-          order.push("marker");
-          await originalMarkerClear(key);
-        },
-      );
-      vi.spyOn(f.lifecycleStore, "removeItem").mockImplementation(
-        async (key) => {
-          if (key === removalEvidenceKey(f.id)) order.push("cleanup");
-          await originalCleanup(key);
-        },
-      );
       await restarted.track(pending);
+      untrace();
       expect(pending.status).toBe("active");
-      expect(order.slice(-2)).toEqual(["marker", "cleanup"]);
-      expect(
-        await f.lifecycleStore.getItem(removalEvidenceKey(f.id)),
-      ).toBeNull();
-      expect(await f.removedMarkerStore.getItem(`${f.id}/removed`)).toBeNull();
+      expect(order.at(-1)).toBe("release");
+      expect(await f.storage.get(removalEvidenceKey(f.id))).toBeUndefined();
+      expect(await f.storage.get(markerKey(f))).toBeUndefined();
       expect(removed).not.toHaveBeenCalled();
       expect(restartedRemoved).not.toHaveBeenCalled();
       pending.dispose();
@@ -1028,25 +1015,18 @@ describe("durable removal recovery activation", () => {
   it("retries a failed authority write while retaining the removed projection", async () => {
     const f = await fixture();
     await realize(f);
-    const write = f.lifecycleStore.setItem.bind(f.lifecycleStore);
-    const fault = vi
-      .spyOn(f.lifecycleStore, "setItem")
-      .mockImplementation(async (key, bytes) => {
-        if (
-          key === removalEvidenceKey(f.id) &&
-          JSON.parse(new TextDecoder().decode(bytes)).recoveryPending
-        )
-          throw new Error("authority write failed");
-        return write(key, bytes);
-      });
+    const restore = interceptWrites(f, async (kind, write) => {
+      if (kind === "authority") throw new Error("authority write failed");
+      await write();
+    });
     const first = registry(f),
       group = await first.load(f.id);
     await expect(first.track(group)).rejects.toThrow("authority write failed");
     expect(
-      deserializeClientState((await f.store.getItem(f.id))!).groupActiveState
-        .kind,
+      deserializeClientState((await f.storage.get(stateKey(f)))!)
+        .groupActiveState.kind,
     ).toBe("removedFromGroup");
-    fault.mockRestore();
+    restore();
     const restarted = registry(f),
       recovered = await restarted.load(f.id);
     await restarted.track(recovered);
@@ -1057,12 +1037,12 @@ describe("durable removal recovery activation", () => {
   it("keeps legacy boolean-only removal conservative even with a winning retained branch", async () => {
     const f = await fixture();
     await realize(f);
-    await f.lifecycleStore.removeItem(removalEvidenceKey(f.id));
+    await f.storage.delete(removalEvidenceKey(f.id));
     const r = registry(f),
       loaded = await r.load(f.id);
     await r.track(loaded);
     expect(loaded.status).toBe("removed");
-    expect(await f.removedMarkerStore.getItem(`${f.id}/removed`)).toBe(true);
+    expect(await f.storage.get(markerKey(f))).toEqual(Uint8Array.of(1));
     await expect(loaded.submitIntent({ kind: "selfUpdate" })).rejects.toThrow(
       /removed/i,
     );
@@ -1072,28 +1052,23 @@ describe("durable removal recovery activation", () => {
   it("rejects mismatched pending tip authority after an active snapshot is saved", async () => {
     const f = await fixture();
     await realize(f);
-    const clear = vi
-      .spyOn(f.removedMarkerStore, "removeItem")
-      .mockRejectedValueOnce(new Error("stop before clear"));
+    const clear = failOnce(f, "release", "stop before clear");
     const first = registry(f),
       group = await first.load(f.id);
     await expect(first.track(group)).rejects.toThrow();
-    clear.mockRestore();
+    clear();
     const key = removalEvidenceKey(f.id),
       record = JSON.parse(
-        new TextDecoder().decode((await f.lifecycleStore.getItem(key))!),
+        new TextDecoder().decode((await f.storage.get(key))!),
       );
     record.recoveryPending.selectedTip = bytesToHex(f.parent.confirmationTag);
-    await f.lifecycleStore.setItem(
-      key,
-      new TextEncoder().encode(JSON.stringify(record)),
-    );
+    await f.storage.set(key, new TextEncoder().encode(JSON.stringify(record)));
     const r = registry(f),
       loaded = await r.load(f.id);
     await r.track(loaded);
     expect(loaded.status).toBe("removed");
-    expect(await f.removedMarkerStore.getItem(`${f.id}/removed`)).toBe(true);
-    expect(await f.lifecycleStore.getItem(key)).not.toBeNull();
+    expect(await f.storage.get(markerKey(f))).toEqual(Uint8Array.of(1));
+    expect(await f.storage.get(key)).toBeDefined();
     loaded.dispose();
   });
 
@@ -1149,45 +1124,20 @@ describe("durable removal recovery activation", () => {
     r.on("updated", updated);
     r.on("loaded", loadedEvent);
     const order: string[] = [];
-    const evidenceWrite = f.lifecycleStore.setItem.bind(f.lifecycleStore),
-      snapshotWrite = f.store.setItem.bind(f.store),
-      markerClear = f.removedMarkerStore.removeItem.bind(f.removedMarkerStore),
-      cleanup = f.lifecycleStore.removeItem.bind(f.lifecycleStore);
-    vi.spyOn(f.lifecycleStore, "setItem").mockImplementation(
-      async (key, bytes) => {
-        if (
-          key === removalEvidenceKey(f.id) &&
-          JSON.parse(new TextDecoder().decode(bytes)).recoveryPending
-        )
-          order.push("authority");
-        return evidenceWrite(key, bytes);
-      },
-    );
-    vi.spyOn(f.store, "setItem").mockImplementation(async (key, bytes) => {
-      order.push("snapshot");
-      return snapshotWrite(key, bytes);
-    });
-    vi.spyOn(f.removedMarkerStore, "removeItem").mockImplementation(
-      async (key) => {
-        order.push("marker");
-        await markerClear(key);
-      },
-    );
-    vi.spyOn(f.lifecycleStore, "removeItem").mockImplementation(async (key) => {
-      if (key === removalEvidenceKey(f.id)) order.push("cleanup");
-      await cleanup(key);
+    const untrace = interceptWrites(f, async (kind, write) => {
+      if (kind) order.push(kind);
+      await write();
     });
     const loaded = await r.get(f.id);
-    expect(order).toEqual(["authority", "snapshot", "marker", "cleanup"]);
+    untrace();
+    expect(order).toEqual(["authority", "snapshot", "release"]);
     expect(updated).toHaveBeenCalledOnce();
     expect(loadedEvent).toHaveBeenCalledOnce();
     expect(await r.get(f.id)).toBe(loaded);
     expect(loadedEvent).toHaveBeenCalledOnce();
     expect(loaded.status).toBe("active");
-    expect(await f.removedMarkerStore.getItem(`${f.id}/removed`)).not.toBe(
-      true,
-    );
-    expect(await f.lifecycleStore.getItem(removalEvidenceKey(f.id))).toBeNull();
+    expect(await f.storage.get(markerKey(f))).toBeUndefined();
+    expect(await f.storage.get(removalEvidenceKey(f.id))).toBeUndefined();
     expect(removed).not.toHaveBeenCalled();
     loaded.dispose();
   });

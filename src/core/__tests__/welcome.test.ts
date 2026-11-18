@@ -30,7 +30,7 @@ import {
 } from "../welcome.js";
 import { encodeContent } from "../../utils/encoding.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 
 // ---------------------------------------------------------------------------
 // spec compliance (welcome delivery)
@@ -181,8 +181,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupView", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore(),
-      keyPackageStore: new InMemoryKeyValueStore(),
+      storage: memoryStorage(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });

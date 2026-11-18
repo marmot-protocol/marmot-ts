@@ -2,16 +2,14 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { unlockGiftWrap } from "applesauce-common/helpers";
 import type { NostrEvent } from "applesauce-core/helpers/event";
-import type { SerializedClientState } from "../../core/client-state.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   GROUP_EVENT_KIND,
 } from "../../core/protocol.js";
-import type { StoredKeyPackage } from "../key-package-manager.js";
 import { MarmotClient } from "../marmot-client.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 
 // ============================================================================
 // Shared setup helpers
@@ -24,16 +22,14 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
   const memberPubkey = await memberAccount.signer.getPublicKey();
 
   const adminClient = new MarmotClient({
-    groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-    keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+    storage: memoryStorage(),
     signer: adminAccount.signer,
     network: mockNetwork,
     clientId: "aa".repeat(32),
   });
 
   const memberClient = new MarmotClient({
-    groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-    keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+    storage: memoryStorage(),
     signer: memberAccount.signer,
     network: mockNetwork,
     clientId: "bb".repeat(32),
@@ -143,6 +139,7 @@ describe("groups.leave() proposal + destroy semantics", () => {
     // Group should be removed from store after leaving
     const groupsAfter = await memberClient.groups.listIds();
     expect(groupsAfter.some((id) => bytesToHex(id) === groupIdHex)).toBe(false);
+    expect(await memberClient.storage.list(`group/${groupIdHex}/`)).toEqual([]);
   });
 
   it("emits the 'destroyed' event", async () => {

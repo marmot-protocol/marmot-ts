@@ -8,57 +8,23 @@ import {
   createApplicationMessageIntent,
   createChatRumor,
 } from "../../client/group/application-message.js";
-import type {
-  BaseGroupHistory,
-  BaseGroupMedia,
-  MarmotGroup,
-} from "../../client/group/marmot-group.js";
+import type { MarmotGroup } from "../../client/group/marmot-group.js";
 import { MarmotClient } from "../../client/marmot-client.js";
-import {
-  getNostrGroupIdHex,
-  SerializedClientState,
-} from "../../core/client-state.js";
+import { getNostrGroupIdHex } from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   GROUP_EVENT_KIND,
 } from "../../core/protocol.js";
-import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../extra/index.js";
-
-/** Minimal in-memory history for testing */
-class TestHistory implements BaseGroupHistory {
-  readonly messages: Uint8Array[] = [];
-
-  async saveMessage(message: Uint8Array): Promise<void> {
-    this.messages.push(message);
-  }
-
-  async purgeMessages(): Promise<void> {
-    this.messages.length = 0;
-  }
-
-  async removeMessage(rumorId: string): Promise<void> {
-    for (let index = this.messages.length - 1; index >= 0; index--) {
-      if (
-        deserializeApplicationData(this.messages[index]).id.toLowerCase() ===
-        rumorId
-      )
-        this.messages.splice(index, 1);
-    }
-  }
-}
+import { memoryStorage } from "../../utils/storage.js";
 
 /**
  * Helper: build a kind-9 chat rumor and drive it through the group's
  * session/runtime seam (the replacement for the old `group.sendChatMessage`).
  */
-async function sendChat<
-  THistory extends BaseGroupHistory | undefined,
-  TMedia extends BaseGroupMedia | undefined,
->(
-  group: MarmotGroup<THistory, TMedia>,
+async function sendChat(
+  group: MarmotGroup,
   signer: { getPublicKey(): Promise<string> | string },
   content: string,
   tags: string[][] = [],
@@ -72,11 +38,9 @@ async function sendChat<
 }
 
 /** Helper: set up two-member group and return the groups */
-async function setupTwoMemberGroup<
-  THistory extends BaseGroupHistory | undefined,
->(
+async function setupTwoMemberGroup(
   adminClient: MarmotClient,
-  inviteeClient: MarmotClient<THistory>,
+  inviteeClient: MarmotClient,
   adminAccount: ReturnType<typeof PrivateKeyAccount.generateNew>,
   inviteeAccount: ReturnType<typeof PrivateKeyAccount.generateNew>,
   mockNetwork: MockNetwork,
@@ -154,15 +118,13 @@ describe("chat messages via session/runtime", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "cd".repeat(32),
@@ -345,41 +307,28 @@ describe("chat messages via session/runtime", () => {
   });
 
   it("saves message to history immediately on send without waiting for ingest", async () => {
-    const history = new TestHistory();
-
-    // Create a fresh invitee client that uses our test history factory
-    const inviteeClientWithHistory = new MarmotClient<TestHistory>({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
-      signer: inviteeAccount.signer,
-      network: mockNetwork,
-      clientId: "cd".repeat(32),
-      historyFactory: () => history,
-    });
-
     const { inviteeGroup } = await setupTwoMemberGroup(
       adminClient,
-      inviteeClientWithHistory,
+      inviteeClient,
       adminAccount,
       inviteeAccount,
       mockNetwork,
       "History Test Group",
     );
 
-    expect(history.messages.length).toBe(0);
+    const history = inviteeGroup.history;
+    const contents = async () =>
+      (await history.queryRumors({})).map((rumor) => rumor.content).sort();
+    expect(await contents()).toEqual([]);
 
     await sendChat(inviteeGroup, inviteeAccount.signer, "Saved immediately");
 
     // History should be populated before any ingest() call
-    expect(history.messages.length).toBe(1);
-    const savedRumor = deserializeApplicationData(history.messages[0]);
-    expect(savedRumor.content).toBe("Saved immediately");
+    expect(await contents()).toEqual(["Saved immediately"]);
 
     // Sending a second message should not double-save the first
     await sendChat(inviteeGroup, inviteeAccount.signer, "Second message");
-    expect(history.messages.length).toBe(2);
-    const secondRumor = deserializeApplicationData(history.messages[1]);
-    expect(secondRumor.content).toBe("Second message");
+    expect(await contents()).toEqual(["Saved immediately", "Second message"]);
 
     // Ingesting self echoes should not duplicate local history entries
     const nostrGroupIdHex = getNostrGroupIdHex(inviteeGroup.state);
@@ -392,18 +341,14 @@ describe("chat messages via session/runtime", () => {
       // drain generator to complete ingest flow
     }
 
-    expect(history.messages.length).toBe(2);
+    expect(await contents()).toEqual(["Saved immediately", "Second message"]);
   });
 
   it("restart path: ingesting own relay echo does not break flow", async () => {
-    const inviteeGroupBackend =
-      new InMemoryKeyValueStore<SerializedClientState>();
-    const inviteeKeyPackageBackend =
-      new InMemoryKeyValueStore<StoredKeyPackage>();
+    const inviteeStorage = memoryStorage();
 
     const inviteeClientBeforeRestart = new MarmotClient({
-      groupStateStore: inviteeGroupBackend,
-      keyPackageStore: inviteeKeyPackageBackend,
+      storage: inviteeStorage,
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "cd".repeat(32),
@@ -423,8 +368,7 @@ describe("chat messages via session/runtime", () => {
 
     // Simulate a restart: new client instance, same persisted group backend
     const inviteeClientAfterRestart = new MarmotClient({
-      groupStateStore: inviteeGroupBackend,
-      keyPackageStore: inviteeKeyPackageBackend,
+      storage: inviteeStorage,
       signer: inviteeAccount.signer,
       network: mockNetwork,
     });

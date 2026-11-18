@@ -18,13 +18,12 @@ import type {
   NostrNetworkInterface,
   PublishResponse,
 } from "../../client/nostr-interface.js";
-import { SerializedClientState } from "../../core/client-state.js";
 import { convergenceStatuses } from "../../core/convergence-status.js";
 import { createCredential } from "../../core/credential.js";
 import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://relay.test";
@@ -92,7 +91,7 @@ function marmotGroup(
   },
 ) {
   return new MarmotGroup(state, {
-    store: new InMemoryKeyValueStore<SerializedClientState>(),
+    storage: memoryStorage(),
     signer,
     ciphersuite: impl,
     network: recordingNetwork(published),

@@ -13,11 +13,10 @@ import { describe, expect, it } from "vitest";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { GroupRegistry } from "../../client/group-registry.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
-import { SerializedClientState } from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://mock-relay.test";
@@ -101,8 +100,7 @@ describe("selfUpdate commit persistence (CR-09)", () => {
   it("emits historyChanged once after each locally confirmed commit", async () => {
     const { impl, memberE1 } = await buildMemberState();
     const group = new MarmotGroup(memberE1, {
-      store: new InMemoryKeyValueStore<SerializedClientState>(),
-      rewindStore: new InMemoryKeyValueStore<Uint8Array>(),
+      storage: memoryStorage(),
       signer: SIGNER,
       ciphersuite: impl,
       network: ackingNetwork(),
@@ -142,13 +140,11 @@ describe("selfUpdate commit persistence (CR-09)", () => {
     const groupId = bytesToHex(memberE1.groupContext.groupId);
     const parentTag = bytesToHex(memberE1.confirmationTag);
 
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-    const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
+    const storage = memoryStorage();
 
     // Session 1: join state, then selfUpdate through the real send/publish path.
     const first = new MarmotGroup(memberE1, {
-      store,
-      rewindStore,
+      storage,
       signer: SIGNER,
       ciphersuite: impl,
       network: ackingNetwork(),
@@ -173,10 +169,7 @@ describe("selfUpdate commit persistence (CR-09)", () => {
 
     // Session 2: restart through the real load path.
     const registry = new GroupRegistry({
-      store,
-      ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-      lifecycleStore: new InMemoryKeyValueStore<Uint8Array>(),
-      rewindStore,
+      storage,
       signer: SIGNER,
       network: ackingNetwork(),
     });
@@ -207,7 +200,7 @@ describe("selfUpdate commit persistence (CR-09)", () => {
     const { impl, memberE1 } = await buildMemberState();
 
     const group = new MarmotGroup(memberE1, {
-      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      storage: memoryStorage(),
       signer: SIGNER,
       ciphersuite: impl,
       network: ackingNetwork(),

@@ -30,19 +30,15 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { createApplicationMessageIntent } from "../../client/group/application-message.js";
 import { MarmotClient } from "../../client/marmot-client.js";
-import {
-  getNostrGroupIdHex,
-  SerializedClientState,
-} from "../../core/client-state.js";
+import { getNostrGroupIdHex } from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import {
   ADDRESSABLE_KEY_PACKAGE_KIND,
   GROUP_EVENT_KIND,
 } from "../../core/protocol.js";
-import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 
 const RELAYS = ["wss://mock-relay.test"];
 
@@ -63,8 +59,7 @@ describe("FOUND-05: founding group creation, joining, and first message (positiv
     mockNetwork = new MockNetwork(RELAYS);
 
     adminClient = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
@@ -72,8 +67,7 @@ describe("FOUND-05: founding group creation, joining, and first message (positiv
     inviteeClients = inviteeAccounts.map(
       (account, index) =>
         new MarmotClient({
-          groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-          keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+          storage: memoryStorage(),
           signer: account.signer,
           network: mockNetwork,
           clientId: index.toString(16).padStart(64, "0"),

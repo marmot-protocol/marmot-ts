@@ -42,7 +42,8 @@ import { GroupRuntime } from "../../client/runtime/group-runtime.js";
 import { linkPublicationRetention } from "../../client/runtime/publication-retention.js";
 import { NostrWelcomeDelivery } from "../../client/transport/nostr/welcome-delivery.js";
 import { NostrGroupPeeler } from "../../client/group/nostr-peeler.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
+import { groupKeys } from "../../client/storage-keys.js";
 import { DEFAULT_CONVERGENCE_POLICY } from "../../core/convergence.js";
 import { GroupHistoryTree } from "../history-tree.js";
 import { contentDedupId } from "../message-dedup.js";
@@ -132,15 +133,11 @@ async function fixture(
     privateKeys: packages[1].privatePackage,
     ratchetTree: undefined,
   });
-  const store = new InMemoryKeyValueStore<Uint8Array>();
-  const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
-  const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
+  const storage = memoryStorage();
   let now = 0;
   const options = {
     ciphersuite: impl,
-    store,
-    rewindStore,
-    ingestStateStore,
+    storage,
     history,
     convergencePolicy: {
       ...DEFAULT_CONVERGENCE_POLICY,
@@ -152,7 +149,7 @@ async function fixture(
     scheduler: { setTimer: () => 0, clearTimer: () => {} },
   };
   const tree = new GroupHistoryTree(initial, { snapshotCacheSize: 2 });
-  tree.bindStore(rewindStore);
+  tree.bindStore(storage);
   const session = new GroupSession({
     ...options,
     state: copy(initial),
@@ -184,7 +181,7 @@ async function fixture(
     await session.save(true);
   };
   const reload = async () =>
-    (await GroupHistoryTree.load(rewindStore, bytesToHex(session.id), {
+    (await GroupHistoryTree.load(storage, bytesToHex(session.id), {
       snapshotCacheSize: 2,
     }))!;
   return {
@@ -202,14 +199,12 @@ async function fixture(
       now += 100;
     },
     reload,
-    store,
-    rewindStore,
-    ingestStateStore,
+    storage,
   };
 }
 
 async function drain(
-  session: GroupSession<GroupSessionHistory | undefined>,
+  session: GroupSession,
   events: Parameters<GroupSession["ingest"]>[0],
 ) {
   const results = [];
@@ -464,7 +459,9 @@ describe("sustained recovery-safe retention", () => {
             bytesToHex(f.session.state.confirmationTag),
           );
           await f.settle();
-          const keys = await f.rewindStore.keys();
+          const keys = await f.storage.list(
+            `${bytesToHex(f.session.id)}/tree/`,
+          );
           const loaded = await f.reload();
           expect(loaded.tags()).toEqual(f.tree.tags());
           let receivers = 0;
@@ -473,12 +470,14 @@ describe("sustained recovery-safe retention", () => {
               .size;
           const canonical = f.session.retainedStates();
           const evidence = decodeDeliveredEvidence(
-            (await f.ingestStateStore.getItem(
-              `${bytesToHex(f.session.id)}/delivered-payloads/v1`,
+            (await f.storage.get(
+              groupKeys.delivered(bytesToHex(f.session.id)),
             ))!,
             loaded,
           );
-          const ingestKeys = await f.ingestStateStore.keys();
+          const ingestKeys = await f.storage.list(
+            `${bytesToHex(f.session.id)}/ingest/`,
+          );
           samples.push([
             f.tree.size,
             heavyOwner.size,
@@ -751,24 +750,23 @@ describe("sustained recovery-safe retention", () => {
         await f.settle();
       }
       const id = bytesToHex(session.id);
-      const key = `${id}/delivered-payloads/v1`;
+      const key = groupKeys.delivered(id);
       expect(
-        decodeDeliveredEvidence(
-          (await f.ingestStateStore.getItem(key))!,
-          f.tree,
-        ).pending,
+        decodeDeliveredEvidence((await f.storage.get(key))!, f.tree).pending,
       ).toHaveLength(1);
       session.dispose();
       for (let restart = 0; restart < 2; restart++) {
         session = new GroupSession({
           ...f.options,
-          state: deserializeClientState((await f.store.getItem(id))!),
+          state: deserializeClientState(
+            (await f.storage.get(groupKeys.state(id)))!,
+          ),
           historyTree: await f.reload(),
         });
         await drain(session, []);
         await session.save(true);
         const evidence = decodeDeliveredEvidence(
-          (await f.ingestStateStore.getItem(key))!,
+          (await f.storage.get(key))!,
           session.historyTree,
         );
         expect(evidence.pending).toHaveLength(1);
@@ -789,7 +787,7 @@ describe("sustained recovery-safe retention", () => {
       expect(removed).toHaveLength(1);
       expect(
         decodeDeliveredEvidence(
-          (await f.ingestStateStore.getItem(key))!,
+          (await f.storage.get(key))!,
           session.historyTree,
         ).pending,
       ).toEqual([]);

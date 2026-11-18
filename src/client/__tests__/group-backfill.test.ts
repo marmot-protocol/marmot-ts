@@ -4,8 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
-import type { SerializedClientState } from "../../core/client-state.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import {
   BACKFILL_FUTURE_SKEW_SECONDS,
   BACKFILL_MAX_HOLD_BACK_SECONDS,
@@ -94,11 +93,7 @@ function fakeEvent(id: number, createdAt: number): NostrEvent {
 }
 
 function newStores() {
-  return {
-    store: new InMemoryKeyValueStore<SerializedClientState>(),
-    ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-    lifecycleStore: new InMemoryKeyValueStore<Uint8Array>(),
-  };
+  return { storage: memoryStorage() };
 }
 
 function makeManager(
@@ -108,7 +103,6 @@ function makeManager(
 ) {
   return new GroupsManager({
     ...stores,
-    ingestPersistence: { kind: "durable" },
     signer: testAccount(0).signer,
     network,
     verifyEvent,
@@ -128,7 +122,7 @@ async function groupWithHistory(
   relays = [RELAY],
 ) {
   const stores = newStores();
-  const { ingestStateStore } = stores;
+  const { storage } = stores;
   const manager = makeManager(network, stores, verifyEvent);
   const group = await manager.create("Backfill Group", { relays });
   for (let i = 0; i < count; i++) {
@@ -142,7 +136,7 @@ async function groupWithHistory(
   groupEvents.forEach((event, i) => {
     event.created_at = newest - (count - 1 - i);
   });
-  return { manager, group, groupEvents, ingestStateStore, stores };
+  return { manager, group, groupEvents, storage, stores };
 }
 
 /**
@@ -677,7 +671,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
   it("bounds the next connect's `since` by the persisted cursor", async () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
-    const { manager, group, ingestStateStore } = await groupWithHistory(
+    const { manager, group, storage } = await groupWithHistory(
       network,
       4,
       newest,
@@ -686,7 +680,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     (await manager.connect(group.id, { backfillPageSize: 3 })).unsubscribe();
     expect(
       decodeBackfillCursor(
-        await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
+        await storage.get(backfillCursorKey(group.idStr, RELAY)),
       ),
     ).toBe(newest);
 
@@ -707,8 +701,11 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
   it("does not advance the cursor from a future-dated event", async () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
-    const { manager, group, groupEvents, ingestStateStore } =
-      await groupWithHistory(network, 3, newest);
+    const { manager, group, groupEvents, storage } = await groupWithHistory(
+      network,
+      3,
+      newest,
+    );
     // Same payload, distinct id, dated an hour ahead.
     network.events.push({
       ...groupEvents[0]!,
@@ -720,7 +717,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
     expect(
       decodeBackfillCursor(
-        await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
+        await storage.get(backfillCursorKey(group.idStr, RELAY)),
       ),
     ).toBe(newest);
   });
@@ -729,13 +726,12 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
     const forgeries = new WeakSet<NostrEvent>();
-    const { manager, group, groupEvents, ingestStateStore } =
-      await groupWithHistory(
-        network,
-        3,
-        newest,
-        (e): e is VerifiedEvent => !forgeries.has(e),
-      );
+    const { manager, group, groupEvents, storage } = await groupWithHistory(
+      network,
+      3,
+      newest,
+      (e): e is VerifiedEvent => !forgeries.has(e),
+    );
     // An open connection keeps every admitted id in the shared dedup cache.
     const open = await manager.connect(group.id);
     // A same-id copy with a newer timestamp that fails verification.
@@ -748,7 +744,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
     expect(
       decodeBackfillCursor(
-        await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
+        await storage.get(backfillCursorKey(group.idStr, RELAY)),
       ),
     ).toBe(newest);
   });
@@ -779,7 +775,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
   it("stops paging when the connection is aborted mid-backfill", async () => {
     const network = new PagingNetwork([RELAY]);
-    const { manager, group, ingestStateStore } = await groupWithHistory(
+    const { manager, group, storage } = await groupWithHistory(
       network,
       6,
       nowSeconds() - 60,
@@ -800,13 +796,13 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
     expect(network.requests).toHaveLength(1);
     expect(
-      await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
-    ).toBeNull();
+      await storage.get(backfillCursorKey(group.idStr, RELAY)),
+    ).toBeUndefined();
   });
 
   it("keeps the cursor when the page cap leaves history unfetched", async () => {
     const network = new PagingNetwork([RELAY]);
-    const { manager, group, ingestStateStore } = await groupWithHistory(
+    const { manager, group, storage } = await groupWithHistory(
       network,
       6,
       nowSeconds() - 60,
@@ -820,15 +816,18 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     ).unsubscribe();
 
     expect(
-      await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
-    ).toBeNull();
+      await storage.get(backfillCursorKey(group.idStr, RELAY)),
+    ).toBeUndefined();
   });
 
   it("holds the cursor at an undecryptable event pooled without a result", async () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
-    const { manager, group, groupEvents, ingestStateStore } =
-      await groupWithHistory(network, 3, newest);
+    const { manager, group, groupEvents, storage } = await groupWithHistory(
+      network,
+      3,
+      newest,
+    );
     // A ciphertext this group cannot decrypt (another group's message,
     // re-tagged into this group). Ingest pools it silently, yielding nothing.
     const other = makeManager(network);
@@ -846,7 +845,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     expect(group.pendingEvents().map((e) => e.id)).toContain(foreign.id);
     expect(
       decodeBackfillCursor(
-        await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
+        await storage.get(backfillCursorKey(group.idStr, RELAY)),
       ),
     ).toBe(newest - 30);
   });
@@ -854,8 +853,11 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
   it("ends recorded progress strictly below an event still held", async () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
-    const { manager, group, groupEvents, ingestStateStore } =
-      await groupWithHistory(network, 6, newest);
+    const { manager, group, groupEvents, storage } = await groupWithHistory(
+      network,
+      6,
+      newest,
+    );
     // An undecryptable event (pooled in memory) inside the capped range.
     const other = makeManager(network);
     const otherGroup = await other.create("Other", { relays: [RELAY] });
@@ -878,7 +880,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
     expect(group.pendingEvents().map((e) => e.id)).toContain(foreign.id);
     const progress = decodeBackfillProgress(
-      await ingestStateStore.getItem(backfillProgressKey(group.idStr, RELAY)),
+      await storage.get(backfillProgressKey(group.idStr, RELAY)),
     );
     // The held event's whole second must be re-read on the next connect, so
     // the range may not include it, even with zero slack.
@@ -889,8 +891,11 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
   it("completes a page-capped backfill over successive connects", async () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
-    const { manager, group, groupEvents, ingestStateStore } =
-      await groupWithHistory(network, 6, newest);
+    const { manager, group, groupEvents, storage } = await groupWithHistory(
+      network,
+      6,
+      newest,
+    );
     const ingestSpy = vi.spyOn(group, "ingest");
     const options = {
       backfillPageSize: 2,
@@ -899,7 +904,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     };
     const cursor = async () =>
       decodeBackfillCursor(
-        await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
+        await storage.get(backfillCursorKey(group.idStr, RELAY)),
       );
 
     let connects = 0;
@@ -918,14 +923,14 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     expect(backfilled).toEqual(new Set(groupEvents.map((e) => e.id)));
     // A completed relay drops its resumable progress.
     expect(
-      await ingestStateStore.getItem(backfillProgressKey(group.idStr, RELAY)),
-    ).toBeNull();
+      await storage.get(backfillProgressKey(group.idStr, RELAY)),
+    ).toBeUndefined();
   });
 
   it("re-fetches input retained during a commit publication after a restart", async () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
-    const { manager, group, groupEvents, ingestStateStore, stores } =
+    const { manager, group, groupEvents, storage, stores } =
       await groupWithHistory(network, 3, newest);
     const older = await foreignEvent(network, groupEvents[0]!, newest - 30);
     network.events.push(older);
@@ -948,7 +953,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     expect(group.session.retainedEvents().map((e) => e.id)).toContain(older.id);
     expect(
       decodeBackfillCursor(
-        await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
+        await storage.get(backfillCursorKey(group.idStr, RELAY)),
       ),
     ).toBe(newest - 30);
 
@@ -971,7 +976,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
   it("does not floor the hold-back of input retained during a first connect with a long history", async () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
-    const { manager, group, groupEvents, ingestStateStore, stores } =
+    const { manager, group, groupEvents, storage, stores } =
       await groupWithHistory(network, 3, newest);
     // History from more than BACKFILL_MAX_HOLD_BACK_SECONDS before the newest.
     const old = newest - 30 * 86_400;
@@ -994,7 +999,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     expect(group.session.retainedEvents().map((e) => e.id)).toContain(older.id);
     expect(
       decodeBackfillCursor(
-        await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
+        await storage.get(backfillCursorKey(group.idStr, RELAY)),
       ),
     ).toBe(old);
 
@@ -1015,8 +1020,11 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
   it("persists the cursor before a live batch admitted meanwhile is ingested", async () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
-    const { manager, group, groupEvents, ingestStateStore } =
-      await groupWithHistory(network, 3, newest);
+    const { manager, group, groupEvents, storage } = await groupWithHistory(
+      network,
+      3,
+      newest,
+    );
     // An undecryptable event to deliver live later, kept off the relay.
     const foreign = await foreignEvent(network, groupEvents[0]!, newest - 30);
 
@@ -1026,8 +1034,8 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
       backfillMaxPages: 1,
     });
     expect(
-      await ingestStateStore.getItem(backfillProgressKey(group.idStr, RELAY)),
-    ).not.toBeNull();
+      await storage.get(backfillProgressKey(group.idStr, RELAY)),
+    ).toBeDefined();
 
     // The reconnect completes, so it first drops that progress record (held
     // here), then writes the cursor.
@@ -1039,8 +1047,8 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     const removeGate = new Promise<void>((resolve) => {
       releaseRemove = resolve;
     });
-    const removeItem = ingestStateStore.removeItem.bind(ingestStateStore);
-    ingestStateStore.removeItem = async (key) => {
+    const removeItem = storage.delete.bind(storage);
+    storage.delete = async (key: string) => {
       reachedRemove();
       await removeGate;
       return removeItem(key);
@@ -1051,8 +1059,8 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
         (call[0] as NostrEvent[]).some((e) => e.id === foreign.id),
       );
     let liveIngestedAtCursorWrite: boolean | undefined;
-    const setItem = ingestStateStore.setItem.bind(ingestStateStore);
-    ingestStateStore.setItem = async (key, value) => {
+    const setItem = storage.set.bind(storage);
+    storage.set = async (key: string, value: Uint8Array) => {
       if (key === backfillCursorKey(group.idStr, RELAY))
         liveIngestedAtCursorWrite = liveIngested();
       return setItem(key, value);
@@ -1075,7 +1083,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
   it("advances a healthy relay's cursor while another relay is unreachable", async () => {
     const network = new PagingNetwork([RELAY, RELAY_B]);
     const newest = nowSeconds() - 60;
-    const { manager, group, ingestStateStore } = await groupWithHistory(
+    const { manager, group, storage } = await groupWithHistory(
       network,
       3,
       newest,
@@ -1084,7 +1092,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     );
     const cursor = async (relay: string) =>
       decodeBackfillCursor(
-        await ingestStateStore.getItem(backfillCursorKey(group.idStr, relay)),
+        await storage.get(backfillCursorKey(group.idStr, relay)),
       );
     network.unreachable.add(RELAY_B);
 
@@ -1112,7 +1120,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
   it("does not advance a relay's cursor when it ignores `until`", async () => {
     const network = new PagingNetwork([RELAY]);
-    const { manager, group, ingestStateStore } = await groupWithHistory(
+    const { manager, group, storage } = await groupWithHistory(
       network,
       5,
       nowSeconds() - 60,
@@ -1122,21 +1130,21 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     (await manager.connect(group.id, { backfillPageSize: 2 })).unsubscribe();
 
     expect(
-      await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
-    ).toBeNull();
+      await storage.get(backfillCursorKey(group.idStr, RELAY)),
+    ).toBeUndefined();
   });
 
   it("keeps the cursor while an earlier batch for the group failed to ingest", async () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
-    const { manager, group, ingestStateStore } = await groupWithHistory(
+    const { manager, group, storage } = await groupWithHistory(
       network,
       3,
       newest,
     );
     const cursor = async () =>
       decodeBackfillCursor(
-        await ingestStateStore.getItem(backfillCursorKey(group.idStr, RELAY)),
+        await storage.get(backfillCursorKey(group.idStr, RELAY)),
       );
     vi.spyOn(group, "ingest").mockImplementationOnce(async function* () {
       throw new Error("ingest failed");
@@ -1198,8 +1206,11 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
   it("ends recorded progress below input retained during a commit publication", async () => {
     const network = new PagingNetwork([RELAY]);
     const newest = nowSeconds() - 60;
-    const { manager, group, groupEvents, ingestStateStore } =
-      await groupWithHistory(network, 6, newest);
+    const { manager, group, groupEvents, storage } = await groupWithHistory(
+      network,
+      6,
+      newest,
+    );
     const retained = await foreignEvent(network, groupEvents[0]!, newest + 1);
     network.events.push(retained);
     let releasePublish!: () => void;
@@ -1226,7 +1237,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
       retained.id,
     );
     const progress = decodeBackfillProgress(
-      await ingestStateStore.getItem(backfillProgressKey(group.idStr, RELAY)),
+      await storage.get(backfillProgressKey(group.idStr, RELAY)),
     );
     expect(progress).toBeDefined();
     expect(progress!.to).toBe(newest);
@@ -1237,7 +1248,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
   it("leaves no backfill record behind a group destroyed while it settles", async () => {
     const network = new PagingNetwork([RELAY]);
-    const { manager, group, ingestStateStore } = await groupWithHistory(
+    const { manager, group, storage } = await groupWithHistory(
       network,
       3,
       nowSeconds() - 60,
@@ -1257,9 +1268,9 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     const removeGate = new Promise<void>((resolve) => {
       releaseRemove = resolve;
     });
-    const removeItem = ingestStateStore.removeItem.bind(ingestStateStore);
+    const removeItem = storage.delete.bind(storage);
     let gated = false;
-    ingestStateStore.removeItem = async (key) => {
+    storage.delete = async (key: string) => {
       if (!gated) {
         gated = true;
         reachedRemove();
@@ -1274,7 +1285,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     releaseRemove();
     await reconnect.then((sub) => sub.unsubscribe());
 
-    const records = (await ingestStateStore.keys()).filter((key) =>
+    const records = (await storage.list("")).filter((key) =>
       key.startsWith(`${group.idStr}/ingest/backfill-`),
     );
     expect(records).toEqual([]);
@@ -1282,7 +1293,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
   it("removes a backfill record written as the group is destroyed", async () => {
     const network = new PagingNetwork([RELAY]);
-    const { manager, group, ingestStateStore } = await groupWithHistory(
+    const { manager, group, storage } = await groupWithHistory(
       network,
       3,
       nowSeconds() - 60,
@@ -1295,9 +1306,9 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     const writeGate = new Promise<void>((resolve) => {
       releaseWrite = resolve;
     });
-    const setItem = ingestStateStore.setItem.bind(ingestStateStore);
+    const setItem = storage.set.bind(storage);
     let gated = false;
-    ingestStateStore.setItem = async (key, value) => {
+    storage.set = async (key: string, value: Uint8Array) => {
       // Gate the first backfill record's write; the destroy lands before it.
       if (!gated && key.startsWith(`${group.idStr}/ingest/backfill-`)) {
         gated = true;
@@ -1306,7 +1317,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
       }
       return setItem(key, value);
     };
-    const removeItem = vi.spyOn(ingestStateStore, "removeItem");
+    const removeItem = vi.spyOn(storage, "delete");
 
     const connecting = manager.connect(group.id);
     await writing;
@@ -1320,7 +1331,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     expect(removeItem).toHaveBeenCalledWith(
       backfillCursorKey(group.idStr, RELAY),
     );
-    const records = (await ingestStateStore.keys()).filter((key) =>
+    const records = (await storage.list("")).filter((key) =>
       key.startsWith(`${group.idStr}/ingest/backfill-`),
     );
     expect(records).toEqual([]);

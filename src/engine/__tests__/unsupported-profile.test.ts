@@ -401,8 +401,8 @@ describe("unsupported-profile gates (D-11)", () => {
   it("CR-04: refuses requestDisband before it persists any irreversible intent", async () => {
     const { impl, neitherState } = await unsupportedProfileGroup();
     const audit = new MemoryAuditSink();
-    // No lifecycleStore: the profile refusal must fire BEFORE the
-    // "durable lifecycleStore is required" check and before any persistence,
+    // No storage: the profile refusal must fire BEFORE the
+    // "durable storage is required" check and before any persistence,
     // so a refused group is never left holding an unpublishable intent.
     const engine = new MarmotGroupEngine({
       state: neitherState,

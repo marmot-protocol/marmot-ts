@@ -17,19 +17,14 @@ import {
   makeAppDataDictionaryExtension,
   type ClientState,
 } from "ts-mls";
-import {
-  MarmotGroup,
-  type BaseGroupHistory,
-  type BaseGroupMedia,
-  type StoredMedia,
-} from "../marmot-group.js";
+import { MarmotGroup } from "../marmot-group.js";
 import { MockNetwork } from "../../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import { createCredential } from "../../../core/credential.js";
 import { marmotAuthService } from "../../../core/auth-service.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../../utils/storage.js";
 import { deserializeClientState } from "../../../core/client-state.js";
 import { DEFAULT_CONVERGENCE_POLICY } from "../../../core/convergence.js";
 import { GroupHistoryTree } from "../../../engine/history-tree.js";
@@ -120,10 +115,7 @@ function canonicalFixture(
   };
 }
 
-async function retentionFixture(
-  horizon = 1,
-  adapters: { history?: BaseGroupHistory; media?: BaseGroupMedia } = {},
-) {
+async function retentionFixture(horizon = 1) {
   const account = testAccount(6);
   const ciphersuite = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
@@ -138,12 +130,9 @@ async function retentionFixture(
     adminPubkeys: [account.pubkey],
     relays: ["wss://relay.test"],
   });
-  const store = new InMemoryKeyValueStore<Uint8Array>();
-  const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
+  const storage = memoryStorage();
   const options = {
-    store,
-    rewindStore,
-    ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
+    storage,
     signer: account.signer,
     ciphersuite,
     network: new MockNetwork(["wss://relay.test"]),
@@ -153,7 +142,6 @@ async function retentionFixture(
       appPayloadPastEpochLimit: horizon,
     },
     scheduler: { setTimer: () => 1, clearTimer() {} },
-    ...adapters,
   };
   const group = new MarmotGroup(clientState, options);
   const setImage = async (metadata: GroupBlossomImagePresent | null) => {
@@ -183,7 +171,7 @@ async function retentionFixture(
     if (work.kind !== "selfUpdate") throw new Error("expected self update");
     group.session.confirmPublished(work.pending);
   };
-  return { group, options, store, rewindStore, setImage, advance };
+  return { group, options, storage, setImage, advance };
 }
 
 function imageCache(service: GroupImageService) {
@@ -195,25 +183,8 @@ function imageCache(service: GroupImageService) {
 }
 
 describe("settled image retention", () => {
-  it("leaves custom media rows and returned plaintext application-owned through epoch pruning and restart", async () => {
-    const rows = new Map<string, StoredMedia>();
-    const media: BaseGroupMedia = {
-      addMedia: vi.fn(async (hash, entry) => {
-        rows.set(hash, entry);
-      }),
-      getMedia: vi.fn(async (hash) => rows.get(hash) ?? null),
-      removeMedia: vi.fn(async (hash) => {
-        rows.delete(hash);
-      }),
-      listMedia: vi.fn(async () =>
-        [...rows.values()].map((entry) => entry.attachment),
-      ),
-      clearMedia: vi.fn(async () => {
-        rows.clear();
-      }),
-    };
-    const { group, options, store, rewindStore, advance } =
-      await retentionFixture(1, { media });
+  it("leaves returned media plaintext application-owned through epoch pruning and restart", async () => {
+    const { group, options, storage, advance } = await retentionFixture(1);
     const original = Uint8Array.of(255, 0, 128, 195, 40, 240, 159, 152, 128);
     const encrypted = await group.encryptMedia(new Blob([original]), {
       filename: "é-e\u0301.bin",
@@ -223,33 +194,20 @@ describe("settled image retention", () => {
       encrypted.encrypted,
       encrypted.attachment,
     );
-    const hash = encrypted.attachment.ciphertextSha256;
-    expect(rows.get(hash)!.data).toBe(delivered.data);
     expect(delivered.data).toEqual(original);
-    const opaque = Uint8Array.of(0, 255, 128);
-    await media.addMedia("application-row-without-epoch", {
-      data: opaque,
-      attachment: { ...encrypted.attachment, filename: "opaque.bin" },
-    });
     for (let epoch = 0; epoch < 8; epoch++) {
       await advance();
       await group.save(true);
     }
     expect(group.session.historyTree.size).toBe(2);
-    expect(media.removeMedia).not.toHaveBeenCalled();
-    expect(media.clearMedia).not.toHaveBeenCalled();
-    expect(rows.size).toBe(2);
-    expect(rows.get(hash)!.data).toBe(delivered.data);
     expect(delivered.data).toEqual(original);
-    expect(rows.get("application-row-without-epoch")!.data).toBe(opaque);
-    expect(opaque).toEqual(Uint8Array.of(0, 255, 128));
     const id = bytesToHex(group.id);
     group.dispose();
     const restarted = new MarmotGroup(
-      deserializeClientState((await store.getItem(id))!),
+      deserializeClientState((await storage.get(`${id}/state`))!),
       {
         ...options,
-        historyTree: (await GroupHistoryTree.load(rewindStore, id))!,
+        historyTree: (await GroupHistoryTree.load(storage, id))!,
       },
     );
     await expect(
@@ -259,17 +217,13 @@ describe("settled image retention", () => {
         encrypted.expectedParent,
       ),
     ).rejects.toThrow(/no longer retained/);
-    expect(rows.get(hash)!.data).toBe(delivered.data);
     await restarted.save(true);
     restarted.dispose();
     expect(delivered.data).toEqual(original);
-    expect(opaque).toEqual(Uint8Array.of(0, 255, 128));
-    expect(media.removeMedia).not.toHaveBeenCalled();
-    expect(media.clearMedia).not.toHaveBeenCalled();
   });
 
   it("preserves exact caller image arrays across replacement, clear, rewind, retirement, restart and close", async () => {
-    const { group, options, store, rewindStore, setImage, advance } =
+    const { group, options, storage, setImage, advance } =
       await retentionFixture();
     const expectedFirst = Uint8Array.of(0, 255, 128, 195, 40);
     const expectedSecond = Uint8Array.of(240, 159, 152, 128, 0);
@@ -318,10 +272,10 @@ describe("settled image retention", () => {
     const id = bytesToHex(group.id);
     group.dispose();
     const restarted = new MarmotGroup(
-      deserializeClientState((await store.getItem(id))!),
+      deserializeClientState((await storage.get(`${id}/state`))!),
       {
         ...options,
-        historyTree: (await GroupHistoryTree.load(rewindStore, id))!,
+        historyTree: (await GroupHistoryTree.load(storage, id))!,
       },
     );
     const afterRestart = await restarted.image.read(profile);
@@ -337,7 +291,7 @@ describe("settled image retention", () => {
   });
 
   it("leaves owned cache bytes intact when required session persistence rejects", async () => {
-    const { group, store, setImage, advance } = await retentionFixture();
+    const { group, storage, setImage, advance } = await retentionFixture();
     const image = encryptGroupImage(Uint8Array.of(0, 128, 255), "image/png");
     await setImage(image.metadata);
     expect(
@@ -353,7 +307,7 @@ describe("settled image retention", () => {
     await setImage(null);
     await advance();
     const write = vi
-      .spyOn(store, "setItem")
+      .spyOn(storage, "batch")
       .mockRejectedValueOnce(new Error("required save failed"));
     await expect(group.save(true)).rejects.toThrow("required save failed");
     expect(imageCache(group.image).cache.get(identity)!.bytes).toBe(owned);

@@ -10,7 +10,7 @@ import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import { MockNetwork } from "../../../__tests__/helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
+import { memoryStorage, type StorageOp } from "../../../utils/storage.js";
 import { GroupRegistry } from "../../group-registry.js";
 import { GroupTerminalError, MarmotGroup } from "../../group/marmot-group.js";
 import {
@@ -49,13 +49,10 @@ async function fixture() {
     "terminal recovery",
     { adminPubkeys: [account.pubkey], relays: ["wss://relay.test"] },
   );
-  const store = new InMemoryKeyValueStore<Uint8Array>();
-  const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
+  const storage = memoryStorage();
   const network = new MockNetwork(["wss://relay.test"]);
   const options = {
-    store,
-    lifecycleStore,
-    ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
+    storage,
     network,
     signer: account.signer,
     ciphersuite,
@@ -73,49 +70,54 @@ async function fixture() {
 }
 
 describe("terminal persistence interruption", () => {
-  for (const boundary of ["intent/v1", "terminal", "registry-state", "cleanup"])
+  // The intent, tombstone and registry shell commit in one atomic batch;
+  // cleanup (dropping live state) is a separate, repeatable batch.
+  for (const boundary of ["projection", "cleanup"] as const)
     for (const forwarding of ["before", "after"] as const)
       it(`fences live use and restores durable authority ${forwarding} ${boundary}`, async () => {
         const { group, options, evidence } = await fixture();
+        const storage = options.storage;
         let armed = true;
         const writes: string[] = [];
-        const faultStore = {
-          ...options.lifecycleStore,
-          getItem: (key: string) => options.lifecycleStore.getItem(key),
-          keys: () => options.lifecycleStore.keys(),
-          clear: () => options.lifecycleStore.clear(),
-          removeItem: async (key: string) => {
-            const hit = armed && boundary === "cleanup";
-            if (hit && forwarding === "before") {
-              armed = false;
-              throw new Error("crash");
-            }
-            await options.lifecycleStore.removeItem(key);
-            if (hit) {
-              armed = false;
-              throw new Error("crash");
-            }
-          },
-          setItem: async (key: string, value: Uint8Array) => {
-            // The live fence precedes even the first adapter call.
+        const isBoundary = (ops: readonly StorageOp[]) =>
+          boundary === "projection"
+            ? ops.some((op) => op.key.endsWith("/disband/intent/v1"))
+            : ops.some(
+                (op) =>
+                  op.type === "delete" && op.key === `${group.idStr}/state`,
+              );
+        const faultStorage = {
+          get: (key: string) => storage.get(key),
+          list: (prefix: string) => storage.list(prefix),
+          set: async (key: string, value: Uint8Array) => {
             expect(crashing.status).toBe("disbanded");
             writes.push(key);
-            const hit = armed && key.endsWith(`/disband/${boundary}`);
+            await storage.set(key, value);
+          },
+          delete: async (key: string) => {
+            expect(crashing.status).toBe("disbanded");
+            writes.push(key);
+            await storage.delete(key);
+          },
+          batch: async (ops: readonly StorageOp[]) => {
+            // The live fence precedes even the first adapter call.
+            expect(crashing.status).toBe("disbanded");
+            writes.push(...ops.map((op) => op.key));
+            const hit = armed && isBoundary(ops);
             if (hit && forwarding === "before") {
               armed = false;
               throw new Error("crash");
             }
-            const result = await options.lifecycleStore.setItem(key, value);
+            await storage.batch(ops);
             if (hit) {
               armed = false;
               throw new Error("crash");
             }
-            return result;
           },
         };
         const crashing = new MarmotGroup(group.state, {
           ...options,
-          lifecycleStore: faultStore,
+          storage: faultStorage,
         });
         await expect(
           crashing.session.persistSelectedDisband(evidence),
@@ -128,7 +130,7 @@ describe("terminal persistence interruption", () => {
         crashing.dispose();
         group.dispose();
         const expected =
-          boundary === "intent/v1" && forwarding === "before"
+          boundary === "projection" && forwarding === "before"
             ? "active"
             : "disbanded";
         for (let restart = 0; restart < 2; restart++) {
@@ -175,19 +177,23 @@ describe("terminal work ownership", () => {
         }),
         removeMessage: vi.fn(async () => {}),
       };
-      const remove = options.store.removeItem.bind(options.store);
+      const batch = options.storage.batch.bind(options.storage);
       const cleanup = vi
-        .spyOn(options.store, "removeItem")
-        .mockImplementation(async (key) => {
-          await remove(key);
-          reachCleanup();
+        .spyOn(options.storage, "batch")
+        .mockImplementation(async (ops) => {
+          await batch(ops);
+          if (
+            ops.some(
+              (op) => op.type === "delete" && op.key === `${group.idStr}/state`,
+            )
+          )
+            reachCleanup();
         });
       const historyError = vi.fn();
       const session = new GroupSession({
         state: group.state,
         ciphersuite: options.ciphersuite,
-        store: options.store,
-        lifecycleStore: options.lifecycleStore,
+        storage: options.storage,
         history,
         onHistoryError: historyError,
       });
@@ -244,20 +250,11 @@ describe("terminal work ownership", () => {
     "keeps pending retraction provenance across two restarts and an acknowledgement crash %s forwarding",
     async (forwarding) => {
       const { group, options, evidence } = await fixture();
-      const shared = options.lifecycleStore;
-      const copy = {
-        getItem: (key: string) => shared.getItem(key),
-        setItem: (key: string, value: Uint8Array) => shared.setItem(key, value),
-        removeItem: (key: string) => shared.removeItem(key),
-        keys: () => shared.keys(),
-        clear: () => shared.clear(),
-      };
+      const shared = options.storage;
       const source = new GroupSession({
         state: group.state,
         ciphersuite: options.ciphersuite,
-        store: options.store,
-        ingestStateStore: shared,
-        rewindStore: copy,
+        storage: shared,
       });
       const rumor = {
         id: "",
@@ -275,13 +272,13 @@ describe("terminal work ownership", () => {
         payload: serializeApplicationRumor(rumor),
       });
       await source.save(true);
-      const deliveredKey = `${group.idStr}/delivered-payloads/v1`;
+      const deliveredKey = `${group.idStr}/ingest/delivered`;
       const delivered = decodeDeliveredEvidence(
-        (await shared.getItem(deliveredKey))!,
+        (await shared.get(deliveredKey))!,
         source.historyTree,
       );
       expect(delivered.entries).toHaveLength(1);
-      await shared.setItem(
+      await shared.set(
         deliveredKey,
         encodeDeliveredEvidence({ entries: [], pending: delivered.entries }),
       );
@@ -320,8 +317,8 @@ describe("terminal work ownership", () => {
         }),
       );
       await retainedTree.resumeRetentionCleanup();
-      await options.store.setItem(
-        group.idStr,
+      await shared.set(
+        `${group.idStr}/state`,
         serializeClientState(retainedTip),
       );
       let historyFails = true;
@@ -337,15 +334,12 @@ describe("terminal work ownership", () => {
         }),
       };
       async function restart() {
-        const tree = await GroupHistoryTree.load(copy, group.idStr);
+        const tree = await GroupHistoryTree.load(shared, group.idStr);
         expect(tree).toBeDefined();
         return new GroupSession({
           state: retainedTip,
           ciphersuite: options.ciphersuite,
-          store: options.store,
-          lifecycleStore: shared,
-          ingestStateStore: copy,
-          rewindStore: copy,
+          storage: shared,
           historyTree: tree,
           convergencePolicy: {
             ...DEFAULT_CONVERGENCE_POLICY,
@@ -359,7 +353,7 @@ describe("terminal work ownership", () => {
       await first.persistSelectedDisband(evidence);
       expect(
         decodeDeliveredEvidence(
-          (await shared.getItem(deliveredKey))!,
+          (await shared.get(deliveredKey))!,
           first.historyTree,
         ).pending,
       ).toHaveLength(1);
@@ -370,11 +364,11 @@ describe("terminal work ownership", () => {
         expect(restored.terminalTombstone).toBeDefined();
         expect(
           decodeDeliveredEvidence(
-            (await shared.getItem(deliveredKey))!,
+            (await shared.get(deliveredKey))!,
             restored.historyTree,
           ).pending,
         ).toHaveLength(1);
-        expect(await shared.getItem(`${group.idStr}/meta`)).not.toBeNull();
+        expect(await shared.get(`${group.idStr}/tree/meta`)).toBeDefined();
         expect(
           restored.historyTree.epochOf(delivered.entries[0].stateTag),
         ).toBe(0);
@@ -389,21 +383,20 @@ describe("terminal work ownership", () => {
       await acknowledging.hydrateLifecycleEvidence();
       historyFails = false;
       let armed = true;
-      const write = shared.setItem.bind(shared);
+      const write = shared.batch.bind(shared);
       const fault = vi
-        .spyOn(shared, "setItem")
-        .mockImplementation(async (key, bytes) => {
-          const hit = armed && key === deliveredKey;
+        .spyOn(shared, "batch")
+        .mockImplementation(async (ops) => {
+          const hit = armed && ops.some((op) => op.key === deliveredKey);
           if (hit && forwarding === "before") {
             armed = false;
             throw new Error("ack crash");
           }
-          const value = await write(key, bytes);
+          await write(ops);
           if (hit) {
             armed = false;
             throw new Error("ack crash");
           }
-          return value;
         });
       for await (const _ of acknowledging.ingest([])) {
         /* fully drain acknowledgement attempt */
@@ -412,7 +405,7 @@ describe("terminal work ownership", () => {
       expect(rows.has(rumor.id)).toBe(false);
       expect(
         decodeDeliveredEvidence(
-          (await shared.getItem(deliveredKey))!,
+          (await shared.get(deliveredKey))!,
           acknowledging.historyTree,
         ).pending,
       ).toHaveLength(forwarding === "before" ? 1 : 0);
@@ -422,54 +415,39 @@ describe("terminal work ownership", () => {
       for await (const _ of final.ingest([])) {
         /* retry any surviving acknowledgement */
       }
-      expect(await shared.getItem(deliveredKey)).toBeNull();
-      expect(await shared.getItem(`${group.idStr}/meta`)).toBeNull();
-      expect(
-        await shared.getItem(`${group.idStr}/disband/terminal`),
-      ).not.toBeNull();
+      expect(await shared.get(deliveredKey)).toBeUndefined();
+      expect(await shared.get(`${group.idStr}/tree/meta`)).toBeUndefined();
+      expect(await shared.get(`${group.idStr}/disband/terminal`)).toBeDefined();
       final.dispose();
       group.dispose();
     },
   );
 
-  it("keeps authority and unacknowledged effects across aliased stores and terminal ingest", async () => {
+  it("keeps authority and unacknowledged effects across terminal ingest", async () => {
     const { group, options, evidence } = await fixture();
-    const shared = options.lifecycleStore;
+    const shared = options.storage;
     const session = new GroupSession({
       state: group.state,
       ciphersuite: options.ciphersuite,
-      store: shared,
-      lifecycleStore: shared,
-      ingestStateStore: shared,
-      rewindStore: shared,
+      storage: shared,
     });
     await session.save(true);
     const ledger = new ConvergenceEffectLedger(shared, group.idStr);
     await ledger.prepareWithdrawal(evidence.commitDigest, 0, []);
     const wrappers = new TerminalWrapperLedger(shared, group.idStr);
-    await wrappers.begin("unfinished", "parent-hash");
-    await wrappers.record("completed", "accepted");
-    await shared.setItem(
-      `${group.idStr}/application-owned`,
-      new Uint8Array([7]),
-    );
+    const completed = "cd".repeat(32);
+    await wrappers.record(completed, "accepted", 0);
+    await shared.set(`${group.idStr}/application-owned`, new Uint8Array([7]));
     await session.persistSelectedDisband(evidence);
+    expect(await shared.get(`${group.idStr}/disband/intent/v1`)).toBeDefined();
+    expect(await shared.get(`${group.idStr}/disband/terminal`)).toBeDefined();
     expect(
-      await shared.getItem(`${group.idStr}/disband/intent/v1`),
-    ).not.toBeNull();
+      await shared.get(`${group.idStr}/disband/registry-state`),
+    ).toBeDefined();
     expect(
-      await shared.getItem(`${group.idStr}/disband/terminal`),
-    ).not.toBeNull();
-    expect(
-      await shared.getItem(`${group.idStr}/disband/registry-state`),
-    ).not.toBeNull();
-    expect(
-      await shared.getItem(`${group.idStr}/ingest/wrapper/v1/unfinished`),
-    ).not.toBeNull();
-    expect(
-      await shared.getItem(`${group.idStr}/ingest/wrapper/v1/completed`),
-    ).toBeNull();
-    expect(await shared.getItem(`${group.idStr}/application-owned`)).toEqual(
+      await shared.get(`${group.idStr}/ingest/wrapper/${completed}`),
+    ).toBeUndefined();
+    expect(await shared.get(`${group.idStr}/application-owned`)).toEqual(
       new Uint8Array([7]),
     );
     const results = [];
@@ -483,9 +461,7 @@ describe("terminal work ownership", () => {
       const restored = new GroupSession({
         state: group.state,
         ciphersuite: options.ciphersuite,
-        store: shared,
-        lifecycleStore: shared,
-        ingestStateStore: shared,
+        storage: shared,
       });
       await restored.hydrateLifecycleEvidence();
       const pending = await restored.driveConvergence();
@@ -495,7 +471,7 @@ describe("terminal work ownership", () => {
       restored.dispose();
     }
     const fault = vi
-      .spyOn(shared, "setItem")
+      .spyOn(shared, "set")
       .mockRejectedValueOnce(new Error("ack crash"));
     await expect(session.acknowledgeConvergenceEffect(effect)).rejects.toThrow(
       "ack crash",
@@ -508,55 +484,47 @@ describe("terminal work ownership", () => {
       const restored = new GroupSession({
         state: group.state,
         ciphersuite: options.ciphersuite,
-        store: shared,
-        lifecycleStore: shared,
-        ingestStateStore: shared,
+        storage: shared,
       });
       await restored.hydrateLifecycleEvidence();
       expect(await restored.driveConvergence()).toEqual([]);
       expect(
         await new ConvergenceEffectLedger(shared, group.idStr).pending(),
       ).toEqual([]);
-      expect(await shared.getItem(`${group.idStr}/application-owned`)).toEqual(
+      expect(await shared.get(`${group.idStr}/application-owned`)).toEqual(
         Uint8Array.of(7),
       );
-      expect(
-        await shared.getItem(`${group.idStr}/ingest/wrapper/v1/unfinished`),
-      ).not.toBeNull();
       restored.dispose();
     }
-    const registry = new GroupRegistry({
-      ...options,
-      store: shared,
-      lifecycleStore: shared,
-      ingestStateStore: shared,
-      rewindStore: shared,
-    });
+    const registry = new GroupRegistry(options);
     expect((await registry.get(group.id)).status).toBe("disbanded");
     registry.untrack(group.id);
     session.dispose();
     group.dispose();
   });
 
-  it("purges only tree-owned keys when stores share their keyspace", async () => {
-    const { group, options } = await fixture();
-    const shared = options.lifecycleStore;
+  it("purges only tree-owned keys within the group keyspace", async () => {
+    const shared = memoryStorage();
+    const gid = "ab".repeat(16);
     for (const suffix of [
-      "meta",
-      "edge/node",
-      "state/node",
-      "commit/node",
+      "tree/meta",
+      "tree/edge/node",
+      "tree/state/node",
+      "tree/commit/node",
+      "tree-adjacent",
       "disband/terminal",
-      "ingest/effect/v1/pending",
+      "ingest/effect/pending",
       "application-owned",
     ])
-      await shared.setItem(`${group.idStr}/${suffix}`, new Uint8Array([1]));
-    await GroupHistoryTree.purge(shared, group.idStr);
-    expect(await shared.keys()).toEqual([
-      `${group.idStr}/disband/terminal`,
-      `${group.idStr}/ingest/effect/v1/pending`,
-      `${group.idStr}/application-owned`,
+      await shared.set(`${gid}/${suffix}`, new Uint8Array([1]));
+    await shared.set(`other/tree/meta`, new Uint8Array([1]));
+    await GroupHistoryTree.purge(shared, gid);
+    expect(await shared.list("")).toEqual([
+      `${gid}/application-owned`,
+      `${gid}/disband/terminal`,
+      `${gid}/ingest/effect/pending`,
+      `${gid}/tree-adjacent`,
+      "other/tree/meta",
     ]);
-    group.dispose();
   });
 });

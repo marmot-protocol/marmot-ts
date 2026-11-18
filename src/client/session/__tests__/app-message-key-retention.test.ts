@@ -12,12 +12,11 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
-import { SerializedClientState } from "../../../core/client-state.js";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { serializeApplicationRumor } from "../../../core/group-message.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../../extra/index.js";
+import { memoryStorage } from "../../../utils/storage.js";
 import { GroupSession } from "../group-session.js";
 
 // Receiver-side MLS secret retention. Both rows were seen live against an MDK
@@ -92,7 +91,7 @@ async function setup() {
     new GroupSession({
       state,
       ciphersuite: impl,
-      store: new InMemoryKeyValueStore<SerializedClientState>(),
+      storage: memoryStorage(),
     });
   return { admin: session(adminState), member: session(memberState) };
 }

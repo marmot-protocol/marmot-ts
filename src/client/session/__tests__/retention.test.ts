@@ -33,7 +33,11 @@ import { deserializeClientState } from "../../../core/client-state.js";
 import { GroupHistoryTree } from "../../../engine/history-tree.js";
 import { contentDedupId } from "../../../engine/message-dedup.js";
 import { marmotAuthService } from "../../../core/auth-service.js";
-import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
+import {
+  memoryStorage,
+  type MemoryStorage,
+  type StorageOp,
+} from "../../../utils/storage.js";
 import {
   GroupSession,
   type GroupSessionHistory,
@@ -41,7 +45,6 @@ import {
 } from "../group-session.js";
 
 async function fixture(
-  rewind = true,
   horizon = 1,
   hooks: Pick<
     GroupSessionOptions,
@@ -67,14 +70,10 @@ async function fixture(
       relays: ["wss://relay.test"],
     },
   );
-  const store = new InMemoryKeyValueStore<Uint8Array>();
-  const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
-  const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
+  const storage = memoryStorage();
   let now = 0;
   const options = {
-    store,
-    rewindStore: rewind ? rewindStore : undefined,
-    ingestStateStore,
+    storage,
     ciphersuite,
     convergencePolicy: {
       ...DEFAULT_CONVERGENCE_POLICY,
@@ -115,9 +114,7 @@ async function fixture(
   return {
     session,
     options,
-    store,
-    rewindStore,
-    ingestStateStore,
+    storage,
     advance,
     settle,
     runtime,
@@ -176,6 +173,56 @@ async function handOffAdmin(f: Awaited<ReturnType<typeof fixture>>) {
   return { context, peerState };
 }
 
+/**
+ * Routes every `set` and `batch` on `storage` through `handle`, which receives
+ * the ops being written and a callback that performs the write. Returns a
+ * function restoring the original methods.
+ */
+function interceptWrites(
+  storage: MemoryStorage,
+  handle: (
+    ops: readonly StorageOp[],
+    write: () => Promise<void>,
+  ) => Promise<void>,
+): () => void {
+  const set = storage.set.bind(storage);
+  const batch = storage.batch.bind(storage);
+  storage.set = (key, value) =>
+    handle([{ type: "set", key, value }], () => set(key, value));
+  storage.batch = (ops) => handle(ops, () => batch(ops));
+  return () => {
+    storage.set = set;
+    storage.batch = batch;
+  };
+}
+
+/** A tree checkpoint (`meta` version 2) and how much garbage it names. */
+function checkpointGarbage(op: StorageOp): number | undefined {
+  if (op.type !== "set" || !op.key.endsWith("/tree/meta") || op.value[0] !== 2)
+    return undefined;
+  return JSON.parse(new TextDecoder().decode(op.value.slice(1))).garbage.length;
+}
+
+/**
+ * Classifies one atomic write of a session save/retention pass:
+ * - `commit`: tree nodes + canonical state + delivered evidence (one batch);
+ * - `checkpoint`: the retention authority naming garbage to remove;
+ * - `cleanup`: garbage deletion + the clean checkpoint (one batch).
+ * Other writes (e.g. a bare tree flush) are not classified.
+ */
+function classifyWrite(
+  ops: readonly StorageOp[],
+  id: string,
+): "commit" | "checkpoint" | "cleanup" | undefined {
+  if (ops.some((op) => op.key === `${id}/state`)) return "commit";
+  if (
+    ops.some((op) => op.type === "delete" && op.key.startsWith(`${id}/tree/`))
+  )
+    return "cleanup";
+  if (ops.some((op) => (checkpointGarbage(op) ?? 0) > 0)) return "checkpoint";
+  return undefined;
+}
+
 describe("settled session retention", () => {
   it("releases an unpublished application pin after send persistence rejects without reusing its sender generation", async () => {
     const f = await fixture();
@@ -187,7 +234,7 @@ describe("settled session retention", () => {
       content: "unpublished",
     };
     const failure = vi
-      .spyOn(f.store, "setItem")
+      .spyOn(f.storage, "batch")
       .mockRejectedValueOnce(new Error("send persistence failed"));
     const original = NostrGroupPeeler.prototype.wrapGroupMessage;
     const identities: string[] = [];
@@ -241,7 +288,7 @@ describe("settled session retention", () => {
     async (boundary) => {
       const controller = new AbortController();
       let staged = false;
-      const f = await fixture(true, 1, {
+      const f = await fixture(1, {
         audit: {
           record(event) {
             if (
@@ -546,7 +593,7 @@ describe("settled session retention", () => {
         rows.clear();
       }),
     };
-    const f = await fixture(true, 1, { history });
+    const f = await fixture(1, { history });
     const payload = Uint8Array.of(0, 255, 128, 195, 40, 240, 159, 152, 128);
     const original = payload.slice();
     const work = (await f.session.send({ kind: "applicationMessage", payload }))
@@ -569,16 +616,16 @@ describe("settled session retention", () => {
       })
     ).publish[0]!;
     const id = bytesToHex(f.session.id);
-    const key = `${id}/delivered-payloads/v1`;
+    const key = `${id}/ingest/delivered`;
     expect(
       decodeDeliveredEvidence(
-        (await f.ingestStateStore.getItem(key))!,
+        (await f.storage.get(key))!,
         f.session.historyTree,
       ).entries,
     ).toHaveLength(1);
     expect(
       decodeDeliveredEvidence(
-        (await f.ingestStateStore.getItem(key))!,
+        (await f.storage.get(key))!,
         f.session.historyTree,
       ).entries[0]!.payload,
     ).toEqual(rumorPayload);
@@ -590,7 +637,7 @@ describe("settled session retention", () => {
     expect(f.session.historyTree.size).toBe(2);
     expect(
       decodeDeliveredEvidence(
-        (await f.ingestStateStore.getItem(key))!,
+        (await f.storage.get(key))!,
         f.session.historyTree,
       ).entries,
     ).toEqual([]);
@@ -604,8 +651,8 @@ describe("settled session retention", () => {
     f.session.dispose();
     const restarted = new GroupSession({
       ...f.options,
-      state: deserializeClientState((await f.store.getItem(id))!),
-      historyTree: (await GroupHistoryTree.load(f.rewindStore, id))!,
+      state: deserializeClientState((await f.storage.get(`${id}/state`))!),
+      historyTree: (await GroupHistoryTree.load(f.storage, id))!,
     });
     await restarted.save(true);
     expect(rows.get("sent-0")).toBe(payload);
@@ -631,7 +678,7 @@ describe("settled session retention", () => {
       });
       const errors = vi.fn();
       let f!: Awaited<ReturnType<typeof fixture>>;
-      f = await fixture(true, 1, {
+      f = await fixture(1, {
         scheduler: {
           setTimer(_ms, cb) {
             callback = cb;
@@ -701,14 +748,18 @@ describe("settled session retention", () => {
       }
       expect(callback).toBeDefined();
       expect(f.session.historyTree.size).toBeGreaterThan(2);
-      const write = f.rewindStore.setItem.bind(f.rewindStore);
       let failures = 0;
-      if (mode === "failure")
-        f.rewindStore.setItem = async (key, bytes) => {
-          if (key.endsWith("/meta") && bytes[0] === 2 && failures++ === 0)
-            throw new Error("automatic checkpoint failed");
-          return write(key, bytes);
-        };
+      const restoreWrites =
+        mode === "failure"
+          ? interceptWrites(f.storage, async (ops, write) => {
+              if (
+                ops.some((op) => checkpointGarbage(op) !== undefined) &&
+                failures++ === 0
+              )
+                throw new Error("automatic checkpoint failed");
+              return write();
+            })
+          : () => {};
       f.tick();
       callback!();
       await waiting;
@@ -723,7 +774,7 @@ describe("settled session retention", () => {
       } else if (mode === "failure") {
         await vi.waitFor(() => expect(errors).toHaveBeenCalledOnce());
         expect(failures).toBe(1);
-        f.rewindStore.setItem = write;
+        restoreWrites();
         await f.session.save(true);
       } else await vi.waitFor(() => expect(f.session.historyTree.size).toBe(2));
       expect(f.session.historyTree.size).toBe(2);
@@ -779,7 +830,7 @@ describe("settled session retention", () => {
 
   for (const horizon of [1, Infinity])
     it(`retires only strictly older acknowledged outer IDs with horizon ${horizon}`, async () => {
-      const f = await fixture(true, horizon);
+      const f = await fixture(horizon);
       const old = (
         await f.session.send({
           kind: "applicationMessage",
@@ -798,28 +849,22 @@ describe("settled session retention", () => {
       await f.runtime.publishApplication(equality.envelope);
       await f.advance();
       await f.session.save(true);
-      const prepared: string[] = [];
-      const write = f.ingestStateStore.setItem.bind(f.ingestStateStore);
-      f.ingestStateStore.setItem = async (key, bytes) => {
-        if (
-          key.includes("/ingest/wrapper/") &&
-          JSON.parse(new TextDecoder().decode(bytes)).state === "prepared"
-        )
-          prepared.push(key);
-        return write(key, bytes);
-      };
       const results = [];
       for await (const result of f.session.ingest([
         old.envelope,
         equality.envelope,
       ]))
         results.push(result);
-      expect(prepared.some((key) => key.endsWith(old.envelope.id))).toBe(
-        horizon !== Infinity,
-      );
       const selfEchoes = results.filter(
         (result) => result.kind === "skipped" && result.reason === "self-echo",
       );
+      // A retired outer ID no longer takes the self-echo fast path.
+      const echoed = (id: string) =>
+        selfEchoes.some(
+          (result) => "event" in result && result.event?.id === id,
+        );
+      expect(echoed(old.envelope.id)).toBe(horizon === Infinity);
+      expect(echoed(equality.envelope.id)).toBe(true);
       expect(selfEchoes).toHaveLength(horizon === Infinity ? 2 : 1);
       f.session.dispose();
     });
@@ -866,20 +911,15 @@ describe("settled session retention", () => {
       await f.runtime.publishApplication(work.envelope);
       await f.session.save(true);
       expect(f.session.historyTree.size).toBe(2);
-      const prepared: string[] = [];
-      const write = f.ingestStateStore.setItem.bind(f.ingestStateStore);
-      f.ingestStateStore.setItem = async (key, bytes) => {
-        if (
-          key.includes("/ingest/wrapper/") &&
-          JSON.parse(new TextDecoder().decode(bytes)).state === "prepared"
-        )
-          prepared.push(key);
-        return write(key, bytes);
-      };
       const results = [];
       for await (const result of f.session.ingest([work.envelope]))
         results.push(result);
-      expect(prepared.some((key) => key.endsWith(work.envelope.id))).toBe(true);
+      // The retired outer ID is not fast-pathed: no self-echo record is written.
+      expect(
+        await f.storage.get(
+          `${bytesToHex(f.session.id)}/ingest/wrapper/${work.envelope.id}`,
+        ),
+      ).toBeUndefined();
       expect(
         results.some(
           (result) =>
@@ -992,18 +1032,17 @@ describe("settled session retention", () => {
   });
   it("uses the outer fast path for locally wrapped handshakes", async () => {
     const f = await fixture();
-    const states: string[] = [];
-    const write = f.ingestStateStore.setItem.bind(f.ingestStateStore);
-    f.ingestStateStore.setItem = async (key, bytes) => {
-      if (key.includes("/ingest/wrapper/"))
-        states.push(JSON.parse(new TextDecoder().decode(bytes)).state);
-      return write(key, bytes);
-    };
     const work = (await f.session.send({ kind: "selfUpdate" })).publish[0];
-    for await (const _ of f.session.ingest([work.envelope])) {
-      void _;
-    }
-    expect(!states.includes("prepared")).toBe(true);
+    const results = [];
+    for await (const result of f.session.ingest([work.envelope]))
+      results.push(result);
+    // The locally wrapped handshake is recognized by its outer ID alone.
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      kind: "skipped",
+      reason: "self-echo",
+    });
+    expect(results[0]).toHaveProperty("event.id", work.envelope.id);
     if (work.kind !== "selfUpdate") throw new Error("expected update");
     f.session.publishFailed(work.pending);
     f.session.dispose();
@@ -1027,13 +1066,13 @@ describe("settled session retention", () => {
         payload: payload.slice(),
       });
       const id = bytesToHex(f.session.id);
-      const key = `${id}/delivered-payloads/v1`;
+      const key = `${id}/ingest/delivered`;
       const evidence = decodeDeliveredEvidence(
-        (await f.ingestStateStore.getItem(key))!,
+        (await f.storage.get(key))!,
         f.session.historyTree,
       );
       expect(evidence.entries).toHaveLength(2);
-      await f.ingestStateStore.setItem(
+      await f.storage.set(
         key,
         encodeDeliveredEvidence({
           entries: [evidence.entries[0]],
@@ -1059,8 +1098,8 @@ describe("settled session retention", () => {
         new GroupSession({
           ...f.options,
           history,
-          state: deserializeClientState((await f.store.getItem(id))!),
-          historyTree: (await GroupHistoryTree.load(f.rewindStore, id))!,
+          state: deserializeClientState((await f.storage.get(`${id}/state`))!),
+          historyTree: (await GroupHistoryTree.load(f.storage, id))!,
         });
       let session = await restore();
       for (let i = 0; i < 3; i++) {
@@ -1076,7 +1115,7 @@ describe("settled session retention", () => {
           void _;
         }
         const retained = decodeDeliveredEvidence(
-          (await f.ingestStateStore.getItem(key))!,
+          (await f.storage.get(key))!,
           session.historyTree,
         );
         expect(retained.pending).toHaveLength(1);
@@ -1088,27 +1127,26 @@ describe("settled session retention", () => {
       }
       session = await restore();
       failHistory = false;
-      const set = f.ingestStateStore.setItem.bind(f.ingestStateStore);
       let armed = true;
-      f.ingestStateStore.setItem = async (name, bytes) => {
-        if (armed && name === key) {
+      const restoreWrites = interceptWrites(f.storage, async (ops, write) => {
+        if (armed && ops.some((op) => op.key === key)) {
           armed = false;
-          if (forwarding === "after") await set(name, bytes);
+          if (forwarding === "after") await write();
           throw new Error("ack crash");
         }
-        return set(name, bytes);
-      };
+        return write();
+      });
       for await (const _ of session.ingest([])) {
         void _;
       }
       expect(armed).toBe(false);
-      f.ingestStateStore.setItem = set;
+      restoreWrites();
       for await (const _ of session.ingest([])) {
         void _;
       }
       await session.save(true);
       const compacted = decodeDeliveredEvidence(
-        (await f.ingestStateStore.getItem(key))!,
+        (await f.storage.get(key))!,
         session.historyTree,
       );
       expect(compacted.pending).toEqual([]);
@@ -1122,14 +1160,16 @@ describe("settled session retention", () => {
       session.dispose();
     });
   for (const horizon of [1, Infinity])
-    it(`contracts process-local history with horizon ${horizon}`, async () => {
-      const f = await fixture(false, horizon);
+    it(`contracts durable history with horizon ${horizon}`, async () => {
+      const f = await fixture(horizon);
       await f.advance();
       await f.advance();
       await f.advance();
       await f.settle();
       expect(f.session.historyTree.size).toBe(horizon === Infinity ? 4 : 2);
-      expect(await f.rewindStore.keys()).toEqual([]);
+      const id = bytesToHex(f.session.id);
+      const persisted = await GroupHistoryTree.load(f.storage, id);
+      expect(persisted?.size).toBe(f.session.historyTree.size);
       const tip = await f.session.historyTree.stateAt(
         bytesToHex(f.session.state.confirmationTag),
       );
@@ -1137,14 +1177,10 @@ describe("settled session retention", () => {
       f.session.dispose();
     });
 
-  for (const boundary of [
-    "flush",
-    "canonical",
-    "evidence",
-    "checkpoint",
-    "delete",
-    "ack",
-  ])
+  // Tree nodes, canonical state and delivered evidence now commit in one
+  // atomic batch ("commit"), and garbage deletion commits with the clean
+  // checkpoint ("cleanup"); the windows between them no longer exist.
+  for (const boundary of ["commit", "checkpoint", "cleanup"] as const)
     for (const forwarding of ["before", "after"] as const)
       it(`recovers through two restarts after ${forwarding} ${boundary}`, async () => {
         const f = await fixture();
@@ -1152,55 +1188,33 @@ describe("settled session retention", () => {
         await f.advance(false);
         await f.advance(false);
         await f.advance(false);
+        const id = bytesToHex(f.session.id);
         let armed = true;
         const writes: string[] = [];
-        const fault = async <T>(
-          kind: string,
-          operation: () => Promise<T>,
-        ): Promise<T> => {
-          writes.push(kind);
+        interceptWrites(f.storage, async (ops, write) => {
+          const kind = classifyWrite(ops, id);
+          if (kind) writes.push(kind);
           const hit = armed && kind === boundary;
           if (hit && forwarding === "before") {
             armed = false;
             throw new Error("crash");
           }
-          const result = await operation();
+          await write();
           if (hit) {
             armed = false;
             throw new Error("crash");
           }
-          return result;
-        };
-        const canonical = f.store.setItem.bind(f.store);
-        f.store.setItem = (key, value) =>
-          fault("canonical", () => canonical(key, value));
-        const evidence = f.ingestStateStore.setItem.bind(f.ingestStateStore);
-        f.ingestStateStore.setItem = (key, value) =>
-          fault("evidence", () => evidence(key, value));
-        const treeWrite = f.rewindStore.setItem.bind(f.rewindStore);
-        f.rewindStore.setItem = (key, value) => {
-          const checkpoint =
-            key.endsWith("/meta") && value[0] === 2
-              ? JSON.parse(new TextDecoder().decode(value.slice(1)))
-              : undefined;
-          const kind = checkpoint
-            ? checkpoint.garbage.length
-              ? "checkpoint"
-              : "ack"
-            : "flush";
-          return fault(kind, () => treeWrite(key, value));
-        };
-        const remove = f.rewindStore.removeItem.bind(f.rewindStore);
-        f.rewindStore.removeItem = (key) => fault("delete", () => remove(key));
+        });
         await expect(f.session.save(true)).rejects.toThrow("crash");
         expect(armed).toBe(false);
-        if (["flush", "canonical", "evidence", "checkpoint"].includes(boundary))
-          expect(writes.includes("delete")).toBe(false);
+        if (boundary !== "cleanup")
+          expect(writes.includes("cleanup")).toBe(false);
         f.session.dispose();
-        const id = bytesToHex(f.session.id);
         for (let restart = 0; restart < 2; restart++) {
-          const tree = (await GroupHistoryTree.load(f.rewindStore, id))!;
-          const state = deserializeClientState((await f.store.getItem(id))!);
+          const tree = (await GroupHistoryTree.load(f.storage, id))!;
+          const state = deserializeClientState(
+            (await f.storage.get(`${id}/state`))!,
+          );
           expect(tree.hasNode(bytesToHex(state.confirmationTag))).toBe(true);
           await tree.resumeRetentionCleanup();
           const restored = new GroupSession({
@@ -1212,29 +1226,22 @@ describe("settled session retention", () => {
           restored.dispose();
         }
       });
-  it("publishes bounded authority after canonical and evidence writes", async () => {
+
+  it("publishes bounded authority after the canonical commit", async () => {
     const f = await fixture();
+    const id = bytesToHex(f.session.id);
     const writes: string[] = [];
-    const canonical = f.store.setItem.bind(f.store);
-    f.store.setItem = async (key, value) => {
-      writes.push("canonical");
-      return canonical(key, value);
-    };
-    const evidence = f.ingestStateStore.setItem.bind(f.ingestStateStore);
-    f.ingestStateStore.setItem = async (key, value) => {
-      writes.push("evidence");
-      return evidence(key, value);
-    };
-    const tree = f.rewindStore.setItem.bind(f.rewindStore);
-    f.rewindStore.setItem = async (key, value) => {
-      if (key.endsWith("/meta") && value[0] === 2) writes.push("checkpoint");
-      return tree(key, value);
-    };
-    const remove = f.rewindStore.removeItem.bind(f.rewindStore);
-    f.rewindStore.removeItem = async (key) => {
-      writes.push("delete");
-      return remove(key);
-    };
+    interceptWrites(f.storage, async (ops, write) => {
+      const kind = classifyWrite(ops, id);
+      if (kind === "commit") {
+        // Canonical state and delivered evidence are one atomic write.
+        expect(ops.some((op) => op.key === `${id}/ingest/delivered`)).toBe(
+          true,
+        );
+      }
+      if (kind) writes.push(kind);
+      return write();
+    });
     await f.advance();
     await f.advance();
     await f.advance();
@@ -1245,18 +1252,17 @@ describe("settled session retention", () => {
         .map((tag) => f.session.historyTree.epochOf(tag))
         .join() === "2,3",
     ).toBe(true);
-    expect(writes.indexOf("canonical")).toBeLessThan(
-      writes.indexOf("evidence"),
-    );
-    expect(writes.indexOf("evidence")).toBeLessThan(
-      writes.indexOf("checkpoint"),
-    );
-    expect(writes.indexOf("checkpoint")).toBeLessThan(writes.indexOf("delete"));
-    const id = bytesToHex(f.session.id);
+    const checkpoint = writes.indexOf("checkpoint");
+    expect(checkpoint).toBeGreaterThan(-1);
+    expect(writes.lastIndexOf("commit", checkpoint)).toBeGreaterThan(-1);
+    expect(writes.indexOf("cleanup", checkpoint)).toBeGreaterThan(checkpoint);
+    expect(writes.slice(0, checkpoint)).not.toContain("cleanup");
     for (let restart = 0; restart < 2; restart++) {
-      const restored = await GroupHistoryTree.load(f.rewindStore, id);
+      const restored = await GroupHistoryTree.load(f.storage, id);
       expect(restored?.size).toBe(2);
-      const state = deserializeClientState((await f.store.getItem(id))!);
+      const state = deserializeClientState(
+        (await f.storage.get(`${id}/state`))!,
+      );
       expect(restored?.hasNode(bytesToHex(state.confirmationTag))).toBe(true);
     }
     f.session.dispose();

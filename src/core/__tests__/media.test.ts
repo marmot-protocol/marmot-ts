@@ -1,12 +1,10 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, randomBytes } from "@noble/hashes/utils.js";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { GroupMediaStore } from "../../client/group/group-media-store.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
-import type { SerializedClientState } from "../client-state.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import {
   encryptedMediaBlossomDefault,
@@ -626,12 +624,10 @@ describe("locator resolution", () => {
 describe("MarmotGroup.decryptMedia", () => {
   it("deduplicates concurrent decrypts for the same attachment", async () => {
     const { clientState, ciphersuite } = await makeClientState();
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
     const group = new MarmotGroup(clientState, {
-      store,
+      storage: memoryStorage(),
       signer: testAccount(6).signer,
       ciphersuite,
-      media: new GroupMediaStore(),
       network: new MockNetwork(),
     });
 
@@ -644,14 +640,13 @@ describe("MarmotGroup.decryptMedia", () => {
     );
     const { encrypted, attachment } = encryptMediaFile(file, fileKey, fields);
 
-    const addMediaSpy = vi.spyOn(group.media, "addMedia");
     const [first, second] = await Promise.all([
       group.decryptMedia(encrypted, attachment),
       group.decryptMedia(encrypted, attachment),
     ]);
 
     expect(first.data).toEqual(file);
-    expect(second.data).toEqual(file);
-    expect(addMediaSpy).toHaveBeenCalledTimes(1);
+    // Both callers share the one in-flight decryption.
+    expect(second).toBe(first);
   });
 });

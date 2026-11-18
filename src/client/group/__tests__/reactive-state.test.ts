@@ -8,7 +8,7 @@ import {
 } from "ts-mls";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import { MockNetwork } from "../../../__tests__/helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../../utils/storage.js";
 import { GroupsManager } from "../../groups-manager.js";
 import { MarmotGroup, type MarmotGroupSnapshot } from "../marmot-group.js";
 import { proposeUpdateMetadata } from "../proposals/update-metadata.js";
@@ -22,12 +22,8 @@ import { createCredential } from "../../../core/credential.js";
 const account = testAccount(6);
 async function owner() {
   const network = new MockNetwork();
-  const store = new InMemoryKeyValueStore<Uint8Array>();
   const manager = new GroupsManager({
-    store: new InMemoryKeyValueStore(),
-    ingestStateStore: store,
-    lifecycleStore: store,
-    ingestPersistence: { kind: "durable" },
+    storage: memoryStorage(),
     signer: account.signer,
     network,
   });
@@ -123,7 +119,7 @@ describe("reactive group state", () => {
     const target = new MarmotGroup(
       deserializeClientState(serializeClientState(group.state)),
       {
-        store: new InMemoryKeyValueStore(),
+        storage: memoryStorage(),
         signer: account.signer,
         ciphersuite: group.ciphersuite,
         network: new MockNetwork(),
@@ -197,7 +193,7 @@ describe("reactive group state", () => {
     });
     await group.session.confirmPublished(work.pending);
     const target = new MarmotGroup(state, {
-      store: new InMemoryKeyValueStore(),
+      storage: memoryStorage(),
       signer: member.signer,
       ciphersuite: group.ciphersuite,
       network: new MockNetwork(),

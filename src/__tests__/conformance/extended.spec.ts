@@ -15,7 +15,7 @@ import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { MockNetwork } from "../helpers/mock-network.js";
 import { MarmotConformanceSubject, parseMdkScenarioStep } from "./subject.js";
 
@@ -223,9 +223,7 @@ describe("deterministic offline catchup pressure", () => {
     const groups = new Map<Client, MarmotGroup>();
     for (const client of CLIENTS) {
       const group = new MarmotGroup(states.get(client)!, {
-        store: new InMemoryKeyValueStore(),
-        ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
-        rewindStore: new InMemoryKeyValueStore<Uint8Array>(),
+        storage: memoryStorage(),
         signer: accounts.get(client)!.signer,
         ciphersuite,
         network,

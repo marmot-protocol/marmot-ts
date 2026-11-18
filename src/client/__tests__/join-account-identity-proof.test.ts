@@ -22,7 +22,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { MarmotClient } from "../marmot-client.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import {
+  memoryStorage,
+  type MemoryStorage,
+  type StorageOp,
+} from "../../utils/storage.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import {
@@ -30,7 +34,6 @@ import {
   forgeKeyPackage,
 } from "../../__tests__/helpers/account-identity-proof-fixtures.js";
 import { marmotAuthService } from "../../core/auth-service.js";
-import type { SerializedClientState } from "../../core/client-state.js";
 import { getMarmotGroupView } from "../../core/client-state.js";
 import { validateWelcomeGroup } from "../../core/welcome-join.js";
 import { createCredential } from "../../core/credential.js";
@@ -57,7 +60,58 @@ import {
   type GroupBlossomImage,
 } from "../../core/components/index.js";
 import { createDefaultKeyPackageLifetime } from "../../utils/timestamp.js";
-import type { StoredKeyPackage } from "../key-package-manager.js";
+import {
+  GROUP_PREFIX,
+  KEY_PACKAGE_PREFIX,
+  groupKeys,
+} from "../storage-keys.js";
+
+/** Every key and value under `prefix`, copied. */
+async function snapshot(storage: MemoryStorage, prefix: string) {
+  return (await storage.list(prefix)).map((key) => [
+    key,
+    storage.data.get(key)?.slice(),
+  ]);
+}
+
+/** Ids of the groups whose canonical state is stored. */
+async function storedGroupIds(storage: MemoryStorage): Promise<string[]> {
+  return (await storage.list(GROUP_PREFIX))
+    .filter((key) => key.endsWith("/state"))
+    .map((key) => key.slice(GROUP_PREFIX.length, -"/state".length));
+}
+
+const isStateWrite = (ops: readonly StorageOp[]) =>
+  ops.some(
+    (op) =>
+      op.type === "set" &&
+      op.key.startsWith(GROUP_PREFIX) &&
+      op.key.endsWith("/state"),
+  );
+
+/** Records every batch that writes a group's canonical state. */
+function stateWrites(storage: MemoryStorage) {
+  const writes = vi.fn();
+  const batch = storage.batch.bind(storage);
+  vi.spyOn(storage, "batch").mockImplementation(async (ops) => {
+    if (isStateWrite(ops)) writes(ops);
+    return batch(ops);
+  });
+  return writes;
+}
+
+/** Makes the next canonical-state batch fail. */
+function failNextStateWrite(storage: MemoryStorage, error: Error) {
+  const batch = storage.batch.bind(storage);
+  let failed = false;
+  vi.spyOn(storage, "batch").mockImplementation(async (ops) => {
+    if (!failed && isStateWrite(ops)) {
+      failed = true;
+      throw error;
+    }
+    return batch(ops);
+  });
+}
 
 const SUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
 // Legacy `marmot.account-identity-proof.v2` custom LeafNode extension
@@ -68,19 +122,16 @@ const LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE = 0xf2f1;
 describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => {
   let ciphersuiteImpl: CiphersuiteImpl;
   let mockNetwork: MockNetwork;
-  let inviteeGroupStateStore: InMemoryKeyValueStore<SerializedClientState>;
-  let inviteeKeyPackageStore: InMemoryKeyValueStore<StoredKeyPackage>;
+  let inviteeStorage: MemoryStorage;
   let inviteeClient: MarmotClient;
 
   beforeEach(async () => {
     ciphersuiteImpl = await getCiphersuiteImpl(SUITE, defaultCryptoProvider);
     mockNetwork = new MockNetwork();
-    inviteeGroupStateStore = new InMemoryKeyValueStore<SerializedClientState>();
-    inviteeKeyPackageStore = new InMemoryKeyValueStore<StoredKeyPackage>();
+    inviteeStorage = memoryStorage();
     const inviteeAccount = testAccount(9);
     inviteeClient = new MarmotClient({
-      groupStateStore: inviteeGroupStateStore,
-      keyPackageStore: inviteeKeyPackageStore,
+      storage: inviteeStorage,
       signer: inviteeAccount.signer,
       network: mockNetwork,
     });
@@ -197,28 +248,18 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       await inviteeClient.keyPackages.add(inviteeKp);
       const ref = await calculateKeyPackageRef(inviteeKp.publicPackage);
       const beforeGroups = structuredClone(
-        await Promise.all(
-          (await inviteeGroupStateStore.keys()).map(async (key) => [
-            key,
-            await inviteeGroupStateStore.getItem(key),
-          ]),
-        ),
+        await snapshot(inviteeStorage, GROUP_PREFIX),
       );
       const beforePackages = structuredClone(
-        await Promise.all(
-          (await inviteeKeyPackageStore.keys()).map(async (key) => [
-            key,
-            await inviteeKeyPackageStore.getItem(key),
-          ]),
-        ),
+        await snapshot(inviteeStorage, KEY_PACKAGE_PREFIX),
       );
       const beforePrivate = structuredClone(
         await inviteeClient.keyPackages.getPrivateKey(ref),
       );
       const beforeAdopt = vi.fn(async () => {});
       const receipt = vi.spyOn(inviteeClient.keyPackages, "recordConsumption");
-      const save = vi.spyOn(inviteeGroupStateStore, "setItem");
-      const packageWrite = vi.spyOn(inviteeKeyPackageStore, "setItem");
+      const save = vi.spyOn(inviteeStorage, "batch");
+      const packageWrite = vi.spyOn(inviteeStorage, "set");
       const joinedEvent = vi.fn();
       const updatedEvent = vi.fn();
       const loadedEvent = vi.fn();
@@ -251,22 +292,12 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       expect(updatedEvent).not.toHaveBeenCalled();
       expect(loadedEvent).not.toHaveBeenCalled();
       expect(inviteeClient.groups.loaded).toEqual([existing]);
-      expect(
-        await Promise.all(
-          (await inviteeGroupStateStore.keys()).map(async (key) => [
-            key,
-            await inviteeGroupStateStore.getItem(key),
-          ]),
-        ),
-      ).toEqual(beforeGroups);
-      expect(
-        await Promise.all(
-          (await inviteeKeyPackageStore.keys()).map(async (key) => [
-            key,
-            await inviteeKeyPackageStore.getItem(key),
-          ]),
-        ),
-      ).toEqual(beforePackages);
+      expect(await snapshot(inviteeStorage, GROUP_PREFIX)).toEqual(
+        beforeGroups,
+      );
+      expect(await snapshot(inviteeStorage, KEY_PACKAGE_PREFIX)).toEqual(
+        beforePackages,
+      );
       expect(await inviteeClient.keyPackages.getPrivateKey(ref)).toEqual(
         beforePrivate,
       );
@@ -307,7 +338,9 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
         welcomeRumor,
       });
       expect(getMarmotGroupView(group.state)?.blossomImage).toEqual(image);
-      expect(await inviteeGroupStateStore.getItem(group.idStr)).not.toBeNull();
+      expect(
+        await inviteeStorage.get(GROUP_PREFIX + groupKeys.state(group.idStr)),
+      ).toBeDefined();
       expect(inviteeClient.groups.loaded).toEqual([group]);
       expect(joinedEvent).toHaveBeenCalledExactlyOnceWith(group);
       expect(await inviteeClient.keyPackages.getPrivateKey(ref)).toBeNull();
@@ -352,7 +385,9 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
     });
     expect(await inviteeClient.keyPackages.getPrivateKey(ref)).toBeNull();
     expect((await inviteeClient.keyPackages.get(ref))?.used).toBe(true);
-    expect(await inviteeGroupStateStore.getItem(group.idStr)).not.toBeNull();
+    expect(
+      await inviteeStorage.get(GROUP_PREFIX + groupKeys.state(group.idStr)),
+    ).toBeDefined();
     const { createApplicationMessage } = await import("ts-mls");
     await expect(
       createApplicationMessage({
@@ -397,13 +432,14 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       const before = structuredClone(
         await inviteeClient.keyPackages.getPrivateKey(ref),
       );
-      const save = vi.spyOn(inviteeGroupStateStore, "setItem");
+      const save = stateWrites(inviteeStorage);
       if (point === "receipt")
         vi.spyOn(
           inviteeClient.keyPackages,
           "recordConsumption",
         ).mockRejectedValueOnce(new Error("receipt write failed"));
-      else save.mockRejectedValueOnce(new Error("adoption write failed"));
+      else
+        failNextStateWrite(inviteeStorage, new Error("adoption write failed"));
       const welcomeRumor = createWelcomeRumor({
         welcome,
         author: admin.pubkey,
@@ -413,7 +449,7 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       await expect(
         inviteeClient.joinGroupFromWelcome({ welcomeRumor }),
       ).rejects.toThrow("write failed");
-      expect(await inviteeGroupStateStore.keys()).toEqual([]);
+      expect(await storedGroupIds(inviteeStorage)).toEqual([]);
       expect(await inviteeClient.keyPackages.getPrivateKey(ref)).toEqual(
         before,
       );
@@ -528,7 +564,7 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
         await expect(joinAsInvitee(welcome, inviteeKp)).rejects.toThrow(
           "active admin",
         );
-        expect(await inviteeGroupStateStore.keys()).toEqual([]);
+        expect(await storedGroupIds(inviteeStorage)).toEqual([]);
       }
       expect(await inviteeClient.keyPackages.get(ref)).toEqual(before);
     },
@@ -591,7 +627,7 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       const ref = await calculateKeyPackageRef(inviteeKp.publicPackage);
       const before = structuredClone(await inviteeClient.keyPackages.get(ref));
       await expect(joinAsInvitee(welcome, inviteeKp)).rejects.toThrow();
-      expect(await inviteeGroupStateStore.keys()).toEqual([]);
+      expect(await storedGroupIds(inviteeStorage)).toEqual([]);
       expect(await inviteeClient.keyPackages.get(ref)).toEqual(before);
     },
   );
@@ -624,14 +660,14 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
     const ref = await calculateKeyPackageRef(inviteeKp.publicPackage);
     const beforeKey = structuredClone(await inviteeClient.keyPackages.get(ref));
     const beforeGroup = structuredClone(
-      await inviteeGroupStateStore.getItem(group.idStr),
+      await inviteeStorage.get(GROUP_PREFIX + groupKeys.state(group.idStr)),
     );
     await expect(joinAsInvitee(welcome, inviteeKp)).rejects.toThrow(
       "already exists",
     );
-    expect(await inviteeGroupStateStore.getItem(group.idStr)).toEqual(
-      beforeGroup,
-    );
+    expect(
+      await inviteeStorage.get(GROUP_PREFIX + groupKeys.state(group.idStr)),
+    ).toEqual(beforeGroup);
     expect(await inviteeClient.keyPackages.get(ref)).toEqual(beforeKey);
   });
 
@@ -677,7 +713,7 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       results.filter((result) => result.status === "rejected"),
     ).toHaveLength(1);
     expect(beforeAdopt).toHaveBeenCalledTimes(1);
-    expect(await inviteeGroupStateStore.keys()).toHaveLength(1);
+    expect(await storedGroupIds(inviteeStorage)).toHaveLength(1);
   });
 
   it("GRP-03: rejects a Welcome into a group that does not require 0x8009 without persisting it", async () => {
@@ -730,7 +766,7 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       name: "AccountIdentityProofError",
       reason: "missing-requirement",
     });
-    expect(await inviteeGroupStateStore.keys()).toEqual([]);
+    expect(await storedGroupIds(inviteeStorage)).toEqual([]);
   });
 
   it("GRP-03: rejects a Welcome when a current non-creator member's proof is invalid without persisting it", async () => {
@@ -785,7 +821,7 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
     await expect(joinAsInvitee(welcome, inviteeKp)).rejects.toMatchObject({
       name: "AccountIdentityProofError",
     });
-    expect(await inviteeGroupStateStore.keys()).toEqual([]);
+    expect(await storedGroupIds(inviteeStorage)).toEqual([]);
   });
 
   it("GRP-03: rejects a group that requires both 0xf2f1 and 0x8009 (mixed profile) without persisting it", async () => {
@@ -856,7 +892,7 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       name: "AccountIdentityProofError",
       reason: "mixed-profile",
     });
-    expect(await inviteeGroupStateStore.keys()).toEqual([]);
+    expect(await storedGroupIds(inviteeStorage)).toEqual([]);
   });
 
   it("GRP-03: rejects a group whose creator leaf carries a proof bound to a different signature key", async () => {
@@ -903,6 +939,6 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       name: "AccountIdentityProofError",
       reason: "invalid-proof",
     });
-    expect(await inviteeGroupStateStore.keys()).toEqual([]);
+    expect(await storedGroupIds(inviteeStorage)).toEqual([]);
   });
 });

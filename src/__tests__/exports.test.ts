@@ -302,7 +302,7 @@ const REPRESENTATIVE_EXPORTS: Record<string, string> = {
   "./core": "createSimpleGroup",
   "./engine": "MarmotGroupEngine",
   "./audit": "noopAuditSink",
-  "./extra": "InMemoryKeyValueStore",
+  "./extra": "EncryptedStorage",
   "./extra/audit/node": "NodeJsonlAuditRecorder",
   "./extra/audit/browser": "AutoBrowserAuditWriter",
   "./utils": "normalizeRelayUrl",
@@ -667,12 +667,11 @@ describe("exports", () => {
         "GROUP_NAME_MAX_BYTES",
         "GROUP_PROFILE_COMPONENT",
         "GROUP_PROFILE_COMPONENT_ID",
+        "GroupHistory",
         "GroupHistoryTree",
         "GroupImageIntegrityError",
         "GroupImageService",
         "GroupMediaService",
-        "GroupMediaStore",
-        "GroupRumorHistory",
         "GroupRuntime",
         "GroupSession",
         "GroupTerminalError",
@@ -700,6 +699,7 @@ describe("exports", () => {
         "MarmotGroup",
         "MarmotGroupEngine",
         "MediaAttachmentRejection",
+        "MemoryStorage",
         "MissingRelayError",
         "MissingSlotIdentifierError",
         "NIP65_RELAY_LIST_KIND",
@@ -717,6 +717,7 @@ describe("exports", () => {
         "SUPPORTED_APP_COMPONENT_IDS",
         "SUPPORTED_LOCATOR_KINDS",
         "StaleMediaPreparationError",
+        "StorageBatch",
         "WELCOME_EVENT_KIND",
         "accountIdentityProofTemplate",
         "adminPolicyEntry",
@@ -794,6 +795,7 @@ describe("exports", () => {
         "defaultCapabilities",
         "defaultMarmotClientConfig",
         "deferredReasons",
+        "deletePrefix",
         "deriveMediaEncryptionKey",
         "deriveMediaEncryptionKeyV1",
         "deriveMediaEncryptionKeyV2",
@@ -924,6 +926,7 @@ describe("exports", () => {
         "mayPrepareLocalCommit",
         "mayRunForkDetection",
         "mediaSourceStateToken",
+        "memoryStorage",
         "messageRetentionEntry",
         "missingGroupRequirements",
         "mlsSignatureSchemeForCiphersuite",
@@ -947,6 +950,7 @@ describe("exports", () => {
         "requiredRetainedEpochs",
         "resolveMediaFetchUrls",
         "resolveMediaFetchUrlsV1",
+        "scopeStorage",
         "scoreBranch",
         "selectCanonicalBranch",
         "selectFairQueuedStateIntent",
@@ -983,10 +987,9 @@ describe("./client exports", () => {
     expect(Object.keys(clientExports).sort()).toMatchInlineSnapshot(`
       [
         "BoundedIdCache",
+        "GroupHistory",
         "GroupImageService",
         "GroupMediaService",
-        "GroupMediaStore",
-        "GroupRumorHistory",
         "GroupRuntime",
         "GroupSession",
         "GroupTerminalError",
@@ -1382,10 +1385,7 @@ describe("./extra exports", () => {
   it("should export the expected members", () => {
     expect(Object.keys(extraExports).sort()).toMatchInlineSnapshot(`
       [
-        "EncryptedKeyValueStore",
-        "InMemoryKeyValueStore",
-        "KeyValueRumorHistoryBackend",
-        "makeKeyValueRumorHistoryFactory",
+        "EncryptedStorage",
       ]
     `);
   });
@@ -1395,10 +1395,13 @@ describe("./utils exports", () => {
   it("should export the expected members", () => {
     expect(Object.keys(utilsExports).sort()).toMatchInlineSnapshot(`
       [
+        "MemoryStorage",
+        "StorageBatch",
         "createDefaultKeyPackageLifetime",
         "createGiftWrap",
         "createThreeMonthLifetime",
         "decodeContent",
+        "deletePrefix",
         "detectEncoding",
         "encodeContent",
         "formatMlsTimestamp",
@@ -1409,7 +1412,9 @@ describe("./utils exports", () => {
         "isLifetimeValid",
         "isLifetimeWithinCap",
         "isValidRelayUrl",
+        "memoryStorage",
         "normalizeRelayUrl",
+        "scopeStorage",
         "unixNow",
       ]
     `);

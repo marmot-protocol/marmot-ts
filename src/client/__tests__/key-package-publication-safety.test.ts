@@ -1,11 +1,10 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { describe, expect, it, vi } from "vitest";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import {
   KeyPackageManager,
   MissingSlotIdentifierError,
-  type StoredKeyPackage,
 } from "../key-package-manager.js";
 import type { PublishResponse } from "../nostr-interface.js";
 
@@ -16,10 +15,10 @@ const OPTIONS = { identifier: SLOT, relays: [TARGET] };
 
 function fixture(clientId: string | undefined = SLOT) {
   const network = new MockNetwork();
-  const store = new InMemoryKeyValueStore<StoredKeyPackage>();
+  const storage = memoryStorage();
   const signer = PrivateKeyAccount.generateNew().signer;
-  const manager = new KeyPackageManager({ store, signer, network, clientId });
-  return { manager, network, store, signer };
+  const manager = new KeyPackageManager({ storage, signer, network, clientId });
+  return { manager, network, storage, signer };
 }
 
 describe("KeyPackage relay acknowledgements", () => {
@@ -56,7 +55,7 @@ describe("KeyPackage relay acknowledgements", () => {
 
     for (const operation of ["purge", "rotate"] as const) {
       it(`preserves the old bundle on ${operation} ${name}`, async () => {
-        const { manager, network, store, signer } = fixture();
+        const { manager, network, storage, signer } = fixture();
         const old = await manager.create(OPTIONS);
         const before = await manager.get(old.keyPackageRef);
         vi.spyOn(network, "publish").mockResolvedValue(responses);
@@ -67,7 +66,7 @@ describe("KeyPackage relay acknowledgements", () => {
           responses,
         });
         const restarted = new KeyPackageManager({
-          store,
+          storage,
           signer,
           network,
           clientId: SLOT,
@@ -143,10 +142,10 @@ describe("ensurePublished slot isolation", () => {
   });
 
   it("does not infer a missing device identity from another stored slot", async () => {
-    const { manager, store, signer, network } = fixture();
+    const { manager, storage, signer, network } = fixture();
     await manager.create(OPTIONS);
     const unconfigured = new KeyPackageManager({
-      store,
+      storage,
       signer,
       network,
     });

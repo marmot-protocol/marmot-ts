@@ -11,11 +11,8 @@ import { vi } from "vitest";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import {
-  serializeClientState,
-  type SerializedClientState,
-} from "../../core/client-state.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { serializeClientState } from "../../core/client-state.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { GroupRegistry } from "../../client/group-registry.js";
 import { MockNetwork } from "../helpers/mock-network.js";
@@ -184,32 +181,23 @@ describe("conformance adapter", () => {
     );
     const network = new MockNetwork();
     network.autoDeliver = false;
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
-    const rewindStore = new InMemoryKeyValueStore<Uint8Array>();
-    const lifecycleStore = new InMemoryKeyValueStore<Uint8Array>();
+    const storage = memoryStorage();
     const signer = account.signer;
     const makeGroup = (state = clientState) =>
       new MarmotGroup(state, {
-        store,
-        ingestStateStore,
-        rewindStore,
-        lifecycleStore,
+        storage,
         signer,
         ciphersuite: impl,
         network,
       });
     const groups = new Map([["alice", makeGroup()]]);
     await groups.get("alice")!.save(true);
-    const initialDurableState = await store.getItem(
-      bytesToHex(clientState.groupContext.groupId),
+    const initialDurableState = await storage.get(
+      `${bytesToHex(clientState.groupContext.groupId)}/state`,
     );
     let durableBeforeCrash = initialDurableState;
     const registry = new GroupRegistry({
-      store,
-      ingestStateStore,
-      rewindStore,
-      lifecycleStore,
+      storage,
       signer,
       network,
     });
@@ -230,7 +218,7 @@ describe("conformance adapter", () => {
       },
       restart: async (_client, group) => {
         const groupId = group.id.slice();
-        durableBeforeCrash = await store.getItem(bytesToHex(groupId));
+        durableBeforeCrash = await storage.get(`${bytesToHex(groupId)}/state`);
         // Sending now durably preserves the updated ratchet and delivery
         // evidence. A crash must restore that latest state, not pre-send bytes.
         expect(durableBeforeCrash).toEqual(serializeClientState(group.state));

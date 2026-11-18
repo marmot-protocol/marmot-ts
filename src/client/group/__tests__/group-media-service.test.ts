@@ -5,7 +5,7 @@ import {
   defaultCryptoProvider,
   getCiphersuiteImpl,
 } from "ts-mls";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
@@ -15,7 +15,6 @@ import {
   type MediaAttachment,
 } from "../../../core/media.js";
 import { GroupMediaService } from "../group-media-service.js";
-import type { BaseGroupMedia, StoredMedia } from "../marmot-group.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 
 const ADMIN_ACCOUNT = testAccount(6);
@@ -53,32 +52,13 @@ function advanceEpoch(state: ClientState): ClientState {
   };
 }
 
-/** Minimal in-memory media cache (keyed by ciphertextSha256) that records calls. */
-function makeMediaCache(): BaseGroupMedia {
-  const entries = new Map<string, StoredMedia>();
-  return {
-    addMedia: vi.fn(async (key: string, entry: StoredMedia) => {
-      entries.set(key, entry);
-    }),
-    getMedia: vi.fn(async (key: string) => entries.get(key) ?? null),
-    removeMedia: vi.fn(async (key: string) => {
-      entries.delete(key);
-    }),
-    listMedia: vi.fn(async () =>
-      [...entries.values()].map((e) => e.attachment),
-    ),
-    clearMedia: vi.fn(async () => entries.clear()),
-  };
-}
-
-async function makeService(media?: BaseGroupMedia) {
+async function makeService() {
   const impl = await getCiphersuiteImpl(
     "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
     defaultCryptoProvider,
   );
   const state = await createState(impl);
   const service = new GroupMediaService({
-    media: media as BaseGroupMedia,
     getState: () => state,
     getCiphersuite: () => impl,
   });
@@ -99,9 +79,8 @@ describe("GroupMediaService", () => {
     expect(data).toEqual(plaintext);
   });
 
-  it("serves a second decrypt from the cache without re-deriving", async () => {
-    const cache = makeMediaCache();
-    const service = await makeService(cache);
+  it("re-derives and re-verifies every sequential decrypt", async () => {
+    const service = await makeService();
     const blob = new Blob([new Uint8Array([1, 2, 3, 4])], {
       type: "application/octet-stream",
     });
@@ -109,17 +88,16 @@ describe("GroupMediaService", () => {
       filename: "blob.bin",
     });
 
-    await service.decryptMedia(encrypted, attachment);
-    await service.decryptMedia(encrypted, attachment);
+    const first = await service.decryptMedia(encrypted, attachment);
+    const second = await service.decryptMedia(encrypted, attachment);
 
-    // Repeated reads must verify the bytes and metadata again.
-    expect(cache.addMedia).toHaveBeenCalledTimes(2);
-    expect(cache.getMedia).not.toHaveBeenCalled();
+    // Nothing is cached: each read decrypts (and verifies) independently.
+    expect(second).not.toBe(first);
+    expect(second.data).toEqual(first.data);
   });
 
   it("deduplicates concurrent decrypts of the same file", async () => {
-    const cache = makeMediaCache();
-    const service = await makeService(cache);
+    const service = await makeService();
     const blob = new Blob([new Uint8Array([9, 8, 7])], {
       type: "application/octet-stream",
     });
@@ -132,9 +110,9 @@ describe("GroupMediaService", () => {
       service.decryptMedia(encrypted, attachment),
     ]);
 
-    expect(a.data).toEqual(b.data);
-    // Only one in-flight decryption should reach the cache write.
-    expect(cache.addMedia).toHaveBeenCalledOnce();
+    // Both callers share the one in-flight decryption.
+    expect(a).toBe(b);
+    expect(a.data).toEqual(new Uint8Array([9, 8, 7]));
   });
 
   it("decrypts media from an older epoch after the local tip advances", async () => {
@@ -144,7 +122,6 @@ describe("GroupMediaService", () => {
     );
     const sourceState = await createState(impl);
     const sender = new GroupMediaService({
-      media: undefined as unknown as BaseGroupMedia,
       getState: () => sourceState,
       getCiphersuite: () => impl,
     });
@@ -158,7 +135,6 @@ describe("GroupMediaService", () => {
     // epoch's state is still within the retained window.
     const tip = advanceEpoch(sourceState);
     const receiver = new GroupMediaService({
-      media: undefined as unknown as BaseGroupMedia,
       getState: () => tip,
       getCiphersuite: () => impl,
       getRetainedStates: () => [tip, sourceState],
@@ -179,7 +155,6 @@ describe("GroupMediaService", () => {
     );
     const sourceState = await createState(impl);
     const sender = new GroupMediaService({
-      media: undefined as unknown as BaseGroupMedia,
       getState: () => sourceState,
       getCiphersuite: () => impl,
     });
@@ -193,7 +168,6 @@ describe("GroupMediaService", () => {
     // Only the advanced tip remains retained — the source epoch was pruned.
     const tip = advanceEpoch(sourceState);
     const receiver = new GroupMediaService({
-      media: undefined as unknown as BaseGroupMedia,
       getState: () => tip,
       getCiphersuite: () => impl,
       getRetainedStates: () => [tip],
@@ -219,9 +193,8 @@ describe("GroupMediaService", () => {
 });
 
 describe("v2 receive validation", () => {
-  it("does not let a cached ciphertext hash authenticate changed metadata", async () => {
-    const cache = makeMediaCache();
-    const service = await makeService(cache);
+  it("does not let a previously decrypted ciphertext hash authenticate changed metadata", async () => {
+    const service = await makeService();
     const { encrypted, attachment } = await service.encryptMedia(
       new Blob(["secret"], { type: "text/plain" }),
       { filename: "a.txt" },
@@ -252,7 +225,6 @@ describe("v2 receive validation", () => {
     const source = await createState(impl);
     let current = source;
     const service = new GroupMediaService({
-      media: undefined,
       getState: () => current,
       getCiphersuite: () => impl,
       getRetainedStates: () => [source],

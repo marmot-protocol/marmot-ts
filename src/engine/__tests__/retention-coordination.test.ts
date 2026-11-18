@@ -37,7 +37,7 @@ import { serializeApplicationRumor } from "../../core/application-rumor.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import type { GenericKeyValueStore } from "../../utils/key-value.js";
+import { MemoryStorage, type StorageOp } from "../../utils/storage.js";
 import {
   MarmotGroupEngine,
   type MarmotGroupEngineOptions,
@@ -56,27 +56,20 @@ function deferred() {
   return { promise, resolve };
 }
 
-class MemoryStore implements GenericKeyValueStore<Uint8Array> {
-  readonly values = new Map<string, Uint8Array>();
+/** Memory storage with hooks around every durable write (`set` and `batch`). */
+class MemoryStore extends MemoryStorage {
   beforeWrite?: () => Promise<void>;
   afterWrite?: (value: Uint8Array) => Promise<void>;
-  async getItem(key: string) {
-    return this.values.get(key)?.slice() ?? null;
-  }
-  async setItem(key: string, value: Uint8Array) {
+  override async set(key: string, value: Uint8Array) {
     await this.beforeWrite?.();
-    this.values.set(key, value.slice());
+    await super.set(key, value);
     await this.afterWrite?.(value);
-    return value;
   }
-  async removeItem(key: string) {
-    this.values.delete(key);
-  }
-  async keys() {
-    return [...this.values.keys()];
-  }
-  async clear() {
-    this.values.clear();
+  override async batch(ops: readonly StorageOp[]) {
+    await this.beforeWrite?.();
+    await super.batch(ops);
+    for (const op of ops)
+      if (op.type === "set") await this.afterWrite?.(op.value);
   }
 }
 

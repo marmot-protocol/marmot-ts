@@ -29,11 +29,10 @@ import {
 } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { ConvergenceEffectLedger } from "../../client/group/wrapper-ledger.js";
-import type { SerializedClientState } from "../../core/client-state.js";
 import { deriveStateNotifications } from "../state-notifications.js";
 import { MarmotGroupEngine } from "../group-engine.js";
 import type { GroupPeeler, IngestResult } from "../types.js";
@@ -168,7 +167,7 @@ function noNetwork(): NostrNetworkInterface {
 
 describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () => {
   it("persists exactly-once withdrawal and revalidation verdicts", async () => {
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     const digest = new Uint8Array(32).fill(7);
     const notification = {
       kind: "epochAdvanced" as const,
@@ -878,21 +877,19 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     // removal lifecycle is covered by client/group/removal-recovery.test.ts.
     const { memberEpoch1 } = await twoMemberEpoch1Group();
 
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const storage = memoryStorage();
     const idHex = bytesToHex(memberEpoch1.groupContext.groupId);
     const removedMarkerKey = `${idHex}/removed`;
     // Simulate a prior removal already realized (marker set) — exactly the
     // state `#realizeRemovalIfNeeded` leaves behind after a genuine removal.
-    await removedMarkerStore.setItem(removedMarkerKey, true);
+    await storage.set(removedMarkerKey, Uint8Array.of(1));
 
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const group = new MarmotGroup(memberEpoch1, {
-      store,
-      removedMarkerStore,
+      storage,
       signer: testAccount(11).signer,
       ciphersuite: impl,
       network: noNetwork(),
@@ -918,25 +915,23 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
 
     for await (const _ of group.ingest([])) void _;
 
-    expect(await removedMarkerStore.getItem(removedMarkerKey)).toBe(true);
+    expect(await storage.get(removedMarkerKey)).toEqual(Uint8Array.of(1));
   });
 
   it("keeps a legacy removal marker when reconverge reports an unattributed selfRemoved withdrawal", async () => {
     const { memberEpoch1 } = await twoMemberEpoch1Group();
 
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-    const removedMarkerStore = new InMemoryKeyValueStore<boolean>();
+    const storage = memoryStorage();
     const idHex = bytesToHex(memberEpoch1.groupContext.groupId);
     const removedMarkerKey = `${idHex}/removed`;
-    await removedMarkerStore.setItem(removedMarkerKey, true);
+    await storage.set(removedMarkerKey, Uint8Array.of(1));
 
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
     );
     const group = new MarmotGroup(memberEpoch1, {
-      store,
-      removedMarkerStore,
+      storage,
       signer: testAccount(11).signer,
       ciphersuite: impl,
       network: noNetwork(),
@@ -964,7 +959,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     await group.reconverge();
 
     expect(reconvergeCalls).toBe(1);
-    expect(await removedMarkerStore.getItem(removedMarkerKey)).toBe(true);
+    expect(await storage.get(removedMarkerKey)).toEqual(Uint8Array.of(1));
   });
 
   /**

@@ -3,49 +3,42 @@ import { giftWrap } from "applesauce-common/operations/gift-wrap";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { describe, expect, it, vi } from "vitest";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import type { SerializedClientState } from "../../core/client-state.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { decodeRecord } from "../../utils/record-codec.js";
+import { memoryStorage } from "../../utils/storage.js";
 import {
   InviteManager,
-  type StoredInviteEntry,
+  type ReceivedInviteRecord,
   type UnreadInvite,
 } from "../invite-manager.js";
-import type { StoredKeyPackage } from "../key-package-manager.js";
 import { MarmotClient } from "../marmot-client.js";
 
 const wire = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-/** JSON persistence also prevents Applesauce's same-object caches hiding prompts. */
-class DurableStore extends InMemoryKeyValueStore<StoredInviteEntry> {
-  override async getItem(key: string): Promise<StoredInviteEntry | null> {
-    return wire(await super.getItem(key));
-  }
-  override async setItem(
-    key: string,
-    value: StoredInviteEntry,
-  ): Promise<StoredInviteEntry> {
-    return super.setItem(key, wire(value));
-  }
-}
+const RECEIVED = "invite/received/";
+const UNREAD = "invite/unread/";
+
+/** Decodes a received-invite record written under `invite/received/`. */
+const receivedRecord = (key: string, value: Uint8Array) =>
+  key.startsWith(RECEIVED)
+    ? decodeRecord<ReceivedInviteRecord>(value)
+    : undefined;
 
 async function fixture() {
   const network = new MockNetwork();
   const aliceAccount = PrivateKeyAccount.generateNew();
   const bobAccount = PrivateKeyAccount.generateNew();
-  const store = new DurableStore();
+  // Byte storage also prevents Applesauce's same-object caches hiding prompts.
+  const store = memoryStorage();
   const alice = new MarmotClient({
     signer: aliceAccount.signer,
     network,
-    groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-    keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+    storage: memoryStorage(),
   });
   const bob = new MarmotClient({
     signer: bobAccount.signer,
     network,
     clientId: "ab".repeat(32),
-    inviteStore: store,
-    groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-    keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+    storage: store,
   });
   await bob.keyPackages.create({ relays: network.relayUrls });
   const keyPackage = network.events.find((event) => event.kind === 30443)!;
@@ -57,7 +50,7 @@ async function fixture() {
   const wrap = wire(network.events.find((event) => event.kind === 1059)!);
   group.dispose();
   const restart = () =>
-    new InviteManager({ signer: bobAccount.signer, store, network });
+    new InviteManager({ signer: bobAccount.signer, storage: store, network });
   const manager = restart();
   await manager.ingestEvent(wrap);
   return { manager, restart, store, wrap, bobAccount, aliceAccount, network };
@@ -89,14 +82,11 @@ describe("InviteManager durable recovery", () => {
   it("journals a Welcome across a failed unread write and restarts without another prompt", async () => {
     const { manager, restart, store, bobAccount, wrap } = await fixture();
     const decrypt = vi.spyOn(bobAccount.signer.nip44!, "decrypt");
-    const set = store.setItem.bind(store);
-    const fault = vi
-      .spyOn(store, "setItem")
-      .mockImplementation((key, value) => {
-        if (key.startsWith("unread:"))
-          return Promise.reject(new Error("Quota"));
-        return set(key, value);
-      });
+    const set = store.set.bind(store);
+    const fault = vi.spyOn(store, "set").mockImplementation((key, value) => {
+      if (key.startsWith(UNREAD)) return Promise.reject(new Error("Quota"));
+      return set(key, value);
+    });
     expect(await manager.decryptGiftWraps()).toEqual([]);
     expect(decrypt).toHaveBeenCalledTimes(2);
     expect(await manager.getUnread()).toEqual([]);
@@ -116,13 +106,11 @@ describe("InviteManager durable recovery", () => {
   it("automatically resumes a journaled unread write on startup without another prompt", async () => {
     const { manager, restart, store, bobAccount, network } = await fixture();
     const decrypt = vi.spyOn(bobAccount.signer.nip44!, "decrypt");
-    const set = store.setItem.bind(store);
-    const fault = vi
-      .spyOn(store, "setItem")
-      .mockImplementation((key, value) => {
-        if (key.startsWith("unread:")) return Promise.reject(new Error("Busy"));
-        return set(key, value);
-      });
+    const set = store.set.bind(store);
+    const fault = vi.spyOn(store, "set").mockImplementation((key, value) => {
+      if (key.startsWith(UNREAD)) return Promise.reject(new Error("Busy"));
+      return set(key, value);
+    });
     expect(await manager.decryptGiftWraps()).toEqual([]);
     expect(decrypt).toHaveBeenCalledTimes(2);
     fault.mockRestore();
@@ -157,12 +145,12 @@ describe("InviteManager durable recovery", () => {
   it("requires explicit retry after interruption at the durable attempt marker", async () => {
     const { manager, restart, store, bobAccount, network } = await fixture();
     const decrypt = vi.spyOn(bobAccount.signer.nip44!, "decrypt");
-    const set = store.setItem.bind(store);
+    const set = store.set.bind(store);
     const fault = vi
-      .spyOn(store, "setItem")
+      .spyOn(store, "set")
       .mockImplementation(async (key, value) => {
         const result = await set(key, value);
-        if (value.type === "received" && value.attempted)
+        if (receivedRecord(key, value)?.attempted)
           throw new Error("Interrupted before prompting");
         return result;
       });
@@ -179,14 +167,12 @@ describe("InviteManager durable recovery", () => {
 
   it("retains the encrypted source when writing the transition journal fails", async () => {
     const { manager, restart, store, wrap } = await fixture();
-    const set = store.setItem.bind(store);
-    const fault = vi
-      .spyOn(store, "setItem")
-      .mockImplementation((key, value) => {
-        if (value.type === "received" && value.rumor)
-          return Promise.reject(new Error("Journal unavailable"));
-        return set(key, value);
-      });
+    const set = store.set.bind(store);
+    const fault = vi.spyOn(store, "set").mockImplementation((key, value) => {
+      if (receivedRecord(key, value)?.rumor)
+        return Promise.reject(new Error("Journal unavailable"));
+      return set(key, value);
+    });
     expect(await manager.decryptGiftWraps()).toEqual([]);
     expect(await manager.getReceived()).toEqual([wire(wrap)]);
     expect(await manager.getUnread()).toEqual([]);
@@ -198,7 +184,7 @@ describe("InviteManager durable recovery", () => {
     const { manager, restart, store, bobAccount, wrap } = await fixture();
     const decrypt = vi.spyOn(bobAccount.signer.nip44!, "decrypt");
     const fault = vi
-      .spyOn(store, "removeItem")
+      .spyOn(store, "delete")
       .mockRejectedValueOnce(new Error("Busy"));
     const notified = vi.fn();
     manager.on("decrypted", notified);
@@ -219,11 +205,11 @@ describe("InviteManager durable recovery", () => {
 
   it("does not resurrect a read invite when an unfinished source cleanup exists", async () => {
     const { manager, restart, store, wrap } = await fixture();
-    const remove = store.removeItem.bind(store);
+    const remove = store.delete.bind(store);
     const fault = vi
-      .spyOn(store, "removeItem")
+      .spyOn(store, "delete")
       .mockImplementation((key) =>
-        key.startsWith("received:")
+        key.startsWith(RECEIVED)
           ? Promise.reject(new Error("Busy"))
           : remove(key),
       );
@@ -241,14 +227,13 @@ describe("InviteManager durable recovery", () => {
   it("resumes an interruption immediately after unread persistence without duplicate notifications", async () => {
     const { manager, restart, store, bobAccount } = await fixture();
     const decrypt = vi.spyOn(bobAccount.signer.nip44!, "decrypt");
-    const set = store.setItem.bind(store);
+    const set = store.set.bind(store);
     // A write took effect but the caller never observed its acknowledgement.
     const fault = vi
-      .spyOn(store, "setItem")
+      .spyOn(store, "set")
       .mockImplementation(async (key, value) => {
         const result = await set(key, value);
-        if (key.startsWith("unread:"))
-          throw new Error("Interrupted after write");
+        if (key.startsWith(UNREAD)) throw new Error("Interrupted after write");
         return result;
       });
     expect(await manager.decryptGiftWraps()).toEqual([]);
@@ -272,12 +257,12 @@ describe("InviteManager durable recovery", () => {
       manager.on("decrypted", notified);
       const watcher = manager.watchUnread();
       expect((await watcher.next()).value).toEqual([]);
-      const set = store.setItem.bind(store);
+      const set = store.set.bind(store);
       const fault = vi
-        .spyOn(store, "setItem")
+        .spyOn(store, "set")
         .mockImplementation(async (key, value) => {
           const result = await set(key, value);
-          if (key.startsWith("unread:"))
+          if (key.startsWith(UNREAD))
             throw new Error("Write acknowledgement lost");
           return result;
         });
@@ -285,9 +270,7 @@ describe("InviteManager durable recovery", () => {
         expect(await manager.decryptGiftWraps()).toEqual([]);
         fault.mockRestore();
         if (cleanupFails)
-          vi.spyOn(store, "removeItem").mockRejectedValueOnce(
-            new Error("Busy"),
-          );
+          vi.spyOn(store, "delete").mockRejectedValueOnce(new Error("Busy"));
         let snapshot: UnreadInvite[] | undefined;
         const next = watcher.next().then((result) => {
           if (!result.done) snapshot = result.value;
@@ -359,7 +342,7 @@ describe("InviteManager durable recovery", () => {
     const { manager, store, bobAccount } = await fixture();
     const decrypt = vi.spyOn(bobAccount.signer.nip44!, "decrypt");
     const fault = vi
-      .spyOn(store, "setItem")
+      .spyOn(store, "set")
       .mockRejectedValue(new Error("Offline storage"));
     expect(await manager.decryptGiftWraps()).toEqual([]);
     expect(decrypt).not.toHaveBeenCalled();
@@ -389,7 +372,7 @@ describe("InviteManager durable recovery", () => {
       await manager.ingestEvent(invalid);
       const decrypt = vi.spyOn(bobAccount.signer.nip44!, "decrypt");
       const fault = vi
-        .spyOn(store, "removeItem")
+        .spyOn(store, "delete")
         .mockRejectedValueOnce(new Error("Cleanup failed"));
       const errors = vi.fn();
       const notified = vi.fn();

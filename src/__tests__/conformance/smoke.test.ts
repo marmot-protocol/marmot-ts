@@ -14,7 +14,7 @@ import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { testAccount } from "../helpers/test-accounts.js";
 import { MarmotConformanceSubject, parseMdkScenarioStep } from "./subject.js";
 
@@ -146,8 +146,7 @@ describe("portable MDK conformance smoke corpus", () => {
     const network = new MockNetwork();
     network.autoDeliver = false;
     const group = new MarmotGroup(clientState, {
-      store: new InMemoryKeyValueStore(),
-      ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
+      storage: memoryStorage(),
       signer: account.signer,
       ciphersuite,
       network,

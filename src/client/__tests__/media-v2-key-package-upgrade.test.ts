@@ -15,11 +15,8 @@ import {
   SUPPORTED_APP_COMPONENT_IDS,
   getAppComponents,
 } from "../../core/components/index.js";
-import {
-  KeyPackageManager,
-  type StoredKeyPackage,
-} from "../key-package-manager.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { KeyPackageManager } from "../key-package-manager.js";
+import { memoryStorage } from "../../utils/storage.js";
 
 it("replaces the signed pre-media capability publication while retaining pending-Welcome secrets and installation identity", async () => {
   const account = testAccount(6);
@@ -53,7 +50,7 @@ it("replaces the signed pre-media capability publication while retaining pending
     ],
   });
   const manager = new KeyPackageManager({
-    store: new InMemoryKeyValueStore<StoredKeyPackage>(),
+    storage: memoryStorage(),
     signer: account.signer,
     network: new MockNetwork(),
     clientId: "ab".repeat(32),

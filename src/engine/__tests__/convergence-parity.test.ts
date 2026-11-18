@@ -100,7 +100,7 @@ import { MarmotGroupEngine } from "../group-engine.js";
 import { GroupHistoryTree } from "../history-tree.js";
 import { RetainedHistoryStore } from "../retained-store.js";
 import type { GroupPeeler } from "../types.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 
 function testPeeler(ciphersuite: CiphersuiteImpl): GroupPeeler<NostrEvent> {
   return {
@@ -322,7 +322,7 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
   });
   it("persists confirmation-time own evidence and abandons it on publish failure", async () => {
     const { impl, adminPubkey, adminEpoch1 } = await twoMemberEpoch1Group();
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     const peeler = testPeeler(impl);
     const engine = new MarmotGroupEngine({
       state: adminEpoch1,
@@ -377,7 +377,7 @@ describe("CONV-04 convergence parity (D-16) — own-commit protection + dual-ord
       ciphersuite: impl,
       peeler,
     });
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     engine.history.bindStore(store);
 
     const first = await engine.send({ kind: "selfUpdate" });

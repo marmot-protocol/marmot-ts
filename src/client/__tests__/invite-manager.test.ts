@@ -8,43 +8,12 @@ import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InviteManager } from "../invite-manager.js";
-import type {
-  ReceivedGiftWrap,
-  StoredInviteEntry,
-  UnreadInvite,
-} from "../invite-manager.js";
-import type { GenericKeyValueStore } from "../../utils/key-value.js";
+import type { ReceivedGiftWrap, UnreadInvite } from "../invite-manager.js";
+import { encodeRecord } from "../../utils/record-codec.js";
+import { memoryStorage, type MarmotStorage } from "../../utils/storage.js";
 import { WELCOME_EVENT_KIND } from "../../core/protocol.js";
 import { fakeVerifyEvent } from "../verify.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-
-/**
- * Simple in-memory backend for testing
- */
-class MemoryBackend<T> implements GenericKeyValueStore<T> {
-  private map = new Map<string, T>();
-
-  async getItem(key: string): Promise<T | null> {
-    return this.map.get(key) ?? null;
-  }
-
-  async setItem(key: string, value: T): Promise<T> {
-    this.map.set(key, value);
-    return value;
-  }
-
-  async removeItem(key: string): Promise<void> {
-    this.map.delete(key);
-  }
-
-  async clear(): Promise<void> {
-    this.map.clear();
-  }
-
-  async keys(): Promise<string[]> {
-    return Array.from(this.map.keys());
-  }
-}
 
 /**
  * Create a mock gift wrap event (kind 1059)
@@ -82,22 +51,29 @@ function createMockWelcomeRumor(
   };
 }
 
-/** Helper to read the seen IDs from the store */
-async function getSeenIds(
-  store: GenericKeyValueStore<StoredInviteEntry>,
-): Promise<string[]> {
-  const entry = await store.getItem("__seen");
-  if (entry && entry.type === "seen") return entry.ids;
-  return [];
+/** Helper to read the seen IDs from storage */
+async function getSeenIds(storage: MarmotStorage): Promise<string[]> {
+  return (await storage.list("invite/seen/")).map((key) =>
+    key.slice("invite/seen/".length),
+  );
+}
+
+/** Helper to store an unread invite directly */
+async function putUnread(
+  storage: MarmotStorage,
+  id: string,
+  rumor: UnreadInvite,
+): Promise<void> {
+  await storage.set(`invite/unread/${id}`, encodeRecord(rumor));
 }
 
 describe("InviteManager", () => {
-  let store: GenericKeyValueStore<StoredInviteEntry>;
+  let storage: MarmotStorage;
   let account: PrivateKeyAccount<any>;
   let inviteManager: InviteManager;
 
   beforeEach(async () => {
-    store = new MemoryBackend<StoredInviteEntry>();
+    storage = memoryStorage();
     account = PrivateKeyAccount.generateNew();
 
     // This suite's mock gift wraps (`createMockGiftWrap`) carry a fake
@@ -109,7 +85,7 @@ describe("InviteManager", () => {
     // default (real) verifier against genuinely signed events.
     inviteManager = new InviteManager({
       signer: account.signer,
-      store,
+      storage,
       network: new MockNetwork(),
       verifyEvent: fakeVerifyEvent,
     });
@@ -131,7 +107,7 @@ describe("InviteManager", () => {
       expect(received[0]).toEqual(giftWrap);
 
       // Check it's marked as seen
-      const seenIds = await getSeenIds(store);
+      const seenIds = await getSeenIds(storage);
       expect(seenIds).toContain(giftWrap.id);
     });
 
@@ -264,7 +240,7 @@ describe("InviteManager", () => {
       const unread: UnreadInvite = createMockWelcomeRumor("rumor-1", "sender");
       const id = "test-id-1";
 
-      await store.setItem(`unread:${id}`, { type: "unread", rumor: unread });
+      await putUnread(storage, id, unread);
 
       const unreadBefore = await inviteManager.getUnread();
       expect(unreadBefore).toHaveLength(1);
@@ -278,10 +254,7 @@ describe("InviteManager", () => {
     it("should emit read event", async () => {
       const unread: UnreadInvite = createMockWelcomeRumor("rumor-1", "sender");
 
-      await store.setItem(`unread:${unread.id}`, {
-        type: "unread",
-        rumor: unread,
-      });
+      await putUnread(storage, unread.id, unread);
 
       let eventEmitted = false;
       let emittedId = "";
@@ -302,10 +275,7 @@ describe("InviteManager", () => {
       // Manually add an unread invite
       const unread: UnreadInvite = createMockWelcomeRumor("rumor-1", "sender");
 
-      await store.setItem(`unread:${unread.id}`, {
-        type: "unread",
-        rumor: unread,
-      });
+      await putUnread(storage, unread.id, unread);
 
       const generator = inviteManager.watchUnread();
       const { value } = await generator.next();
@@ -318,10 +288,7 @@ describe("InviteManager", () => {
       // Add an unread invite
       const unread: UnreadInvite = createMockWelcomeRumor("rumor-1", "sender");
 
-      await store.setItem(`unread:${unread.id}`, {
-        type: "unread",
-        rumor: unread,
-      });
+      await putUnread(storage, unread.id, unread);
 
       const generator = inviteManager.watchUnread();
 
@@ -459,7 +426,7 @@ describe("InviteManager", () => {
       expect(unreadAfter).toHaveLength(0);
 
       // Seen index should NOT be cleared
-      const seenIds = await getSeenIds(store);
+      const seenIds = await getSeenIds(storage);
       expect(seenIds).toContain(giftWrap.id);
     });
   });
@@ -471,12 +438,12 @@ describe("InviteManager", () => {
 
       await inviteManager.ingestEvent(giftWrap);
 
-      const seenBefore = await getSeenIds(store);
+      const seenBefore = await getSeenIds(storage);
       expect(seenBefore).toContain(giftWrap.id);
 
       await inviteManager.clearSeen();
 
-      const seenAfter = await getSeenIds(store);
+      const seenAfter = await getSeenIds(storage);
       expect(seenAfter).toHaveLength(0);
     });
   });
@@ -509,7 +476,7 @@ describe("InviteManager", () => {
       const localAccount = PrivateKeyAccount.generateNew();
       const manager = new InviteManager({
         signer: localAccount.signer,
-        store: new MemoryBackend<StoredInviteEntry>(),
+        storage: memoryStorage(),
         network: new MockNetwork(),
         // default (real) verifyEvent
       });
@@ -535,7 +502,7 @@ describe("InviteManager", () => {
       const localAccount = PrivateKeyAccount.generateNew();
       const manager = new InviteManager({
         signer: localAccount.signer,
-        store: new MemoryBackend<StoredInviteEntry>(),
+        storage: memoryStorage(),
         network: new MockNetwork(),
         verifyEvent: fakeVerifyEvent,
       });
@@ -571,7 +538,7 @@ describe("InviteManager", () => {
     function makeRealVerifierManager(): InviteManager {
       return new InviteManager({
         signer: PrivateKeyAccount.generateNew().signer,
-        store: new MemoryBackend<StoredInviteEntry>(),
+        storage: memoryStorage(),
         network: new MockNetwork(),
         // default (real) verifyEvent
       });

@@ -1,30 +1,20 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { describe, expect, it, vi } from "vitest";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { MarmotClient } from "../marmot-client.js";
 import type { StoredKeyPackage } from "../key-package-manager.js";
-import type { SerializedClientState } from "../../core/client-state.js";
 import type { UnreadInvite } from "../invite-manager.js";
-import { GroupRumorHistory } from "../group/group-rumor-history.js";
-import { GroupMediaStore } from "../group/group-media-store.js";
+import { GroupHistory } from "../group/group-history.js";
 
 function fixture() {
-  const store = new InMemoryKeyValueStore<StoredKeyPackage>();
+  const storage = memoryStorage();
   const client = new MarmotClient({
-    groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-    keyPackageStore: store,
+    storage,
     signer: PrivateKeyAccount.generateNew().signer,
     network: new MockNetwork(),
   });
-  const backend = {
-    queryRumors: async () => [],
-    addRumor: async () => {},
-    removeRumor: async () => {},
-    clear: async () => {},
-  };
-  const history = new GroupRumorHistory(backend);
-  const media = new GroupMediaStore();
+  const history = new GroupHistory();
   return [
     {
       name: "key packages",
@@ -32,7 +22,7 @@ function fixture() {
         client.keyPackages.watchKeyPackages({ signal }),
       count: () => client.keyPackages.listenerCount("updated"),
       changed: () => client.keyPackages.emit("updated", {} as StoredKeyPackage),
-      block: () => vi.spyOn(store, "keys"),
+      block: () => vi.spyOn(storage, "list"),
     },
     {
       name: "unread invites",
@@ -60,14 +50,7 @@ function fixture() {
       watch: (signal?: AbortSignal) => history.subscribe(undefined, { signal }),
       count: () => history.listenerCount("cleared"),
       changed: () => history.emit("cleared"),
-      block: () => vi.spyOn(backend, "queryRumors"),
-    },
-    {
-      name: "media",
-      watch: (signal?: AbortSignal) => media.subscribe({ signal }),
-      count: () => media.listenerCount("cleared"),
-      changed: () => media.emit("cleared"),
-      block: () => vi.spyOn(media, "listMedia"),
+      block: () => vi.spyOn(history, "queryRumors"),
     },
   ];
 }
@@ -160,7 +143,7 @@ describe("public watcher cancellation", () => {
       f.changed();
       resolve([]);
       expect((await first).done).toBe(false);
-      // History and media discard overtaken queries; the other watchers emit another
+      // History discards overtaken queries; the other watchers emit another
       // current snapshot on the next pull.
       if (index < 4) expect((await watcher.next()).done).toBe(false);
       await watcher.return(undefined);
@@ -195,8 +178,7 @@ describe("public watcher cancellation", () => {
 
   it("annotated invitations refresh joinability on key package changes", async () => {
     const client = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: PrivateKeyAccount.generateNew().signer,
       network: new MockNetwork(),
     });
@@ -218,8 +200,7 @@ describe("public watcher cancellation", () => {
 
   it("annotated invitations cancel during validation", async () => {
     const client = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: PrivateKeyAccount.generateNew().signer,
       network: new MockNetwork(),
     });

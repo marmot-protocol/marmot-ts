@@ -18,7 +18,7 @@ import {
   encodeMediaImetaTag,
   mediaSourceStateToken,
 } from "../../../core/media.js";
-import { InMemoryKeyValueStore } from "../../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../../utils/storage.js";
 import { GroupRegistry } from "../../group-registry.js";
 import { MarmotGroup } from "../marmot-group.js";
 import {
@@ -45,9 +45,7 @@ async function setup() {
     ]),
   });
   const options = {
-    store: new InMemoryKeyValueStore<Uint8Array>(),
-    rewindStore: new InMemoryKeyValueStore<Uint8Array>(),
-    ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
+    storage: memoryStorage(),
     signer: account.signer,
     ciphersuite,
     network: new MockNetwork(),
@@ -175,10 +173,7 @@ describe("source-bound v2 transfer", () => {
       await advance();
       await group.save(true);
       group.dispose();
-      const registry = new GroupRegistry({
-        ...options,
-        lifecycleStore: new InMemoryKeyValueStore<Uint8Array>(),
-      });
+      const registry = new GroupRegistry(options);
       restarted = await registry.get(group.id);
       const source = await restarted.session.mediaSourceForRumor(
         prepared.rumor.id,
@@ -255,9 +250,7 @@ describe("source-bound v2 transfer", () => {
       });
       peer = new MarmotGroup(joined, {
         ...options,
-        store: new InMemoryKeyValueStore<Uint8Array>(),
-        rewindStore: new InMemoryKeyValueStore<Uint8Array>(),
-        ingestStateStore: new InMemoryKeyValueStore<Uint8Array>(),
+        storage: memoryStorage(),
         signer: member.signer,
       });
       const prepared = await prepareMediaMessage(peer, files, {
@@ -275,10 +268,7 @@ describe("source-bound v2 transfer", () => {
       }
       await group.save(true);
       group.dispose();
-      const registry = new GroupRegistry({
-        ...options,
-        lifecycleStore: new InMemoryKeyValueStore<Uint8Array>(),
-      });
+      const registry = new GroupRegistry(options);
       restarted = await registry.get(group.id);
       const source = await restarted.session.mediaSourceForRumor(
         prepared.rumor.id,

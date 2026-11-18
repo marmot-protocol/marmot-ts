@@ -7,11 +7,9 @@ import {
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { MarmotClient } from "../../client/marmot-client.js";
-import type { StoredKeyPackage } from "../../client/key-package-manager.js";
-import { SerializedClientState } from "../../core/client-state.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 
 const RELAYS = ["wss://mock-relay.test"];
 const INBOX = ["wss://mock-inbox.test"];
@@ -35,15 +33,13 @@ describe("invites.listen + keyPackages.ensurePublished", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "cd".repeat(32),

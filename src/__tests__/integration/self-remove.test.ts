@@ -16,13 +16,12 @@ import { describe, expect, it } from "vitest";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import type { IngestResult } from "../../client/session/group-session.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
-import { SerializedClientState } from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
 import { createGroupEvent } from "../../core/group-message.js";
 import { getGroupMembers } from "../../core/group-members.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://relay.test";
@@ -54,7 +53,7 @@ function marmotGroup(
   network: NostrNetworkInterface = recordingNetwork(published),
 ) {
   return new MarmotGroup(state, {
-    store: new InMemoryKeyValueStore<SerializedClientState>(),
+    storage: memoryStorage(),
     signer: {
       getPublicKey: async () => pubkey,
       signEvent: async () => {

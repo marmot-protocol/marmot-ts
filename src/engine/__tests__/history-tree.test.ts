@@ -27,7 +27,7 @@ import { isAppPayloadExpired } from "../../core/retained-history.js";
 import { deriveMediaEncryptionKey } from "../../core/media/crypto.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 import { GroupHistoryTree } from "../history-tree.js";
 import { retentionFloor } from "../retention.js";
 import { buildTreeBranchSet } from "../tree-convergence.js";
@@ -202,7 +202,7 @@ describe("GroupHistoryTree", () => {
 
   it("pins exact old topology and producing evidence until release, then keeps below/equal/above boundary adjacency", async () => {
     const { tree, tags, oldForkTag } = await extendedFork();
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
     const options = {
       canonicalTipTag: tags.at(-1)!,
@@ -243,14 +243,14 @@ describe("GroupHistoryTree", () => {
     const rootTag = tree.rootTag!;
     const a = tree.recordCommit(rootTag, commitA, childA);
     const b = tree.recordCommit(rootTag, commitB, childB);
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
     await tree.flush();
     const gid = bytesToHex(memberE1.groupContext.groupId);
-    const keys = store.keys.bind(store);
-    store.keys = async () => (await keys()).reverse();
+    const list = store.list.bind(store);
+    store.list = async (prefix) => (await list(prefix)).reverse();
     const first = (await GroupHistoryTree.load(store, gid))!;
-    store.keys = keys;
+    store.list = list;
     const second = (await GroupHistoryTree.load(store, gid))!;
     expect(first.childrenOf(rootTag)).toEqual(second.childrenOf(rootTag));
     const before = buildTreeBranchSet(first, a, DEFAULT_CONVERGENCE_POLICY);
@@ -261,7 +261,7 @@ describe("GroupHistoryTree", () => {
         appPayloadPastEpochLimit: 0,
       }),
     );
-    store.keys = async () => (await keys()).reverse();
+    store.list = async (prefix) => (await list(prefix)).reverse();
     const loaded = (await GroupHistoryTree.load(store, gid))!;
     expect(loaded.childrenOf(rootTag)).toEqual(first.childrenOf(rootTag));
     expect(buildTreeBranchSet(loaded, a, DEFAULT_CONVERGENCE_POLICY)).toEqual(
@@ -281,7 +281,7 @@ describe("GroupHistoryTree", () => {
     await empty.publishRetention(emptyPlan);
     const { memberE1 } = await buildFork(impl);
     const single = new GroupHistoryTree(memberE1);
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     single.bindStore(store);
     const plan = await single.prepareRetention({
       canonicalTipTag: single.rootTag!,
@@ -324,7 +324,7 @@ describe("GroupHistoryTree", () => {
       stamp,
     );
     const all = tree.tags();
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
     await tree.publishRetention(
       await tree.prepareRetention({
@@ -379,7 +379,7 @@ describe("GroupHistoryTree", () => {
     });
     const tip = (await tree.stateAt(tags.at(-1)!))!;
     const live = serializeClientState(tip);
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
     await tree.publishRetention(
       await tree.prepareRetention({
@@ -424,7 +424,7 @@ describe("GroupHistoryTree", () => {
     const tipTag = tags.at(-1)!;
     const tip = (await tree.stateAt(tipTag))!;
     const sourceEpoch = 3;
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
     const options = {
       canonicalTipTag: tipTag,
@@ -553,7 +553,7 @@ describe("GroupHistoryTree", () => {
       maxRewindCommits: 2,
       appPayloadPastEpochLimit: 0,
     };
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
     await tree.publishRetention(await tree.prepareRetention(options));
     await tree.resumeRetentionCleanup();
@@ -614,7 +614,7 @@ describe("GroupHistoryTree", () => {
   it("fails closed on corrupt authoritative closure, boundary, receiver allowlists and required commit bytes", async () => {
     const { tree, tags } = await extendedFork();
     const gid = bytesToHex((await tree.stateAt(tags[0]))!.groupContext.groupId);
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
     await tree.publishRetention(
       await tree.prepareRetention({
@@ -624,7 +624,7 @@ describe("GroupHistoryTree", () => {
       }),
     );
     await tree.resumeRetentionCleanup();
-    const original = (await store.getItem(`${gid}/meta`))!;
+    const original = (await store.get(`${gid}/tree/meta`))!;
     type CheckpointFixture = {
       boundary: { digest: string };
       garbage: string[];
@@ -654,17 +654,17 @@ describe("GroupHistoryTree", () => {
       const bytes = new Uint8Array(json.length + 1);
       bytes[0] = 2;
       bytes.set(json, 1);
-      await store.setItem(`${gid}/meta`, bytes);
+      await store.set(`${gid}/tree/meta`, bytes);
       await expect(GroupHistoryTree.load(store, gid)).rejects.toThrow();
     }
-    await store.setItem(`${gid}/meta`, original);
-    await store.setItem(`${gid}/commit/${tags[5]}`, Uint8Array.of(1));
+    await store.set(`${gid}/tree/meta`, original);
+    await store.set(`${gid}/tree/commit/${tags[5]}`, Uint8Array.of(1));
     await expect(GroupHistoryTree.load(store, gid)).rejects.toThrow();
   });
 
   it("fences tree mutation throughout publication and retains failed dirty writes for retry", async () => {
     const { tree, tags } = await extendedFork();
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
     const plan = await tree.prepareRetention({
       canonicalTipTag: tags.at(-1)!,
@@ -672,7 +672,8 @@ describe("GroupHistoryTree", () => {
       appPayloadPastEpochLimit: 0,
     });
     const state = (await tree.stateAt(tags.at(-1)!))!;
-    const original = store.setItem.bind(store);
+    // The pre-publication flush commits as one batch; fail that batch.
+    const original = store.batch.bind(store);
     let release!: () => void;
     let entered!: () => void;
     const waiting = new Promise<void>((resolve) => {
@@ -682,14 +683,14 @@ describe("GroupHistoryTree", () => {
       release = resolve;
     });
     let first = true;
-    store.setItem = async (key, bytes) => {
+    store.batch = async (ops) => {
       if (first) {
         first = false;
         entered();
         await blocked;
         throw new Error("write failed");
       }
-      return original(key, bytes);
+      return original(ops);
     };
     const publication = tree.publishRetention(plan);
     await waiting;
@@ -699,7 +700,7 @@ describe("GroupHistoryTree", () => {
     release();
     await expect(publication).rejects.toThrow("write failed");
     expect(tree.isDirty).toBe(true);
-    store.setItem = original;
+    store.batch = original;
     await tree.flush();
     expect(tree.isDirty).toBe(false);
     tree.updateSnapshot(tags.at(-1)!, state);
@@ -709,9 +710,10 @@ describe("GroupHistoryTree", () => {
   it("keeps a snapshot generation dirtied during an awaited flush retryable", async () => {
     const { memberE1 } = await buildFork(impl);
     const tree = new GroupHistoryTree(memberE1);
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
-    const original = store.setItem.bind(store);
+    // Block the flush's atomic batch while it carries a snapshot write.
+    const original = store.batch.bind(store);
     let release!: () => void;
     let entered!: () => void;
     const waiting = new Promise<void>((resolve) => {
@@ -721,13 +723,13 @@ describe("GroupHistoryTree", () => {
       release = resolve;
     });
     let first = true;
-    store.setItem = async (key, bytes) => {
-      if (first && key.includes("/state/")) {
+    store.batch = async (ops) => {
+      if (first && ops.some((op) => op.key.includes("/tree/state/"))) {
         first = false;
         entered();
         await blocked;
       }
-      return original(key, bytes);
+      return original(ops);
     };
     const flushing = tree.flush();
     await waiting;
@@ -740,8 +742,8 @@ describe("GroupHistoryTree", () => {
     expect(tree.isDirty).toBe(true);
     await tree.flush();
     expect(
-      await store.getItem(
-        `${bytesToHex(memberE1.groupContext.groupId)}/state/${tree.rootTag}`,
+      await store.get(
+        `${bytesToHex(memberE1.groupContext.groupId)}/tree/state/${tree.rootTag}`,
       ),
     ).toEqual(serializeClientState(changed));
     expect(tree.isDirty).toBe(false);
@@ -809,7 +811,7 @@ describe("GroupHistoryTree", () => {
       childTag,
     );
 
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
     await tree.flush();
     const restored = (await GroupHistoryTree.load(
@@ -848,7 +850,7 @@ describe("GroupHistoryTree", () => {
     const tagA = tree.recordCommit(rootTag, commitA, childA);
     const tagB = tree.recordCommit(rootTag, commitB, childB);
 
-    const store = new InMemoryKeyValueStore<Uint8Array>();
+    const store = memoryStorage();
     tree.bindStore(store);
     expect(tree.isDirty).toBe(true);
     await tree.flush();

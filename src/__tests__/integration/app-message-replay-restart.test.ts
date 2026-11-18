@@ -18,7 +18,6 @@ import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import {
   deserializeClientState,
   serializeClientState,
-  SerializedClientState,
 } from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
 import {
@@ -27,7 +26,7 @@ import {
 } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage, StorageBatch } from "../../utils/storage.js";
 import { testAccount } from "../helpers/test-accounts.js";
 import { TerminalWrapperLedger } from "../../client/group/wrapper-ledger.js";
 import restartFaultFixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/restart-delivery-faults.v1.json" with { type: "json" };
@@ -141,15 +140,13 @@ describe("application message replay across restart", () => {
       state: bobState,
       ciphersuite: impl,
     });
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
+    const storage = memoryStorage();
     const groupId = bytesToHex(add.newState.groupContext.groupId);
-    await store.setItem(groupId, serializeClientState(add.newState));
+    await storage.set(`${groupId}/state`, serializeClientState(add.newState));
     const restarted = new MarmotGroup(
-      deserializeClientState((await store.getItem(groupId))!),
+      deserializeClientState((await storage.get(`${groupId}/state`))!),
       {
-        store,
-        ingestStateStore,
+        storage,
         signer: aliceAccount.signer,
         ciphersuite: impl,
         network: NETWORK,
@@ -170,28 +167,36 @@ describe("application message replay across restart", () => {
     });
     expect(snapshot.leaves).toHaveLength(expected.member_count);
   });
-  it("recovers a prepared wrapper on either side of the canonical-state write", async () => {
-    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
-    const ledger = new TerminalWrapperLedger(ingestStateStore, "group");
+  it("makes a wrapper record durable only with the batch that commits its state", async () => {
+    const storage = memoryStorage();
+    const ledger = new TerminalWrapperLedger(storage, "group");
+    const event = "a".repeat(64);
 
-    await ledger.begin("event", "state-before");
-    // Crash before canonical state: the identical durable state retries.
-    expect(await ledger.get("event", "state-before")).toBeUndefined();
-    // An unrelated durable state change is not evidence that this wrapper was
-    // applied and must never suppress it.
-    expect(await ledger.get("event", "unrelated-state")).toBeUndefined();
-    await ledger.stageApplied(
-      "event",
-      "state-before",
-      "state-after",
-      "accepted",
-    );
-    expect(await ledger.get("event", "unrelated-state")).toBeUndefined();
-    // Only this wrapper's exact bound result state suppresses replay after a
-    // crash between canonical persistence and terminalization.
-    expect(await ledger.get("event", "state-after")).toBe("accepted");
-    await ledger.record("event", "accepted");
-    expect(await ledger.get("event", "state-before")).toBe("accepted");
+    // A record staged with its producing state is invisible until the batch
+    // commits: a crash before the canonical-state write retries the wrapper.
+    const failing = new StorageBatch({
+      get: (key) => storage.get(key),
+      set: (key, value) => storage.set(key, value),
+      delete: (key) => storage.delete(key),
+      list: (prefix) => storage.list(prefix),
+      batch: async () => {
+        throw new Error("crash before commit");
+      },
+    });
+    ledger.stage(failing, event, "accepted", 1);
+    failing.set("group/state", Uint8Array.of(1));
+    await expect(failing.commit()).rejects.toThrow("crash before commit");
+    expect(await ledger.get(event)).toBeUndefined();
+    expect(await storage.get("group/state")).toBeUndefined();
+
+    // Committed atomically with the state it produced, it suppresses replay.
+    const batch = new StorageBatch(storage);
+    ledger.stage(batch, event, "accepted", 1);
+    batch.set("group/state", Uint8Array.of(1));
+    expect(await ledger.get(event)).toBeUndefined();
+    await batch.commit();
+    expect(await ledger.get(event)).toBe("accepted");
+    expect(await storage.get("group/state")).toEqual(Uint8Array.of(1));
   });
 
   it("does not re-process a terminal wrapper when the ingest ledger is reloaded", async () => {
@@ -261,15 +266,13 @@ describe("application message replay across restart", () => {
       ciphersuite: impl,
     });
 
-    const store = new InMemoryKeyValueStore<SerializedClientState>();
-    const ingestStateStore = new InMemoryKeyValueStore<Uint8Array>();
+    const storage = memoryStorage();
     const signer = adminAccount.signer;
 
     // Session 1: the admin delivers the message exactly once. Ingest persists the
-    // advanced ratchet state to `store`.
+    // advanced ratchet state to `storage`.
     const first = new MarmotGroup(adminEpoch1, {
-      store,
-      ingestStateStore,
+      storage,
       signer,
       ciphersuite: impl,
       network: NETWORK,
@@ -279,11 +282,10 @@ describe("application message replay across restart", () => {
     first.dispose();
 
     // "Restart": rehydrate canonical state and reuse terminal wrapper evidence.
-    const persisted = await store.getItem(groupId);
+    const persisted = await storage.get(`${groupId}/state`);
     expect(persisted).toBeDefined();
     const reloaded = new MarmotGroup(deserializeClientState(persisted!), {
-      store,
-      ingestStateStore,
+      storage,
       signer,
       ciphersuite: impl,
       network: NETWORK,

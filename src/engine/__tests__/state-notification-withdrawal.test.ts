@@ -32,7 +32,7 @@ import { generateKeyPackage } from "../../core/key-package.js";
 import { memoryStorage } from "../../utils/storage.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { ConvergenceEffectLedger } from "../../client/group/wrapper-ledger.js";
+import { ConvergenceEffectLedger } from "../../client/storage/wrapper-ledger.js";
 import { deriveStateNotifications } from "../state-notifications.js";
 import { MarmotGroupEngine } from "../group-engine.js";
 import type { GroupPeeler, IngestResult } from "../types.js";

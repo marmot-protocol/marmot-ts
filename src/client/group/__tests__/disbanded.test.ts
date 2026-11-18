@@ -19,7 +19,7 @@ import { generateKeyPackage } from "../../../core/key-package.js";
 import { memoryStorage } from "../../../utils/storage.js";
 import { GroupTerminalError, MarmotGroup } from "../marmot-group.js";
 import { MockNetwork } from "../../../__tests__/helpers/mock-network.js";
-import { GroupRegistry } from "../../group-registry.js";
+import { GroupRegistry } from "../../storage/group-registry.js";
 import {
   decodeDisbandTombstone,
   disbandTombstoneKey,

@@ -64,7 +64,7 @@ import {
   GROUP_PREFIX,
   KEY_PACKAGE_PREFIX,
   groupKeys,
-} from "../storage-keys.js";
+} from "../storage/storage-keys.js";
 
 /** Every key and value under `prefix`, copied. */
 async function snapshot(storage: MemoryStorage, prefix: string) {

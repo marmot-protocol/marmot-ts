@@ -38,6 +38,19 @@ const client = new MarmotClient({ signer, network, storage });
 
 Destroying or leaving a group deletes everything under its `group/<groupId>/` prefix. Values contain MLS secrets and private keys: protect the storage the way you would protect a signing key.
 
+## Client storage modules
+
+The client storage code lives in `src/client/storage`. The package’s `/client` entry point exposes the shared adapter contract, adapter helpers, and group message history API. The internal modules divide responsibility as follows.
+
+| Module                                                                  | Responsibility                                                       |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `group-registry.ts`                                                     | Loads persisted groups and tracks live instances.                    |
+| `storage-keys.ts`, `record-codec.ts`                                    | Define client record keys and encode structured records as bytes.    |
+| `key-package-store.ts`                                                  | Persists local key packages and their consumption receipts.          |
+| `backfill-cursor.ts`, `wrapper-ledger.ts`, `delivered-payload-store.ts` | Persist backfill progress, replay markers, and delivery evidence.    |
+| `pending-publication.ts`                                                | Persists pending commits so publication can resume after a restart.  |
+| `group-history.ts`                                                      | Exposes decrypted message history backed by a per-group rumor store. |
+
 ## Requirements for durable adapters
 
 - Resolve `set`, `delete` and `batch` only after the change is durable.

@@ -1,8 +1,8 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import type { StateNotification } from "../../engine/state-notifications.js";
-import { decodeRecord, encodeRecord } from "../../utils/record-codec.js";
-import type { MarmotStorage, StorageBatch } from "../../utils/storage.js";
-import { groupKeys } from "../storage-keys.js";
+import { decodeRecord, encodeRecord } from "./record-codec.js";
+import type { MarmotStorage, StorageBatch } from "./storage.js";
+import { groupKeys } from "./storage-keys.js";
 
 export type TerminalWrapperOutcome = "accepted" | "stale" | "invalidated";
 

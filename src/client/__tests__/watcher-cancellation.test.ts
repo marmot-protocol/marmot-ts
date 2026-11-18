@@ -5,7 +5,7 @@ import { memoryStorage } from "../../utils/storage.js";
 import { MarmotClient } from "../marmot-client.js";
 import type { StoredKeyPackage } from "../key-package-manager.js";
 import type { UnreadInvite } from "../invite-manager.js";
-import { GroupHistory } from "../group/group-history.js";
+import { GroupHistory } from "../storage/group-history.js";
 
 function fixture() {
   const storage = memoryStorage();

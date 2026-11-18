@@ -23,7 +23,7 @@ import {
   KEY_PACKAGE_MLS_VERSION_TAG,
 } from "../core/protocol.js";
 import { logger } from "../utils/debug.js";
-import type { MarmotStorage } from "../utils/storage.js";
+import type { MarmotStorage } from "./storage/storage.js";
 import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import {
   isLifetimeCurrentWithGrace,
@@ -47,7 +47,7 @@ import {
   LocalKeyPackage,
   StoredKeyPackage,
   WelcomeKeyPackageCandidate,
-} from "./key-package-store.js";
+} from "./storage/key-package-store.js";
 import { NostrNetworkInterface } from "./nostr-interface.js";
 import {
   defaultVerifyEvent,
@@ -73,7 +73,7 @@ export {
   type StoredKeyPackage,
   type TrackedKeyPackage,
   type WelcomeKeyPackageCandidate,
-} from "./key-package-store.js";
+} from "./storage/key-package-store.js";
 export {
   KeyPackagePublisher,
   type KeyPackagePublisherOptions,

@@ -32,7 +32,6 @@ export type {
 export type { GroupPublishResult as GroupImagePublicationResult } from "../session/group-effects.js";
 
 export * from "./marmot-group.js";
-export * from "./group-history.js";
 export type { WelcomeRecipient } from "../transport/nostr/welcome-delivery.js";
 
 export * from "./media-transfer.js";

@@ -10,7 +10,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { GroupRegistry } from "../../client/group-registry.js";
+import { GroupRegistry } from "../../client/storage/group-registry.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import { createCredential } from "../../core/credential.js";
 import { getPubkeyLeafNodeIndexes } from "../../core/group-members.js";

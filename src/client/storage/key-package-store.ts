@@ -9,22 +9,22 @@ import {
   PrivateKeyPackage,
 } from "ts-mls";
 
-import { validateKeyPackageAccountIdentityProof } from "../core/components/account-identity-proof.js";
+import { validateKeyPackageAccountIdentityProof } from "../../core/components/account-identity-proof.js";
 import {
   getKeyPackage,
   getKeyPackageIdentifier,
-} from "../core/key-package-event.js";
+} from "../../core/key-package-event.js";
 import {
   calculateKeyPackageRef,
   isReusableKeyPackage,
-} from "../core/key-package.js";
-import { validateKeyPackageSlot } from "../core/key-package-event-encode.js";
-import { isValidRelayUrl, normalizeRelayUrl } from "../utils/relay-url.js";
-import { logger } from "../utils/debug.js";
-import { RecordStore } from "../utils/record-codec.js";
-import type { MarmotStorage } from "../utils/storage.js";
+} from "../../core/key-package.js";
+import { validateKeyPackageSlot } from "../../core/key-package-event-encode.js";
+import { isValidRelayUrl, normalizeRelayUrl } from "../../utils/relay-url.js";
+import { logger } from "../../utils/debug.js";
+import { RecordStore } from "./record-codec.js";
+import type { MarmotStorage } from "./storage.js";
 import { KEY_PACKAGE_PREFIX } from "./storage-keys.js";
-import { deduplicatePublishedEvents } from "./key-package-events.js";
+import { deduplicatePublishedEvents } from "../key-package-events.js";
 
 /** Local transport destinations, never derived from signed event tags. */
 export function normalizeKeyPackageRelays(relays: readonly string[]): string[] {

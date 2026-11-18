@@ -37,7 +37,7 @@ import {
   disbandRequestKey,
   encodeDisbandRequest,
 } from "../../engine/disband-request.js";
-import { GROUP_PREFIX, groupKeys } from "../storage-keys.js";
+import { GROUP_PREFIX, groupKeys } from "../storage/storage-keys.js";
 
 const SUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
 // Legacy `marmot.account-identity-proof.v2` custom LeafNode extension

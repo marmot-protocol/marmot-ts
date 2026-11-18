@@ -1,7 +1,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { describe, expect, it } from "vitest";
-import { decodeRecord } from "../../../utils/record-codec.js";
-import { memoryStorage, StorageBatch } from "../../../utils/storage.js";
+import { decodeRecord } from "../record-codec.js";
+import { memoryStorage, StorageBatch } from "../storage.js";
 import {
   ConvergenceEffectLedger,
   TerminalWrapperLedger,

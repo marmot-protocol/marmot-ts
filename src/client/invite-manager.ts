@@ -11,9 +11,9 @@ import {
 import { EventEmitter } from "eventemitter3";
 import { WELCOME_EVENT_KIND } from "../core/protocol.js";
 import { getWelcome } from "../core/welcome.js";
-import { encodeRecord, RecordStore } from "../utils/record-codec.js";
-import { deletePrefix, type MarmotStorage } from "../utils/storage.js";
-import { INVITE_PREFIX } from "./storage-keys.js";
+import { encodeRecord, RecordStore } from "./storage/record-codec.js";
+import { deletePrefix, type MarmotStorage } from "./storage/storage.js";
+import { invitePrefixes } from "./storage/storage-keys.js";
 import { logger } from "../utils/debug.js";
 import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import type {
@@ -46,10 +46,6 @@ export type ReceivedInviteRecord = {
   /** Permanently invalid plaintext; only source cleanup remains. */
   invalid?: boolean;
 };
-
-const SEEN_PREFIX = `${INVITE_PREFIX}seen/`;
-const RECEIVED_PREFIX = `${INVITE_PREFIX}received/`;
-const UNREAD_PREFIX = `${INVITE_PREFIX}unread/`;
 
 function isGiftWrap(event: NostrEvent): event is KnownEvent<kinds.GiftWrap> {
   return event.kind === kinds.GiftWrap;
@@ -147,8 +143,8 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
     super();
     this.signer = options.signer;
     this.storage = options.storage;
-    this.received = new RecordStore(options.storage, RECEIVED_PREFIX);
-    this.unread = new RecordStore(options.storage, UNREAD_PREFIX);
+    this.received = new RecordStore(options.storage, invitePrefixes.received);
+    this.unread = new RecordStore(options.storage, invitePrefixes.unread);
     this.network = options.network;
     this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
   }
@@ -224,7 +220,7 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
       return false;
     }
 
-    if (await this.storage.get(SEEN_PREFIX + event.id)) return false;
+    if (await this.storage.get(invitePrefixes.seen + event.id)) return false;
 
     this.#log("ingesting gift wrap %s", event.id);
 
@@ -233,10 +229,14 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
     await this.storage.batch([
       {
         type: "set",
-        key: RECEIVED_PREFIX + event.id,
+        key: invitePrefixes.received + event.id,
         value: encodeRecord(record),
       },
-      { type: "set", key: SEEN_PREFIX + event.id, value: Uint8Array.of(1) },
+      {
+        type: "set",
+        key: invitePrefixes.seen + event.id,
+        value: Uint8Array.of(1),
+      },
     ]);
 
     this.emit("received", event);
@@ -563,8 +563,8 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    * If you need to clear seen events, use clearSeen() or create a fresh store.
    */
   async clear(): Promise<void> {
-    await deletePrefix(this.storage, RECEIVED_PREFIX);
-    await deletePrefix(this.storage, UNREAD_PREFIX);
+    await deletePrefix(this.storage, invitePrefixes.received);
+    await deletePrefix(this.storage, invitePrefixes.unread);
   }
 
   /**
@@ -572,6 +572,6 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    * Warning: This will allow previously processed events to be re-ingested.
    */
   async clearSeen(): Promise<void> {
-    await deletePrefix(this.storage, SEEN_PREFIX);
+    await deletePrefix(this.storage, invitePrefixes.seen);
   }
 }

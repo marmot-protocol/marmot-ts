@@ -11,12 +11,12 @@ import { generateKeyPackage } from "../../../core/key-package.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import { MockNetwork } from "../../../__tests__/helpers/mock-network.js";
 import { memoryStorage, type StorageOp } from "../../../utils/storage.js";
-import { GroupRegistry } from "../../group-registry.js";
+import { GroupRegistry } from "../../storage/group-registry.js";
 import { GroupTerminalError, MarmotGroup } from "../../group/marmot-group.js";
 import {
   ConvergenceEffectLedger,
   TerminalWrapperLedger,
-} from "../../group/wrapper-ledger.js";
+} from "../../storage/wrapper-ledger.js";
 import { GroupSession } from "../group-session.js";
 import { GroupHistoryTree } from "../../../engine/history-tree.js";
 import {
@@ -30,7 +30,7 @@ import { serializeApplicationRumor } from "../../../core/group-message.js";
 import {
   encodeDeliveredEvidence,
   decodeDeliveredEvidence,
-} from "../delivered-payload-store.js";
+} from "../../storage/delivered-payload-store.js";
 
 async function fixture() {
   const account = testAccount(6);

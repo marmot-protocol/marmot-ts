@@ -1,25 +1,28 @@
 /** @module @category Client - Group Manager */
 import { bytesToHex } from "@noble/hashes/utils.js";
-import type { MarmotRumorDatabases } from "./group/group-history.js";
+import type { MarmotRumorDatabases } from "./group-history.js";
 import { EventSigner } from "applesauce-core";
 import { hexToBytes } from "applesauce-core/helpers";
 import { EventEmitter } from "eventemitter3";
 import { ClientState, CryptoProvider, defaultCryptoProvider } from "ts-mls";
-import { deserializeClientState } from "../core/client-state.js";
-import type { ConvergencePolicy } from "../core/convergence.js";
-import { GroupHistoryTree } from "../engine/history-tree.js";
-import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
-import type { AuditContextOptions, AuditSink } from "../audit/index.js";
-import { RetainedHistoryStore } from "../engine/retained-store.js";
+import { deserializeClientState } from "../../core/client-state.js";
+import type { ConvergencePolicy } from "../../core/convergence.js";
+import { GroupHistoryTree } from "../../engine/history-tree.js";
+import type { IngestionPoolOptions } from "../../engine/ingestion-pool.js";
+import type { AuditContextOptions, AuditSink } from "../../audit/index.js";
+import { RetainedHistoryStore } from "../../engine/retained-store.js";
 import {
   disbandRegistryStateKey,
   disbandTombstoneKey,
-} from "../engine/disband-tombstone.js";
-import { logger } from "../utils/debug.js";
-import type { MarmotStorage } from "../utils/storage.js";
+} from "../../engine/disband-tombstone.js";
+import { logger } from "../../utils/debug.js";
+import type { MarmotStorage } from "./storage.js";
 import { groupKeys } from "./storage-keys.js";
-import { MarmotGroup, type GroupDisbandedEvent } from "./group/marmot-group.js";
-import type { NostrNetworkInterface } from "./nostr-interface.js";
+import {
+  MarmotGroup,
+  type GroupDisbandedEvent,
+} from "../group/marmot-group.js";
+import type { NostrNetworkInterface } from "../nostr-interface.js";
 
 const log = logger.extend("GroupRegistry");
 

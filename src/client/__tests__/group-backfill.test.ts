@@ -6,16 +6,18 @@ import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { memoryStorage } from "../../utils/storage.js";
 import {
-  BACKFILL_FUTURE_SKEW_SECONDS,
   BACKFILL_MAX_HOLD_BACK_SECONDS,
+  fetchPagedBackfill,
+  nextBackfillCursor,
+} from "../group-backfill.js";
+import {
+  BACKFILL_FUTURE_SKEW_SECONDS,
   backfillCursorKey,
   backfillProgressKey,
   decodeBackfillCursor,
   decodeBackfillProgress,
   encodeBackfillCursor,
-  fetchPagedBackfill,
-  nextBackfillCursor,
-} from "../group-backfill.js";
+} from "../storage/backfill-cursor.js";
 import { GroupsManager } from "../groups-manager.js";
 import type { NostrNetworkInterface } from "../nostr-interface.js";
 import {

@@ -28,7 +28,7 @@ import {
 } from "../../../engine/disband-tombstone.js";
 import { encodeDisbandRequest } from "../../../engine/disband-request.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
-import { decodeDeliveredEvidence } from "../delivered-payload-store.js";
+import { decodeDeliveredEvidence } from "../../storage/delivered-payload-store.js";
 import { GROUP_BLOSSOM_IMAGE_COMPONENT_ID } from "../../../core/components/ids.js";
 import { NostrGroupPeeler } from "../../group/nostr-peeler.js";
 import { serializeClientState } from "../../../core/client-state.js";

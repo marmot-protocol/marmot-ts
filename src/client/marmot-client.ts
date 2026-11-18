@@ -1,5 +1,5 @@
 /** @module @category Client - Marmot Client */
-import type { MarmotRumorDatabases } from "./group/group-history.js";
+import type { MarmotRumorDatabases } from "./storage/group-history.js";
 import { watchCurrent } from "../utils/watch-current.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
@@ -24,8 +24,8 @@ import {
   readWelcomeGroupInfo,
 } from "../core/welcome.js";
 import { logger } from "../utils/debug.js";
-import { scopeStorage, type MarmotStorage } from "../utils/storage.js";
-import { GROUP_PREFIX, groupKeys } from "./storage-keys.js";
+import { scopeStorage, type MarmotStorage } from "./storage/storage.js";
+import { GROUP_PREFIX, groupKeys } from "./storage/storage-keys.js";
 import { MarmotGroup } from "./group/marmot-group.js";
 import { GroupsManager } from "./groups-manager.js";
 import { InviteManager, type UnreadInvite } from "./invite-manager.js";

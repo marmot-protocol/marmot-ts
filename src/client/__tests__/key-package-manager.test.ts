@@ -20,9 +20,9 @@ import {
 } from "../../core/key-package-event.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { decodeRecord, RecordStore } from "../../utils/record-codec.js";
+import { decodeRecord, RecordStore } from "../storage/record-codec.js";
 import { memoryStorage, type MemoryStorage } from "../../utils/storage.js";
-import { KEY_PACKAGE_PREFIX } from "../storage-keys.js";
+import { KEY_PACKAGE_PREFIX } from "../storage/storage-keys.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { createCredential } from "../../core/credential.js";
 import { createDefaultKeyPackageLifetime } from "../../utils/timestamp.js";

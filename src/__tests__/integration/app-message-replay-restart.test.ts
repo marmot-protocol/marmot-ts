@@ -28,7 +28,7 @@ import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { memoryStorage, StorageBatch } from "../../utils/storage.js";
 import { testAccount } from "../helpers/test-accounts.js";
-import { TerminalWrapperLedger } from "../../client/group/wrapper-ledger.js";
+import { TerminalWrapperLedger } from "../../client/storage/wrapper-ledger.js";
 import restartFaultFixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/restart-delivery-faults.v1.json" with { type: "json" };
 import { projectCanonicalConformanceSnapshot } from "../conformance/snapshot.js";
 

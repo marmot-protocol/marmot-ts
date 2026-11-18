@@ -37,13 +37,13 @@ import {
   GroupSession,
   type GroupSessionHistory,
 } from "../../client/session/group-session.js";
-import { decodeDeliveredEvidence } from "../../client/session/delivered-payload-store.js";
+import { decodeDeliveredEvidence } from "../../client/storage/delivered-payload-store.js";
 import { GroupRuntime } from "../../client/runtime/group-runtime.js";
 import { linkPublicationRetention } from "../../client/runtime/publication-retention.js";
 import { NostrWelcomeDelivery } from "../../client/transport/nostr/welcome-delivery.js";
 import { NostrGroupPeeler } from "../../client/group/nostr-peeler.js";
 import { memoryStorage } from "../../utils/storage.js";
-import { groupKeys } from "../../client/storage-keys.js";
+import { groupKeys } from "../../client/storage/storage-keys.js";
 import { DEFAULT_CONVERGENCE_POLICY } from "../../core/convergence.js";
 import { GroupHistoryTree } from "../history-tree.js";
 import { contentDedupId } from "../message-dedup.js";

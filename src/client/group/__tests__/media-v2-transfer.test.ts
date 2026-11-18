@@ -19,7 +19,7 @@ import {
   mediaSourceStateToken,
 } from "../../../core/media.js";
 import { memoryStorage } from "../../../utils/storage.js";
-import { GroupRegistry } from "../../group-registry.js";
+import { GroupRegistry } from "../../storage/group-registry.js";
 import { MarmotGroup } from "../marmot-group.js";
 import {
   prepareMediaMessage,

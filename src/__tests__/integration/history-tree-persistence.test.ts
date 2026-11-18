@@ -14,7 +14,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { GroupRegistry } from "../../client/group-registry.js";
+import { GroupRegistry } from "../../client/storage/group-registry.js";
 import { GroupSession } from "../../client/session/group-session.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import {

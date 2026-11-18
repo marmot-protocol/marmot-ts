@@ -11,7 +11,7 @@ import { MarmotGroup } from "../client/group/marmot-group.js";
 import type { NostrNetworkInterface } from "../client/nostr-interface.js";
 import { fakeVerifyEvent, type VerifyEventMethod } from "../client/verify.js";
 import { memoryStorage } from "../utils/storage.js";
-import { groupKeys } from "../client/storage-keys.js";
+import { groupKeys } from "../client/storage/storage-keys.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import type { GroupImageTransportRequest } from "../client/group/group-image-transport.js";

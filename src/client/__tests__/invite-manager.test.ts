@@ -9,7 +9,7 @@ import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InviteManager } from "../invite-manager.js";
 import type { ReceivedGiftWrap, UnreadInvite } from "../invite-manager.js";
-import { encodeRecord } from "../../utils/record-codec.js";
+import { encodeRecord } from "../storage/record-codec.js";
 import { memoryStorage, type MarmotStorage } from "../../utils/storage.js";
 import { WELCOME_EVENT_KIND } from "../../core/protocol.js";
 import { fakeVerifyEvent } from "../verify.js";

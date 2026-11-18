@@ -4,13 +4,13 @@ import { seamGroup } from "../../../__tests__/helpers/engine-seam-fixtures.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import { MockNetwork } from "../../../__tests__/helpers/mock-network.js";
 import { deserializeClientState } from "../../../core/client-state.js";
-import { memoryStorage } from "../../../utils/storage.js";
-import { MarmotGroup } from "../marmot-group.js";
-import { proposeUpdateMetadata } from "../proposals/update-metadata.js";
+import { memoryStorage } from "../storage.js";
+import { MarmotGroup } from "../../group/marmot-group.js";
+import { proposeUpdateMetadata } from "../../group/proposals/update-metadata.js";
 import {
   createApplicationMessageIntent,
   createChatRumor,
-} from "../application-message.js";
+} from "../../group/application-message.js";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 
 async function setup() {

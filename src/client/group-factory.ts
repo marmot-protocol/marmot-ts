@@ -1,6 +1,6 @@
 /** @module @category Client - Group Manager */
 import { EventSigner } from "applesauce-core";
-import type { MarmotRumorDatabases } from "./group/group-history.js";
+import type { MarmotRumorDatabases } from "./storage/group-history.js";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import {
@@ -22,7 +22,7 @@ import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { createCredential } from "../core/credential.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
-import type { MarmotStorage } from "../utils/storage.js";
+import type { MarmotStorage } from "./storage/storage.js";
 import { MarmotGroup } from "./group/marmot-group.js";
 import { createInviteIntent } from "./group/invite.js";
 import { NostrGroupPeeler } from "./group/nostr-peeler.js";

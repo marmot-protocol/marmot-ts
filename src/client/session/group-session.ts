@@ -1,5 +1,5 @@
 /** @module @category Client - Session */
-import { pendingPublicationKey } from "../runtime/pending-publication.js";
+import { pendingPublicationKey } from "../storage/pending-publication.js";
 import {
   mediaSourceStateToken,
   StaleMediaPreparationError,
@@ -9,7 +9,7 @@ import { deserializeApplicationData } from "../../core/application-rumor.js";
 import {
   encodeDeliveredEvidence,
   decodeDeliveredEvidence,
-} from "./delivered-payload-store.js";
+} from "../storage/delivered-payload-store.js";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
   getCredentialFromLeafIndex,
@@ -91,14 +91,14 @@ import {
   deletePrefix,
   StorageBatch,
   type MarmotStorage,
-} from "../../utils/storage.js";
-import { groupKeys } from "../storage-keys.js";
+} from "../storage/storage.js";
+import { groupKeys } from "../storage/storage-keys.js";
 import { NostrGroupPeeler } from "../group/nostr-peeler.js";
 import {
   ConvergenceEffectLedger,
   TerminalWrapperLedger,
   type TerminalWrapperOutcome,
-} from "../group/wrapper-ledger.js";
+} from "../storage/wrapper-ledger.js";
 import { proposeLeaveGroup } from "../group/proposals/leave-group.js";
 import type {
   GroupEffects,

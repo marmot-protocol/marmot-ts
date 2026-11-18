@@ -7,7 +7,7 @@ export type {
   PublishKeyPackageOptions,
 } from "./key-package-publisher.js";
 export type { CreateGroupOptions } from "./group-factory.js";
-export type { KeyPackageConsumptionReceipt } from "./key-package-store.js";
+export * from "./storage/index.js";
 export type { RejectReason } from "./verify.js";
 export * from "./groups-manager.js";
 export * from "./group/index.js";

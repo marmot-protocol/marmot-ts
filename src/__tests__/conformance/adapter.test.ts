@@ -14,7 +14,7 @@ import { generateKeyPackage } from "../../core/key-package.js";
 import { serializeClientState } from "../../core/client-state.js";
 import { memoryStorage } from "../../utils/storage.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { GroupRegistry } from "../../client/group-registry.js";
+import { GroupRegistry } from "../../client/storage/group-registry.js";
 import { MockNetwork } from "../helpers/mock-network.js";
 import { testAccount } from "../helpers/test-accounts.js";
 import {

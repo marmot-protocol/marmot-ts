@@ -40,8 +40,8 @@ import type {
 import type { DisbandTombstone } from "../../engine/disband-tombstone.js";
 import { buildForkTreeView, type ForkTreeView } from "./fork-tree-view.js";
 import { logger } from "../../utils/debug.js";
-import type { MarmotStorage } from "../../utils/storage.js";
-import { groupKeys } from "../storage-keys.js";
+import type { MarmotStorage } from "../storage/storage.js";
+import { groupKeys } from "../storage/storage-keys.js";
 import {
   getMarmotGroupInfo,
   type MarmotGroupInfo,
@@ -50,7 +50,7 @@ import {
   evaluateKeyPackageForGroup,
   type KeyPackageEligibility,
 } from "../../core/key-package-eligibility.js";
-import { PendingPublicationStore } from "../runtime/pending-publication.js";
+import { PendingPublicationStore } from "../storage/pending-publication.js";
 import { GroupRuntime } from "../runtime/group-runtime.js";
 import { linkPublicationRetention } from "../runtime/publication-retention.js";
 import type {
@@ -76,7 +76,10 @@ import {
   type DecryptedMedia,
   type EncryptMediaMetadata,
 } from "./group-media-service.js";
-import { GroupHistory, type MarmotRumorDatabases } from "./group-history.js";
+import {
+  GroupHistory,
+  type MarmotRumorDatabases,
+} from "../storage/group-history.js";
 
 export { createAdminCommitPolicyCallback } from "../../engine/admin-policy.js";
 export type { ProposalAction, ProposalContext } from "../../engine/types.js";

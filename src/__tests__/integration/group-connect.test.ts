@@ -49,7 +49,7 @@ import {
   scopeStorage,
   type MemoryStorage,
 } from "../../utils/storage.js";
-import { GROUP_PREFIX, groupKeys } from "../../client/storage-keys.js";
+import { GROUP_PREFIX, groupKeys } from "../../client/storage/storage-keys.js";
 
 const RELAYS = ["wss://mock-relay.test"];
 

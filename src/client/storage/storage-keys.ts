@@ -15,7 +15,9 @@
  * group/<gid>/ingest/delivered               delivered-payload evidence
  * group/<gid>/ingest/backfill-{cursor,progress}/<relay>  backfill paging state
  * keypackage/<ref>                           stored key package (private keys included)
- * invite/<giftWrapId>                        received invite
+ * invite/seen/<eventId>                     gift wrap deduplication marker
+ * invite/received/<eventId>                 received gift wrap and transition state
+ * invite/unread/<rumorId>                    decrypted Welcome rumor
  * ```
  *
  * Group-scoped components receive a view scoped to `group/`, so their keys
@@ -29,7 +31,12 @@ export const GROUP_PREFIX = "group/";
 /** Prefix of every stored key package. */
 export const KEY_PACKAGE_PREFIX = "keypackage/";
 /** Prefix of every stored invite. */
-export const INVITE_PREFIX = "invite/";
+const INVITE_PREFIX = "invite/";
+export const invitePrefixes = {
+  seen: `${INVITE_PREFIX}seen/`,
+  received: `${INVITE_PREFIX}received/`,
+  unread: `${INVITE_PREFIX}unread/`,
+};
 
 /** Keys relative to the `group/`-scoped storage view. */
 export const groupKeys = {
@@ -41,6 +48,10 @@ export const groupKeys = {
   publication: (gid: string) => `${gid}/publication`,
   wrapperPrefix: (gid: string) => `${gid}/ingest/wrapper/`,
   effectPrefix: (gid: string) => `${gid}/ingest/effect/`,
+  backfillCursor: (gid: string, relay: string) =>
+    `${gid}/ingest/backfill-cursor/${relay}`,
+  backfillProgress: (gid: string, relay: string) =>
+    `${gid}/ingest/backfill-progress/${relay}`,
   delivered: (gid: string) => `${gid}/ingest/delivered`,
 };
 

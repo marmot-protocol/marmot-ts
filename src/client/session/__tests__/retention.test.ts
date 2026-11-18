@@ -5,7 +5,7 @@ import { serializeApplicationRumor } from "../../../core/group-message.js";
 import {
   decodeDeliveredEvidence,
   encodeDeliveredEvidence,
-} from "../delivered-payload-store.js";
+} from "../../storage/delivered-payload-store.js";
 import {
   appDataUpdateProposalType,
   defaultCryptoProvider,

@@ -15,6 +15,8 @@
 
 ### Added
 
+- The client entry point now exports `MarmotStorage` and its adapter helpers, including `memoryStorage()`.
+
 - `watchKeyPackages()`, `invites.watchUnread()`, `invites.watchReceived()`, `watchInvites()`, and `history.subscribe()` accept an optional `{ signal }` to stop watching, matching `groups.watch()`.
 
 ### Fixed

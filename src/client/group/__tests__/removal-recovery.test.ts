@@ -14,7 +14,7 @@ import {
 } from "ts-mls";
 import { describe, expect, it, vi } from "vitest";
 import type { EventSigner } from "applesauce-core";
-import { GroupRegistry } from "../../group-registry.js";
+import { GroupRegistry } from "../../storage/group-registry.js";
 import { MarmotGroup } from "../marmot-group.js";
 import { removalEvidenceKey } from "../../session/group-session.js";
 import type { NostrNetworkInterface } from "../../nostr-interface.js";

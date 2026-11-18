@@ -3,7 +3,7 @@ import { giftWrap } from "applesauce-common/operations/gift-wrap";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { describe, expect, it, vi } from "vitest";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { decodeRecord } from "../../utils/record-codec.js";
+import { decodeRecord } from "../storage/record-codec.js";
 import { memoryStorage } from "../../utils/storage.js";
 import {
   InviteManager,

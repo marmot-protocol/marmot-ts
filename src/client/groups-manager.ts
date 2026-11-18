@@ -1,4 +1,4 @@
-import type { MarmotRumorDatabases } from "./group/group-history.js";
+import type { MarmotRumorDatabases } from "./storage/group-history.js";
 import { watchCurrent } from "../utils/watch-current.js";
 import type { MarmotGroupSnapshot } from "./group/marmot-group.js";
 import { isReusableKeyPackage } from "../core/key-package.js";
@@ -27,7 +27,7 @@ import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
 import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { logger } from "../utils/debug.js";
 import { hasAck } from "../utils/index.js";
-import type { MarmotStorage } from "../utils/storage.js";
+import type { MarmotStorage } from "./storage/storage.js";
 import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import {
   MarmotGroup,
@@ -56,25 +56,27 @@ import {
   GroupImageRequestError,
   validateGroupImageUploadResponse,
 } from "./group/group-image-transport.js";
-import type { WelcomeKeyPackageCandidate } from "./key-package-store.js";
+import type { WelcomeKeyPackageCandidate } from "./storage/key-package-store.js";
 import { GroupFactory, type CreateGroupOptions } from "./group-factory.js";
 import {
   DEFAULT_BACKFILL_MAX_PAGES,
   DEFAULT_BACKFILL_PAGE_SIZE,
   DEFAULT_BACKFILL_SLACK_SECONDS,
-  type BackfillProgress,
   type PagedBackfillResult,
+  fetchPagedBackfill,
+  nextBackfillCursor,
+  oldestCreatedAt,
+} from "./group-backfill.js";
+import {
+  type BackfillProgress,
   backfillCursorKey,
   backfillProgressKey,
   encodeBackfillCursor,
   encodeBackfillProgress,
-  fetchPagedBackfill,
-  nextBackfillCursor,
-  oldestCreatedAt,
   readBackfillCursor,
   readBackfillProgress,
-} from "./group-backfill.js";
-import { GroupRegistry } from "./group-registry.js";
+} from "./storage/backfill-cursor.js";
+import { GroupRegistry } from "./storage/group-registry.js";
 import type { GroupRuntime } from "./runtime/group-runtime.js";
 import type {
   GroupPublishResult,

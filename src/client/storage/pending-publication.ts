@@ -11,9 +11,9 @@ import {
   serializeClientState,
 } from "../../core/client-state.js";
 import { defaultVerifyEvent, safeVerifyEvent } from "../verify.js";
-import type { MarmotStorage } from "../../utils/storage.js";
-import { decodeRecord, encodeRecord } from "../../utils/record-codec.js";
-import { groupKeys } from "../storage-keys.js";
+import type { MarmotStorage } from "./storage.js";
+import { decodeRecord, encodeRecord } from "./record-codec.js";
+import { groupKeys } from "./storage-keys.js";
 import type { PublishResponse } from "../nostr-interface.js";
 import type { GroupPublishWork } from "../session/group-effects.js";
 

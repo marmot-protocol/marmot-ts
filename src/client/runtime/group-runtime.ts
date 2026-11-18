@@ -17,7 +17,7 @@ import { confirmPublicationRetention } from "./publication-retention.js";
 import {
   PendingPublicationStore,
   type PendingPublication,
-} from "./pending-publication.js";
+} from "../storage/pending-publication.js";
 import type {
   GroupEffects,
   GroupPublishResult,

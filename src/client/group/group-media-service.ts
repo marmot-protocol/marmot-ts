@@ -11,7 +11,6 @@ import {
   encryptMediaFile,
   type MediaAttachment,
 } from "../../core/media.js";
-import type { BaseGroupMedia, StoredMedia } from "./marmot-group.js";
 
 export type EncryptMediaMetadata = {
   filename: string;
@@ -23,10 +22,15 @@ export type EncryptMediaMetadata = {
   thumbhash?: string;
 };
 
-export type GroupMediaServiceOptions<
-  TMedia extends BaseGroupMedia | undefined = undefined,
-> = {
-  media: TMedia;
+/** A decrypted encrypted-media-v2 attachment. */
+export type DecryptedMedia = {
+  /** Plaintext (decrypted) file bytes. */
+  data: Uint8Array;
+  /** The full encrypted-media-v2 attachment metadata associated with this blob. */
+  attachment: MediaAttachment;
+};
+
+export type GroupMediaServiceOptions = {
   getState: () => ClientState;
   getCiphersuite: () => CiphersuiteImpl;
   assertOpen?: () => void;
@@ -40,22 +44,17 @@ export type GroupMediaServiceOptions<
 };
 
 /**
- * Source-bound v2 encryption and verified plaintext cache writes.
+ * Source-bound encrypted-media-v2 encryption and verified decryption.
  * Retained state is bounded by the existing session rollback policy.
  */
-export class GroupMediaService<
-  TMedia extends BaseGroupMedia | undefined = undefined,
-> {
-  readonly media: TMedia;
-
+export class GroupMediaService {
   readonly #assertOpen?: () => void;
   readonly #getState: () => ClientState;
   readonly #getCiphersuite: () => CiphersuiteImpl;
   readonly #getRetainedStates?: () => Iterable<ClientState>;
-  readonly #decryptingMedia = new Map<string, Promise<StoredMedia>>();
+  readonly #decryptingMedia = new Map<string, Promise<DecryptedMedia>>();
 
-  constructor(options: GroupMediaServiceOptions<TMedia>) {
-    this.media = options.media;
+  constructor(options: GroupMediaServiceOptions) {
     this.#assertOpen = options.assertOpen;
     this.#getState = options.getState;
     this.#getCiphersuite = options.getCiphersuite;
@@ -117,7 +116,7 @@ export class GroupMediaService<
     encrypted: Uint8Array,
     attachment: MediaAttachment,
     sourceParent: string = mediaSourceStateToken(this.#getState()),
-  ): Promise<StoredMedia> {
+  ): Promise<DecryptedMedia> {
     this.#assertOpen?.();
     // Select the exact authenticated source, never probe unrelated epochs/forks.
     const state = [
@@ -125,13 +124,11 @@ export class GroupMediaService<
       ...(this.#getRetainedStates?.() ?? []),
     ].find((candidate) => mediaSourceStateToken(candidate) === sourceParent);
     if (!state) throw new Error("Media source material is no longer retained");
-    // Verify supplied ciphertext and authenticated metadata even on cache hits.
-    // Old hash-only cache entries are not evidence of a verified v2 reference.
-    const key = attachment.ciphertextSha256;
+    // Concurrent identical decrypts share one promise.
     const identity = JSON.stringify([
       sourceParent,
       attachment.version,
-      key,
+      attachment.ciphertextSha256,
       attachment.plaintextSha256,
       attachment.nonce,
       attachment.mediaType,
@@ -148,11 +145,6 @@ export class GroupMediaService<
       );
       const plaintext = decryptMediaFile(encrypted, fileKey, attachment);
       this.#assertOpen?.();
-      await this.media?.addMedia(key, {
-        data: plaintext,
-        attachment,
-      });
-
       this.#assertOpen?.();
       return { data: plaintext, attachment };
     })();

@@ -1,5 +1,6 @@
 /** @module @category Client - Group Manager */
 import { EventSigner } from "applesauce-core";
+import type { MarmotRumorDatabases } from "./group/group-history.js";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import {
@@ -11,7 +12,6 @@ import {
   defaultCryptoProvider,
   Welcome,
 } from "ts-mls";
-import type { SerializedClientState } from "../core/client-state.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
 import { GroupHistoryTree } from "../engine/history-tree.js";
 import { MarmotGroupEngine } from "../engine/group-engine.js";
@@ -22,14 +22,8 @@ import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { createCredential } from "../core/credential.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
-import type { GenericKeyValueStore } from "../utils/key-value.js";
-import {
-  BaseGroupHistory,
-  BaseGroupMedia,
-  GroupHistoryFactory,
-  GroupMediaFactory,
-  MarmotGroup,
-} from "./group/marmot-group.js";
+import type { MarmotStorage } from "../utils/storage.js";
+import { MarmotGroup } from "./group/marmot-group.js";
 import { createInviteIntent } from "./group/invite.js";
 import { NostrGroupPeeler } from "./group/nostr-peeler.js";
 import type { WelcomeRecipient } from "./transport/nostr/welcome-delivery.js";
@@ -38,20 +32,9 @@ import type { NostrNetworkInterface } from "./nostr-interface.js";
 import { isValidRelayUrl } from "../utils/relay-url.js";
 
 /** Options accepted by {@link GroupFactory}. */
-export type GroupFactoryOptions<
-  THistory extends BaseGroupHistory | undefined = undefined,
-  TMedia extends BaseGroupMedia | undefined = undefined,
-> = {
-  store: GenericKeyValueStore<SerializedClientState>;
-  ingestStateStore: GenericKeyValueStore<Uint8Array>;
-  lifecycleStore: GenericKeyValueStore<Uint8Array>;
-  /** Dedicated store for the per-group rewind-history blob (optional). */
-  rewindStore?: GenericKeyValueStore<Uint8Array>;
-  /**
-   * Persisted removed-inactive marker store (D-12) inherited by new groups;
-   * see {@link MarmotGroupOptions.removedMarkerStore}.
-   */
-  removedMarkerStore?: GenericKeyValueStore<boolean>;
+export type GroupFactoryOptions = {
+  /** Storage scoped to the client's `group/` namespace. */
+  storage: MarmotStorage;
   signer: EventSigner;
   network: NostrNetworkInterface;
   /** Optional forensic audit sink inherited by new groups. */
@@ -59,8 +42,8 @@ export type GroupFactoryOptions<
   /** Required when `audit` is set; contains stable engine/account/session metadata. */
   auditContext?: AuditContextOptions;
   cryptoProvider?: CryptoProvider;
-  historyFactory?: GroupHistoryFactory<THistory>;
-  mediaFactory?: GroupMediaFactory<TMedia>;
+  /** Per-group rumor databases for message history (in memory when omitted). */
+  rumors?: MarmotRumorDatabases;
   /** Convergence policy applied to newly created/imported groups. */
   convergencePolicy?: ConvergencePolicy;
   /** Ingestion-pool tuning applied to newly created/imported groups. */
@@ -114,32 +97,20 @@ type FoundingCreateResult = {
  * seam (darkmatter's `do_create_group`). The factory only constructs and
  * persists; caching/eventing is the registry's job.
  */
-export class GroupFactory<
-  THistory extends BaseGroupHistory | undefined = any,
-  TMedia extends BaseGroupMedia | undefined = any,
-> {
-  readonly #store: GenericKeyValueStore<SerializedClientState>;
-  readonly #ingestStateStore: GenericKeyValueStore<Uint8Array>;
-  readonly #lifecycleStore: GenericKeyValueStore<Uint8Array>;
-  readonly #rewindStore?: GenericKeyValueStore<Uint8Array>;
-  readonly #removedMarkerStore?: GenericKeyValueStore<boolean>;
+export class GroupFactory {
+  readonly #storage: MarmotStorage;
   readonly #signer: EventSigner;
   readonly #network: NostrNetworkInterface;
   readonly #audit?: AuditSink;
   readonly #auditContext?: AuditContextOptions;
   readonly #cryptoProvider: CryptoProvider;
-  readonly #historyFactory: GroupHistoryFactory<THistory>;
-  readonly #mediaFactory: GroupMediaFactory<TMedia>;
+  readonly #rumors?: MarmotRumorDatabases;
   readonly #convergencePolicy?: ConvergencePolicy;
   readonly #ingestionPool?: IngestionPoolOptions;
   readonly #verifyEvent: VerifyEventMethod;
 
-  constructor(options: GroupFactoryOptions<THistory, TMedia>) {
-    this.#store = options.store;
-    this.#ingestStateStore = options.ingestStateStore;
-    this.#lifecycleStore = options.lifecycleStore;
-    this.#rewindStore = options.rewindStore;
-    this.#removedMarkerStore = options.removedMarkerStore;
+  constructor(options: GroupFactoryOptions) {
+    this.#storage = options.storage;
     this.#convergencePolicy = options.convergencePolicy;
     this.#ingestionPool = options.ingestionPool;
     this.#signer = options.signer;
@@ -147,9 +118,7 @@ export class GroupFactory<
     this.#audit = options.audit;
     this.#auditContext = options.auditContext;
     this.#cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
-    this.#historyFactory =
-      options.historyFactory as GroupHistoryFactory<THistory>;
-    this.#mediaFactory = options.mediaFactory as GroupMediaFactory<TMedia>;
+    this.#rumors = options.rumors;
     this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
   }
 
@@ -182,7 +151,7 @@ export class GroupFactory<
   async create(
     name: string,
     options?: CreateGroupOptions,
-  ): Promise<MarmotGroup<THistory, TMedia>> {
+  ): Promise<MarmotGroup> {
     assertFoundingInviteeRelays(options?.invitees, options?.relays);
 
     const ciphersuiteImpl = await this.#getCiphersuiteImpl(
@@ -218,32 +187,23 @@ export class GroupFactory<
           )
         : undefined;
 
-    const group = new MarmotGroup<THistory, TMedia>(
-      founding?.state ?? clientState,
-      {
-        ciphersuite: ciphersuiteImpl,
-        store: this.#store,
-        ingestStateStore: this.#ingestStateStore,
-        lifecycleStore: this.#lifecycleStore,
-        rewindStore: this.#rewindStore,
-        removedMarkerStore: this.#removedMarkerStore,
-        convergencePolicy: this.#convergencePolicy,
-        ingestionPool: this.#ingestionPool,
-        signer: this.#signer,
-        network: this.#network,
-        audit: this.#audit,
-        auditContext: this.#auditContext,
-        history: this.#historyFactory,
-        media: this.#mediaFactory,
-        retained: founding?.retained,
-        historyTree: founding?.historyTree,
-      },
-    );
+    const group = new MarmotGroup(founding?.state ?? clientState, {
+      ciphersuite: ciphersuiteImpl,
+      storage: this.#storage,
+      convergencePolicy: this.#convergencePolicy,
+      ingestionPool: this.#ingestionPool,
+      signer: this.#signer,
+      network: this.#network,
+      audit: this.#audit,
+      auditContext: this.#auditContext,
+      rumors: this.#rumors,
+      retained: founding?.retained,
+      historyTree: founding?.historyTree,
+    });
     // GroupSession only binds a tree it created itself (its own fresh
     // GroupHistoryTree) — a supplied tree must be bound here before saving,
     // or save()'s history.flush() would throw.
-    if (founding && this.#rewindStore)
-      founding.historyTree.bindStore(this.#rewindStore);
+    if (founding) founding.historyTree.bindStore(this.#storage);
     await group.save(true);
 
     // D-05/D-07/D-12: fan out directly, bypassing GroupRuntime entirely — no

@@ -21,7 +21,9 @@ import {
 import { validateKeyPackageSlot } from "../core/key-package-event-encode.js";
 import { isValidRelayUrl, normalizeRelayUrl } from "../utils/relay-url.js";
 import { logger } from "../utils/debug.js";
-import { GenericKeyValueStore } from "../utils/key-value.js";
+import { RecordStore } from "../utils/record-codec.js";
+import type { MarmotStorage } from "../utils/storage.js";
+import { KEY_PACKAGE_PREFIX } from "./storage-keys.js";
 import { deduplicatePublishedEvents } from "./key-package-events.js";
 
 /** Local transport destinations, never derived from signed event tags. */
@@ -157,16 +159,19 @@ export type KeyPackageStoreEvents = {
  * darkmatter's `AccountSecretStore` seam.
  */
 export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
-  readonly #store: GenericKeyValueStore<StoredKeyPackage>;
+  readonly #store: RecordStore<StoredKeyPackage>;
   readonly #cryptoProvider: CryptoProvider;
   #log = logger.extend("KeyPackageStore");
 
   constructor(
-    store: GenericKeyValueStore<StoredKeyPackage>,
+    storage: MarmotStorage,
     cryptoProvider: CryptoProvider = defaultCryptoProvider,
   ) {
     super();
-    this.#store = store;
+    this.#store = new RecordStore<StoredKeyPackage>(
+      storage,
+      KEY_PACKAGE_PREFIX,
+    );
     this.#cryptoProvider = cryptoProvider;
   }
 
@@ -216,7 +221,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         : {}),
     };
 
-    await this.#store.setItem(key, entry);
+    await this.#store.set(key, entry);
     this.emit("added", entry);
     this.#log(
       "added %s" + (entry.privatePackage ? " with private key" : ""),
@@ -265,7 +270,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       );
     }
 
-    const existing = await this.#store.getItem(key);
+    const existing = await this.#store.get(key);
 
     if (existing) {
       const publicationRelays = normalizeKeyPackageRelays([
@@ -303,7 +308,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         publicationRelays,
       };
 
-      await this.#store.setItem(key, updated);
+      await this.#store.set(key, updated);
       this.emit("updated", updated);
       this.#log("stored published event %s for %s", event.id, ref);
     } else {
@@ -316,7 +321,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         publicationRelays: normalizeKeyPackageRelays(relays),
       };
 
-      await this.#store.setItem(key, entry);
+      await this.#store.set(key, entry);
       this.emit("added", entry);
       this.#log("added key package from event %s", event.id);
     }
@@ -328,7 +333,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    */
   async get(ref: Uint8Array | string): Promise<StoredKeyPackage | null> {
     const key = this.#resolveKey(ref);
-    return this.#store.getItem(key);
+    return (await this.#store.get(key)) ?? null;
   }
 
   /**
@@ -336,8 +341,8 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    */
   async remove(ref: Uint8Array | string): Promise<void> {
     const key = this.#resolveKey(ref);
-    const stored = await this.#store.getItem(key);
-    await this.#store.removeItem(key);
+    const stored = await this.#store.get(key);
+    await this.#store.delete(key);
 
     if (stored) {
       this.emit("removed", stored.keyPackageRef);
@@ -354,16 +359,16 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    * verify per stored package.
    */
   async list(): Promise<ListedKeyPackage[]> {
-    const allKeys = await this.#store.keys();
+    const allKeys = await this.#store.ids();
 
     const packages = await Promise.all(
-      allKeys.map((key) => this.#store.getItem(key)),
+      allKeys.map((key) => this.#store.get(key)),
     );
 
     return packages
       .filter(
         (pkg): pkg is LocalKeyPackage =>
-          pkg !== null && pkg.privatePackage !== undefined,
+          pkg !== undefined && pkg.privatePackage !== undefined,
       )
       .map(
         ({
@@ -419,8 +424,8 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   /** Checks whether a key package with local private material exists. */
   async has(ref: Uint8Array | string): Promise<boolean> {
     const key = this.#resolveKey(ref);
-    const item = await this.#store.getItem(key);
-    return item !== null && item.privatePackage !== undefined;
+    const item = await this.#store.get(key);
+    return item !== undefined && item.privatePackage !== undefined;
   }
 
   /**
@@ -433,7 +438,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
     ref: Uint8Array | string,
   ): Promise<PrivateKeyPackage | null> {
     const key = this.#resolveKey(ref);
-    const stored = await this.#store.getItem(key);
+    const stored = await this.#store.get(key);
     return stored?.privatePackage ?? null;
   }
 
@@ -446,11 +451,11 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    */
   async markUsed(ref: Uint8Array | string): Promise<void> {
     const key = this.#resolveKey(ref);
-    const existing = await this.#store.getItem(key);
+    const existing = await this.#store.get(key);
     if (!existing) return;
 
     const updated: StoredKeyPackage = { ...existing, used: true };
-    await this.#store.setItem(key, updated);
+    await this.#store.set(key, updated);
     this.emit("updated", updated);
     this.#log("marked key package %s as used", key);
   }
@@ -458,7 +463,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   /** Records validated intent before adoption, without altering private material. */
   async recordConsumption(groupId: Uint8Array, ref: Uint8Array): Promise<void> {
     const key = this.#resolveKey(ref);
-    const existing = await this.#store.getItem(key);
+    const existing = await this.#store.get(key);
     // Direct GroupsManager users can supply external candidates without a local entry.
     if (!existing) return;
     const receipts = existing.consumptionReceipts ?? [];
@@ -468,7 +473,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       )
     )
       return;
-    await this.#store.setItem(key, {
+    await this.#store.set(key, {
       ...existing,
       consumptionReceipts: [
         ...receipts,
@@ -484,8 +489,8 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   async finalizeConsumptions(
     hasAdoptedGroup: (groupId: Uint8Array) => Promise<boolean>,
   ): Promise<void> {
-    for (const key of await this.#store.keys()) {
-      const entry = await this.#store.getItem(key);
+    for (const key of await this.#store.ids()) {
+      const entry = await this.#store.get(key);
       if (!entry?.consumptionReceipts?.length) continue;
       let adopted = false;
       const remaining: KeyPackageConsumptionReceipt[] = [];
@@ -507,7 +512,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         ? { ...entry, used: true }
         : { ...publicMetadata, used: true };
       // Persist retirement before clearing the receipt, making retries idempotent.
-      await this.#store.setItem(key, {
+      await this.#store.set(key, {
         ...retired,
         consumptionReceipts: entry.consumptionReceipts,
       });
@@ -515,7 +520,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       const updated = remaining.length
         ? { ...finished, consumptionReceipts: remaining }
         : finished;
-      await this.#store.setItem(key, updated);
+      await this.#store.set(key, updated);
       this.emit("updated", updated);
       // Never zero privatePackage: adopted MLS state can alias its arrays.
       void privatePackage;
@@ -524,10 +529,10 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
 
   /** Clears all entries (local and tracked) from the store. */
   async clear(): Promise<void> {
-    const allKeys = await this.#store.keys();
+    const allKeys = await this.#store.ids();
     for (const key of allKeys) {
-      const stored = await this.#store.getItem(key);
-      await this.#store.removeItem(key);
+      const stored = await this.#store.get(key);
+      await this.#store.delete(key);
       if (stored) {
         this.emit("removed", stored.keyPackageRef);
       }

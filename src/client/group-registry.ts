@@ -1,13 +1,11 @@
 /** @module @category Client - Group Manager */
 import { bytesToHex } from "@noble/hashes/utils.js";
+import type { MarmotRumorDatabases } from "./group/group-history.js";
 import { EventSigner } from "applesauce-core";
 import { hexToBytes } from "applesauce-core/helpers";
 import { EventEmitter } from "eventemitter3";
 import { ClientState, CryptoProvider, defaultCryptoProvider } from "ts-mls";
-import {
-  deserializeClientState,
-  SerializedClientState,
-} from "../core/client-state.js";
+import { deserializeClientState } from "../core/client-state.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
 import { GroupHistoryTree } from "../engine/history-tree.js";
 import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
@@ -18,35 +16,17 @@ import {
   disbandTombstoneKey,
 } from "../engine/disband-tombstone.js";
 import { logger } from "../utils/debug.js";
-import type { GenericKeyValueStore } from "../utils/key-value.js";
-import {
-  BaseGroupHistory,
-  BaseGroupMedia,
-  GroupHistoryFactory,
-  GroupMediaFactory,
-  MarmotGroup,
-  type GroupDisbandedEvent,
-} from "./group/marmot-group.js";
+import type { MarmotStorage } from "../utils/storage.js";
+import { groupKeys } from "./storage-keys.js";
+import { MarmotGroup, type GroupDisbandedEvent } from "./group/marmot-group.js";
 import type { NostrNetworkInterface } from "./nostr-interface.js";
 
 const log = logger.extend("GroupRegistry");
 
 /** Options accepted by {@link GroupRegistry}. */
-export type GroupRegistryOptions<
-  THistory extends BaseGroupHistory | undefined = undefined,
-  TMedia extends BaseGroupMedia | undefined = undefined,
-> = {
-  store: GenericKeyValueStore<SerializedClientState>;
-  ingestStateStore: GenericKeyValueStore<Uint8Array>;
-  lifecycleStore: GenericKeyValueStore<Uint8Array>;
-  /** Dedicated store for the per-group full-fork history tree (optional). */
-  rewindStore?: GenericKeyValueStore<Uint8Array>;
-  /**
-   * Persisted removed-inactive marker store (D-12) inherited by loaded groups;
-   * see {@link MarmotGroupOptions.removedMarkerStore}. Without it, removal
-   * realization degrades to in-memory-only and cannot survive a restart.
-   */
-  removedMarkerStore?: GenericKeyValueStore<boolean>;
+export type GroupRegistryOptions = {
+  /** Storage scoped to the client's `group/` namespace. */
+  storage: MarmotStorage;
   signer: EventSigner;
   network: NostrNetworkInterface;
   /** Optional forensic audit sink inherited by loaded groups. */
@@ -54,8 +34,8 @@ export type GroupRegistryOptions<
   /** Required when `audit` is set; contains stable engine/account/session metadata. */
   auditContext?: AuditContextOptions;
   cryptoProvider?: CryptoProvider;
-  historyFactory?: GroupHistoryFactory<THistory>;
-  mediaFactory?: GroupMediaFactory<TMedia>;
+  /** Per-group rumor databases for message history (in memory when omitted). */
+  rumors?: MarmotRumorDatabases;
   /** Convergence policy applied to loaded groups (rollback horizon, selection). */
   convergencePolicy?: ConvergencePolicy;
   /** Ingestion-pool tuning applied to loaded groups (size + epoch-age bounds). */
@@ -63,21 +43,15 @@ export type GroupRegistryOptions<
 };
 
 /** Cache-level events emitted by {@link GroupRegistry}. */
-export type GroupRegistryEvents<
-  THistory extends BaseGroupHistory | undefined = any,
-  TMedia extends BaseGroupMedia | undefined = any,
-> = {
+export type GroupRegistryEvents = {
   /** Emitted when the set of loaded (cached) groups changes. */
-  updated: (groups: MarmotGroup<THistory, TMedia>[]) => void;
+  updated: (groups: MarmotGroup[]) => void;
   /** Emitted when a group is loaded from the store into the cache. */
-  loaded: (group: MarmotGroup<THistory, TMedia>) => void;
+  loaded: (group: MarmotGroup) => void;
   /** Emitted when an inbound commit removed the client from a tracked group. */
-  removed: (group: MarmotGroup<THistory, TMedia>) => void;
+  removed: (group: MarmotGroup) => void;
   /** Emitted after durable canonical disband notification delivery is recorded. */
-  disbanded: (
-    group: MarmotGroup<THistory, TMedia>,
-    evidence: GroupDisbandedEvent,
-  ) => void;
+  disbanded: (group: MarmotGroup, evidence: GroupDisbandedEvent) => void;
 };
 
 /**
@@ -87,27 +61,19 @@ export type GroupRegistryEvents<
  * {@link ClientState}. The orchestrating {@link GroupsManager} layers the
  * higher-level lifecycle events (created/imported/joined/destroyed/left) on top.
  */
-export class GroupRegistry<
-  THistory extends BaseGroupHistory | undefined = any,
-  TMedia extends BaseGroupMedia | undefined = any,
-> extends EventEmitter<GroupRegistryEvents<THistory, TMedia>> {
-  readonly store: GenericKeyValueStore<SerializedClientState>;
-  readonly ingestStateStore: GenericKeyValueStore<Uint8Array>;
-  readonly lifecycleStore: GenericKeyValueStore<Uint8Array>;
-  readonly rewindStore?: GenericKeyValueStore<Uint8Array>;
-  readonly removedMarkerStore?: GenericKeyValueStore<boolean>;
+export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
+  readonly storage: MarmotStorage;
   readonly signer: EventSigner;
   readonly network: NostrNetworkInterface;
   readonly audit?: AuditSink;
   readonly auditContext?: AuditContextOptions;
   readonly cryptoProvider: CryptoProvider;
-  readonly historyFactory: GroupHistoryFactory<THistory>;
-  readonly mediaFactory: GroupMediaFactory<TMedia>;
+  readonly rumors?: MarmotRumorDatabases;
   readonly convergencePolicy?: ConvergencePolicy;
   readonly ingestionPool?: IngestionPoolOptions;
 
   /** In-memory cache of loaded group instances, keyed by hex group id */
-  #groups = new Map<string, MarmotGroup<THistory, TMedia>>();
+  #groups = new Map<string, MarmotGroup>();
 
   /** Per-group listener handles, so we can detach them when a group is unloaded. */
   #groupListeners = new Map<
@@ -115,52 +81,38 @@ export class GroupRegistry<
     {
       destroyed: () => void;
       removed: () => void;
-      disbanded: (
-        group: MarmotGroup<THistory, TMedia>,
-        evidence: GroupDisbandedEvent,
-      ) => void;
+      disbanded: (group: MarmotGroup, evidence: GroupDisbandedEvent) => void;
     }
   >();
 
   /** Tracks in-flight group loads to prevent duplicate instances under concurrency */
-  #groupLoadPromises = new Map<
-    string,
-    Promise<MarmotGroup<THistory, TMedia>>
-  >();
+  #groupLoadPromises = new Map<string, Promise<MarmotGroup>>();
 
   /** Group ids provisionally cached while their post-hydration activation runs. */
   #activatingGroups = new Set<string>();
 
-  constructor(options: GroupRegistryOptions<THistory, TMedia>) {
+  constructor(options: GroupRegistryOptions) {
     super();
-    this.store = options.store;
-    this.ingestStateStore = options.ingestStateStore;
-    this.lifecycleStore = options.lifecycleStore;
-    this.rewindStore = options.rewindStore;
-    this.removedMarkerStore = options.removedMarkerStore;
+    this.storage = options.storage;
     this.signer = options.signer;
     this.network = options.network;
     this.audit = options.audit;
     this.auditContext = options.auditContext;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
-    this.historyFactory =
-      options.historyFactory as GroupHistoryFactory<THistory>;
-    this.mediaFactory = options.mediaFactory as GroupMediaFactory<TMedia>;
+    this.rumors = options.rumors;
     this.convergencePolicy = options.convergencePolicy;
     this.ingestionPool = options.ingestionPool;
   }
 
   /** Returns the list of currently loaded (cached) group instances. */
-  get loaded(): MarmotGroup<THistory, TMedia>[] {
+  get loaded(): MarmotGroup[] {
     return Array.from(this.#groups.entries())
       .filter(([id]) => !this.#activatingGroups.has(id))
       .map(([, group]) => group);
   }
 
   /** Reads the cached instance for a group id, without loading from the store. */
-  peek(
-    groupId: Uint8Array | string,
-  ): MarmotGroup<THistory, TMedia> | undefined {
+  peek(groupId: Uint8Array | string): MarmotGroup | undefined {
     const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
     return this.#groups.get(id);
   }
@@ -170,13 +122,9 @@ export class GroupRegistry<
     state: ClientState,
     retained?: RetainedHistoryStore,
     historyTree?: GroupHistoryTree,
-  ): Promise<MarmotGroup<THistory, TMedia>> {
-    return MarmotGroup.fromClientState<THistory, TMedia>(state, {
-      store: this.store,
-      ingestStateStore: this.ingestStateStore,
-      lifecycleStore: this.lifecycleStore,
-      rewindStore: this.rewindStore,
-      removedMarkerStore: this.removedMarkerStore,
+  ): Promise<MarmotGroup> {
+    return MarmotGroup.fromClientState(state, {
+      storage: this.storage,
       retained,
       historyTree,
       convergencePolicy: this.convergencePolicy,
@@ -186,21 +134,18 @@ export class GroupRegistry<
       network: this.network,
       audit: this.audit,
       auditContext: this.auditContext,
-      history: this.historyFactory,
-      media: this.mediaFactory,
+      rumors: this.rumors,
     });
   }
 
   /** Loads a group from the store, hydrated but not cached. */
-  async load(
-    groupId: Uint8Array | string,
-  ): Promise<MarmotGroup<THistory, TMedia>> {
+  async load(groupId: Uint8Array | string): Promise<MarmotGroup> {
     const id = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
     const idHex = bytesToHex(id);
     log("loading group %s from store", idHex);
     const stateBytes =
-      (await this.store.getItem(idHex)) ??
-      (await this.lifecycleStore?.getItem(disbandRegistryStateKey(idHex)));
+      (await this.storage.get(groupKeys.state(idHex))) ??
+      (await this.storage.get(disbandRegistryStateKey(idHex)));
 
     if (!stateBytes) throw new Error(`Group ${idHex} not found`);
 
@@ -225,28 +170,17 @@ export class GroupRegistry<
     idHex: string,
     state: ClientState,
   ): Promise<GroupHistoryTree | undefined> {
-    if (!this.rewindStore) return undefined;
-    const metadata = await this.rewindStore.getItem(`${idHex}/meta`);
+    const metadata = await this.storage.get(`${idHex}/tree/meta`);
     if (!metadata) {
       // Absence is optional only when no owned history was ever persisted.
-      // Neighboring groups and arbitrary adapter data are not history evidence.
-      const prefixes = ["edge", "state", "commit"].map(
-        (kind) => `${idHex}/${kind}/`,
-      );
-      const owned = (await this.rewindStore.keys()).some((key) =>
-        prefixes.some(
-          (prefix) =>
-            key.startsWith(prefix) &&
-            /^[0-9a-f]+$/.test(key.slice(prefix.length)),
-        ),
-      );
+      const owned = (await this.storage.list(`${idHex}/tree/`)).length > 0;
       if (owned)
         throw new Error("GroupHistoryTree: required checkpoint missing");
       return undefined;
     }
     let tree: GroupHistoryTree | undefined;
     try {
-      tree = await GroupHistoryTree.load(this.rewindStore, idHex);
+      tree = await GroupHistoryTree.load(this.storage, idHex);
     } catch (error) {
       throw new Error(
         `GroupHistoryTree: failed to restore required history: ${error instanceof Error ? error.message : String(error)}`,
@@ -317,7 +251,7 @@ export class GroupRegistry<
   }
 
   /** Caches a group, attaches lifecycle forwarders, then activates its state. */
-  async track(group: MarmotGroup<THistory, TMedia>): Promise<void> {
+  async track(group: MarmotGroup): Promise<void> {
     const id = bytesToHex(group.id);
     this.#activatingGroups.add(id);
     this.#groups.set(id, group);
@@ -329,10 +263,8 @@ export class GroupRegistry<
     // signal so the manager can re-emit it to the application.
     const removed = () => this.emit("removed", group);
     group.on("removed", removed);
-    const disbanded = (
-      _group: MarmotGroup<THistory, TMedia>,
-      evidence: GroupDisbandedEvent,
-    ) => this.emit("disbanded", group, evidence);
+    const disbanded = (_group: MarmotGroup, evidence: GroupDisbandedEvent) =>
+      this.emit("disbanded", group, evidence);
     group.on("disbanded", disbanded);
     const listeners = { destroyed, removed, disbanded };
     this.#groupListeners.set(id, listeners);
@@ -412,11 +344,9 @@ export class GroupRegistry<
 
   /** Lists all persisted group IDs, decoded from their hex storage keys. */
   async listIds(): Promise<Uint8Array[]> {
-    const ids = new Set(
-      (await this.store.keys()).filter((key) => /^[0-9a-f]+$/i.test(key)),
-    );
-    for (const key of (await this.lifecycleStore?.keys()) ?? []) {
-      const match = /^([0-9a-f]+)\/disband\/terminal$/i.exec(key);
+    const ids = new Set<string>();
+    for (const key of await this.storage.list("")) {
+      const match = /^([0-9a-f]+)\/(state|disband\/terminal)$/.exec(key);
       if (match) ids.add(match[1]!);
     }
     return [...ids].map((key) => hexToBytes(key));
@@ -426,15 +356,13 @@ export class GroupRegistry<
   async has(groupId: Uint8Array | string): Promise<boolean> {
     const key = typeof groupId === "string" ? groupId : bytesToHex(groupId);
     return (
-      (await this.store.getItem(key)) !== null ||
-      (await this.lifecycleStore?.getItem(disbandTombstoneKey(key))) != null
+      (await this.storage.get(groupKeys.state(key))) !== undefined ||
+      (await this.storage.get(disbandTombstoneKey(key))) !== undefined
     );
   }
 
   /** Gets a group from cache or loads it from the store, caching the result. */
-  async get(
-    groupId: Uint8Array | string,
-  ): Promise<MarmotGroup<THistory, TMedia>> {
+  async get(groupId: Uint8Array | string): Promise<MarmotGroup> {
     const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
     const existingLoad = this.#groupLoadPromises.get(id);
     if (existingLoad) return existingLoad;
@@ -460,7 +388,7 @@ export class GroupRegistry<
   }
 
   /** Loads all groups from the store and returns them. */
-  async loadAll(): Promise<MarmotGroup<THistory, TMedia>[]> {
+  async loadAll(): Promise<MarmotGroup[]> {
     const groupIds = await this.listIds();
     return Promise.all(groupIds.map((groupId) => this.get(groupId)));
   }

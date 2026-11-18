@@ -1,4 +1,5 @@
 /** @module @category Client - Marmot Client */
+import type { MarmotRumorDatabases } from "./group/group-history.js";
 import { watchCurrent } from "../utils/watch-current.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
@@ -10,10 +11,7 @@ import {
   GroupInfo,
   Welcome,
 } from "ts-mls";
-import {
-  getMarmotGroupView,
-  SerializedClientState,
-} from "../core/client-state.js";
+import { getMarmotGroupView } from "../core/client-state.js";
 import type { ConvergencePolicy } from "../core/convergence.js";
 import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
 import type { AuditContextOptions, AuditSink } from "../audit/index.js";
@@ -26,27 +24,16 @@ import {
   readWelcomeGroupInfo,
 } from "../core/welcome.js";
 import { logger } from "../utils/debug.js";
-import type { GenericKeyValueStore } from "../utils/key-value.js";
-import {
-  BaseGroupHistory,
-  BaseGroupMedia,
-  GroupHistoryFactory,
-  GroupMediaFactory,
-  MarmotGroup,
-} from "./group/marmot-group.js";
+import { scopeStorage, type MarmotStorage } from "../utils/storage.js";
+import { GROUP_PREFIX, groupKeys } from "./storage-keys.js";
+import { MarmotGroup } from "./group/marmot-group.js";
 import { GroupsManager } from "./groups-manager.js";
-import {
-  InviteManager,
-  StoredInviteEntry,
-  type UnreadInvite,
-} from "./invite-manager.js";
-import type { StoredKeyPackage } from "./key-package-manager.js";
+import { InviteManager, type UnreadInvite } from "./invite-manager.js";
 import {
   KeyPackageManager,
   type KeyPackageManagerOptions,
 } from "./key-package-manager.js";
 import type { NostrNetworkInterface } from "./nostr-interface.js";
-import { InMemoryKeyValueStore } from "../extra/in-memory-key-value-store.js";
 import { defaultVerifyEvent, type VerifyEventMethod } from "./verify.js";
 
 const log = logger.extend("client");
@@ -87,14 +74,7 @@ export interface AnnotatedInvite {
   joinable: boolean;
 }
 
-export type IngestPersistenceCapability =
-  | { kind: "durable" }
-  | { kind: "ephemeral"; reason: "ingest_state_store_omitted" };
-
-export type MarmotClientOptions<
-  THistory extends BaseGroupHistory | undefined = undefined,
-  TMedia extends BaseGroupMedia | undefined = undefined,
-> = {
+export type MarmotClientOptions = {
   /**
    * The signer used for the client's Nostr identity. Also signs the kind-450
    * account identity proof carried by every KeyPackage and leaf this client
@@ -103,37 +83,13 @@ export type MarmotClientOptions<
   signer: EventSigner;
   /** The capabilities to use for the client */
   capabilities?: Capabilities;
-  /** The backend to store and load the groups from */
-  groupStateStore: GenericKeyValueStore<SerializedClientState>;
   /**
-   * Durable backend for group lifecycle intent and terminal records. When
-   * omitted, lifecycle records share the `groupStateStore` from
-   * {@link MarmotClientOptions} through a
-   * disband-key-scoped adapter.
+   * Durable storage for every piece of protocol state: group state, fork
+   * history, ingest ledgers, lifecycle records, key packages (including
+   * private keys) and invites. See {@link MarmotStorage} for the adapter
+   * contract. Use {@link memoryStorage} only for tests and demos.
    */
-  lifecycleStore?: GenericKeyValueStore<Uint8Array>;
-  /** Durable terminal-wrapper and convergence-effect evidence. */
-  ingestStateStore?: GenericKeyValueStore<Uint8Array>;
-  /**
-   * Dedicated backend for the per-group full-fork history tree (the single
-   * persisted source for fork recovery and the {@link MarmotGroup.forkTree}
-   * API) and exact pending commit publication records. When provided, the tree
-   * and pending private MLS states are persisted so recovery survives a
-   * restart; back it with the same durable (ideally encrypted) backend as
-   * `groupStateStore`. Optional — when omitted, history is in-memory only and is
-   * rebuilt from the current tip after each restart.
-   */
-  rewindStore?: GenericKeyValueStore<Uint8Array>;
-  /**
-   * Dedicated backend for the persisted removed-inactive marker (D-12), keyed
-   * by group-id hex like `groupStateStore`. When provided, the fact that an
-   * involuntary removal was already realized survives a restart, so the
-   * `removed` event fires exactly once across process boundaries and a
-   * re-convergence that supersedes the removing commit can clear it durably.
-   * Back it with the same durable backend as `groupStateStore`. Optional —
-   * when omitted, realization is in-memory-only and does not survive a restart.
-   */
-  removedMarkerStore?: GenericKeyValueStore<boolean>;
+  storage: MarmotStorage;
   /**
    * Convergence policy applied to every group: branch selection and the
    * `maxRewindCommits` rollback horizon. Keep the finite profile-1 default
@@ -150,10 +106,6 @@ export type MarmotClientOptions<
    * (e.g. a large `maxSize` and a very large `maxRewindCommits`).
    */
   ingestionPool?: IngestionPoolOptions;
-  /** The backend for key package private material and publish tracking */
-  keyPackageStore: GenericKeyValueStore<StoredKeyPackage>;
-  /** Key value store for the {@link InviteManager} class, if non is provided an {@link InMemoryKeyValueStore} is used */
-  inviteStore?: GenericKeyValueStore<StoredInviteEntry>;
   /** The crypto provider to use for cryptographic operations */
   cryptoProvider?: CryptoProvider;
   /** Load a persisted installation signing identity for KeyPackages. */
@@ -182,23 +134,15 @@ export type MarmotClientOptions<
    * encoding so key packages share a stable addressable slot on relays.
    */
   clientId?: string;
-} & (THistory extends undefined
-  ? {}
-  : {
-      /** The group history interface to be passed to group instance */
-      historyFactory: GroupHistoryFactory<THistory>;
-    }) &
-  (TMedia extends undefined
-    ? {}
-    : {
-        /** The group media interface to be passed to group instance */
-        mediaFactory: GroupMediaFactory<TMedia>;
-      });
+  /**
+   * Per-group rumor databases for application message history: return an
+   * applesauce `IAsyncEventDatabase<Rumor>` for a group, or `undefined` to keep
+   * that group's history in memory. Omit to keep all history in memory.
+   */
+  rumors?: MarmotRumorDatabases;
+};
 
-export class MarmotClient<
-  THistory extends BaseGroupHistory | undefined = any,
-  TMedia extends BaseGroupMedia | undefined = any,
-> {
+export class MarmotClient {
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
   /** The capabilities to use for the client */
@@ -208,30 +152,25 @@ export class MarmotClient<
   /** Manages key package lifecycle: local storage, publishing, and rotation */
   readonly keyPackages: KeyPackageManager;
   /** Manages group lifecycle: persistence, caching, creation, loading, leaving */
-  readonly groups: GroupsManager<THistory, TMedia>;
+  readonly groups: GroupsManager;
   /** Manages invite lifecycle: ingestion, decryption, and storage */
   readonly invites: InviteManager;
-  readonly ingestPersistence: IngestPersistenceCapability;
+  /** The client's durable storage. */
+  readonly storage: MarmotStorage;
 
   /** Crypto provider for cryptographic operations */
   public cryptoProvider: CryptoProvider;
 
-  constructor(options: MarmotClientOptions<THistory, TMedia>) {
+  constructor(options: MarmotClientOptions) {
     this.signer = options.signer;
     this.capabilities = options.capabilities ?? defaultCapabilities();
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     const verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
-    const ingestStateStore =
-      options.ingestStateStore ?? new InMemoryKeyValueStore<Uint8Array>();
-    const lifecycleStore =
-      options.lifecycleStore ??
-      lifecycleStoreFromGroupState(options.groupStateStore);
-    this.ingestPersistence = options.ingestStateStore
-      ? { kind: "durable" }
-      : { kind: "ephemeral", reason: "ingest_state_store_omitted" };
+    this.storage = options.storage;
+    const groupStorage = scopeStorage(options.storage, GROUP_PREFIX);
     this.keyPackages = new KeyPackageManager({
-      store: options.keyPackageStore,
+      storage: options.storage,
       signer: options.signer,
       network: options.network,
       clientId: options.clientId,
@@ -240,23 +179,12 @@ export class MarmotClient<
       getSignatureKeyPair: options.getSignatureKeyPair,
       verifyEvent,
       hasAdoptedGroup: async (groupId) =>
-        (await options.groupStateStore.getItem(bytesToHex(groupId))) !== null,
+        (await groupStorage.get(groupKeys.state(bytesToHex(groupId)))) !==
+        undefined,
     });
 
-    const historyFactory = (
-      "historyFactory" in options ? options.historyFactory : undefined
-    ) as GroupHistoryFactory<THistory>;
-    const mediaFactory = (
-      "mediaFactory" in options ? options.mediaFactory : undefined
-    ) as GroupMediaFactory<TMedia>;
-
-    this.groups = new GroupsManager<THistory, TMedia>({
-      store: options.groupStateStore,
-      ingestStateStore,
-      lifecycleStore,
-      ingestPersistence: this.ingestPersistence,
-      rewindStore: options.rewindStore,
-      removedMarkerStore: options.removedMarkerStore,
+    this.groups = new GroupsManager({
+      storage: groupStorage,
       convergencePolicy: options.convergencePolicy,
       ingestionPool: options.ingestionPool,
       signer: this.signer,
@@ -264,14 +192,13 @@ export class MarmotClient<
       audit: options.audit,
       auditContext: options.auditContext,
       cryptoProvider: this.cryptoProvider,
-      historyFactory,
-      mediaFactory,
+      rumors: options.rumors,
       verifyEvent,
     });
 
     this.invites = new InviteManager({
       signer: this.signer,
-      store: options.inviteStore || new InMemoryKeyValueStore(),
+      storage: options.storage,
       network: this.network,
       verifyEvent,
     });
@@ -447,7 +374,7 @@ export class MarmotClient<
     /** The unwrapped kind 444 rumor event containing the Welcome message */
     welcomeRumor: Rumor;
   }): Promise<{
-    group: MarmotGroup<THistory, TMedia>;
+    group: MarmotGroup;
   }> {
     const { welcomeRumor } = options;
     log("joining group from welcome rumor %s", welcomeRumor.id);
@@ -486,22 +413,4 @@ export class MarmotClient<
 
     return { group };
   }
-}
-
-function lifecycleStoreFromGroupState(
-  store: GenericKeyValueStore<SerializedClientState>,
-): GenericKeyValueStore<Uint8Array> {
-  const isLifecycleKey = (key: string) => key.includes("/disband/");
-  return {
-    getItem: (key) => store.getItem(key),
-    setItem: (key, value) => store.setItem(key, value),
-    removeItem: (key) => store.removeItem(key),
-    async clear() {
-      for (const key of await store.keys())
-        if (isLifecycleKey(key)) await store.removeItem(key);
-    },
-    async keys() {
-      return (await store.keys()).filter(isLifecycleKey);
-    },
-  };
 }

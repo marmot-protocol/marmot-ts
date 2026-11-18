@@ -1,5 +1,4 @@
 /** Durable exact-byte recovery for acknowledgement-uncertain commits. */
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import {
   decode,
   encode,
@@ -12,7 +11,9 @@ import {
   serializeClientState,
 } from "../../core/client-state.js";
 import { defaultVerifyEvent, safeVerifyEvent } from "../verify.js";
-import type { GenericKeyValueStore } from "../../utils/key-value.js";
+import type { MarmotStorage } from "../../utils/storage.js";
+import { decodeRecord, encodeRecord } from "../../utils/record-codec.js";
+import { groupKeys } from "../storage-keys.js";
 import type { PublishResponse } from "../nostr-interface.js";
 import type { GroupPublishWork } from "../session/group-effects.js";
 
@@ -21,7 +22,7 @@ type CommitWork = Extract<
   { kind: "groupEvolution" | "selfUpdate" }
 >;
 export function pendingPublicationKey(groupId: string): string {
-  return `${groupId}/pending-publication/v1`;
+  return groupKeys.publication(groupId);
 }
 
 export interface PendingPublication {
@@ -36,24 +37,15 @@ export interface PendingPublication {
 export class PendingPublicationStore {
   readonly #key: string;
   constructor(
-    readonly store: GenericKeyValueStore<Uint8Array>,
+    readonly store: MarmotStorage,
     groupId: string,
   ) {
     this.#key = pendingPublicationKey(groupId);
   }
   async read(): Promise<PendingPublication | undefined> {
-    const bytes = await this.store.getItem(this.#key);
+    const bytes = await this.store.get(this.#key);
     if (!bytes) return undefined;
-    const value = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-      (_key, item) =>
-        item &&
-        typeof item === "object" &&
-        Object.keys(item).length === 1 &&
-        typeof item.$bytes === "string"
-          ? hexToBytes(item.$bytes)
-          : item,
-    );
+    const value = decodeRecord<any>(bytes);
     if (
       value.version !== 1 ||
       !["groupEvolution", "selfUpdate"].includes(value.work?.kind) ||
@@ -117,16 +109,9 @@ export class PendingPublicationStore {
         },
       },
     };
-    await this.store.setItem(
-      this.#key,
-      new TextEncoder().encode(
-        JSON.stringify(stored, (_key, item) =>
-          item instanceof Uint8Array ? { $bytes: bytesToHex(item) } : item,
-        ),
-      ),
-    );
+    await this.store.set(this.#key, encodeRecord(stored));
   }
   async clear(): Promise<void> {
-    await this.store.removeItem(this.#key);
+    await this.store.delete(this.#key);
   }
 }

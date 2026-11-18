@@ -12,6 +12,8 @@ export class IndexedDbAuditWriter implements AuditLogWriter {
   readonly storeName: string;
   readonly logId: string;
   #db: Promise<IDBDatabase>;
+  /** Distinguishes writer instances so a reopened log never overwrites lines. */
+  readonly #session = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   #index = 0;
 
   constructor(options: IndexedDbAuditWriterOptions) {
@@ -26,9 +28,10 @@ export class IndexedDbAuditWriter implements AuditLogWriter {
     await idbRequest<void>((resolve, reject) => {
       const tx = db.transaction(this.storeName, "readwrite");
       const store = tx.objectStore(this.storeName);
+      const index = this.#index++;
       store.put(
-        { logId: this.logId, index: this.#index++, line },
-        `${this.logId}:${this.#index}`,
+        { logId: this.logId, session: this.#session, index, line },
+        `${this.logId}:${this.#session}:${String(index).padStart(10, "0")}`,
       );
       tx.oncomplete = () => resolve();
       tx.onerror = () =>

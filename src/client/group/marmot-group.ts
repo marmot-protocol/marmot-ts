@@ -40,17 +40,16 @@ import type {
 import type { DisbandTombstone } from "../../engine/disband-tombstone.js";
 import { buildForkTreeView, type ForkTreeView } from "./fork-tree-view.js";
 import { logger } from "../../utils/debug.js";
-import type { GenericKeyValueStore } from "../../utils/key-value.js";
+import type { MarmotStorage } from "../../utils/storage.js";
+import { groupKeys } from "../storage-keys.js";
 import {
   getMarmotGroupInfo,
   type MarmotGroupInfo,
-  type SerializedClientState,
 } from "../../core/client-state.js";
 import {
   evaluateKeyPackageForGroup,
   type KeyPackageEligibility,
 } from "../../core/key-package-eligibility.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
 import { PendingPublicationStore } from "../runtime/pending-publication.js";
 import { GroupRuntime } from "../runtime/group-runtime.js";
 import { linkPublicationRetention } from "../runtime/publication-retention.js";
@@ -63,7 +62,6 @@ import {
   ingestResultDisposition,
   type AppliedNotificationsIngestResult,
   type DispositionedIngestResult,
-  type GroupSessionHistory,
   type ProposalBuilder,
 } from "../session/group-session.js";
 import { NostrNetworkInterface, PublishResponse } from "../nostr-interface.js";
@@ -75,8 +73,10 @@ import type {
 } from "../transport/nostr/welcome-delivery.js";
 import {
   GroupMediaService,
+  type DecryptedMedia,
   type EncryptMediaMetadata,
 } from "./group-media-service.js";
+import { GroupHistory, type MarmotRumorDatabases } from "./group-history.js";
 
 export { createAdminCommitPolicyCallback } from "../../engine/admin-policy.js";
 export type { ProposalAction, ProposalContext } from "../../engine/types.js";
@@ -216,78 +216,12 @@ export function selectFairQueuedStateIntent(
   return undefined;
 }
 
-/**
- * The minimum interface for a group to store them MLS messages
- * Implementations should extend this with methods for querying and loading stored messages
- */
-export interface BaseGroupHistory extends GroupSessionHistory {
-  /** Saves a new application message to the group history */
-  saveMessage(message: Uint8Array): Promise<void>;
-  /** Purge the group history, called when group is destroyed */
-  purgeMessages(): Promise<void>;
-}
-
-/** Shape of the stored media in a {@link BaseGroupMedia} implementation */
-export type StoredMedia = {
-  /** Plaintext (decrypted) file bytes. */
-  data: Uint8Array;
-  /** The full encrypted-media-v2 attachment metadata associated with this blob. */
-  attachment: MediaAttachment;
-};
-
-/** A factory function that creates a {@link BaseGroupHistory} instance for a group id */
-export type GroupHistoryFactory<
-  THistory extends BaseGroupHistory | undefined = undefined,
-> = (groupId: Uint8Array) => THistory;
-
-/** The minimal implementation of a group media store */
-export interface BaseGroupMedia {
-  /** Adds a new media entry to the group media store */
-  addMedia(sha256: string, entry: StoredMedia): Promise<void>;
-  /** Retrieves a media entry from the group media store */
-  getMedia(sha256: string): Promise<StoredMedia | null>;
-  /** Removes a media entry from the group media store */
-  removeMedia(sha256: string): Promise<void>;
-  /** Lists all media entries in the group media store */
-  listMedia(): Promise<MediaAttachment[]>;
-  /** Clears all media entries from the group media store */
-  clearMedia(): Promise<void>;
-}
-
-/** A factory function that creates a {@link BaseGroupHistory} instance for a group id */
-export type GroupMediaFactory<
-  TMedia extends BaseGroupMedia | undefined = undefined,
-> = (groupId: Uint8Array) => TMedia;
-
-export type MarmotGroupOptions<
-  THistory extends BaseGroupHistory | undefined = undefined,
-  TMedia extends BaseGroupMedia | undefined = undefined,
-> = {
-  /** The key-value backend where serialized group state bytes are persisted */
-  store: GenericKeyValueStore<SerializedClientState>;
-  /** Durable group lifecycle request and terminal record backend. */
-  lifecycleStore?: GenericKeyValueStore<Uint8Array>;
+export type MarmotGroupOptions = {
   /**
-   * Dedicated backend for the rewind-history blob (one entry per group). When
-   * provided, the convergence rewind window survives a restart. Optional —
-   * omitted means rewind history is in-memory only (legacy behavior).
+   * Durable storage scoped to the client's `group/` namespace. Every record of
+   * this group lives under `<gid>/` (see `src/client/storage-keys.ts`).
    */
-  rewindStore?: GenericKeyValueStore<Uint8Array>;
-  /**
-   * Persisted removed-inactive marker (D-12,
-   * `protocol-core/member-departure.md` "Realizing removal"): a sibling
-   * store using a separate `${groupId}/removed` namespace on the same durable
-   * backend as {@link store}, that records
-   * whether this group's involuntary removal has already been realized
-   * (marker set) so realization survives a restart — without a full
-   * `ClientState` deserialize just to check. Deliberately NOT a field grafted
-   * onto the serialized `ClientState`: `ClientState` stays exactly what
-   * ts-mls produces, and the marker is independently readable/clearable
-   * (cleared by the session after validated durable exact-anchor recovery).
-   * When omitted, realization degrades to in-memory-only — it still
-   * fires exactly once per process, but does not survive a restart.
-   */
-  removedMarkerStore?: GenericKeyValueStore<boolean>;
+  storage: MarmotStorage;
   /** The signer used for the clients identity */
   signer: EventSigner;
   /** The ciphersuite implementation to use for the group */
@@ -309,16 +243,11 @@ export type MarmotGroupOptions<
    * undecryptable events held for retry). Defaults bound it.
    */
   ingestionPool?: IngestionPoolOptions;
-  /** Store for durable terminal transport-wrapper evidence. */
-  ingestStateStore?: GenericKeyValueStore<Uint8Array>;
-  /** The storage interface for the groups application message history (optional) */
-  history?: THistory | GroupHistoryFactory<THistory>;
   /**
-   * Backend (or pre-wrapped store) for the plaintext blob cache used by
-   * {@link MarmotGroup.decryptMedia}. Defaults to an in-memory cache when
-   * not provided.
+   * Per-group rumor databases for application message history. When omitted,
+   * or when it returns `undefined` for this group, history is kept in memory.
    */
-  media?: TMedia | GroupMediaFactory<TMedia>;
+  rumors?: MarmotRumorDatabases;
   /**
    * Injectable wall-clock (ms) for the convergence quiescence window (B5).
    * Defaults to `Date.now`; tests inject a fake clock for determinism.
@@ -348,12 +277,9 @@ export type MarmotGroupOptions<
 };
 
 /** Map of events that can be emitted by a MarmotGroup */
-export type MarmotGroupEvents<
-  THistory extends BaseGroupHistory | undefined = any,
-  TMedia extends BaseGroupMedia | undefined = any,
-> = {
+export type MarmotGroupEvents = {
   /** Emitted synchronously after a distinct UI snapshot is installed. */
-  changed: (group: MarmotGroup<THistory, TMedia>) => void;
+  changed: (group: MarmotGroup) => void;
   /** Reconciled results from ingestion, history recovery, and settlement. */
   ingestResult: (result: DispositionedIngestResult) => void;
   /** Emitted when the group state is updated */
@@ -361,11 +287,11 @@ export type MarmotGroupEvents<
   /** Emitted when a new application message is received */
   applicationMessage: (message: Uint8Array) => void;
   /** Emitted when the group state is saved */
-  stateSaved: (group: MarmotGroup<THistory, TMedia>) => void;
+  stateSaved: (group: MarmotGroup) => void;
   /** Emitted once when in-memory resources and watchers are released. */
-  disposed: (group: MarmotGroup<THistory, TMedia>) => void;
+  disposed: (group: MarmotGroup) => void;
   /** Emitted when the group is destroyed */
-  destroyed: (group: MarmotGroup<THistory, TMedia>) => void;
+  destroyed: (group: MarmotGroup) => void;
   /**
    * Emitted when an inbound commit removed this member from the group — an
    * admin's involuntary Remove, or a peer committing this member's own
@@ -373,12 +299,9 @@ export type MarmotGroupEvents<
    * persisted, but the group can no longer send or decrypt); the application
    * decides when to call {@link MarmotGroup.destroy} to purge it.
    */
-  removed: (group: MarmotGroup<THistory, TMedia>) => void;
+  removed: (group: MarmotGroup) => void;
   /** At-most-once callback attempt after its durable record, when storage exists. */
-  disbanded: (
-    group: MarmotGroup<THistory, TMedia>,
-    evidence: GroupDisbandedEvent,
-  ) => void;
+  disbanded: (group: MarmotGroup, evidence: GroupDisbandedEvent) => void;
   /** Emitted when history persistence fails (best-effort, non-blocking) */
   historyError: (error: Error) => void;
   /**
@@ -387,26 +310,19 @@ export type MarmotGroupEvents<
    * unchanged (a superseded fork still adds nodes). Read {@link MarmotGroup.forkTreeView}
    * to re-render.
    */
-  historyChanged: (group: MarmotGroup<THistory, TMedia>) => void;
+  historyChanged: (group: MarmotGroup) => void;
 };
 
-type RemovedListener<
-  THistory extends BaseGroupHistory | undefined,
-  TMedia extends BaseGroupMedia | undefined,
-> = {
-  fn: (group: MarmotGroup<THistory, TMedia>) => void;
+type RemovedListener = {
+  fn: (group: MarmotGroup) => void;
   context: unknown;
   once: boolean;
 };
 
 /**
  * The main class for interacting with a MLS group
- * @template THistory - The type of the history store to use for the group, must implement the {@link BaseGroupHistory} interface. (Default is no history store)
  */
-export class MarmotGroup<
-  THistory extends BaseGroupHistory | undefined = undefined,
-  TMedia extends BaseGroupMedia | undefined = undefined,
-> extends EventEmitter<MarmotGroupEvents<THistory, TMedia>> {
+export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
   #snapshot!: MarmotGroupSnapshot;
   #stateRevision = 0;
   #snapshotStateRevision = -1;
@@ -516,7 +432,7 @@ export class MarmotGroup<
   }
 
   /** The key-value backend where serialized group state bytes are persisted */
-  readonly store: GenericKeyValueStore<SerializedClientState>;
+  readonly storage: MarmotStorage;
 
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
@@ -527,18 +443,15 @@ export class MarmotGroup<
   /** The nostr relay pool to use for the group */
   readonly network: NostrNetworkInterface;
 
-  /** The storage interface for the groups application message history */
-  readonly history: THistory;
-
-  /** The storage interface for the groups media */
-  readonly media: TMedia;
+  /** The group's decrypted application messages (rumors). */
+  readonly history: GroupHistory;
 
   /** Protocol state owner for this group. Prefer this over convenience methods. */
-  readonly session: GroupSession<THistory>;
+  readonly session: GroupSession;
   /** Runtime publisher for driving session effects through transport. */
   readonly runtime: GroupRuntime;
   /** Optional media helper for group encrypted attachments. */
-  readonly mediaService: GroupMediaService<TMedia>;
+  readonly mediaService: GroupMediaService;
   /** Dedicated canonical group-image source and retrieval service. */
   readonly image: GroupImageService;
   readonly #closeController = new AbortController();
@@ -559,23 +472,12 @@ export class MarmotGroup<
     reject: (error: unknown) => void;
   }> = [];
 
-  /** Persisted removed-inactive marker store (D-12); see {@link MarmotGroupOptions.removedMarkerStore}. */
-  readonly #removedMarkerStore?: GenericKeyValueStore<boolean>;
-  /**
-   * In-memory realization fallback used only when {@link #removedMarkerStore}
-   * is not configured — keeps `#realizeRemovalIfNeeded` idempotent within a
-   * single process even without persistence (documented degradation).
-   */
-  #removalRealizedInMemory = false;
   /** Same-instance serialization for the marker transaction and public event. */
   #removalRealizationInFlight?: Promise<void>;
   /** Project-owned metadata for safe `removed` dispatch; never reads emitter internals. */
-  readonly #removedListeners: RemovedListener<THistory, TMedia>[] = [];
+  readonly #removedListeners: RemovedListener[] = [];
   readonly #disbandedListeners: Array<{
-    fn: (
-      group: MarmotGroup<THistory, TMedia>,
-      evidence: GroupDisbandedEvent,
-    ) => void;
+    fn: (group: MarmotGroup, evidence: GroupDisbandedEvent) => void;
     context: unknown;
     once: boolean;
   }> = [];
@@ -596,63 +498,51 @@ export class MarmotGroup<
 
   private log: Debugger;
 
-  override on<
-    T extends EventEmitter.EventNames<MarmotGroupEvents<THistory, TMedia>>,
-  >(
+  override on<T extends EventEmitter.EventNames<MarmotGroupEvents>>(
     event: T,
-    fn: EventEmitter.EventListener<MarmotGroupEvents<THistory, TMedia>, T>,
+    fn: EventEmitter.EventListener<MarmotGroupEvents, T>,
     context?: unknown,
   ): this {
     if (event === "removed") {
       this.#removedListeners.push({
-        fn: fn as (group: MarmotGroup<THistory, TMedia>) => void,
+        fn: fn as (group: MarmotGroup) => void,
         context: context || this,
         once: false,
       });
     }
     if (event === "disbanded")
       this.#disbandedListeners.push({
-        fn: fn as (
-          group: MarmotGroup<THistory, TMedia>,
-          evidence: GroupDisbandedEvent,
-        ) => void,
+        fn: fn as (group: MarmotGroup, evidence: GroupDisbandedEvent) => void,
         context: context || this,
         once: false,
       });
     return super.on(event, fn, context);
   }
 
-  override once<
-    T extends EventEmitter.EventNames<MarmotGroupEvents<THistory, TMedia>>,
-  >(
+  override once<T extends EventEmitter.EventNames<MarmotGroupEvents>>(
     event: T,
-    fn: EventEmitter.EventListener<MarmotGroupEvents<THistory, TMedia>, T>,
+    fn: EventEmitter.EventListener<MarmotGroupEvents, T>,
     context?: unknown,
   ): this {
     if (event === "removed") {
       this.#removedListeners.push({
-        fn: fn as (group: MarmotGroup<THistory, TMedia>) => void,
+        fn: fn as (group: MarmotGroup) => void,
         context: context || this,
         once: true,
       });
     }
     if (event === "disbanded")
       this.#disbandedListeners.push({
-        fn: fn as (
-          group: MarmotGroup<THistory, TMedia>,
-          evidence: GroupDisbandedEvent,
-        ) => void,
+        fn: fn as (group: MarmotGroup, evidence: GroupDisbandedEvent) => void,
         context: context || this,
         once: true,
       });
     return super.once(event, fn, context);
   }
 
-  override removeListener<
-    T extends EventEmitter.EventNames<MarmotGroupEvents<THistory, TMedia>>,
-  >(
+  override removeListener<T extends EventEmitter.EventNames<MarmotGroupEvents>>(
     event: T,
-    fn?: EventEmitter.EventListener<MarmotGroupEvents<THistory, TMedia>, T>,
+    fn?: EventEmitter.EventListener<MarmotGroupEvents, T>,
     context?: unknown,
     once?: boolean,
   ): this {
@@ -660,7 +550,7 @@ export class MarmotGroup<
       if (!fn) {
         this.#removedListeners.length = 0;
       } else {
-        const removedFn = fn as (group: MarmotGroup<THistory, TMedia>) => void;
+        const removedFn = fn as (group: MarmotGroup) => void;
         for (let i = this.#removedListeners.length - 1; i >= 0; i--) {
           const listener = this.#removedListeners[i];
           if (
@@ -677,7 +567,7 @@ export class MarmotGroup<
       if (!fn) this.#disbandedListeners.length = 0;
       else {
         const disbandedFn = fn as (
-          group: MarmotGroup<THistory, TMedia>,
+          group: MarmotGroup,
           evidence: GroupDisbandedEvent,
         ) => void;
         for (let i = this.#disbandedListeners.length - 1; i >= 0; i--) {
@@ -694,11 +584,9 @@ export class MarmotGroup<
     return super.removeListener(event, fn, context, once);
   }
 
-  override off<
-    T extends EventEmitter.EventNames<MarmotGroupEvents<THistory, TMedia>>,
-  >(
+  override off<T extends EventEmitter.EventNames<MarmotGroupEvents>>(
     event: T,
-    fn?: EventEmitter.EventListener<MarmotGroupEvents<THistory, TMedia>, T>,
+    fn?: EventEmitter.EventListener<MarmotGroupEvents, T>,
     context?: unknown,
     once?: boolean,
   ): this {
@@ -706,7 +594,7 @@ export class MarmotGroup<
   }
 
   override removeAllListeners(
-    event?: EventEmitter.EventNames<MarmotGroupEvents<THistory, TMedia>>,
+    event?: EventEmitter.EventNames<MarmotGroupEvents>,
   ): this {
     if (event === undefined || event === "removed")
       this.#removedListeners.length = 0;
@@ -747,7 +635,7 @@ export class MarmotGroup<
 
   /** Group-scoped durable key for removal realization state. */
   get #removedMarkerKey(): string {
-    return `${this.idStr}/removed`;
+    return groupKeys.removed(this.idStr);
   }
 
   /**
@@ -1032,35 +920,22 @@ export class MarmotGroup<
     return attempt;
   }
 
-  constructor(
-    state: ClientState,
-    options: MarmotGroupOptions<THistory, TMedia>,
-  ) {
+  constructor(state: ClientState, options: MarmotGroupOptions) {
     super();
-    this.store = options.store;
+    this.storage = options.storage;
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
     this.network = options.network;
-    this.#removedMarkerStore = options.removedMarkerStore;
 
-    if (options.history) {
-      if (typeof options.history === "function") {
-        this.history = options.history(state.groupContext.groupId);
-      } else {
-        this.history = options.history;
-      }
-    } else {
-      this.history = undefined as THistory;
-    }
+    this.history = GroupHistory.forGroup(
+      bytesToHex(state.groupContext.groupId),
+      options.rumors,
+    );
 
     this.session = new GroupSession({
       state,
       ciphersuite: this.ciphersuite,
-      store: this.store,
-      ingestStateStore: options.ingestStateStore,
-      lifecycleStore: options.lifecycleStore,
-      rewindStore: options.rewindStore,
-      removedMarkerStore: options.removedMarkerStore,
+      storage: this.storage,
       retained: options.retained,
       historyTree: options.historyTree,
       convergencePolicy: options.convergencePolicy,
@@ -1089,20 +964,9 @@ export class MarmotGroup<
       },
     });
 
-    if (options.media) {
-      if (typeof options.media === "function") {
-        this.media = options.media(this.id);
-      } else {
-        this.media = options.media;
-      }
-    } else {
-      this.media = undefined as TMedia;
-    }
-
     this.idStr = bytesToHex(this.id);
     this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
-    const publicationStore =
-      options.rewindStore ?? new InMemoryKeyValueStore<Uint8Array>();
+    const storage = this.storage;
     this.runtime = new GroupRuntime({
       welcomeDelivery: new NostrWelcomeDelivery({
         signer: this.signer,
@@ -1110,20 +974,14 @@ export class MarmotGroup<
       }),
       pendingPublications: new PendingPublicationStore(
         {
-          getItem: (key) => publicationStore.getItem(key),
-          setItem: async (key, value) => {
-            await this.session.persistPublication(() =>
-              publicationStore.setItem(key, value),
-            );
-            return value;
-          },
-          removeItem: (key) =>
-            this.session.persistPublication(() =>
-              publicationStore.removeItem(key),
-            ),
-          keys: () => publicationStore.keys(),
-          clear: () =>
-            this.session.persistPublication(() => publicationStore.clear()),
+          get: (key) => storage.get(key),
+          list: (prefix) => storage.list(prefix),
+          set: (key, value) =>
+            this.session.persistPublication(() => storage.set(key, value)),
+          delete: (key) =>
+            this.session.persistPublication(() => storage.delete(key)),
+          batch: (ops) =>
+            this.session.persistPublication(() => storage.batch(ops)),
         },
         this.idStr,
       ),
@@ -1146,7 +1004,6 @@ export class MarmotGroup<
     });
     linkPublicationRetention(this.runtime, this.session);
     this.mediaService = new GroupMediaService({
-      media: this.media,
       assertOpen: () => this.session.assertOutboundOpen(),
       getState: () => this.state,
       getCiphersuite: () => this.ciphersuite,
@@ -1162,15 +1019,12 @@ export class MarmotGroup<
   }
 
   /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
-  static async fromClientState<
-    THistory extends BaseGroupHistory | undefined = undefined,
-    TMedia extends BaseGroupMedia | undefined = undefined,
-  >(
+  static async fromClientState(
     state: ClientState,
-    options: Omit<MarmotGroupOptions<THistory, TMedia>, "ciphersuite"> & {
+    options: Omit<MarmotGroupOptions, "ciphersuite"> & {
       cryptoProvider?: CryptoProvider;
     },
-  ): Promise<MarmotGroup<THistory, TMedia>> {
+  ): Promise<MarmotGroup> {
     const cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     const cipherSuite = await cryptoProvider.getCiphersuiteImpl(
       state.groupContext.cipherSuite,
@@ -1655,20 +1509,10 @@ export class MarmotGroup<
     if (this.session.terminalTombstone) return;
     if (this.state.groupActiveState.kind !== "removedFromGroup") return;
 
-    if (this.#removedMarkerStore) {
-      const alreadyRealized = await this.#removedMarkerStore.getItem(
-        this.#removedMarkerKey,
-      );
-      if (alreadyRealized) return;
-      await this.#removedMarkerStore.setItem(this.#removedMarkerKey, true);
-      await this.session.markRemovalNotificationDelivered();
-    } else {
-      // No persisted marker configured: realization degrades to in-memory
-      // only — still idempotent within this process, but not restart-durable
-      // (documented on `MarmotGroupOptions.removedMarkerStore`).
-      if (this.#removalRealizedInMemory) return;
-      this.#removalRealizedInMemory = true;
-    }
+    const alreadyRealized = await this.storage.get(this.#removedMarkerKey);
+    if (alreadyRealized?.[0] === 1) return;
+    await this.storage.set(this.#removedMarkerKey, Uint8Array.of(1));
+    await this.session.markRemovalNotificationDelivered();
 
     this.#rejectQueuedOutbound("Removed from group; outbound cancelled.");
     this.#emitRemovedSafely();
@@ -1884,7 +1728,7 @@ export class MarmotGroup<
     encrypted: Uint8Array,
     attachment: MediaAttachment,
     sourceParent?: string,
-  ): Promise<StoredMedia> {
+  ): Promise<DecryptedMedia> {
     return this.mediaService.decryptMedia(encrypted, attachment, sourceParent);
   }
 
@@ -1911,9 +1755,6 @@ export class MarmotGroup<
 
     // Stop the settle timer and fail queued outbound before tearing down (B5).
     this.dispose();
-
-    this.log("clearing group media");
-    if (this.media) await this.media.clearMedia();
 
     this.log("removing group from store");
     await this.session.destroyLocalState();

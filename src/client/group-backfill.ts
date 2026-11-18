@@ -5,7 +5,7 @@ import type { NostrEvent } from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers/filter";
 
 import { logger } from "../utils/debug.js";
-import type { GenericKeyValueStore } from "../utils/key-value.js";
+import type { MarmotStorage } from "../utils/storage.js";
 import { normalizeRelayUrl } from "../utils/relay-url.js";
 import type { NostrNetworkInterface } from "./nostr-interface.js";
 
@@ -62,7 +62,7 @@ function relayKey(relay: string): string {
  * group's ingest state.
  */
 export function backfillCursorKey(groupIdHex: string, relay: string): string {
-  return `${groupIdHex}/ingest/backfill-cursor/v1/${relayKey(relay)}`;
+  return `${groupIdHex}/ingest/backfill-cursor/${relayKey(relay)}`;
 }
 
 /** Encodes a cursor (unix seconds) as a version byte + big-endian uint32. */
@@ -92,13 +92,13 @@ export function decodeBackfillCursor(
  * a full (paged) backfill of that relay rather than skipping history.
  */
 export async function readBackfillCursor(
-  store: GenericKeyValueStore<Uint8Array>,
+  store: MarmotStorage,
   groupIdHex: string,
   relay: string,
   nowSeconds: number,
 ): Promise<number | undefined> {
   const cursor = decodeBackfillCursor(
-    await store.getItem(backfillCursorKey(groupIdHex, relay)),
+    await store.get(backfillCursorKey(groupIdHex, relay)),
   );
   if (cursor === undefined) return undefined;
   if (cursor > nowSeconds + BACKFILL_FUTURE_SKEW_SECONDS) {
@@ -114,7 +114,7 @@ export async function readBackfillCursor(
  * cursor.
  */
 export function backfillProgressKey(groupIdHex: string, relay: string): string {
-  return `${groupIdHex}/ingest/backfill-progress/v1/${relayKey(relay)}`;
+  return `${groupIdHex}/ingest/backfill-progress/${relayKey(relay)}`;
 }
 
 /**
@@ -155,13 +155,13 @@ export function decodeBackfillProgress(
  * paged from its newest event as usual).
  */
 export async function readBackfillProgress(
-  store: GenericKeyValueStore<Uint8Array>,
+  store: MarmotStorage,
   groupIdHex: string,
   relay: string,
   nowSeconds: number,
 ): Promise<BackfillProgress | undefined> {
   const progress = decodeBackfillProgress(
-    await store.getItem(backfillProgressKey(groupIdHex, relay)),
+    await store.get(backfillProgressKey(groupIdHex, relay)),
   );
   if (!progress || progress.to > nowSeconds + BACKFILL_FUTURE_SKEW_SECONDS)
     return undefined;

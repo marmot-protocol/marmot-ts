@@ -6,7 +6,6 @@ import { createApplicationMessageIntent } from "../../client/group/application-m
 import { MarmotClient } from "../../client/marmot-client.js";
 import {
   getNostrGroupIdHex,
-  SerializedClientState,
 } from "../../core/client-state.js";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import {
@@ -14,10 +13,9 @@ import {
   GROUP_EVENT_KIND,
   WELCOME_EVENT_KIND,
 } from "../../core/protocol.js";
-import type { StoredKeyPackage } from "../../client/key-package-manager.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { InMemoryKeyValueStore } from "../../extra/in-memory-key-value-store.js";
+import { memoryStorage } from "../../utils/storage.js";
 
 // NOTE: we use the shared test helper MockNetwork, not an inline version.
 
@@ -41,15 +39,13 @@ describe("End-to-end: invite, join, first message", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-      keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
+      storage: memoryStorage(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "cd".repeat(32),

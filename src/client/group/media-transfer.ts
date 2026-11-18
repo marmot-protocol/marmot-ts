@@ -13,7 +13,8 @@ import {
   createChatRumor,
   createApplicationMessageIntent,
 } from "./application-message.js";
-import type { MarmotGroup, StoredMedia } from "./marmot-group.js";
+import type { MarmotGroup } from "./marmot-group.js";
+import type { DecryptedMedia } from "./group-media-service.js";
 import type { EncryptMediaMetadata } from "./group-media-service.js";
 
 /**
@@ -75,7 +76,7 @@ async function cancellable<T>(
     signal.removeEventListener("abort", abort);
   }
 }
-function policyFor(group: MarmotGroup<any, any>): EncryptedMediaPolicyV2 {
+function policyFor(group: MarmotGroup): EncryptedMediaPolicyV2 {
   group.session.assertOutboundOpen();
   const policy = getEncryptedMediaPolicy(group.state.groupContext.extensions);
   if (!policy)
@@ -85,7 +86,7 @@ function policyFor(group: MarmotGroup<any, any>): EncryptedMediaPolicyV2 {
 
 /** Upload all attachments and build one guarded kind-9 send intent. No MLS mutation. */
 export async function prepareMediaMessage(
-  group: MarmotGroup<any, any>,
+  group: MarmotGroup,
   files: readonly { blob: Blob; metadata: EncryptMediaMetadata }[],
   options: MediaTransferOptions & { caption?: string; tags?: string[][] },
 ) {
@@ -164,11 +165,11 @@ export async function prepareMediaMessage(
 
 /** Fetch and decrypt exactly one reference; try fallbacks after corrupt blobs too. */
 export async function downloadMediaAttachment(
-  group: MarmotGroup<any, any>,
+  group: MarmotGroup,
   attachment: MediaAttachment,
   sourceParent: string,
   options: MediaTransferOptions,
-): Promise<StoredMedia> {
+): Promise<DecryptedMedia> {
   if (!parseMediaImetaTag(encodeMediaImetaTag(attachment)))
     throw new Error("Invalid media attachment");
   const { signal, maxBytes } = limits(options, group.closedSignal);
@@ -203,7 +204,7 @@ export async function downloadMediaAttachment(
 
 /** Attachment failures are local; callers retain the original caption and tags. */
 export async function downloadMessageMedia(
-  group: MarmotGroup<any, any>,
+  group: MarmotGroup,
   tags: string[][],
   sourceParent: string,
   options: MediaTransferOptions,

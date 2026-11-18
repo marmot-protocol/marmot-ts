@@ -15,7 +15,11 @@ import {
   serializeClientState,
 } from "../core/client-state.js";
 import { commitDigest } from "../core/convergence.js";
-import type { GenericKeyValueStore } from "../utils/key-value.js";
+import {
+  deletePrefix,
+  StorageBatch,
+  type MarmotStorage,
+} from "../utils/storage.js";
 import {
   decodeOwnCommitRecord,
   encodeOwnCommitRecord,
@@ -74,13 +78,13 @@ const HISTORY_TREE_VERSION = 1;
 /** Default number of heavy snapshots kept rehydrated in memory at once. */
 const DEFAULT_SNAPSHOT_CACHE = 128;
 
-/** The store backing a tree's heavy material. A `GenericKeyValueStore<Uint8Array>`. */
-type HistoryTreeStore = GenericKeyValueStore<Uint8Array>;
+/** The storage backing a tree's heavy material, scoped so group ids are key prefixes. */
+type HistoryTreeStore = MarmotStorage;
 
-const metaKey = (gid: string) => `${gid}/meta`;
-const edgeKey = (gid: string, tag: string) => `${gid}/edge/${tag}`;
-const stateKey = (gid: string, tag: string) => `${gid}/state/${tag}`;
-const commitKey = (gid: string, tag: string) => `${gid}/commit/${tag}`;
+const metaKey = (gid: string) => `${gid}/tree/meta`;
+const edgeKey = (gid: string, tag: string) => `${gid}/tree/edge/${tag}`;
+const stateKey = (gid: string, tag: string) => `${gid}/tree/state/${tag}`;
+const commitKey = (gid: string, tag: string) => `${gid}/tree/commit/${tag}`;
 
 /**
  * Protocol-level metadata for one edge — the commit that produced a node from
@@ -377,7 +381,7 @@ export class GroupHistoryTree {
       this.#putHeavy(tag, { snapshot: bytes });
       return bytes;
     }
-    const bytes = await this.#store.getItem(stateKey(this.#gid, tag));
+    const bytes = await this.#store.get(stateKey(this.#gid, tag));
     if (!bytes) return undefined;
     this.#putHeavy(tag, { snapshot: bytes });
     return bytes;
@@ -405,7 +409,7 @@ export class GroupHistoryTree {
     if (!this.#store || !this.#gid) return undefined;
     // Fetched on demand (rare — for replay/debug); not cached, to avoid
     // displacing a hot snapshot or polluting the LRU with commit-only entries.
-    const record = await this.#store.getItem(commitKey(this.#gid, childTag));
+    const record = await this.#store.get(commitKey(this.#gid, childTag));
     return record ? decodeOwnCommitRecord(record).wireBytes : undefined;
   }
 
@@ -419,7 +423,7 @@ export class GroupHistoryTree {
     const record =
       cached ??
       (this.#store && this.#gid
-        ? await this.#store.getItem(commitKey(this.#gid, childTag))
+        ? await this.#store.get(commitKey(this.#gid, childTag))
         : null);
     if (!record) return undefined;
     const decoded = decodeOwnCommitRecord(record);
@@ -575,7 +579,7 @@ export class GroupHistoryTree {
    * dirty so the first {@link flush} persists the whole tree. A no-op if the
    * same store is already bound (e.g. on a tree loaded via {@link load}).
    */
-  bindStore(store: GenericKeyValueStore<Uint8Array>): void {
+  bindStore(store: MarmotStorage): void {
     this.#assertMutable();
     if (this.#store === store) return;
     this.#store = store;
@@ -592,7 +596,12 @@ export class GroupHistoryTree {
   async flush(): Promise<void> {
     this.#assertMutable();
     if (this.#flushing) return this.#flushing;
-    const operation = this.#flush();
+    const operation = (async () => {
+      const batch = new StorageBatch(this.#requireStore());
+      const finish = await this.#stageFlush(batch);
+      await batch.commit();
+      finish();
+    })();
     this.#flushing = operation;
     try {
       await operation;
@@ -601,10 +610,27 @@ export class GroupHistoryTree {
     }
   }
 
-  async #flush(): Promise<void> {
+  /**
+   * Stages every unflushed node into `batch` so it commits atomically with the
+   * caller's other writes. Call the returned function only after the batch
+   * commits; it marks the staged nodes clean.
+   * @internal
+   */
+  async stageFlush(batch: StorageBatch): Promise<() => void> {
+    this.#assertMutable();
+    await this.#flushing;
+    return this.#stageFlush(batch);
+  }
+
+  #requireStore(): HistoryTreeStore {
     if (!this.#store || !this.#gid)
       throw new Error("GroupHistoryTree: flush requires a bound store");
-    const gid = this.#gid;
+    return this.#store;
+  }
+
+  async #stageFlush(batch: StorageBatch): Promise<() => void> {
+    this.#requireStore();
+    const gid = this.#gid!;
 
     const revision = this.#revision;
     const dirty = [...this.#dirty].map(([tag, generation]) => ({
@@ -626,17 +652,13 @@ export class GroupHistoryTree {
     for (const { tag, node, heavy } of dirty) {
       if (!node || !heavy)
         throw new Error("GroupHistoryTree: dirty material missing");
-      await this.#store.setItem(
-        edgeKey(gid, tag),
-        this.#encodePhysicalEdge(node),
-      );
-      await this.#store.setItem(stateKey(gid, tag), heavy.snapshot);
+      batch.set(edgeKey(gid, tag), this.#encodePhysicalEdge(node));
+      batch.set(stateKey(gid, tag), heavy.snapshot);
       if (node.edge) {
-        const commit =
-          heavy.commit ?? (await this.#store.getItem(commitKey(gid, tag)));
+        const commit = heavy.commit ?? (await batch.get(commitKey(gid, tag)));
         if (!commit)
           throw new Error("GroupHistoryTree: required commit missing");
-        await this.#store.setItem(commitKey(gid, tag), commit);
+        batch.set(commitKey(gid, tag), commit);
       }
       if (checkpoint) {
         checkpoint.receivers[tag] = [
@@ -648,18 +670,22 @@ export class GroupHistoryTree {
         delete checkpoint.projections[tag];
       }
     }
-    if (this.#rootTag && (this.#rootDirty || checkpoint)) {
-      await this.#store.setItem(
+    const writeRoot = !!this.#rootTag && (this.#rootDirty || !!checkpoint);
+    if (writeRoot)
+      batch.set(
         metaKey(gid),
-        checkpoint ? encodeCheckpoint(checkpoint) : encodeMeta(this.#rootTag),
+        checkpoint ? encodeCheckpoint(checkpoint) : encodeMeta(this.#rootTag!),
       );
-      if (checkpoint) this.#checkpoint = checkpoint;
-      if (this.#revision === revision) this.#rootDirty = false;
-    }
-    for (const { tag, generation } of dirty)
-      if (this.#dirty.get(tag) === generation) this.#dirty.delete(tag);
-    // Flushed entries are now clean and may be evicted under cache pressure.
-    this.#evict();
+    return () => {
+      if (writeRoot) {
+        if (checkpoint) this.#checkpoint = checkpoint;
+        if (this.#revision === revision) this.#rootDirty = false;
+      }
+      for (const { tag, generation } of dirty)
+        if (this.#dirty.get(tag) === generation) this.#dirty.delete(tag);
+      // Flushed entries are now clean and may be evicted under cache pressure.
+      this.#evict();
+    };
   }
 
   /**
@@ -668,11 +694,11 @@ export class GroupHistoryTree {
    * snapshots/commit bytes are fetched on demand.
    */
   static async load(
-    store: GenericKeyValueStore<Uint8Array>,
+    store: MarmotStorage,
     gid: string,
     options?: { snapshotCacheSize?: number },
   ): Promise<GroupHistoryTree | undefined> {
-    const metaBytes = await store.getItem(metaKey(gid));
+    const metaBytes = await store.get(metaKey(gid));
     if (!metaBytes) return undefined;
     const checkpoint =
       metaBytes[0] === 2 ? decodeCheckpoint(metaBytes) : undefined;
@@ -682,14 +708,14 @@ export class GroupHistoryTree {
     tree.#store = store;
     tree.#gid = gid;
 
-    const prefix = `${gid}/edge/`;
+    const prefix = `${gid}/tree/edge/`;
     const keys = checkpoint
       ? checkpoint.members.map((tag) => edgeKey(gid, tag))
-      : await store.keys();
+      : await store.list(prefix);
     for (const key of keys) {
       if (!key.startsWith(prefix)) continue;
       const tag = key.slice(prefix.length);
-      const bytes = await store.getItem(key);
+      const bytes = await store.get(key);
       if (!bytes) {
         if (checkpoint)
           throw new Error("GroupHistoryTree: required edge missing");
@@ -732,20 +758,8 @@ export class GroupHistoryTree {
   }
 
   /** Removes every persisted key for a group's tree from the store. */
-  static async purge(
-    store: GenericKeyValueStore<Uint8Array>,
-    gid: string,
-  ): Promise<void> {
-    const keys = await store.keys();
-    for (const key of keys) {
-      if (
-        key === metaKey(gid) ||
-        ["edge", "state", "commit"].some((namespace) =>
-          key.startsWith(`${gid}/${namespace}/`),
-        )
-      )
-        await store.removeItem(key);
-    }
+  static async purge(store: MarmotStorage, gid: string): Promise<void> {
+    await deletePrefix(store, `${gid}/tree/`);
   }
 
   /**
@@ -800,7 +814,10 @@ export class GroupHistoryTree {
     this.#retentionActive = true;
     try {
       const identity = retentionPlanIdentity(plan);
-      await this.#flush();
+      const batch = new StorageBatch(this.#store);
+      const flushed = await this.#stageFlush(batch);
+      await batch.commit();
+      flushed();
       const root = this.#nodes.get(plan.logicalRootTag)!;
       const existingBoundary =
         plan.logicalRootTag === this.#checkpoint?.rootTag
@@ -875,7 +892,7 @@ export class GroupHistoryTree {
         )
           throw new Error("GroupHistoryTree: retention parent closure broken");
         if (node.edge) {
-          const bytes = await this.#store.getItem(commitKey(this.#gid, tag));
+          const bytes = await this.#store.get(commitKey(this.#gid, tag));
           if (
             !bytes ||
             bytesToHex(commitDigest(decodeOwnCommitRecord(bytes).wireBytes)) !==
@@ -886,9 +903,9 @@ export class GroupHistoryTree {
       }
       const authority = encodeCheckpoint(checkpoint);
       try {
-        await this.#store.setItem(metaKey(this.#gid), authority);
+        await this.#store.set(metaKey(this.#gid), authority);
       } catch (error) {
-        const persisted = await this.#store.getItem(metaKey(this.#gid));
+        const persisted = await this.#store.get(metaKey(this.#gid));
         if (persisted && bytesToHex(persisted) === bytesToHex(authority)) {
           this.#adoptCheckpoint(checkpoint, plan.snapshots);
           this.#publishedRetention = {
@@ -1033,22 +1050,22 @@ export class GroupHistoryTree {
         throw new Error(
           "GroupHistoryTree: cleanup authority differs from live membership",
         );
-      for (const [tag, snapshot] of Object.entries(checkpoint.projections))
-        await this.#store.setItem(
-          stateKey(this.#gid, tag),
-          hexToBytes(snapshot),
-        );
-      for (const tag of checkpoint.garbage) {
-        await this.#store.removeItem(edgeKey(this.#gid, tag));
-        await this.#store.removeItem(stateKey(this.#gid, tag));
-        await this.#store.removeItem(commitKey(this.#gid, tag));
-      }
       if (
         checkpoint.garbage.length ||
         Object.keys(checkpoint.projections).length
       ) {
+        // Projections, garbage removal and the clean checkpoint commit together.
+        const batch = new StorageBatch(this.#store);
+        for (const [tag, snapshot] of Object.entries(checkpoint.projections))
+          batch.set(stateKey(this.#gid, tag), hexToBytes(snapshot));
+        for (const tag of checkpoint.garbage) {
+          batch.delete(edgeKey(this.#gid, tag));
+          batch.delete(stateKey(this.#gid, tag));
+          batch.delete(commitKey(this.#gid, tag));
+        }
         const clean = { ...checkpoint, garbage: [], projections: {} };
-        await this.#store.setItem(metaKey(this.#gid), encodeCheckpoint(clean));
+        batch.set(metaKey(this.#gid), encodeCheckpoint(clean));
+        await batch.commit();
         this.#checkpoint = clean;
       }
     } finally {
@@ -1110,9 +1127,7 @@ export class GroupHistoryTree {
           throw new Error("GroupHistoryTree: retained parent closure broken");
         cursor = parent;
       }
-      const primary = await this.#store!.getItem(
-        stateKey(this.#gid!, node.tag),
-      );
+      const primary = await this.#store!.get(stateKey(this.#gid!, node.tag));
       if (!primary)
         throw new Error("GroupHistoryTree: required snapshot missing");
       const snapshot =
@@ -1143,9 +1158,7 @@ export class GroupHistoryTree {
       )
         throw new Error("GroupHistoryTree: receiver allowlist mismatch");
       if (node.edge) {
-        const record = await this.#store!.getItem(
-          commitKey(this.#gid!, node.tag),
-        );
+        const record = await this.#store!.get(commitKey(this.#gid!, node.tag));
         if (!record || node.edge.commitDigest.length !== 32)
           throw new Error("GroupHistoryTree: required commit missing");
         const wire = decodeOwnCommitRecord(record).wireBytes;

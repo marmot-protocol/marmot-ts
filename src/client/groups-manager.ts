@@ -1,3 +1,4 @@
+import type { MarmotRumorDatabases } from "./group/group-history.js";
 import { watchCurrent } from "../utils/watch-current.js";
 import type { MarmotGroupSnapshot } from "./group/marmot-group.js";
 import { isReusableKeyPackage } from "../core/key-package.js";
@@ -15,10 +16,7 @@ import {
   type GroupInfo,
   Welcome,
 } from "ts-mls";
-import {
-  getNostrGroupIdHex,
-  SerializedClientState,
-} from "../core/client-state.js";
+import { getNostrGroupIdHex } from "../core/client-state.js";
 import type { MarmotGroupInfo } from "../core/client-state.js";
 import { GROUP_EVENT_KIND } from "../core/protocol.js";
 import { marmotAuthService } from "../core/auth-service.js";
@@ -29,14 +27,9 @@ import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
 import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { logger } from "../utils/debug.js";
 import { hasAck } from "../utils/index.js";
-import type { GenericKeyValueStore } from "../utils/key-value.js";
-import type { IngestPersistenceCapability } from "./marmot-client.js";
+import type { MarmotStorage } from "../utils/storage.js";
 import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import {
-  BaseGroupHistory,
-  BaseGroupMedia,
-  GroupHistoryFactory,
-  GroupMediaFactory,
   MarmotGroup,
   GroupTerminalError,
   type GroupDisbandedEvent,
@@ -82,7 +75,6 @@ import {
   readBackfillProgress,
 } from "./group-backfill.js";
 import { GroupRegistry } from "./group-registry.js";
-import { InMemoryKeyValueStore } from "../extra/in-memory-key-value-store.js";
 import type { GroupRuntime } from "./runtime/group-runtime.js";
 import type {
   GroupPublishResult,
@@ -216,30 +208,12 @@ function backfillBounds(options: ConnectOptions | undefined) {
 }
 
 /** Options for creating a new GroupsManager */
-export type GroupsManagerOptions<
-  THistory extends BaseGroupHistory | undefined = undefined,
-  TMedia extends BaseGroupMedia | undefined = undefined,
-> = {
-  /** The backend storing serialized group state bytes */
-  store: GenericKeyValueStore<SerializedClientState>;
-  ingestStateStore: GenericKeyValueStore<Uint8Array>;
-  lifecycleStore: GenericKeyValueStore<Uint8Array>;
-  ingestPersistence: IngestPersistenceCapability;
+export type GroupsManagerOptions = {
   /**
-   * Dedicated backend for the per-group rewind-history blob. When provided, the
-   * convergence rewind window is persisted and survives a restart. Optional.
+   * Durable storage scoped to the client's `group/` namespace: every group's
+   * state, fork history, ingest ledgers and lifecycle records.
    */
-  rewindStore?: GenericKeyValueStore<Uint8Array>;
-  /**
-   * Dedicated backend for the persisted removed-inactive marker (D-12), keyed
-   * by the same group-id hex as {@link store}. When provided, the fact that an
-   * involuntary removal has already been realized survives a restart, so the
-   * `removed` event fires exactly once across process boundaries and a rewind
-   * that supersedes the removal can clear it durably. Optional — when omitted,
-   * realization degrades to in-memory-only (fires once per process, does not
-   * survive a restart).
-   */
-  removedMarkerStore?: GenericKeyValueStore<boolean>;
+  storage: MarmotStorage;
   /** The signer used for the clients identity */
   signer: EventSigner;
   /** The nostr relay pool to use for the client */
@@ -250,10 +224,8 @@ export type GroupsManagerOptions<
   auditContext?: AuditContextOptions;
   /** The crypto provider to use for cryptographic operations */
   cryptoProvider?: CryptoProvider;
-  /** Optional group history factory passed to each MarmotGroup instance */
-  historyFactory?: GroupHistoryFactory<THistory>;
-  /** Optional group media factory passed to each MarmotGroup instance */
-  mediaFactory?: GroupMediaFactory<TMedia>;
+  /** Per-group rumor databases for message history (in memory when omitted). */
+  rumors?: MarmotRumorDatabases;
   /**
    * Convergence policy applied to every group (branch selection + the
    * `maxRewindCommits` rollback horizon). Keep the finite profile-1 default
@@ -278,22 +250,19 @@ export type GroupsManagerOptions<
 };
 
 /** Events emitted by {@link GroupsManager} */
-export type GroupsManagerEvents<
-  THistory extends BaseGroupHistory | undefined = any,
-  TMedia extends BaseGroupMedia | undefined = any,
-> = {
+export type GroupsManagerEvents = {
   /** Emitted after the loaded set or any loaded group snapshot changes. */
   changed: (snapshots: readonly MarmotGroupSnapshot[]) => void;
   /** Emitted when the set of loaded groups changes */
-  updated: (groups: MarmotGroup<THistory, TMedia>[]) => void;
+  updated: (groups: MarmotGroup[]) => void;
   /** Emitted when a group is loaded from the store */
-  loaded: (group: MarmotGroup<THistory, TMedia>) => void;
+  loaded: (group: MarmotGroup) => void;
   /** Emitted when a new group is created */
-  created: (group: MarmotGroup<THistory, TMedia>) => void;
+  created: (group: MarmotGroup) => void;
   /** Emitted when a group is imported from a ClientState object */
-  imported: (group: MarmotGroup<THistory, TMedia>) => void;
+  imported: (group: MarmotGroup) => void;
   /** Emitted when a group is joined */
-  joined: (group: MarmotGroup<THistory, TMedia>) => void;
+  joined: (group: MarmotGroup) => void;
   /** Emitted when a group is unloaded */
   unloaded: (groupId: Uint8Array) => void;
   /** Emitted when a group is destroyed */
@@ -340,12 +309,10 @@ export type GroupsManagerEvents<
  * construction to an internal `GroupFactory`, layering the public lifecycle events
  * (created/imported/joined/destroyed/left) and the send/ingest facade on top.
  */
-export class GroupsManager<
-  THistory extends BaseGroupHistory | undefined = any,
-  TMedia extends BaseGroupMedia | undefined = any,
-> extends EventEmitter<GroupsManagerEvents<THistory, TMedia>> {
+export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
   /** The backend storing serialized group state bytes */
-  readonly store: GenericKeyValueStore<SerializedClientState>;
+  /** Storage scoped to the client's `group/` namespace. */
+  readonly storage: MarmotStorage;
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
   /** The nostr relay pool to use for the client */
@@ -353,17 +320,16 @@ export class GroupsManager<
 
   /** Crypto provider for cryptographic operations */
   public cryptoProvider: CryptoProvider;
-  readonly ingestPersistence: IngestPersistenceCapability;
 
   /** Owns the in-memory cache + store hydration. */
-  readonly #registry: GroupRegistry<THistory, TMedia>;
+  readonly #registry: GroupRegistry;
   readonly #adoptions = new Map<string, Promise<void>>();
   readonly #maxPendingImageMutations: number;
   readonly #imageMutations = new Map<
     string,
     {
-      group: Promise<MarmotGroup<THistory, TMedia>>;
-      instance?: MarmotGroup<THistory, TMedia>;
+      group: Promise<MarmotGroup>;
+      instance?: MarmotGroup;
       tail: Promise<unknown>;
       pending: number;
     }
@@ -381,17 +347,13 @@ export class GroupsManager<
     }
   >();
   /** Builds new groups (the identity-signer/ciphersuite consumer). */
-  readonly #factory: GroupFactory<THistory, TMedia>;
+  readonly #factory: GroupFactory;
   /** The injectable event verifier gating the 445 drain (SEC-01). */
   readonly #verifyEvent: VerifyEventMethod;
   /** Holds each group's backfill cursor alongside its ingest state. */
-  readonly #ingestStateStore: GenericKeyValueStore<Uint8Array>;
 
   #snapshot: readonly MarmotGroupSnapshot[] = Object.freeze([]);
-  readonly #snapshotListeners = new Map<
-    MarmotGroup<THistory, TMedia>,
-    () => void
-  >();
+  readonly #snapshotListeners = new Map<MarmotGroup, () => void>();
 
   /** Synchronous UI snapshots of loaded groups; stable until `changed`. No storage reads. */
   get snapshot(): readonly MarmotGroupSnapshot[] {
@@ -409,7 +371,7 @@ export class GroupsManager<
     this.emit("changed", this.#snapshot);
   };
 
-  #trackSnapshots(groups: MarmotGroup<THistory, TMedia>[]): void {
+  #trackSnapshots(groups: MarmotGroup[]): void {
     const live = new Set(groups);
     for (const [group, detach] of this.#snapshotListeners)
       if (!live.has(group)) detach();
@@ -428,7 +390,7 @@ export class GroupsManager<
     this.#refreshSnapshot();
   }
 
-  constructor(options: GroupsManagerOptions<THistory, TMedia>) {
+  constructor(options: GroupsManagerOptions) {
     super();
     const capacity = options.maxPendingImageMutations ?? 16;
     if (!Number.isSafeInteger(capacity) || capacity < 1)
@@ -436,21 +398,14 @@ export class GroupsManager<
         "Image mutation capacity must be a finite positive integer",
       );
     this.#maxPendingImageMutations = capacity;
-    this.store = options.store;
-    this.ingestPersistence = options.ingestPersistence;
+    this.storage = options.storage;
     this.signer = options.signer;
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
-    this.#ingestStateStore =
-      options.ingestStateStore ?? new InMemoryKeyValueStore<Uint8Array>();
 
-    this.#registry = new GroupRegistry<THistory, TMedia>({
-      store: options.store,
-      ingestStateStore: options.ingestStateStore,
-      lifecycleStore: options.lifecycleStore,
-      rewindStore: options.rewindStore,
-      removedMarkerStore: options.removedMarkerStore,
+    this.#registry = new GroupRegistry({
+      storage: options.storage,
       convergencePolicy: options.convergencePolicy,
       ingestionPool: options.ingestionPool,
       signer: options.signer,
@@ -458,16 +413,11 @@ export class GroupsManager<
       audit: options.audit,
       auditContext: options.auditContext,
       cryptoProvider: this.cryptoProvider,
-      historyFactory: options.historyFactory,
-      mediaFactory: options.mediaFactory,
+      rumors: options.rumors,
     });
 
-    this.#factory = new GroupFactory<THistory, TMedia>({
-      store: options.store,
-      ingestStateStore: options.ingestStateStore,
-      lifecycleStore: options.lifecycleStore,
-      rewindStore: options.rewindStore,
-      removedMarkerStore: options.removedMarkerStore,
+    this.#factory = new GroupFactory({
+      storage: options.storage,
       convergencePolicy: options.convergencePolicy,
       ingestionPool: options.ingestionPool,
       signer: options.signer,
@@ -475,8 +425,7 @@ export class GroupsManager<
       audit: options.audit,
       auditContext: options.auditContext,
       cryptoProvider: this.cryptoProvider,
-      historyFactory: options.historyFactory,
-      mediaFactory: options.mediaFactory,
+      rumors: options.rumors,
       verifyEvent: this.#verifyEvent,
     });
 
@@ -493,7 +442,7 @@ export class GroupsManager<
   }
 
   /** Returns the list of currently loaded group instances */
-  get loaded(): MarmotGroup<THistory, TMedia>[] {
+  get loaded(): MarmotGroup[] {
     return this.#registry.loaded;
   }
 
@@ -508,14 +457,12 @@ export class GroupsManager<
   }
 
   /** Gets a group from cache or loads it from store */
-  async get(
-    groupId: Uint8Array | string,
-  ): Promise<MarmotGroup<THistory, TMedia>> {
+  async get(groupId: Uint8Array | string): Promise<MarmotGroup> {
     return this.#registry.get(groupId);
   }
 
   /** Returns the protocol session for a loaded or persisted group. */
-  async session(groupId: Uint8Array | string): Promise<GroupSession<THistory>> {
+  async session(groupId: Uint8Array | string): Promise<GroupSession> {
     return (await this.get(groupId)).session;
   }
 
@@ -657,7 +604,7 @@ export class GroupsManager<
   #mutateImage(
     groupId: Uint8Array | string,
     operation: (
-      group: MarmotGroup<THistory, TMedia>,
+      group: MarmotGroup,
       actorPubkey: string,
       owned: Uint8Array | undefined,
       signal: AbortSignal,
@@ -757,7 +704,7 @@ export class GroupsManager<
     return result;
   }
 
-  #assertImageOwnerOpen(group: MarmotGroup<THistory, TMedia>): void {
+  #assertImageOwnerOpen(group: MarmotGroup): void {
     if (
       !this.loaded.includes(group) ||
       group.closedSignal.aborted ||
@@ -767,10 +714,7 @@ export class GroupsManager<
     group.session.assertOpen();
   }
 
-  async #imageActor(
-    group: MarmotGroup<THistory, TMedia>,
-    signal?: AbortSignal,
-  ): Promise<string> {
+  async #imageActor(group: MarmotGroup, signal?: AbortSignal): Promise<string> {
     this.#assertImageOwnerOpen(group);
     signal?.throwIfAborted();
     const signals = [group.closedSignal, group.image.closedSignal];
@@ -802,7 +746,7 @@ export class GroupsManager<
   }
 
   #assertImageMutation(
-    group: MarmotGroup<THistory, TMedia>,
+    group: MarmotGroup,
     actorPubkey: string,
     expectedParent?: string,
   ): void {
@@ -931,7 +875,7 @@ export class GroupsManager<
   }
 
   /** Loads all groups from the store and returns them */
-  async loadAll(): Promise<MarmotGroup<THistory, TMedia>[]> {
+  async loadAll(): Promise<MarmotGroup[]> {
     return this.#registry.loadAll();
   }
 
@@ -967,7 +911,7 @@ export class GroupsManager<
       { controller: AbortController; sub?: Unsubscribable }
     >();
 
-    const connect = (group: MarmotGroup<THistory, TMedia>) => {
+    const connect = (group: MarmotGroup) => {
       if (records.has(group.idStr)) return;
       if (options?.signal?.aborted) return;
       const record: { controller: AbortController; sub?: Unsubscribable } = {
@@ -1033,7 +977,7 @@ export class GroupsManager<
 
   /** Backfill + live-subscribe a single group instance to its transport events. */
   async #connectGroup(
-    group: MarmotGroup<THistory, TMedia>,
+    group: MarmotGroup,
     options?: ConnectOptions,
   ): Promise<Unsubscribable> {
     const noop: Unsubscribable = { unsubscribe: () => {} };
@@ -1228,7 +1172,7 @@ export class GroupsManager<
       const resume = new Map<string, BackfillProgress>();
       for (const relay of relays) {
         const cursor = await readBackfillCursor(
-          this.#ingestStateStore,
+          this.storage,
           group.idStr,
           relay,
           nowSeconds(),
@@ -1238,7 +1182,7 @@ export class GroupsManager<
           since.set(relay, Math.max(0, Math.floor(cursor - slack)));
         }
         const progress = await readBackfillProgress(
-          this.#ingestStateStore,
+          this.storage,
           group.idStr,
           relay,
           nowSeconds(),
@@ -1326,16 +1270,16 @@ export class GroupsManager<
    * written as the group closes is removed again.
    */
   async #writeBackfillRecord(
-    group: MarmotGroup<THistory, TMedia>,
+    group: MarmotGroup,
     key: string,
     value?: Uint8Array,
   ): Promise<void> {
     const closed = () =>
       group.session.destroyed || group.session.terminalTombstone !== undefined;
     if (closed()) return;
-    if (value === undefined) return this.#ingestStateStore.removeItem(key);
-    await this.#ingestStateStore.setItem(key, value);
-    if (closed()) await this.#ingestStateStore.removeItem(key);
+    if (value === undefined) return this.storage.delete(key);
+    await this.storage.set(key, value);
+    if (closed()) await this.storage.delete(key);
   }
 
   /**
@@ -1345,7 +1289,7 @@ export class GroupsManager<
    * re-reads the same window. Persistence failures are logged, never thrown.
    */
   async #advanceBackfillCursors(
-    group: MarmotGroup<THistory, TMedia>,
+    group: MarmotGroup,
     backfill: PagedBackfillResult,
     trusted: readonly NostrEvent[],
     held: readonly NostrEvent[],
@@ -1388,7 +1332,7 @@ export class GroupsManager<
    * record unchanged. Persistence failures are logged, never thrown.
    */
   async #recordBackfillProgress(
-    group: MarmotGroup<THistory, TMedia>,
+    group: MarmotGroup,
     backfill: PagedBackfillResult,
     recorded: ReadonlyMap<string, BackfillProgress>,
     held: readonly NostrEvent[],
@@ -1443,7 +1387,7 @@ export class GroupsManager<
       /** Runs after duplicate rejection while adoption for this group is serialized. */
       beforeAdopt?: () => Promise<void>;
     },
-  ): Promise<MarmotGroup<THistory, TMedia>> {
+  ): Promise<MarmotGroup> {
     const eventName = options?.emit ?? "imported";
     const id = bytesToHex(state.groupContext.groupId);
     const previous = this.#adoptions.get(id) ?? Promise.resolve();
@@ -1480,7 +1424,7 @@ export class GroupsManager<
    * Imports a new group from a {@link ClientState} object, persisting it to
    * the store and emitting `imported`.
    */
-  async import(state: ClientState): Promise<MarmotGroup<THistory, TMedia>> {
+  async import(state: ClientState): Promise<MarmotGroup> {
     return this.adoptClientState(state, { emit: "imported" });
   }
 
@@ -1510,7 +1454,7 @@ export class GroupsManager<
       keyPackageRef: Uint8Array,
     ) => Promise<void>;
   }): Promise<{
-    group: MarmotGroup<THistory, TMedia>;
+    group: MarmotGroup;
     consumedKeyPackageRef: Uint8Array | null;
   }> {
     const { welcome, candidates, ciphersuiteImpl } = options;
@@ -1647,7 +1591,7 @@ export class GroupsManager<
   async create(
     name: string,
     options?: CreateGroupOptions,
-  ): Promise<MarmotGroup<THistory, TMedia>> {
+  ): Promise<MarmotGroup> {
     log("creating group %o", name);
     const group = await this.#factory.create(name, options);
 
@@ -1667,7 +1611,7 @@ export class GroupsManager<
     /** Watch loaded groups and their UI state without loading storage. Call loadAll() to hydrate first. */
     includeStateChanges?: boolean;
     signal?: AbortSignal;
-  }): AsyncGenerator<MarmotGroup<THistory, TMedia>[]> {
+  }): AsyncGenerator<MarmotGroup[]> {
     if (options?.includeStateChanges) {
       return watchCurrent({
         read: () => this.loaded,

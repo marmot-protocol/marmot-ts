@@ -365,11 +365,22 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       allKeys.map((key) => this.#store.get(key)),
     );
 
+    // Oldest first (signed lifetime start), so selection is deterministic and
+    // independent of the storage adapter's key order.
+    const notBefore = (pkg: LocalKeyPackage) =>
+      pkg.publicPackage.leafNode.lifetime?.notBefore ?? 0n;
     return packages
       .filter(
         (pkg): pkg is LocalKeyPackage =>
           pkg !== undefined && pkg.privatePackage !== undefined,
       )
+      .sort((a, b) => {
+        const order = notBefore(a) - notBefore(b);
+        if (order !== 0n) return order < 0n ? -1 : 1;
+        return bytesToHex(a.keyPackageRef).localeCompare(
+          bytesToHex(b.keyPackageRef),
+        );
+      })
       .map(
         ({
           keyPackageRef,
@@ -405,7 +416,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   }
 
   /**
-   * Lists all local key packages with their published events defaulted to an
+   * Lists all local key packages, oldest first, with their published events defaulted to an
    * empty array, suitable for emitting as a stable snapshot.
    */
   async snapshot(): Promise<ListedKeyPackage[]> {

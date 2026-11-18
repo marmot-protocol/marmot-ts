@@ -34,6 +34,7 @@ export {
   type IngestResult,
   type RemovalEvidence,
   type DispositionedIngestResult,
+  type GroupSessionHistory,
   type GroupSessionOptions,
   type ProposalBuilder,
 } from "./session/group-session.js";

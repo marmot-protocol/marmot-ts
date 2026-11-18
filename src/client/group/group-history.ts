@@ -40,7 +40,7 @@ export type GroupHistoryEvents = {
 
 /**
  * A group's decrypted application messages (rumors), backed by an applesauce
- * {@link RumorStore} (in memory) or {@link AsyncRumorStore} (app database).
+ * `RumorStore` (in memory) or `AsyncRumorStore` (app database).
  *
  * Read with {@link queryRumors}, {@link subscribe} or
  * {@link createPaginatedLoader}, or use {@link store} directly for applesauce

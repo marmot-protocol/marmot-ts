@@ -10,24 +10,18 @@ import { relaySet } from "applesauce-core/helpers/relays";
 import { createEventLoaderForStore } from "applesauce-loaders/loaders";
 import { RelayPool as AsRelayPool } from "applesauce-relay/pool";
 
-import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-
-import { GroupRumorHistory, MarmotClient } from "@internet-privacy/marmot-ts";
+import { MarmotClient, memoryStorage } from "@internet-privacy/marmot-ts";
 import {
   AuditEmitter,
   deriveAccountRef,
   deriveEngineId,
   type AuditContextOptions,
 } from "@internet-privacy/marmot-ts/audit";
-import {
-  InMemoryKeyValueStore,
-  KeyValueRumorHistoryBackend,
-} from "@internet-privacy/marmot-ts/extra";
 import { NodeJsonlAuditRecorder } from "@internet-privacy/marmot-ts/extra/audit/node";
 
 import { Directory, LOOKUP_RELAYS } from "../helpers/discovery.js";
-import { PrefixedKeyValueStore } from "../helpers/prefixed-store.js";
-import { SqliteKeyValueStore } from "../helpers/sqlite-store.js";
+import { sqliteRumorDatabases } from "../helpers/sqlite-rumors.js";
+import { sqliteStorage } from "../helpers/sqlite-storage.js";
 import { RelayPool } from "../helpers/relay-pool.js";
 import {
   MarmotController,
@@ -170,16 +164,6 @@ function openDatabase(path: string): Database {
   return db;
 }
 
-/**
- * One key-value store backed by a `db` table, or an in-memory store when `db` is
- * null (the `--ephemeral` path, where nothing touches disk).
- */
-function makeStore<T>(db: Database | null, table: string) {
-  return db
-    ? new SqliteKeyValueStore<T>(db, table)
-    : new InMemoryKeyValueStore<T>();
-}
-
 export async function createController(
   opts: CliOptions,
   onStatus: (line: StatusLine) => void,
@@ -210,9 +194,8 @@ export async function createController(
     opts.ephemeral,
   );
 
-  // One SQLite connection holds every key-value store for this account (groups,
-  // KeyPackages, invites, messages) as separate tables. Null in ephemeral mode,
-  // where each store falls back to memory and nothing touches disk.
+  // One SQLite connection holds this account's protocol storage and message
+  // history. Null in ephemeral mode, where everything stays in memory.
   const db = opts.ephemeral ? null : openDatabase(join(dataDir, "state.db"));
 
   const keyPath = join(dataDir, "identity.key");
@@ -288,33 +271,15 @@ export async function createController(
     authSigner: account.signer,
   });
 
-  // One shared message store holds every group's rumor history. Each group's
-  // backend is scoped to a `${groupHex}:` keyspace so groups never read or
-  // clear each other's messages. Keyed by rumor id, so re-ingesting a group
-  // event (e.g. relay backfill) overwrites in place rather than duplicating.
-  const messagesStore = makeStore<Rumor>(db, "messages");
-  const historyFactory = GroupRumorHistory.makeFactory(
-    (groupId) =>
-      new KeyValueRumorHistoryBackend(
-        new PrefixedKeyValueStore(
-          messagesStore,
-          Buffer.from(groupId).toString("hex") + ":",
-        ),
-      ),
-  );
-
   const client = new MarmotClient({
     signer: account.signer,
     network: pool,
     audit,
     auditContext,
-    groupStateStore: makeStore(db, "groups") as any,
-    // Persist the convergence rewind window so fork recovery survives a restart
-    // (otherwise a client on a minority branch at quit never rewinds on relaunch).
-    rewindStore: makeStore(db, "rewind") as any,
-    keyPackageStore: makeStore(db, "keypackages") as any,
-    inviteStore: makeStore(db, "invites") as any,
-    historyFactory,
+    // Group state, fork history, ingest ledgers, KeyPackages and invites.
+    storage: db ? sqliteStorage(db) : memoryStorage(),
+    // Per-group message history; omitted in ephemeral mode (kept in memory).
+    rumors: db ? sqliteRumorDatabases(db) : undefined,
     clientId,
   });
 

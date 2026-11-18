@@ -13,7 +13,7 @@ const inviteSync = await client.invites.listen(inboxRelays);
 inviteSync.unsubscribe();
 ```
 
-Listening on any other relays silently misses invites. Pass a durable `inviteStore` to the client so received and unread invites survive a restart (see [Storage](/client/storage)).
+Listening on any other relays silently misses invites. Received and unread invites are kept in the client's `storage`, so with a durable storage they survive a restart (see [Storage](/client/storage)).
 
 ## Watch for invites
 

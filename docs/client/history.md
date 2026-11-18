@@ -1,45 +1,41 @@
 # History
 
-MLS does not store messages: once a message is decrypted, it is gone unless you keep it. Configure a history backend and every group gets a `group.history` that records sent and received messages, so you can query them, render a live timeline, and page through older messages.
+MLS does not store messages: once a message is decrypted, it is gone unless you keep it. Every group has a `group.history` that records sent and received messages, so you can query them, render a live timeline, and page through older messages.
 
-History is local storage on this device. It is separate from what relays retain: relays only hold encrypted kind 445 events, and old events can't be decrypted again once the group has moved far enough past their epoch. Keep plaintext history if you want messages to survive restarts.
+History is local to this device. Relays only hold encrypted kind 445 events, and MLS forward secrecy means old events can't be decrypted again once the group has moved past their epoch. **History kept only in memory is lost for good on restart**, so give the client a rumor database if messages should survive.
 
-## Wire history into the client
+## Persist history
 
-Pass a `historyFactory` to `MarmotClient`. `GroupRumorHistory.makeFactory` builds one from a per-group backend, and `KeyValueRumorHistoryBackend` adapts any [key-value store](/client/storage):
+Pass a `rumors` factory to `MarmotClient`. It returns an applesauce [`IAsyncEventDatabase<Rumor>`](https://hzrd149.github.io/applesauce/) for one group, or `undefined` to keep that group in memory. The library wraps each database in an applesauce `AsyncRumorStore`:
 
 ```typescript
-import { GroupRumorHistory, MarmotClient } from "@internet-privacy/marmot-ts";
-import {
-  InMemoryKeyValueStore,
-  KeyValueRumorHistoryBackend,
-} from "@internet-privacy/marmot-ts/extra";
-import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-
-const historyFactory = GroupRumorHistory.makeFactory(
-  () => new KeyValueRumorHistoryBackend(new InMemoryKeyValueStore<Rumor>()),
-);
+import { MarmotClient } from "@internet-privacy/marmot-ts";
 
 const client = new MarmotClient({
   signer,
   network,
-  groupStateStore,
-  keyPackageStore,
-  historyFactory,
+  storage,
+  rumors: Object.assign(
+    (groupId: string) => openRumorDatabase(`marmot-${groupId}`),
+    // Optional: delete a group's database after it is destroyed or disbanded.
+    { drop: (groupId: string) => deleteRumorDatabase(`marmot-${groupId}`) },
+  ),
 });
 ```
 
-Give each group its own store (for example, a key prefix derived from the group ID) so groups can't read or clear each other's messages. `makeKeyValueRumorHistoryFactory(storeFor)` from `/extra` is a shorthand for the same wiring.
+Each database must hold exactly one group, and writes must resolve only once committed. The library never closes the database connection. Omit `rumors` to keep all history in memory (fine for tests and bots that don't need history).
 
 You never save messages yourself: the group writes every sent message and every received application message to its history.
 
 ## Query messages
 
-`queryRumors` takes Nostr filters and returns rumors newest first:
+`queryRumors` takes Nostr filters (including `ids` and tag filters) and returns rumors newest first:
 
 ```typescript
 const recent = await group.history.queryRumors({ kinds: [9], limit: 50 });
 ```
+
+`group.history.store` is the underlying applesauce `RumorStore` / `AsyncRumorStore`, so applesauce models, `timeline()` and the `insert$` / `remove$` streams work too.
 
 ## Live timeline
 
@@ -63,7 +59,7 @@ Each update is a complete re-query, so replace your rendered list rather than ap
 
 ## Load older messages
 
-`createPaginatedLoader(filter?)` yields one page per call, walking backwards in time (50 per page unless the filter sets `limit`):
+`createPaginatedLoader(filter?)` yields one page per call, walking backwards in time (50 per page unless the filter sets `limit`). Messages that share a timestamp are never skipped:
 
 ```typescript
 const loader = group.history.createPaginatedLoader({ kinds: [9], limit: 30 });
@@ -76,25 +72,16 @@ async function loadOlder() {
 
 Pages are snapshots. If a message is later retracted, a page you already rendered will still contain it; refresh from `subscribe` or re-query.
 
-## Remove or purge messages
+## Deletions and expiry
 
-```typescript
-await group.history.removeMessage(rumorId); // remove one message by rumor ID
-await group.history.purgeMessages(); // clear the group's history
-```
-
-`GroupRumorHistory` emits `rumor`, `removed`, and `cleared` events after each successful change. If a history write fails, the group emits `historyError`:
+The rumor store applies NIP-09 deletions (a member's kind 5 rumor removes that member's own messages) and NIP-40 expiration. `GroupHistory` emits `rumor`, `removed` and `cleared` events after each change. If a history write fails, the group emits `historyError`:
 
 ```typescript
 group.on("historyError", (error) => reportError(error));
 ```
 
-Destroying a group (`group.destroy()`, `client.groups.destroy()`, or a successful `client.groups.leave()`) purges its history, and so does a group being disbanded. If you want to keep messages from such groups, copy them out first.
+Destroying a group (`group.destroy()`, `client.groups.destroy()`, or a successful `client.groups.leave()`) purges its history and calls `rumors.drop`, and so does a group being disbanded. If you want to keep messages from such groups, copy them out first.
 
 ## Retracted messages
 
 When fork resolution withdraws a message, the library removes it from history and open `subscribe` timelines refresh automatically. See [fork retractions](/client/messages#handle-fork-retractions) for what else your app should update.
-
-## Custom backends
-
-To store messages elsewhere (SQLite, IndexedDB with indexes, a server), implement `GroupRumorHistoryBackend`: `queryRumors` (newest first, honoring filters and `limit`), `addRumor`, `removeRumor` (idempotent), and `clear`. Key rumors by `id` so relay backfill overwrites rather than duplicates. See the [API reference](pathname:///reference/index.html) for the interface.

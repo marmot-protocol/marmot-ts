@@ -165,7 +165,7 @@ interface HeavyEntry {
  *
  * The **light index** (per-node epoch/parent/edge metadata) is always resident.
  * **Heavy material** (serialized snapshots + commit bytes) is kept in a bounded
- * in-memory LRU and otherwise fetched from a backing key-value store on demand,
+ * in-memory LRU and otherwise fetched from the bound storage on demand,
  * so memory stays bounded even as the tree grows without limit. Newly recorded
  * nodes are pinned in memory until {@link flush} persists them.
  *

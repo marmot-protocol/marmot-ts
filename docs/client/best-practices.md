@@ -10,9 +10,10 @@ Run through this list before shipping a Marmot app. Each item links to the page 
 
 ## Storage
 
-- [ ] **Persist every store**, not just the two required ones. Then check `client.ingestPersistence.kind === "durable"`. [Storage](/client/storage#the-stores-marmotclient-uses)
-- [ ] **Protect `keyPackageStore` like a signing key.** `EncryptedKeyValueStore` is a demo, not at-rest encryption. [Storage](/client/storage#encrypt-a-store-demo-only)
-- [ ] **Isolate all stores for each account**, and run one client per account. [Multi-account](/client/multi-account)
+- [ ] **Use a durable `storage` with atomic `batch`.** A partial batch can replay or lose messages. [Storage](/client/storage#requirements-for-durable-adapters)
+- [ ] **Persist message history with a `rumors` database.** In-memory history can't be recovered after a restart. [History](/client/history#persist-history)
+- [ ] **Encrypt storage at rest.** It holds MLS secrets and key package private keys; wrap it in `EncryptedStorage` with a key from platform key storage. [Storage](/client/storage#encrypt-storage-at-rest)
+- [ ] **Isolate storage for each account**, and run one client per account. [Multi-account](/client/multi-account)
 
 ## Sync and messaging
 

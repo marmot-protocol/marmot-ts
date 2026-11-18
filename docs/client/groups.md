@@ -211,7 +211,7 @@ try {
 }
 ```
 
-Every new send also retries an outstanding publication first. To survive a restart while a commit is pending, provide a durable `rewindStore` (see [Storage](/client/storage)). For founding Welcomes that failed, use `retryWelcome()` as shown in [Create a group with founding members](#create-a-group-with-founding-members).
+Every new send also retries an outstanding publication first. Pending publications are kept in the client's `storage`, so with a durable storage they survive a restart (see [Storage](/client/storage)). For founding Welcomes that failed, use `retryWelcome()` as shown in [Create a group with founding members](#create-a-group-with-founding-members).
 
 ## Events
 

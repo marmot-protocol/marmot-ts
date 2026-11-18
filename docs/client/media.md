@@ -103,4 +103,4 @@ Download a single accepted attachment with `downloadMediaAttachment(group, attac
 - **Rejected reference:** the `imeta` tag is malformed (`invalid_structure`, `unsupported_format`, `missing_field`, `duplicate_field`, or `malformed_field`).
 - **Media disabled:** downloading and sending throw if the group has no encrypted media policy.
 
-Decrypt and cache files promptly if your app needs them long term. Configure a `mediaFactory` on the client for a persistent media cache; see the [API reference](pathname:///reference/index.html).
+Decrypt files promptly and keep the plaintext in your own cache if your app needs them long term: `decryptMedia` returns the bytes and stores nothing.

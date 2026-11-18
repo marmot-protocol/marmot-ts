@@ -1,147 +1,170 @@
 # Storage
 
-`MarmotClient` keeps everything it must remember in key/value stores that you supply. All of them share one small interface, so any backend works: in-memory for tests, IndexedDB or LocalForage in the browser, SQLite or files on a server.
+`MarmotClient` keeps everything it must remember in **one** storage you supply: a small byte key/value interface. The library owns every key and record format, so a backend only has to store bytes: in-memory for tests, IndexedDB in the browser, SQLite or files on a server.
 
-## The store interface
+Decrypted messages are stored separately, in a per-group rumor database (see [History](/client/history)).
+
+## The storage interface
 
 ```typescript
-import type { GenericKeyValueStore } from "@internet-privacy/marmot-ts";
+import type { MarmotStorage, StorageOp } from "@internet-privacy/marmot-ts";
 
-interface GenericKeyValueStore<T> {
-  getItem(key: string): Promise<T | null>;
-  setItem(key: string, value: T): Promise<T>;
-  removeItem(key: string): Promise<void>;
-  clear(): Promise<void>;
-  keys(): Promise<string[]>;
+interface MarmotStorage {
+  get(key: string): Promise<Uint8Array | undefined>;
+  set(key: string, value: Uint8Array): Promise<void>;
+  delete(key: string): Promise<void>;
+  /** Keys starting with `prefix`, sorted ascending. */
+  list(prefix: string): Promise<string[]>;
+  /** Apply every op atomically, in order. */
+  batch(ops: readonly StorageOp[]): Promise<void>;
 }
+
+type StorageOp =
+  | { type: "set"; key: string; value: Uint8Array }
+  | { type: "delete"; key: string };
 ```
 
-## The stores `MarmotClient` uses
+```typescript
+const client = new MarmotClient({ signer, network, storage });
+```
 
-| Option               | Holds                                                                                   | If left in memory / omitted                                                                                                                 |
-| -------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `groupStateStore`    | Serialized MLS state, one entry per group                                               | Required. Losing it loses every group.                                                                                                      |
-| `keyPackageStore`    | Your key packages, **including private keys**                                           | Required. Losing it means Welcomes sent to your published key packages can no longer be joined.                                             |
-| `inviteStore`        | Received gift wraps, decrypted invites, read/seen state                                 | Defaults to in-memory. Unread invites and read state are lost on restart.                                                                   |
-| `ingestStateStore`   | Replay protection, convergence evidence and per-relay backfill cursors                  | Defaults to in-memory. Replays aren't detected across restarts, backfill starts over, and `client.ingestPersistence.kind` is `"ephemeral"`. |
-| `rewindStore`        | The per-group [fork-history tree](/client/fork-history) and pending commit publications | Defaults to in-memory. Fork recovery after a restart starts again from the current state.                                                   |
-| `removedMarkerStore` | Whether a removal from a group has already been handled                                 | Defaults to in-memory. The fact that you were removed from a group doesn't survive a restart.                                               |
-| `lifecycleStore`     | Disband intent and terminal records                                                     | Defaults to scoped keys inside `groupStateStore`, so it is durable whenever that store is.                                                  |
+## What lives in storage
 
-Message history and media caches are separate per-group backends, configured with `historyFactory` (see [History](/client/history)) and `mediaFactory` (see [Media](/client/media)).
+| Keys                  | Holds                                                                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `group/<groupId>/...` | Each group's MLS state, its [fork-history tree](/client/fork-history), replay protection, convergence evidence, backfill cursors and lifecycle records |
+| `keypackage/<ref>`    | Your key packages, **including private keys**                                                                                                          |
+| `invite/...`          | Received gift wraps, decrypted invites and seen markers                                                                                                |
 
-In production, give **every** store above a durable backend, and check `client.ingestPersistence.kind === "durable"` at startup. `StoredKeyPackage` contains private keys, so protect `keyPackageStore` the way you would protect a signing key.
-
-::: warning One account per set of stores
-Never share a store between accounts. See [Multi-account](/client/multi-account) for a per-account store factory.
-:::
+Destroying or leaving a group deletes everything under its `group/<groupId>/` prefix. Values contain MLS secrets and private keys: protect the storage the way you would protect a signing key.
 
 ## Requirements for durable adapters
 
-- Resolve `setItem` and `removeItem` only after the write is durable. Each write must replace the complete value atomically, and a read must see every completed write.
-- Preserve `Uint8Array` values byte for byte. Plain `JSON.stringify` silently corrupts them. Use structured clone (IndexedDB), CBOR, or base64 for each field.
-- Keep all stores of an account together: back them up, restore them and delete them as a set. Run only one `MarmotClient` at a time over a given set of stores.
-- If several stores share one physical database, give each adapter its own namespace. Its `clear()` and `keys()` must only touch that namespace, and you should never implement cleanup as `clear()` on a shared backend.
+- Resolve `set`, `delete` and `batch` only after the change is durable.
+- `batch` must be **all-or-nothing**: after a crash, either every op is visible or none is. The library commits each group state change, its fork-history nodes and its replay-protection records in one batch, so a partial batch could replay or lose messages. IndexedDB transactions and SQLite transactions provide this directly.
+- `list(prefix)` must return every key that starts with `prefix`, sorted.
+- Store values byte for byte. There is no structured data to serialize: values are always `Uint8Array`.
+- One storage holds one account. Run only one `MarmotClient` at a time over a given storage.
 
-## Use the in-memory store
+::: warning One account per storage
+Never share a storage between accounts without a per-account key prefix. See [Multi-account](/client/multi-account).
+:::
+
+## Use the in-memory storage
 
 For tests and short-lived scripts:
 
 ```typescript
-import { InMemoryKeyValueStore } from "@internet-privacy/marmot-ts/extra";
-import {
-  MarmotClient,
-  type SerializedClientState,
-} from "@internet-privacy/marmot-ts";
-import type { StoredKeyPackage } from "@internet-privacy/marmot-ts/client";
+import { MarmotClient, memoryStorage } from "@internet-privacy/marmot-ts";
 
-const client = new MarmotClient({
-  signer,
-  network,
-  groupStateStore: new InMemoryKeyValueStore<SerializedClientState>(),
-  keyPackageStore: new InMemoryKeyValueStore<StoredKeyPackage>(),
-});
+const client = new MarmotClient({ signer, network, storage: memoryStorage() });
 ```
 
-## Use LocalForage in the browser
+Everything is lost when the process exits.
 
-[LocalForage](https://github.com/localForage/localForage) instances already satisfy `GenericKeyValueStore` and store `Uint8Array` values through IndexedDB's structured clone:
+## Use IndexedDB in the browser
 
-```typescript
-import localforage from "localforage";
-
-const store = (storeName: string) =>
-  localforage.createInstance({ name: "marmot", storeName });
-
-const client = new MarmotClient({
-  signer,
-  network,
-  clientId,
-  groupStateStore: store("groups"),
-  keyPackageStore: store("keyPackages"),
-  inviteStore: store("invites"),
-  ingestStateStore: store("ingest"),
-  rewindStore: store("rewind"),
-  removedMarkerStore: store("removed"),
-  lifecycleStore: store("lifecycle"),
-});
-```
-
-## Write a custom backend
-
-Any object with the five methods works. Here is a sketch over a SQLite table, with one table per store so that `clear()` stays scoped:
+One object store, string keys, `Uint8Array` values. A transaction makes `batch` atomic:
 
 ```typescript
-import type { GenericKeyValueStore } from "@internet-privacy/marmot-ts";
+import type { MarmotStorage } from "@internet-privacy/marmot-ts";
 
-function sqliteStore<T>(db: Database, table: string): GenericKeyValueStore<T> {
-  db.exec(`CREATE TABLE IF NOT EXISTS ${table} (k TEXT PRIMARY KEY, v BLOB)`);
+async function indexedDbStorage(name: string): Promise<MarmotStorage> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const open = indexedDB.open(name, 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("kv");
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(open.error);
+  });
+  const run = <T>(
+    mode: IDBTransactionMode,
+    body: (store: IDBObjectStore) => IDBRequest<T> | void,
+  ) =>
+    new Promise<T>((resolve, reject) => {
+      const tx = db.transaction("kv", mode);
+      const request = body(tx.objectStore("kv"));
+      tx.oncomplete = () => resolve(request?.result as T);
+      tx.onerror = tx.onabort = () => reject(tx.error);
+    });
   return {
-    async getItem(key) {
-      const row = db.get(`SELECT v FROM ${table} WHERE k = ?`, key);
-      return row ? decode<T>(row.v) : null;
+    get: (key) => run("readonly", (s) => s.get(key)),
+    set: (key, value) => run("readwrite", (s) => void s.put(value, key)),
+    delete: (key) => run("readwrite", (s) => void s.delete(key)),
+    list: async (prefix) =>
+      (
+        await run<IDBValidKey[]>("readonly", (s) =>
+          s.getAllKeys(IDBKeyRange.bound(prefix, prefix + "￿")),
+        )
+      ).map(String),
+    batch: (ops) =>
+      run("readwrite", (s) => {
+        for (const op of ops)
+          op.type === "set" ? s.put(op.value, op.key) : s.delete(op.key);
+      }),
+  };
+}
+```
+
+## Use SQLite on a server
+
+```typescript
+import type { MarmotStorage } from "@internet-privacy/marmot-ts";
+
+function sqliteStorage(db: Database): MarmotStorage {
+  db.exec("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v BLOB)");
+  const put = (key: string, value: Uint8Array) =>
+    db.run("INSERT OR REPLACE INTO kv VALUES (?, ?)", key, value);
+  const del = (key: string) => db.run("DELETE FROM kv WHERE k = ?", key);
+  return {
+    async get(key) {
+      const row = db.get("SELECT v FROM kv WHERE k = ?", key);
+      return row ? new Uint8Array(row.v) : undefined;
     },
-    async setItem(key, value) {
-      db.run(
-        `INSERT OR REPLACE INTO ${table} VALUES (?, ?)`,
-        key,
-        encode(value),
-      );
-      return value;
+    async set(key, value) {
+      put(key, value);
     },
-    async removeItem(key) {
-      db.run(`DELETE FROM ${table} WHERE k = ?`, key);
+    async delete(key) {
+      del(key);
     },
-    async clear() {
-      db.run(`DELETE FROM ${table}`);
+    async list(prefix) {
+      return db
+        .all(
+          "SELECT k FROM kv WHERE k >= ? AND k < ? ORDER BY k",
+          prefix,
+          prefix + "￿",
+        )
+        .map((row) => row.k);
     },
-    async keys() {
-      return db.all(`SELECT k FROM ${table}`).map((row) => row.k);
+    async batch(ops) {
+      db.transaction(() => {
+        for (const op of ops)
+          op.type === "set" ? put(op.key, op.value) : del(op.key);
+      })();
     },
   };
 }
 ```
 
-`Database`, `encode` and `decode` stand in for your driver and a binary-safe serializer such as CBOR.
+`Database` stands in for your driver (for example `better-sqlite3` or `bun:sqlite`).
 
-## Encrypt a store (demo only)
+## Encrypt storage at rest
 
-`EncryptedKeyValueStore` from `./extra` wraps a `GenericKeyValueStore<Uint8Array>` with password-based encryption. It works for the byte-valued stores (`groupStateStore`, `ingestStateStore`, `rewindStore`, `lifecycleStore`):
+`EncryptedStorage` from `./extra` wraps any `MarmotStorage` and encrypts every value with AES-256-GCM. Each value gets a random nonce and is bound to its key, so values can't be swapped between keys undetected. Keys stay in plaintext: they reveal group ids, key package refs and event ids, but no secrets.
 
 ```typescript
-import { EncryptedKeyValueStore } from "@internet-privacy/marmot-ts/extra";
+import { EncryptedStorage } from "@internet-privacy/marmot-ts/extra";
 
-const groupStateStore = new EncryptedKeyValueStore(rawStore, salt);
-if (!(await groupStateStore.unlock(password)))
-  throw new Error("Wrong password");
+// From a 32-byte key held in platform key storage (recommended):
+const storage = new EncryptedStorage(rawStorage, key);
+
+// Or derived from a password (PBKDF2-SHA256; rejects a wrong password):
+const storage = await EncryptedStorage.fromPassword(rawStorage, password);
 ```
 
-::: danger Not for production
-`EncryptedKeyValueStore` only demonstrates the wrapping pattern. It is not a secure at-rest encryption scheme. For real deployments, use platform key storage (Keychain, Android Keystore, DPAPI, libsecret, or WebCrypto with a non-extractable key).
-:::
+Prefer a key from platform key storage (Keychain, Android Keystore, DPAPI, libsecret, or a non-extractable WebCrypto key) over a password.
 
 ## Next steps
 
-- [Multi-account](/client/multi-account): isolated stores for each account
 - [History](/client/history): persisting decrypted messages
+- [Multi-account](/client/multi-account): isolated storage for each account
 - [Network](/client/network): the other adapter `MarmotClient` needs

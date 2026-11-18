@@ -270,7 +270,7 @@ export type MarmotGroupOptions = {
    */
   retained?: RetainedHistoryStore;
   /**
-   * A full-fork history tree rehydrated from the `rewindStore` option on load. Set by
+   * A full-fork history tree rehydrated from storage on load. Set by
    * the internal loader (`GroupRegistry`); not part of the public construction API.
    */
   historyTree?: GroupHistoryTree;

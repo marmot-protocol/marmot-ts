@@ -22,8 +22,7 @@ if (!clientId) {
 const client = new MarmotClient({
   signer,
   network,
-  groupStateStore,
-  keyPackageStore,
+  storage,
   clientId,
 });
 ```
@@ -97,7 +96,7 @@ Call `ensurePublished` on every startup. It does nothing if this slot already ha
 await client.keyPackages.ensurePublished({ relays: outboxRelays });
 ```
 
-To publish unconditionally, call `create`. It generates the key material, stores the private part in `keyPackageStore`, and publishes the kind 30443 event to `relays`:
+To publish unconditionally, call `create`. It generates the key material, stores the private part in the client's `storage`, and publishes the kind 30443 event to `relays`:
 
 ```typescript
 const keyPackage = await client.keyPackages.create({

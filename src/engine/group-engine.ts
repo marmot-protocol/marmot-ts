@@ -487,7 +487,7 @@ export class MarmotGroupEngine<TEnvelope> {
   /** Handle of the pending settle-check timer, if any (cleared/reset per pass). */
   #settleTimer: TimerHandle | undefined;
   readonly #audit?: AuditEmitter;
-  readonly #lifecycleStore?: MarmotStorage;
+  readonly #storage?: MarmotStorage;
   readonly #disbandRequestKey: string;
   #disbandRequest: DisbandRequest | undefined;
   readonly #disbandHydrated: Promise<void>;
@@ -508,7 +508,7 @@ export class MarmotGroupEngine<TEnvelope> {
       DEFAULT_CONVERGENCE_POLICY.settlementQuiescenceMs;
     this.#scheduler = options.scheduler ?? DEFAULT_SCHEDULER;
     this.#onSettleCheck = options.onSettleCheck;
-    this.#lifecycleStore = options.storage;
+    this.#storage = options.storage;
     this.#disbandRequestKey = disbandRequestKey(
       bytesToHex(options.state.groupContext.groupId),
     );
@@ -1091,17 +1091,17 @@ export class MarmotGroupEngine<TEnvelope> {
     const leaveAdmission = await this.#enterAdmission();
     try {
       await this.#disbandHydrated;
-      if (!this.#lifecycleStore) return;
+      if (!this.#storage) return;
       const key = disbandConvergenceKey(
         bytesToHex(this.#state.groupContext.groupId),
       );
       if (!this.#convergencePass || this.#disbandCandidates.size === 0) {
-        await this.#lifecycleStore.delete(key);
+        await this.#storage.delete(key);
         return;
       }
       const wallNow = this.#wallNow();
       const monoNow = this.#now();
-      await this.#lifecycleStore.set(
+      await this.#storage.set(
         key,
         encodeDisbandConvergence({
           generation: this.#convergencePass.generation,
@@ -1144,10 +1144,8 @@ export class MarmotGroupEngine<TEnvelope> {
       // `undefined`, which is this seam's deliberate disposition and must not be
       // converted into a throw.
       this.#assertOutboundProfileSupported();
-      if (!this.#lifecycleStore)
-        throw new Error(
-          "A durable lifecycleStore is required to request disbanding",
-        );
+      if (!this.#storage)
+        throw new Error("Durable storage is required to request disbanding");
       if (this.#state.groupActiveState.kind === "removedFromGroup") {
         await this.#failDisbandRequest("NoLongerMember");
         return undefined;
@@ -3496,10 +3494,10 @@ export class MarmotGroupEngine<TEnvelope> {
   }
 
   async #hydrateDisbandState(): Promise<void> {
-    if (!this.#lifecycleStore) return;
-    const encoded = await this.#lifecycleStore.get(this.#disbandRequestKey);
+    if (!this.#storage) return;
+    const encoded = await this.#storage.get(this.#disbandRequestKey);
     if (encoded) this.#disbandRequest = decodeDisbandRequest(encoded);
-    const convergence = await this.#lifecycleStore.get(
+    const convergence = await this.#storage.get(
       disbandConvergenceKey(bytesToHex(this.#state.groupContext.groupId)),
     );
     if (!convergence) return;
@@ -3562,8 +3560,8 @@ export class MarmotGroupEngine<TEnvelope> {
   }
 
   async #persistDisbandRequest(): Promise<void> {
-    if (!this.#lifecycleStore || !this.#disbandRequest) return;
-    await this.#lifecycleStore.set(
+    if (!this.#storage || !this.#disbandRequest) return;
+    await this.#storage.set(
       this.#disbandRequestKey,
       encodeDisbandRequest(this.#disbandRequest),
     );

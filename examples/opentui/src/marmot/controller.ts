@@ -15,7 +15,6 @@ import type { EventStore } from "applesauce-core/event-store";
 import {
   createApplicationMessageIntent,
   createChatRumor,
-  type GroupRumorHistory,
   type ListedKeyPackage,
   type MarmotClient,
   type MarmotGroup,
@@ -1309,8 +1308,7 @@ export class MarmotController {
   async loadOlder(groupId: string): Promise<void> {
     const group = this.#groups.get(groupId);
     if (!group) return;
-    const history = group.history as unknown as GroupRumorHistory | undefined;
-    if (!history) return;
+    const history = group.history;
     const state = this.#paginationState(groupId);
     if (state.loadingOlder || state.exhausted) return;
 
@@ -1908,8 +1906,7 @@ export class MarmotController {
    */
   #startHistory(group: MarmotGroup): void {
     const id = group.idStr;
-    const history = group.history as unknown as GroupRumorHistory | undefined;
-    if (!history) return;
+    const history = group.history;
     // Messages and reactions are projected from two independent subscriptions so
     // the message window stays a clean count of chat messages — folding reactions
     // into the same `limit` would let a burst of reactions push messages out.

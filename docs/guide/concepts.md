@@ -71,4 +71,4 @@ Most apps only need `MarmotClient`. Drop to lower layers when you need control t
 - **Admin policy**: commits that change membership or metadata are rejected unless an admin made them.
 - **Verified input**: inbound events have their signatures checked before they reach the protocol layer.
 
-Your Nostr signer and your stores remain part of your trust boundary: anyone who can read `groupStateStore` or `keyPackageStore` can read the group. See [Storage](/client/storage).
+Your Nostr signer and your stores remain part of your trust boundary: anyone who can read the client's `storage` can read the group. See [Storage](/client/storage).

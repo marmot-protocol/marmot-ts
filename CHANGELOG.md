@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **One storage for everything.** `MarmotClient` now takes a single `storage: MarmotStorage` — a byte key/value interface with `get`, `set`, `delete`, `list(prefix)` and an atomic `batch(ops)` — instead of `groupStateStore`, `keyPackageStore`, `inviteStore`, `ingestStateStore`, `rewindStore`, `removedMarkerStore` and `lifecycleStore`. The library owns every key and record format, so adapters only store bytes: no structured-clone or `Uint8Array` serialization concerns, and no per-store namespacing. Fork history, replay protection, backfill cursors and removal state are now always persisted.
+  - Migration: replace all store options with `storage`. Use `memoryStorage()` for tests, or implement `MarmotStorage` over IndexedDB or SQLite with a transaction for `batch` (see the [Storage](docs/client/storage.md) guide). Existing data is not migrated: start from a fresh storage, and re-join groups or re-publish key packages as needed.
+- **Message history uses applesauce rumor stores.** `historyFactory`, `GroupRumorHistory`, `GroupRumorHistoryBackend`, `KeyValueRumorHistoryBackend`, `makeKeyValueRumorHistoryFactory` and `BaseGroupHistory` are removed. Every group now has `group.history` (a `GroupHistory`) backed by an applesauce `RumorStore`, or by an `AsyncRumorStore` over the database returned from the new optional `rumors(groupId)` factory (with optional `rumors.drop(groupId)` cleanup). Queries support full Nostr filters, and NIP-09 deletions and NIP-40 expiration are applied.
+  - Migration: replace `historyFactory` with `rumors: (groupId) => database` returning an `IAsyncEventDatabase<Rumor>`, or omit it to keep history in memory. `queryRumors`, `subscribe` and `createPaginatedLoader` are unchanged; `group.history.store` exposes the applesauce store.
+- **The media cache is removed.** `mediaFactory`, `group.media`, `GroupMediaStore`, `BaseGroupMedia` and `StoredMedia` are gone. `decryptMedia` returns a `DecryptedMedia` and caches nothing; keep plaintext in your own cache if needed.
+- `MarmotClient`, `MarmotGroup`, `GroupsManager` and `GroupSession` no longer take `THistory`/`TMedia` type parameters.
+- `GenericKeyValueStore`, `InMemoryKeyValueStore`, `EncryptedKeyValueStore` and `client.ingestPersistence` are removed. `EncryptedStorage` (from `./extra`) replaces the encrypted store: it wraps any `MarmotStorage` with AES-256-GCM, binds each value to its key, and can derive its key from a password with `EncryptedStorage.fromPassword()`.
+- `KeyPackageManager` and `InviteManager` take `storage` instead of `store`. `StoredInviteEntry` is replaced by `ReceivedInviteRecord`.
+
 ### Added
 
 - `watchKeyPackages()`, `invites.watchUnread()`, `invites.watchReceived()`, `watchInvites()`, and `history.subscribe()` accept an optional `{ signal }` to stop watching, matching `groups.watch()`.
@@ -12,7 +23,11 @@
 - Received Welcomes now survive temporary signer and storage failures. Explicit decryption retries resume safely after restart; automatic listening does not repeatedly prompt for failed envelopes or duplicate delivery notifications. Recovery refreshes unread watchers even when an earlier write succeeded but reported failure.
 - KeyPackage publication, rotation, and purge now reject when no requested relay acknowledges the event, preserving private keys after rejected replacements or deletions. `KeyPackagePublishError` exposes the signed event and relay responses; transport errors still propagate unchanged.
 - `ensurePublished()` now selects only the explicit slot or manager `clientId`, rather than returning another device's package. Configure one of these identifiers even when local packages already exist.
-- Media-store subscriptions now close promptly during idle pulls or pending reads and accept an optional `{ signal }` for cancellation.
+- Each group state save now commits its fork-history nodes, delivered-message evidence and processed-event records atomically, so a crash can no longer leave them out of step.
+- Destroying a group now removes all of its stored records, including removal attribution that was previously left behind.
+- Receiving the same invite concurrently can no longer lose seen markers, and the seen set no longer grows as a single ever-larger record.
+- `IndexedDbAuditWriter` no longer overwrites earlier sessions' lines in the same log, and stores each line's index consistently with its key.
+- `createPaginatedLoader` no longer skips messages that share a timestamp with a page boundary.
 
 ### Documentation
 
@@ -81,7 +96,7 @@
 
 - Packed installations validate all ten supported code entrypoints using isolated production consumers, including NodeNext and bundler type imports. The default MLS ciphersuite works without any of the five optional cryptographic backends or an upstream `ts-mls` installation; install an optional backend only when selecting its ciphersuite. Import the bundled fork through `/mls`. Strict consumer checks use `skipLibCheck: true` and do not promise dependency-wide declaration validation.
 
-- Named public signature types improve typed consumers and API reference coverage; `pnpm typecheck:tests` now checks every source test and helper independently of runtime tests. For publisher options, import `GenerateKeyPackageOptions` from `@internet-privacy/marmot-ts/client`; root and `/core` imports retain the existing core generator type. These exports are type-only, with unchanged runtime exports. See [Client](docs/client/marmot-client.md#key-package-management) and [Storage upgrades](docs/client/storage.md#upgrading-existing-stores) for import and checkpoint guidance.
+- Named public signature types improve typed consumers and API reference coverage; `pnpm typecheck:tests` now checks every source test and helper independently of runtime tests. For publisher options, import `GenerateKeyPackageOptions` from `@internet-privacy/marmot-ts/client`; root and `/core` imports retain the existing core generator type. These exports are type-only, with unchanged runtime exports. See [Key packages](docs/client/key-packages.md) for import guidance.
 
 - Release publication dependencies after conclusive rollback, confirmation, or rejected preparation before effects reach a publisher, including cancelled Commits and leave proposals. Finite recovery retention can then contract; returned application work and retryable publication failures keep their source pinned until acknowledgement.
 
@@ -93,7 +108,7 @@
 
 - Long-lived groups using the default finite window now release obsolete recovery snapshots, duplicate identities, completed delivery evidence and private plaintext cache copies after convergence settles, while preserving eligible forks and unfinished recovery, publication and retraction work. Pending work can temporarily exceed the horizon; explicit `Infinity` keeps historical recovery material without widening the application decryption window. Application rumor history and custom media remain application-controlled.
 
-- Existing generic stores are read by the updated loader and upgraded through checkpoint/evidence metadata with restartable exact-key cleanup. Preserve the recovery and ingestion stores together, keep single-value writes atomic and coordinate separate writers; no key renaming or store clearing is required. After a version-2 tree checkpoint is saved, use the updated loader rather than downgrading to an older one. See [Storage](docs/client/storage.md#retention-checkpoint-and-restart-repair) for adapter requirements and migration limits.
+- Existing generic stores are read by the updated loader and upgraded through checkpoint/evidence metadata with restartable exact-key cleanup. Preserve the recovery and ingestion stores together, keep single-value writes atomic and coordinate separate writers; no key renaming or store clearing is required. After a version-2 tree checkpoint is saved, use the updated loader rather than downgrading to an older one. See [Storage](docs/client/storage.md) for adapter requirements.
 
 - Cancelling an image replacement or closing its image service now stops queued and preparing MLS image changes before publication, while ordinary group operations remain usable. Image changes already being published retain their publication outcome.
 
@@ -172,7 +187,7 @@
 - Successful `isCommitMessage` and `isProposalMessage` guards now narrow to a public/private union. Consumers that read `privateMessage` directly after a guard must branch on `message.wireformat`: use `publicMessage.content` for `mls_public_message` and `privateMessage` for `mls_private_message`. `isApplicationMessage` remains private-only.
 
 - Reusable KeyPackages require the canonical empty-data `0x0004` component in the KeyPackage dictionary; legacy-only `0x000a` markers are deliberately rejected. Generate and republish current packages. Publications omit relay tags; destinations are retained locally across restarts for rotation and purge. Older route-less records need explicit rotation routes or locally supplied tracking routes for cleanup.
-- Publication identifiers (`clientId`, `identifier`, and rotation `d`) must be exactly 64 lowercase hex characters and invalid values reject before side effects. Generate 32 random bytes once, encode as lowercase hex and persist that slot instead of a device label. Publish under the new slot, then delete the old publication through known routes: a different `d` does not replace the old address. See the [publication slot migration](docs/core/key-packages.md#publication-slot-migration) for the create/purge and rotation paths.
+- Publication identifiers (`clientId`, `identifier`, and rotation `d`) must be exactly 64 lowercase hex characters and invalid values reject before side effects. Generate 32 random bytes once, encode as lowercase hex and persist that slot instead of a device label. Publish under the new slot, then delete the old publication through known routes: a different `d` does not replace the old address. See the [key packages guide](docs/client/key-packages.md) for the create/purge and rotation paths.
 - Custom `GroupSessionHistory`/`BaseGroupHistory` implementations must implement idempotent `removeMessage(rumorId)`; custom `GroupRumorHistoryBackend` implementations must implement durable `removeRumor(rumorId)`. Remove by the canonical inner ID and resolve only after persistence succeeds.
 - Legacy account identity proofs (`0xf2f1`) and their helper exports are removed. New groups require `0x8009`; incompatible groups cannot be joined, and stored incompatible groups refuse traffic. Republish current KeyPackages and explicitly purge obsolete ones. See the [account identity proof migration guide](docs/client/best-practices.md#migrating-to-account-identity-proof-v2-0x8009).
 - Separate proof-signer options are removed. `generateKeyPackage` requires a `signer`, and `makeLeafAppComponentsExtension` requires an encoded current proof.

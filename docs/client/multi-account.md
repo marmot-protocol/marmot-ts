@@ -1,46 +1,35 @@
 # Multi-account
 
-To support several Nostr accounts in one app, create one `MarmotClient` per account, each with its own isolated set of stores. This page shows how to build those stores and how to switch between accounts cleanly.
+To support several Nostr accounts in one app, create one `MarmotClient` per account, each with its own storage and rumor databases. This page shows how to build them and how to switch between accounts cleanly.
 
-::: danger Never share stores between accounts
-`keyPackageStore` and `groupStateStore` hold MLS private keys. If two accounts share a store, they leak key material to each other and corrupt each other's group state. Isolate **every** store, not just those two.
+::: danger Never share storage between accounts
+The client's `storage` holds MLS secrets and key package private keys. If two accounts share it without a per-account prefix, they leak key material to each other and corrupt each other's group state.
 :::
 
-## Create isolated stores for each account
+## Create isolated storage for each account
 
-Namespace every store by the account's pubkey. Message history is per group, so give it a per-account factory as well:
+Give each account its own database (or a key prefix with `scopeStorage`), and its own rumor databases:
 
 ```typescript
-import localforage from "localforage";
-import { bytesToHex } from "@noble/hashes/utils.js";
-import { makeKeyValueRumorHistoryFactory } from "@internet-privacy/marmot-ts/extra";
+import { scopeStorage, type MarmotStorage } from "@internet-privacy/marmot-ts";
 
-export function storesForAccount(pubkey: string) {
-  const store = (storeName: string) =>
-    localforage.createInstance({ name: `marmot-${pubkey}`, storeName });
-
+export function storageForAccount(pubkey: string) {
   return {
-    groupStateStore: store("groups"),
-    keyPackageStore: store("keyPackages"),
-    inviteStore: store("invites"),
-    ingestStateStore: store("ingest"),
-    rewindStore: store("rewind"),
-    removedMarkerStore: store("removed"),
-    lifecycleStore: store("lifecycle"),
-    historyFactory: makeKeyValueRumorHistoryFactory((groupId) =>
-      localforage.createInstance({
-        name: `marmot-${pubkey}-history-${bytesToHex(groupId)}`,
-      }),
-    ),
+    // One database per account...
+    storage: openStorage(`marmot-${pubkey}`),
+    // ...or a shared database with a per-account prefix:
+    // storage: scopeStorage(sharedStorage, `${pubkey}/`),
+    rumors: (groupId: string) =>
+      openRumorDatabase(`marmot-${pubkey}-${groupId}`),
   };
 }
 ```
 
-Any `GenericKeyValueStore` backend works here; see [Storage](/client/storage) for what each store holds. If you configure a `mediaFactory` (see [Media](/client/media)), scope it per account in the same way.
+`openStorage` returns a `MarmotStorage` (see [Storage](/client/storage)) and `openRumorDatabase` an applesauce `IAsyncEventDatabase<Rumor>` (see [History](/client/history)).
 
 ## Create a client for an account
 
-The network adapter can be shared across accounts. The signer, the stores and the key package slot (`clientId`) belong to the account:
+The network adapter can be shared across accounts. The signer, the storage and the key package slot (`clientId`) belong to the account:
 
 ```typescript
 import { MarmotClient } from "@internet-privacy/marmot-ts";
@@ -52,7 +41,7 @@ function createClientForAccount(account: Account) {
     // 32 random bytes as lowercase hex, generated once per account on this
     // device and persisted (see Key packages).
     clientId: account.keyPackageSlot,
-    ...storesForAccount(account.pubkey),
+    ...storageForAccount(account.pubkey),
   });
 }
 ```
@@ -96,7 +85,7 @@ async function stopSession(session: AccountSession) {
 
 ## Switch accounts
 
-Stop the old session completely before starting the new one. Otherwise the old client keeps ingesting into the old account's stores in the background:
+Stop the old session completely before starting the new one. Otherwise the old client keeps ingesting into the old account's storage in the background:
 
 ```typescript
 let current: AccountSession | null = null;
@@ -112,4 +101,4 @@ In UI frameworks, store the active client in state and make every watcher depend
 
 ## Remove an account
 
-To sign out and forget an account, stop its session and then delete all of its stores together, for example by dropping the `marmot-${pubkey}` database and its history databases. Don't delete only some of them, because the stores depend on each other.
+To sign out and forget an account, stop its session and then delete its storage and its rumor databases, for example by dropping the `marmot-${pubkey}` database and its history databases.

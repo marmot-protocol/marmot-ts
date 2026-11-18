@@ -10,7 +10,7 @@ TypeScript implementation of the [Marmot protocol](https://github.com/marmot-pro
 - 🔐 **End-to-end encrypted** group messaging using MLS (RFC 9420)
 - 🌐 **Decentralized** — groups operate across Nostr relays
 - 🔑 **Key package lifecycle** — publishing, rotation, deletion
-- 📦 **Storage-agnostic** — bring any `GenericKeyValueStore` backend (LocalForage, IndexedDB, in-memory, …)
+- 📦 **Storage-agnostic** — one small byte key/value `MarmotStorage` (IndexedDB, SQLite, in-memory, …) plus optional applesauce rumor databases for history
 - 🔌 **Network-agnostic** — works with any Nostr client library
 - 📱 **Cross-platform** — browsers, Node.js (v20+), Bun (v1.1+), and Deno (v2+)
 
@@ -42,15 +42,11 @@ A `MarmotClient` needs four things to operate:
 
 1. **A signer** (`EventSigner`, from `applesauce-core`) — signs Nostr events on behalf of the user, including the `0x8009` account identity proof carried on every key package's LeafNode.
 2. **A network interface** (`NostrNetworkInterface`) — publishes, requests, and subscribes to events on relays.
-3. **A group state store** — persists serialized MLS group state (`GenericKeyValueStore<SerializedClientState>`).
-4. **A key package store** — persists local key package material (`GenericKeyValueStore<StoredKeyPackage>`).
-
-The stores share a single interface: `GenericKeyValueStore<T>`.
+3. **A storage** (`MarmotStorage`) — persists group state, fork history, key packages (with private keys) and invites.
 
 You can optionally supply:
 
-- **`inviteStore`** — persists received invites; defaults to an in-memory store.
-- **`historyFactory`** — wires a per-group message history backend (see [`GroupRumorHistory`](docs/client/history.md)).
+- **`rumors`** — a per-group applesauce rumor database for message history (see [History](docs/client/history.md)); history stays in memory without it.
 - **`clientId`** — a stable `d`-tag slot: 32 random bytes encoded as 64 lowercase hex characters, persisted and reused for your kind 30443 key packages.
 
 The client exposes three managers — `client.groups`, `client.keyPackages`, and `client.invites` — plus `client.network` and the `joinGroupFromWelcome` entry point.
@@ -58,32 +54,24 @@ The client exposes three managers — `client.groups`, `client.keyPackages`, and
 ## Storage
 
 ```ts
-interface GenericKeyValueStore<T> {
-  getItem(key: string): Promise<T | null>;
-  setItem(key: string, value: T): Promise<T>;
-  removeItem(key: string): Promise<void>;
-  clear(): Promise<void>;
-  keys(): Promise<string[]>;
+interface MarmotStorage {
+  get(key: string): Promise<Uint8Array | undefined>;
+  set(key: string, value: Uint8Array): Promise<void>;
+  delete(key: string): Promise<void>;
+  list(prefix: string): Promise<string[]>; // sorted keys starting with prefix
+  batch(ops: readonly StorageOp[]): Promise<void>; // atomic
 }
 ```
 
-Any backend that matches this shape works. [LocalForage](https://github.com/localForage/localForage) instances satisfy it directly:
+The library owns every key and record format; a backend only stores bytes. For tests or short-lived processes use the in-memory implementation:
 
 ```ts
-import localforage from "localforage";
+import { memoryStorage } from "@internet-privacy/marmot-ts";
 
-const groupStateStore = localforage.createInstance({ name: "marmot-groups" });
-const keyPackageStore = localforage.createInstance({ name: "marmot-keys" });
+const storage = memoryStorage();
 ```
 
-For tests or short-lived processes, the library ships an in-memory implementation under the `./extra` subpath:
-
-```ts
-import { InMemoryKeyValueStore } from "@internet-privacy/marmot-ts/extra";
-
-const groupStateStore = new InMemoryKeyValueStore();
-const keyPackageStore = new InMemoryKeyValueStore();
-```
+See [Storage](docs/client/storage.md) for IndexedDB and SQLite adapters and `EncryptedStorage`.
 
 ## Quick Start
 
@@ -99,8 +87,7 @@ const clientId = bytesToHex(randomBytes(32));
 const client = new MarmotClient({
   signer, // your EventSigner (e.g. from applesauce-core)
   network, // your NostrNetworkInterface implementation
-  groupStateStore, // GenericKeyValueStore<SerializedClientState>
-  keyPackageStore, // GenericKeyValueStore<StoredKeyPackage>
+  storage, // MarmotStorage
   clientId, // persisted random slot; arbitrary device labels are rejected
 });
 ```
@@ -235,8 +222,8 @@ The `exports` map exposes the library as focused subpaths:
 | `@internet-privacy/marmot-ts/client` | `MarmotClient`, `MarmotGroup`, managers, intents, history, network                              |
 | `@internet-privacy/marmot-ts/core`   | Protocol/crypto/state primitives with no app I/O                                                |
 | `@internet-privacy/marmot-ts/engine` | `MarmotGroupEngine` and the convergence/ingest state machine                                    |
-| `@internet-privacy/marmot-ts/extra`  | Optional stores — `InMemoryKeyValueStore`, encrypted store, history backend                     |
-| `@internet-privacy/marmot-ts/utils`  | Encoding, key-value, Nostr, relay-url, and timestamp helpers                                    |
+| `@internet-privacy/marmot-ts/extra`  | Optional extras — `EncryptedStorage` (AES-256-GCM at-rest encryption) and audit writers         |
+| `@internet-privacy/marmot-ts/utils`  | Encoding, storage, Nostr, relay-url, and timestamp helpers                                      |
 | `@internet-privacy/marmot-ts/mls`    | The forked [`ts-mls`](https://github.com/hzrd149/ts-mls) MLS engine, bundled inside the package |
 
 Import MLS primitives (ciphersuites, `ClientState`, `processMessage`, and so on) from

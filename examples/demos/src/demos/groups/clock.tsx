@@ -6,6 +6,7 @@ import {
   createApplicationMessageIntent,
   createChatRumor,
   createInviteIntent,
+  Proposals,
   type AnnotatedInvite,
   type MarmotGroup,
 } from "@internet-privacy/marmot-ts/client";
@@ -148,6 +149,9 @@ function Host({ signal, adopt }: GroupActions) {
         ) : (
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span>{snapshot?.groupData?.name}</span>
+            {snapshot && (
+              <span className="badge">Epoch {snapshot.epoch.toString()}</span>
+            )}
             <button
               className="btn btn-sm"
               onClick={() => setRunning((value) => !value)}
@@ -162,9 +166,65 @@ function Host({ signal, adopt }: GroupActions) {
           </p>
         )}
       </Panel>
+      {group && <Members group={group} signal={signal} />}
       {group && <InviteContacts group={group} signal={signal} />}
       <Clock messages={sent} direction="Sent" />
     </div>
+  );
+}
+
+function Members({
+  group,
+  signal,
+}: {
+  group: MarmotGroup;
+  signal: AbortSignal;
+}) {
+  const client = use$(client$)!;
+  const account = use$(account$)!;
+  const snapshot = useAsyncLatest((signal) => group.watch({ signal }), [group]);
+  const [banning, setBanning] = useState(false);
+
+  async function ban(pubkey: string) {
+    setBanning(true);
+    try {
+      const responses = await client.groups.commit(group.id, {
+        extraProposals: [Proposals.proposeRemoveUser(pubkey)],
+        signal,
+      });
+      if (!Object.values(responses).some((response) => response.ok))
+        throw new Error("No relay accepted the removal");
+    } finally {
+      setBanning(false);
+    }
+  }
+
+  return (
+    <Panel title={`Members (${snapshot?.members.length ?? 0})`}>
+      <ul>
+        {snapshot?.members.map((pubkey) => (
+          <li
+            key={pubkey}
+            className="flex items-center justify-between gap-2 border-b border-base-300 py-2"
+          >
+            <Identity pubkey={pubkey} />
+            {pubkey === account.pubkey ? (
+              <span className="badge">Host</span>
+            ) : (
+              <span title="Removes this member from the group. You can invite them again.">
+                <Action
+                  run={() => ban(pubkey)}
+                  disabled={banning || snapshot.status !== "active"}
+                >
+                  Ban
+                </Action>
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {!snapshot && <p>Loading members…</p>}
+    </Panel>
   );
 }
 
@@ -261,6 +321,7 @@ function Receiver({ signal, adopt }: GroupActions) {
   );
   const [error, setError] = useState<string>();
   const [needsUpdate, setNeedsUpdate] = useState(false);
+  const removed = snapshot?.status === "removed";
   const messages =
     useAsyncLatest(
       (signal) =>
@@ -325,7 +386,12 @@ function Receiver({ signal, adopt }: GroupActions) {
             {error}
           </p>
         )}
-        {group && needsUpdate && (
+        {removed && (
+          <p role="alert" className="text-warning">
+            Removed from group — you will not receive new clock ticks.
+          </p>
+        )}
+        {group && needsUpdate && snapshot?.status === "active" && (
           <Action run={() => selfUpdate(group)}>Retry leaf update</Action>
         )}
       </Panel>

@@ -22,7 +22,6 @@ export class KeyPackagePublication {
   });
   #tail: Promise<unknown> = Promise.resolve();
   #inbox?: Unsubscribable;
-  #timer?: ReturnType<typeof setInterval>;
   #retirement?: ReturnType<typeof setTimeout>;
   readonly #controller = new AbortController();
   readonly clientId: string;
@@ -56,16 +55,19 @@ export class KeyPackagePublication {
       const packages = await this.#packages();
       this.signal.throwIfAborted();
       const current = packages[0];
-      const enabled = autoPublish || !!current;
-      this.state$.next({ busy: false, enabled, current });
-      if (enabled) await this.publish();
+      this.state$.next({ busy: false, enabled: !!current, current });
+      if (autoPublish) await this.publish();
+      else if (current) {
+        await this.#listen();
+        await this.#retireSuperseded();
+      }
     } catch (cause) {
       this.#error(cause);
       throw cause;
     }
   }
 
-  /** Opt in once; upkeep thereafter replaces consumed or expired packages. */
+  /** Publish or replace a package only when explicitly requested. */
   publish = () => this.#run(false);
   rotate = () => this.#run(true);
 
@@ -151,19 +153,7 @@ export class KeyPackagePublication {
           current: { ...pkg, published: stored.published },
         });
         await this.#retireSuperseded();
-        if (!this.#inbox) {
-          const relays = await this.client.network.getUserInboxRelays(
-            this.pubkey,
-          );
-          this.signal.throwIfAborted();
-          const inbox = await this.client.invites.listen(relays);
-          if (this.signal.aborted) inbox.unsubscribe();
-          else this.#inbox = inbox;
-        }
-        if (!this.#timer && !this.signal.aborted)
-          this.#timer = setInterval(() => {
-            void this.publish().catch(this.#error);
-          }, 60_000);
+        await this.#listen();
       } catch (cause) {
         if (!this.signal.aborted)
           this.state$.next({
@@ -176,6 +166,15 @@ export class KeyPackagePublication {
     });
     this.#tail = task.catch(() => {});
     return task;
+  }
+
+  async #listen() {
+    if (this.#inbox) return;
+    const relays = await this.client.network.getUserInboxRelays(this.pubkey);
+    this.signal.throwIfAborted();
+    const inbox = await this.client.invites.listen(relays);
+    if (this.signal.aborted) inbox.unsubscribe();
+    else this.#inbox = inbox;
   }
 
   async #retireSuperseded() {
@@ -207,7 +206,6 @@ export class KeyPackagePublication {
   close() {
     if (this.signal.aborted) return;
     this.#controller.abort();
-    clearInterval(this.#timer);
     clearTimeout(this.#retirement);
     this.#inbox?.unsubscribe();
     this.client.invites.off("error", this.#error);

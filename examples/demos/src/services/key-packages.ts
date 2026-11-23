@@ -10,7 +10,7 @@ import {
 import { client$ } from "./client.js";
 import { account$ } from "./accounts.js";
 import { transport$ } from "./transport.js";
-import { getDevelopmentName } from "../utils/development-name.js";
+import { takeInitialKeyPackagePublication } from "./internal/development-identity.js";
 import {
   KeyPackagePublication,
   type SessionKeyState,
@@ -18,7 +18,7 @@ import {
 
 export type { SessionKeyState } from "./internal/key-package-publication.js";
 
-/** Upkeep is a leaf of the real client, not its owner or a replacement for its API. */
+/** Publication is a leaf of the real client, not its owner or a replacement for its API. */
 const publication$ = client$.pipe(
   withLatestFrom(account$, transport$),
   switchMap(([client, account, transport]) => {
@@ -29,9 +29,10 @@ const publication$ = client$.pipe(
         transport,
         account.pubkey,
       );
+      const newlyCreated = takeInitialKeyPackagePublication(account);
       subscriber.next(publication);
       void publication
-        .start(transport.mode === "local" && !!getDevelopmentName(account))
+        .start(newlyCreated && transport.mode === "local")
         .catch(() => {
           // The publication's state stream carries the actionable error.
         });

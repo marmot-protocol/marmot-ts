@@ -17,7 +17,6 @@ import { client$ } from "../../services/client.js";
 import { contacts$, profile$ } from "../../services/contacts.js";
 import { mode$ } from "../../services/mode.js";
 import { relays$, lookupRelays$, ready$ } from "../../services/transport.js";
-import { publish } from "../../services/key-packages.js";
 import { useAsyncLatest } from "../../hooks/use-async-latest.js";
 
 export default function ClockDemo() {
@@ -297,7 +296,6 @@ function Receiver({ signal, adopt }: GroupActions) {
       if (!signal.aborted)
         setError(cause instanceof Error ? cause.message : String(cause));
     }
-    void publish().catch(() => {});
   }
 
   return (

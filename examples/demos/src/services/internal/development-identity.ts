@@ -3,6 +3,8 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import type { DemoRelay } from "./relay/demo-relay.js";
 import { getDevelopmentName } from "../../utils/development-name.js";
 
+const newAccounts = new WeakSet<IAccount>();
+
 const ADJECTIVES = [
   "Amber",
   "Brisk",
@@ -30,7 +32,13 @@ export function createDevelopmentAccount(): PrivateKeyAccount {
   account.metadata = {
     developmentName: `${ADJECTIVES[random[0] % ADJECTIVES.length]} ${ANIMALS[random[1] % ANIMALS.length]} ${random[2] % 10_000}`,
   };
+  newAccounts.add(account);
   return account;
+}
+
+/** Consume the creation intent once; restored and imported accounts never have it. */
+export function takeInitialKeyPackagePublication(account: IAccount): boolean {
+  return newAccounts.delete(account);
 }
 
 export async function publishDevelopmentProfile(

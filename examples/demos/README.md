@@ -50,7 +50,7 @@ dependencies directly and owns its resource lifetime:
 
 ```text
 mode$ ──► transport$
-account$ + transport$ ──► client$ ──► key-package upkeep
+account$ + transport$ ──► client$ ──► key-package publication
 account$ + transport$ ──► contacts$ (Users with reactive profiles)
 ```
 
@@ -170,17 +170,18 @@ group for a fresh run.
 
 ## Session key packages
 
-New development identities automatically publish a kind-30443 key package in
-local mode. Other accounts (and live mode) opt in with **Publish key package** in
-the sidebar. The session then maintains a current package, listens on the account's
-inbox relays, and exposes incoming invites through the shared Marmot client.
+New development identities automatically publish a kind-30443 key package once,
+when created in local mode. Logged-in and restored accounts (and live mode) opt in
+with **Publish key package** in the sidebar. Existing private packages enable
+invite listening without publishing or signing a replacement.
 
 **Rotate** creates fresh keys in the same addressable publication slot.
-Reloads restore the slot and private bundles, and re-publish the current signed
-package if the local worker lost it. Old bundles remain available for delayed
+Reloads restore the slot and private bundles without re-publishing; use **Publish
+again** if the local worker lost the publication. Old bundles remain available for delayed
 Welcomes until their replacement grace period (24 hours) or signed expiry, whichever
-comes first. Renewal after joining replaces consumed packages without signing
-every clock tick. Local private material is never copied into live mode.
+comes first. Publishing and rotating after a package is consumed or expires are
+explicit sidebar actions, not timer or demo side effects. Local private material
+is never copied into live mode.
 
 The sessionStorage bundles contain unencrypted MLS secrets: use development accounts.
 Only key-package material survives reloads, not the demo's group state or history.

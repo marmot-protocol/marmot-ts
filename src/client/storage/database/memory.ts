@@ -313,6 +313,7 @@ function accountReader(
 
 /** In-memory {@link MarmotAccountDatabase}. Not durable. */
 export class MemoryAccountDatabase implements MarmotAccountDatabase {
+  /** @internal */
   readonly store = new MemoryStore(ACCOUNT_TABLES);
   readonly meta: AccountReader["meta"];
   readonly keyPackages: AccountReader["keyPackages"];

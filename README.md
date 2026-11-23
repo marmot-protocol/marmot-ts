@@ -10,7 +10,7 @@ TypeScript implementation of the [Marmot protocol](https://github.com/marmot-pro
 - 🔐 **End-to-end encrypted** group messaging using MLS (RFC 9420)
 - 🌐 **Decentralized** — groups operate across Nostr relays
 - 🔑 **Key package lifecycle** — publishing, rotation, deletion
-- 📦 **Storage-agnostic** — one small byte key/value `MarmotStorage` (IndexedDB, SQLite, in-memory, …) plus optional applesauce rumor databases for history
+- 📦 **Storage-agnostic** — one typed database per group plus an account database, with built-in IndexedDB, SQLite and in-memory adapters; message history is queryable through real indexes
 - 🔌 **Network-agnostic** — works with any Nostr client library
 - 📱 **Cross-platform** — browsers, Node.js (v20+), Bun (v1.1+), and Deno (v2+)
 
@@ -42,11 +42,10 @@ A `MarmotClient` needs four things to operate:
 
 1. **A signer** (`EventSigner`, from `applesauce-core`) — signs Nostr events on behalf of the user, including the `0x8009` account identity proof carried on every key package's LeafNode.
 2. **A network interface** (`NostrNetworkInterface`) — publishes, requests, and subscribes to events on relays.
-3. **A storage** (`MarmotStorage`) — persists group state, fork history, key packages (with private keys) and invites.
+3. **A database** (`MarmotDatabase`) — persists each group's state, fork history and message history, plus key packages (with private keys) and invites.
 
 You can optionally supply:
 
-- **`rumors`** — a per-group applesauce rumor database for message history (see [History](docs/client/history.md)); history stays in memory without it.
 - **`clientId`** — a stable `d`-tag slot: 32 random bytes encoded as 64 lowercase hex characters, persisted and reused for your kind 30443 key packages.
 
 The client exposes three managers — `client.groups`, `client.keyPackages`, and `client.invites` — plus `client.network` and the `joinGroupFromWelcome` entry point.
@@ -54,24 +53,18 @@ The client exposes three managers — `client.groups`, `client.keyPackages`, and
 ## Storage
 
 ```ts
-interface MarmotStorage {
-  get(key: string): Promise<Uint8Array | undefined>;
-  set(key: string, value: Uint8Array): Promise<void>;
-  delete(key: string): Promise<void>;
-  list(prefix: string): Promise<string[]>; // sorted keys starting with prefix
-  batch(ops: readonly StorageOp[]): Promise<void>; // atomic
-}
+import { memoryDatabase } from "@internet-privacy/marmot-ts";
+import {
+  indexedDBDatabase,
+  sqliteDatabase,
+} from "@internet-privacy/marmot-ts/extra";
+
+const database = memoryDatabase(); // tests and short-lived processes
+// const database = indexedDBDatabase({ prefix: `marmot:${pubkey}` });
+// const database = sqliteDatabase({ execute: (sql, params) => ... });
 ```
 
-The library owns every key and record format; a backend only stores bytes. For tests or short-lived processes use the in-memory implementation:
-
-```ts
-import { memoryStorage } from "@internet-privacy/marmot-ts";
-
-const storage = memoryStorage();
-```
-
-See [Storage](docs/client/storage.md) for IndexedDB and SQLite adapters and `EncryptedStorage`.
+Each group gets its own database of typed tables (state, fork history, processed events, messages and their deliveries), and the account database holds key packages, invites and the group list. See [Storage](docs/client/storage.md) for the contract and for writing your own adapter.
 
 ## Quick Start
 
@@ -87,7 +80,7 @@ const clientId = bytesToHex(randomBytes(32));
 const client = new MarmotClient({
   signer, // your EventSigner (e.g. from applesauce-core)
   network, // your NostrNetworkInterface implementation
-  storage, // MarmotStorage
+  database, // MarmotDatabase
   clientId, // persisted random slot; arbitrary device labels are rejected
 });
 ```
@@ -222,8 +215,8 @@ The `exports` map exposes the library as focused subpaths:
 | `@internet-privacy/marmot-ts/client` | `MarmotClient`, `MarmotGroup`, managers, intents, history, network                              |
 | `@internet-privacy/marmot-ts/core`   | Protocol/crypto/state primitives with no app I/O                                                |
 | `@internet-privacy/marmot-ts/engine` | `MarmotGroupEngine` and the convergence/ingest state machine                                    |
-| `@internet-privacy/marmot-ts/extra`  | Optional extras — `EncryptedStorage` (AES-256-GCM at-rest encryption) and audit writers         |
-| `@internet-privacy/marmot-ts/utils`  | Encoding, storage, Nostr, relay-url, and timestamp helpers                                      |
+| `@internet-privacy/marmot-ts/extra`  | Storage adapters — `indexedDBDatabase` and `sqliteDatabase` — and audit writers                 |
+| `@internet-privacy/marmot-ts/utils`  | Encoding, Nostr, relay-url, and timestamp helpers                                               |
 | `@internet-privacy/marmot-ts/mls`    | The forked [`ts-mls`](https://github.com/hzrd149/ts-mls) MLS engine, bundled inside the package |
 
 Import MLS primitives (ciphersuites, `ClientState`, `processMessage`, and so on) from

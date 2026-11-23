@@ -10,7 +10,8 @@ import { relaySet } from "applesauce-core/helpers/relays";
 import { createEventLoaderForStore } from "applesauce-loaders/loaders";
 import { RelayPool as AsRelayPool } from "applesauce-relay/pool";
 
-import { MarmotClient, memoryStorage } from "@internet-privacy/marmot-ts";
+import { MarmotClient, memoryDatabase } from "@internet-privacy/marmot-ts";
+import { sqliteDatabase } from "@internet-privacy/marmot-ts/extra";
 import {
   AuditEmitter,
   deriveAccountRef,
@@ -20,8 +21,6 @@ import {
 import { NodeJsonlAuditRecorder } from "@internet-privacy/marmot-ts/extra/audit/node";
 
 import { Directory, LOOKUP_RELAYS } from "../helpers/discovery.js";
-import { sqliteRumorDatabases } from "../helpers/sqlite-rumors.js";
-import { sqliteStorage } from "../helpers/sqlite-storage.js";
 import { RelayPool } from "../helpers/relay-pool.js";
 import {
   MarmotController,
@@ -194,8 +193,9 @@ export async function createController(
     opts.ephemeral,
   );
 
-  // One SQLite connection holds this account's protocol storage and message
-  // history. Null in ephemeral mode, where everything stays in memory.
+  // One SQLite connection holds this account's group databases (state, fork
+  // history, messages) and account database. Null in ephemeral mode, where
+  // everything stays in memory.
   const db = opts.ephemeral ? null : openDatabase(join(dataDir, "state.db"));
 
   const keyPath = join(dataDir, "identity.key");
@@ -276,10 +276,18 @@ export async function createController(
     network: pool,
     audit,
     auditContext,
-    // Group state, fork history, ingest ledgers, KeyPackages and invites.
-    storage: db ? sqliteStorage(db) : memoryStorage(),
-    // Per-group message history; omitted in ephemeral mode (kept in memory).
-    rumors: db ? sqliteRumorDatabases(db) : undefined,
+    // Every group's state, fork history and messages, plus KeyPackages,
+    // invites and the group list.
+    database: db
+      ? sqliteDatabase({
+          execute: (sql, params = []) =>
+            db
+              .query(sql)
+              .all(
+                ...(params as (string | number | null | Uint8Array)[]),
+              ) as Record<string, unknown>[],
+        })
+      : memoryDatabase(),
     clientId,
   });
 

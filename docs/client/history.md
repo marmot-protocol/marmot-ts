@@ -2,30 +2,9 @@
 
 MLS does not store messages: once a message is decrypted, it is gone unless you keep it. Every group has a `group.history` that records sent and received messages, so you can query them, render a live timeline, and page through older messages.
 
-History is local to this device. Relays only hold encrypted kind 445 events, and MLS forward secrecy means old events can't be decrypted again once the group has moved past their epoch. **History kept only in memory is lost for good on restart**, so give the client a rumor database if messages should survive.
+History is local to this device. Relays only hold encrypted kind 445 events, and MLS forward secrecy means old events can't be decrypted again once the group has moved past their epoch. History lives in each group's database (see [Storage](/client/storage)), so it survives restarts whenever the client's `database` is durable. With `memoryDatabase()` it is lost when the process exits.
 
-## Persist history
-
-Pass a `rumors` factory to `MarmotClient`. It returns an applesauce [`IAsyncEventDatabase<Rumor>`](https://hzrd149.github.io/applesauce/) for one group, or `undefined` to keep that group in memory. The library wraps each database in an applesauce `AsyncRumorStore`:
-
-```typescript
-import { MarmotClient } from "@internet-privacy/marmot-ts";
-
-const client = new MarmotClient({
-  signer,
-  network,
-  storage,
-  rumors: Object.assign(
-    (groupId: string) => openRumorDatabase(`marmot-${groupId}`),
-    // Optional: delete a group's database after it is destroyed or disbanded.
-    { drop: (groupId: string) => deleteRumorDatabase(`marmot-${groupId}`) },
-  ),
-});
-```
-
-Each database must hold exactly one group, and writes must resolve only once committed. The library never closes the database connection. Omit `rumors` to keep all history in memory (fine for tests and bots that don't need history).
-
-You never save messages yourself: the group writes every sent message and every received application message to its history.
+You never save messages yourself: the group writes every sent message and every received application message to the group database in the same transaction as the state that produced it. A message delivered on a fork branch that later loses is removed the same way.
 
 ## Query messages
 
@@ -35,7 +14,7 @@ You never save messages yourself: the group writes every sent message and every 
 const recent = await group.history.queryRumors({ kinds: [9], limit: 50 });
 ```
 
-`group.history.store` is the underlying applesauce `RumorStore` / `AsyncRumorStore`, so applesauce models, `timeline()` and the `insert$` / `remove$` streams work too.
+`group.history.store` is the underlying applesauce `AsyncRumorStore`, so applesauce models, `timeline()` and the `insert$` / `remove$` streams work too. For queries the applesauce filter language can't express, read the group database's `messages` and `deliveries` tables directly (see [Storage](/client/storage#querying-messages)).
 
 ## Live timeline
 
@@ -80,7 +59,7 @@ The rumor store applies NIP-09 deletions (a member's kind 5 rumor removes that m
 group.on("historyError", (error) => reportError(error));
 ```
 
-Destroying a group (`group.destroy()`, `client.groups.destroy()`, or a successful `client.groups.leave()`) purges its history and calls `rumors.drop`, and so does a group being disbanded. If you want to keep messages from such groups, copy them out first.
+Destroying a group (`group.destroy()`, `client.groups.destroy()`, or a successful `client.groups.leave()`) deletes its database, including its history; a disbanded group purges its history too. If you want to keep messages from such groups, copy them out first.
 
 ## Retracted messages
 

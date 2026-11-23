@@ -4,18 +4,18 @@
 
 ### Breaking changes
 
-- **One storage for everything.** `MarmotClient` now takes a single `storage: MarmotStorage` — a byte key/value interface with `get`, `set`, `delete`, `list(prefix)` and an atomic `batch(ops)` — instead of `groupStateStore`, `keyPackageStore`, `inviteStore`, `ingestStateStore`, `rewindStore`, `removedMarkerStore` and `lifecycleStore`. The library owns every key and record format, so adapters only store bytes: no structured-clone or `Uint8Array` serialization concerns, and no per-store namespacing. Fork history, replay protection, backfill cursors and removal state are now always persisted.
-  - Migration: replace all store options with `storage`. Use `memoryStorage()` for tests, or implement `MarmotStorage` over IndexedDB or SQLite with a transaction for `batch` (see the [Storage](docs/client/storage.md) guide). Existing data is not migrated: start from a fresh storage, and re-join groups or re-publish key packages as needed.
-- **Message history uses applesauce rumor stores.** `historyFactory`, `GroupRumorHistory`, `GroupRumorHistoryBackend`, `KeyValueRumorHistoryBackend`, `makeKeyValueRumorHistoryFactory` and `BaseGroupHistory` are removed. Every group now has `group.history` (a `GroupHistory`) backed by an applesauce `RumorStore`, or by an `AsyncRumorStore` over the database returned from the new optional `rumors(groupId)` factory (with optional `rumors.drop(groupId)` cleanup). Queries support full Nostr filters, and NIP-09 deletions and NIP-40 expiration are applied.
-  - Migration: replace `historyFactory` with `rumors: (groupId) => database` returning an `IAsyncEventDatabase<Rumor>`, or omit it to keep history in memory. `queryRumors`, `subscribe` and `createPaginatedLoader` are unchanged; `group.history.store` exposes the applesauce store.
+- **A typed database per group.** `MarmotClient` now takes a single `database: MarmotDatabase` instead of `groupStateStore`, `keyPackageStore`, `inviteStore`, `ingestStateStore`, `rewindStore`, `removedMarkerStore`, `lifecycleStore` and `historyFactory`. A `MarmotDatabase` is an account database (key packages, invites, the group list) plus one database per group (state, fork history, processed events, messages and how each message was delivered). Each is a small set of typed tables with named, index-backed queries and all-or-nothing transactions, so your database does the indexing instead of the library scanning keys in memory. Fork history, replay protection, backfill cursors and removal state are always persisted.
+  - Migration: use `memoryDatabase()` for tests, `indexedDBDatabase()` in browsers or `sqliteDatabase(connection)` with any SQLite driver (both from `@internet-privacy/marmot-ts/extra`), or implement `MarmotDatabase` yourself (see the [Storage](docs/client/storage.md) guide). Existing data is not migrated: start from a fresh database, and re-join groups or re-publish key packages as needed.
+- **Message history lives in the group database.** `historyFactory`, `GroupRumorHistory`, `GroupRumorHistoryBackend`, `KeyValueRumorHistoryBackend`, `makeKeyValueRumorHistoryFactory` and `BaseGroupHistory` are removed. Every group has `group.history` (a `GroupHistory`) over an applesauce `AsyncRumorStore` backed by the group's `messages` table. Queries support full Nostr filters, and NIP-09 deletions and NIP-40 expiration are applied. `group.database.messages` and `group.database.deliveries` can be queried directly, including the epoch and fork-history state each message was delivered on.
+  - Migration: drop `historyFactory`; history persists with the client's `database`. `queryRumors`, `subscribe` and `createPaginatedLoader` are unchanged; `group.history.store` exposes the applesauce store.
 - **The media cache is removed.** `mediaFactory`, `group.media`, `GroupMediaStore`, `BaseGroupMedia` and `StoredMedia` are gone. `decryptMedia` returns a `DecryptedMedia` and caches nothing; keep plaintext in your own cache if needed.
 - `MarmotClient`, `MarmotGroup`, `GroupsManager` and `GroupSession` no longer take `THistory`/`TMedia` type parameters.
-- `GenericKeyValueStore`, `InMemoryKeyValueStore`, `EncryptedKeyValueStore` and `client.ingestPersistence` are removed. `EncryptedStorage` (from `./extra`) replaces the encrypted store: it wraps any `MarmotStorage` with AES-256-GCM, binds each value to its key, and can derive its key from a password with `EncryptedStorage.fromPassword()`.
-- `KeyPackageManager` and `InviteManager` take `storage` instead of `store`. `StoredInviteEntry` is replaced by `ReceivedInviteRecord`.
+- `GenericKeyValueStore`, `InMemoryKeyValueStore`, `EncryptedKeyValueStore` and `client.ingestPersistence` are removed. Encryption at rest is now the storage layer's job (SQLCipher, an encrypted file system, or an encrypting IndexedDB wrapper).
+- `KeyPackageManager` and `InviteManager` take the account `database` instead of `store`; `MarmotGroup` and `GroupSession` take their group `database`. `StoredInviteEntry` is replaced by `ReceivedInviteRecord`.
 
 ### Added
 
-- The client entry point now exports `MarmotStorage` and its adapter helpers, including `memoryStorage()`.
+- `indexedDBDatabase()` and `sqliteDatabase()` storage adapters in `@internet-privacy/marmot-ts/extra`, and `memoryDatabase()` for tests.
 
 - `watchKeyPackages()`, `invites.watchUnread()`, `invites.watchReceived()`, `watchInvites()`, and `history.subscribe()` accept an optional `{ signal }` to stop watching, matching `groups.watch()`.
 
@@ -25,8 +25,9 @@
 - Received Welcomes now survive temporary signer and storage failures. Explicit decryption retries resume safely after restart; automatic listening does not repeatedly prompt for failed envelopes or duplicate delivery notifications. Recovery refreshes unread watchers even when an earlier write succeeded but reported failure.
 - KeyPackage publication, rotation, and purge now reject when no requested relay acknowledges the event, preserving private keys after rejected replacements or deletions. `KeyPackagePublishError` exposes the signed event and relay responses; transport errors still propagate unchanged.
 - `ensurePublished()` now selects only the explicit slot or manager `clientId`, rather than returning another device's package. Configure one of these identifiers even when local packages already exist.
-- Each group state save now commits its fork-history nodes, delivered-message evidence and processed-event records atomically, so a crash can no longer leave them out of step.
-- Destroying a group now removes all of its stored records, including removal attribution that was previously left behind.
+- Each group state save now commits its fork-history nodes, processed-event records and new or retracted messages in one transaction, so a crash can no longer show a message without the state that produced it, or apply an event twice. Messages from an abandoned fork branch are removed in the same transaction.
+- Creating, joining and destroying a group now finish or roll back cleanly after a crash between the account and group databases.
+- Destroying a group now deletes its whole database, including removal attribution that was previously left behind.
 - Receiving the same invite concurrently can no longer lose seen markers, and the seen set no longer grows as a single ever-larger record.
 - `IndexedDbAuditWriter` no longer overwrites earlier sessions' lines in the same log, and stores each line's index consistently with its key.
 - `createPaginatedLoader` no longer skips messages that share a timestamp with a page boundary.

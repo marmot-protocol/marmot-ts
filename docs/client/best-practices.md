@@ -10,9 +10,8 @@ Run through this list before shipping a Marmot app. Each item links to the page 
 
 ## Storage
 
-- [ ] **Use a durable `storage` with atomic `batch`.** A partial batch can replay or lose messages. [Storage](/client/storage#requirements-for-durable-adapters)
-- [ ] **Persist message history with a `rumors` database.** In-memory history can't be recovered after a restart. [History](/client/history#persist-history)
-- [ ] **Encrypt storage at rest.** It holds MLS secrets and key package private keys; wrap it in `EncryptedStorage` with a key from platform key storage. [Storage](/client/storage#encrypt-storage-at-rest)
+- [ ] **Use a durable `database`** (`indexedDBDatabase` or `sqliteDatabase`, or your own adapter with all-or-nothing transactions). In-memory history and state can't be recovered after a restart. [Storage](/client/storage)
+- [ ] **Encrypt storage at rest.** It holds MLS secrets and key package private keys; use SQLCipher, an encrypted file system or an encrypting IndexedDB wrapper. [Storage](/client/storage#encryption-at-rest)
 - [ ] **Isolate storage for each account**, and run one client per account. [Multi-account](/client/multi-account)
 
 ## Sync and messaging

@@ -1,5 +1,5 @@
 /**
- * Storage adapters for {@link MarmotDatabase}: IndexedDB for browsers and
+ * Storage adapters for `MarmotDatabase`: IndexedDB for browsers and
  * SQLite for any driver that can run a statement. Neither encrypts at rest.
  *
  * @module

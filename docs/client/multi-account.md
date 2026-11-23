@@ -1,35 +1,28 @@
 # Multi-account
 
-To support several Nostr accounts in one app, create one `MarmotClient` per account, each with its own storage and rumor databases. This page shows how to build them and how to switch between accounts cleanly.
+To support several Nostr accounts in one app, create one `MarmotClient` per account, each with its own database. This page shows how to build them and how to switch between accounts cleanly.
 
-::: danger Never share storage between accounts
-The client's `storage` holds MLS secrets and key package private keys. If two accounts share it without a per-account prefix, they leak key material to each other and corrupt each other's group state.
+::: danger Never share a database between accounts
+The client's `database` holds MLS secrets and key package private keys. If two accounts share it, they leak key material to each other and corrupt each other's group state.
 :::
 
-## Create isolated storage for each account
+## Create an isolated database for each account
 
-Give each account its own database (or a key prefix with `scopeStorage`), and its own rumor databases:
+Give each account its own IndexedDB prefix or SQLite file:
 
 ```typescript
-import { scopeStorage, type MarmotStorage } from "@internet-privacy/marmot-ts";
+import { indexedDBDatabase } from "@internet-privacy/marmot-ts/extra";
 
 export function storageForAccount(pubkey: string) {
-  return {
-    // One database per account...
-    storage: openStorage(`marmot-${pubkey}`),
-    // ...or a shared database with a per-account prefix:
-    // storage: scopeStorage(sharedStorage, `${pubkey}/`),
-    rumors: (groupId: string) =>
-      openRumorDatabase(`marmot-${pubkey}-${groupId}`),
-  };
+  return { database: indexedDBDatabase({ prefix: `marmot:${pubkey}` }) };
 }
 ```
 
-`openStorage` returns a `MarmotStorage` (see [Storage](/client/storage)) and `openRumorDatabase` an applesauce `IAsyncEventDatabase<Rumor>` (see [History](/client/history)).
+See [Storage](/client/storage) for the SQLite adapter and for writing your own.
 
 ## Create a client for an account
 
-The network adapter can be shared across accounts. The signer, the storage and the key package slot (`clientId`) belong to the account:
+The network adapter can be shared across accounts. The signer, the database and the key package slot (`clientId`) belong to the account:
 
 ```typescript
 import { MarmotClient } from "@internet-privacy/marmot-ts";

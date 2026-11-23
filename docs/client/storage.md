@@ -1,183 +1,113 @@
 # Storage
 
-`MarmotClient` keeps everything it must remember in **one** storage you supply: a small byte key/value interface. The library owns every key and record format, so a backend only has to store bytes: in-memory for tests, IndexedDB in the browser, SQLite or files on a server.
-
-Decrypted messages are stored separately, in a per-group rumor database (see [History](/client/history)).
-
-## The storage interface
+`MarmotClient` persists everything through one `database` option: an **account database** plus **one database per group**. Each is a small set of typed tables with named, index-backed queries, so a real database (IndexedDB, SQLite) does the indexing instead of the library scanning keys in memory.
 
 ```typescript
-import type { MarmotStorage, StorageOp } from "@internet-privacy/marmot-ts";
+import { MarmotClient } from "@internet-privacy/marmot-ts";
+import { indexedDBDatabase } from "@internet-privacy/marmot-ts/extra";
 
-interface MarmotStorage {
-  get(key: string): Promise<Uint8Array | undefined>;
-  set(key: string, value: Uint8Array): Promise<void>;
-  delete(key: string): Promise<void>;
-  /** Keys starting with `prefix`, sorted ascending. */
-  list(prefix: string): Promise<string[]>;
-  /** Apply every op atomically, in order. */
-  batch(ops: readonly StorageOp[]): Promise<void>;
-}
-
-type StorageOp =
-  | { type: "set"; key: string; value: Uint8Array }
-  | { type: "delete"; key: string };
+const client = new MarmotClient({
+  signer,
+  network,
+  database: indexedDBDatabase({ prefix: `marmot:${pubkey}` }),
+});
 ```
 
+## What lives where
+
+| Database              | Tables                                                    | Holds                                                                                                                                                                                                          |
+| --------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Account               | `keyPackages`, `invites`, `groups`, `intents`, `meta`     | Your key packages (**including private keys**), received invites and seen gift wraps, the list of groups, and in-progress operations that span databases                                                       |
+| Group (one per group) | `meta`, `treeNodes`, `wrappers`, `messages`, `deliveries` | The group's MLS state and lifecycle records, its [fork-history tree](/client/fork-history), processed transport events, decrypted messages, and how each message was delivered (epoch, state, transport event) |
+
+Destroying or leaving a group drops its whole database. Values contain MLS secrets and private keys: protect storage the way you would protect a signing key.
+
+## Built-in adapters
+
+| Adapter                       | Import                              | Use for                                                          |
+| ----------------------------- | ----------------------------------- | ---------------------------------------------------------------- |
+| `memoryDatabase()`            | `@internet-privacy/marmot-ts`       | Tests, demos and throwaway sessions. Everything is lost on exit. |
+| `indexedDBDatabase(options?)` | `@internet-privacy/marmot-ts/extra` | Browsers and workers: one IndexedDB database per group           |
+| `sqliteDatabase(connection)`  | `@internet-privacy/marmot-ts/extra` | Node, Bun, Deno, React Native: any SQLite driver                 |
+
+### IndexedDB
+
 ```typescript
-const client = new MarmotClient({ signer, network, storage });
+const database = indexedDBDatabase({ prefix: `marmot:${pubkey}` });
 ```
 
-## What lives in storage
+The account lives in `<prefix>:account` and each group in `<prefix>:group:<groupId>`. Use one prefix per account.
 
-| Keys                  | Holds                                                                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `group/<groupId>/...` | Each group's MLS state, its [fork-history tree](/client/fork-history), replay protection, convergence evidence, backfill cursors and lifecycle records |
-| `keypackage/<ref>`    | Your key packages, **including private keys**                                                                                                          |
-| `invite/...`          | Received gift wraps, decrypted invites and seen markers                                                                                                |
+### SQLite
 
-Destroying or leaving a group deletes everything under its `group/<groupId>/` prefix. Values contain MLS secrets and private keys: protect the storage the way you would protect a signing key.
-
-## Client storage modules
-
-The client storage code lives in `src/client/storage`. The package’s `/client` entry point exposes the shared adapter contract, adapter helpers, and group message history API. The internal modules divide responsibility as follows.
-
-| Module                                                                  | Responsibility                                                       |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `group-registry.ts`                                                     | Loads persisted groups and tracks live instances.                    |
-| `storage-keys.ts`, `record-codec.ts`                                    | Define client record keys and encode structured records as bytes.    |
-| `key-package-store.ts`                                                  | Persists local key packages and their consumption receipts.          |
-| `backfill-cursor.ts`, `wrapper-ledger.ts`, `delivered-payload-store.ts` | Persist backfill progress, replay markers, and delivery evidence.    |
-| `pending-publication.ts`                                                | Persists pending commits so publication can resume after a restart.  |
-| `group-history.ts`                                                      | Exposes decrypted message history backed by a per-group rumor store. |
-
-## Requirements for durable adapters
-
-- Resolve `set`, `delete` and `batch` only after the change is durable.
-- `batch` must be **all-or-nothing**: after a crash, either every op is visible or none is. The library commits each group state change, its fork-history nodes and its replay-protection records in one batch, so a partial batch could replay or lose messages. IndexedDB transactions and SQLite transactions provide this directly.
-- `list(prefix)` must return every key that starts with `prefix`, sorted.
-- Store values byte for byte. There is no structured data to serialize: values are always `Uint8Array`.
-- One storage holds one account. Run only one `MarmotClient` at a time over a given storage.
-
-::: warning One account per storage
-Never share a storage between accounts without a per-account key prefix. See [Multi-account](/client/multi-account).
-:::
-
-## Use the in-memory storage
-
-For tests and short-lived scripts:
+`sqliteDatabase` takes any object with an `execute(sql, params)` method that returns result rows as plain objects. For example with `bun:sqlite`:
 
 ```typescript
-import { MarmotClient, memoryStorage } from "@internet-privacy/marmot-ts";
+import { Database } from "bun:sqlite";
+import { sqliteDatabase } from "@internet-privacy/marmot-ts/extra";
 
-const client = new MarmotClient({ signer, network, storage: memoryStorage() });
+const db = new Database("marmot.sqlite");
+db.exec("PRAGMA journal_mode = WAL");
+const database = sqliteDatabase({
+  execute: (sql, params = []) => db.query(sql).all(...(params as any[])),
+});
 ```
 
-Everything is lost when the process exits.
+All groups share the connection; each group's rows carry its id, and indexes cover message time, kind, author and tags. Give each account its own file (or a distinct `tablePrefix`) and dedicate the connection to the adapter.
 
-## Use IndexedDB in the browser
+## Querying messages
 
-One object store, string keys, `Uint8Array` values. A transaction makes `batch` atomic:
+Messages are rows in the group's `messages` table, indexed by `kind`, `pubkey`, `createdAt` and single-letter tags. `group.history` reads them through applesauce (see [History](/client/history)), and you can query the table directly:
 
 ```typescript
-import type { MarmotStorage } from "@internet-privacy/marmot-ts";
+const db = group.database;
+const replies = await db.messages.query({
+  kinds: [9],
+  tags: [[`e:${parentId}`]],
+  limit: 50,
+});
+const deliveries = await db.deliveries.byRumor(replies[0].id);
+```
 
-async function indexedDbStorage(name: string): Promise<MarmotStorage> {
-  const db = await new Promise<IDBDatabase>((resolve, reject) => {
-    const open = indexedDB.open(name, 1);
-    open.onupgradeneeded = () => open.result.createObjectStore("kv");
-    open.onsuccess = () => resolve(open.result);
-    open.onerror = () => reject(open.error);
-  });
-  const run = <T>(
-    mode: IDBTransactionMode,
-    body: (store: IDBObjectStore) => IDBRequest<T> | void,
-  ) =>
-    new Promise<T>((resolve, reject) => {
-      const tx = db.transaction("kv", mode);
-      const request = body(tx.objectStore("kv"));
-      tx.oncomplete = () => resolve(request?.result as T);
-      tx.onerror = tx.onabort = () => reject(tx.error);
-    });
-  return {
-    get: (key) => run("readonly", (s) => s.get(key)),
-    set: (key, value) => run("readwrite", (s) => void s.put(value, key)),
-    delete: (key) => run("readwrite", (s) => void s.delete(key)),
-    list: async (prefix) =>
-      (
-        await run<IDBValidKey[]>("readonly", (s) =>
-          s.getAllKeys(IDBKeyRange.bound(prefix, prefix + "￿")),
-        )
-      ).map(String),
-    batch: (ops) =>
-      run("readwrite", (s) => {
-        for (const op of ops)
-          op.type === "set" ? s.put(op.value, op.key) : s.delete(op.key);
-      }),
+Each `deliveries` row records how a message arrived: the epoch it decrypted at and the fork-history state it belongs to. A message stays visible while any delivery supports it; when a fork switch abandons the branch it arrived on, its delivery and (if it was the last one) the message are removed in the same transaction.
+
+## Transactions
+
+Every change the client makes to a group — new MLS state, fork-history nodes, the processed transport event, new or retracted messages — commits in **one group transaction**. After a crash either all of it is durable or none of it is, so a message is never shown without the state that produced it, and an event is never applied twice.
+
+Operations that touch both the account and a group database (creating, joining and destroying a group) write an `intents` row first and are finished or undone the next time the client starts.
+
+## Encryption at rest
+
+The adapters store values as given. Encrypt at the storage layer when the threat model requires it: SQLCipher or an encrypted file system for SQLite, an encrypted volume or a wrapper around IndexedDB in the browser. Index columns (message kinds, authors, timestamps and tags; epochs; invite states) must stay readable by the database to be indexed.
+
+## Write your own adapter
+
+Implement `MarmotDatabase` from `@internet-privacy/marmot-ts`:
+
+```typescript
+interface MarmotDatabase {
+  account: MarmotAccountDatabase;
+  groups: {
+    open(groupId: string): Promise<MarmotGroupDatabase>;
+    drop(groupId: string): Promise<void>;
   };
 }
 ```
 
-## Use SQLite on a server
+Requirements:
 
-```typescript
-import type { MarmotStorage } from "@internet-privacy/marmot-ts";
+- `transaction(fn)` is **all-or-nothing** across every table and resolves only once durable. Reads inside `fn` see its own writes.
+- `fn` only awaits the transaction's own methods: the library prepares every value before the transaction opens, which keeps IndexedDB transactions alive.
+- Reads outside a transaction see committed data.
+- Index the columns each query names: `wrappers.deleteBelow` by `epoch`, `messages.query` by time, kind, author and tags, `deliveries.byRumor` / `countByRumor` by `rumorId`, `deliveries.withEvidence` (rows that still hold `evidence`), and `invites.byState` / `byRumor`.
+- Store `value` and `evidence` byte for byte.
+- One `MarmotDatabase` holds one account. Run only one `MarmotClient` at a time over it.
 
-function sqliteStorage(db: Database): MarmotStorage {
-  db.exec("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v BLOB)");
-  const put = (key: string, value: Uint8Array) =>
-    db.run("INSERT OR REPLACE INTO kv VALUES (?, ?)", key, value);
-  const del = (key: string) => db.run("DELETE FROM kv WHERE k = ?", key);
-  return {
-    async get(key) {
-      const row = db.get("SELECT v FROM kv WHERE k = ?", key);
-      return row ? new Uint8Array(row.v) : undefined;
-    },
-    async set(key, value) {
-      put(key, value);
-    },
-    async delete(key) {
-      del(key);
-    },
-    async list(prefix) {
-      return db
-        .all(
-          "SELECT k FROM kv WHERE k >= ? AND k < ? ORDER BY k",
-          prefix,
-          prefix + "￿",
-        )
-        .map((row) => row.k);
-    },
-    async batch(ops) {
-      db.transaction(() => {
-        for (const op of ops)
-          op.type === "set" ? put(op.key, op.value) : del(op.key);
-      })();
-    },
-  };
-}
-```
-
-`Database` stands in for your driver (for example `better-sqlite3` or `bun:sqlite`).
-
-## Encrypt storage at rest
-
-`EncryptedStorage` from `./extra` wraps any `MarmotStorage` and encrypts every value with AES-256-GCM. Each value gets a random nonce and is bound to its key, so values can't be swapped between keys undetected. Keys stay in plaintext: they reveal group ids, key package refs and event ids, but no secrets.
-
-```typescript
-import { EncryptedStorage } from "@internet-privacy/marmot-ts/extra";
-
-// From a 32-byte key held in platform key storage (recommended):
-const storage = new EncryptedStorage(rawStorage, key);
-
-// Or derived from a password (PBKDF2-SHA256; rejects a wrong password):
-const storage = await EncryptedStorage.fromPassword(rawStorage, password);
-```
-
-Prefer a key from platform key storage (Keychain, Android Keystore, DPAPI, libsecret, or a non-extractable WebCrypto key) over a password.
+The IndexedDB and SQLite adapters in `src/extra` are complete reference implementations, and both pass the same conformance suite as the in-memory database.
 
 ## Next steps
 
-- [History](/client/history): persisting decrypted messages
+- [History](/client/history): reading decrypted messages
 - [Multi-account](/client/multi-account): isolated storage for each account
 - [Network](/client/network): the other adapter `MarmotClient` needs

@@ -597,6 +597,7 @@ export class GroupHistoryTree {
    * and its heavy material later evicted/reloaded. Marks every current node
    * dirty so the first {@link flush} persists the whole tree. A no-op if the
    * same store is already bound (e.g. on a tree loaded via {@link load}).
+   * @internal
    */
   bindStore(store: HistoryTreeStore): void {
     this.#assertMutable();
@@ -733,6 +734,7 @@ export class GroupHistoryTree {
    * Loads a tree's light index from a store (heavy material stays lazy). Returns
    * `undefined` if no tree is persisted under `gid`. The store stays bound, so
    * snapshots/commit bytes are fetched on demand.
+   * @internal
    */
   static async load(
     store: HistoryTreeStore,
@@ -774,7 +776,10 @@ export class GroupHistoryTree {
     return tree;
   }
 
-  /** Stages deletion of every persisted record of a tree. */
+  /**
+   * Stages deletion of every persisted record of a tree.
+   * @internal
+   */
   static async stagePurge(store: HistoryTreeStore): Promise<HistoryTreeWrite> {
     const write = emptyTreeWrite();
     const metaBytes = await store.meta();

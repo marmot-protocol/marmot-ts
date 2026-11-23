@@ -22,17 +22,17 @@ yarn add @internet-privacy/marmot-ts applesauce-core
 
 The examples import Nostr types from `applesauce-core`. marmot-ts depends on it already, but strict package managers such as pnpm only let your app import packages it lists itself, so add it alongside marmot-ts (use the same major version marmot-ts depends on).
 
-## Create storage
+## Create a database
 
-The client persists MLS group state, key package private material and invites in one byte key/value storage that you provide. The in-memory storage is fine for trying things out:
+The client persists MLS group state, message history, key package private material and invites in a database you provide: one account database plus one database per group. The in-memory database is fine for trying things out:
 
 ```typescript
-import { memoryStorage } from "@internet-privacy/marmot-ts";
+import { memoryDatabase } from "@internet-privacy/marmot-ts";
 
-const storage = memoryStorage();
+const database = memoryDatabase();
 ```
 
-Production apps need a durable storage (IndexedDB, SQLite, …) and usually a [rumor database](/client/history) for message history. See [Storage](/client/storage).
+Production apps use a durable adapter such as `indexedDBDatabase()` or `sqliteDatabase()` from `@internet-privacy/marmot-ts/extra`. See [Storage](/client/storage).
 
 ## Connect to relays
 
@@ -84,7 +84,7 @@ if (!clientId) {
 const client = new MarmotClient({
   signer, // applesauce EventSigner with nip44 support
   network,
-  storage,
+  database,
   clientId,
 });
 

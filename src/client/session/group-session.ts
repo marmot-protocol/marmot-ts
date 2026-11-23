@@ -290,7 +290,10 @@ export class GroupSession {
   readonly ciphersuite: CiphersuiteImpl;
   /** This group's database. */
   readonly database: MarmotGroupDatabase;
-  /** Single-record access to the database's `meta` table. */
+  /**
+   * Single-record access to the database's `meta` table.
+   * @internal
+   */
   readonly meta: GroupMetaStore;
   readonly history?: GroupSessionHistory;
   readonly #dropDatabase?: () => Promise<void>;

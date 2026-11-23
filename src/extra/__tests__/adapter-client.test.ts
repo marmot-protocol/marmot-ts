@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { unlockGiftWrap } from "applesauce-common/helpers/gift-wrap";
-import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
+import "fake-indexeddb/auto";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   createApplicationMessageIntent,
@@ -38,14 +38,8 @@ const adapters: [string, () => () => MarmotDatabase][] = [
   [
     "indexeddb",
     () => {
-      const factory = new IDBFactory();
       const prefix = `client${counter++}`;
-      return () =>
-        indexedDBDatabase({
-          indexedDB: factory,
-          keyRange: IDBKeyRange,
-          prefix,
-        });
+      return () => indexedDBDatabase({ prefix });
     },
   ],
 ];

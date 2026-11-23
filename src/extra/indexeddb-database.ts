@@ -1,13 +1,23 @@
 /**
  * IndexedDB adapter for {@link MarmotDatabase}: one IndexedDB database per
  * group plus one for the account, each transaction one native `readwrite`
- * transaction across every object store.
+ * transaction across every object store. Built on
+ * [`idb`](https://github.com/jakearchibald/idb), so it uses the global
+ * `indexedDB` (browsers, workers, or `fake-indexeddb/auto` in tests).
  *
  * Values are stored as given (plaintext). Wrap the browser storage with your
  * own encryption if the device threat model requires it.
  *
  * @module @category Storage
  */
+import {
+  deleteDB,
+  openDB,
+  type IDBPDatabase,
+  type IDBPIndex,
+  type IDBPObjectStore,
+  type IDBPTransaction,
+} from "idb";
 import {
   applyGroupUpdate,
   compareMessages,
@@ -42,10 +52,6 @@ import type {
 export interface IndexedDBDatabaseOptions {
   /** Database name prefix; defaults to `marmot`. Use one prefix per account. */
   prefix?: string;
-  /** The IndexedDB factory; defaults to `globalThis.indexedDB`. */
-  indexedDB?: IDBFactory;
-  /** The matching `IDBKeyRange` class; defaults to `globalThis.IDBKeyRange`. */
-  keyRange?: typeof IDBKeyRange;
 }
 
 const SCHEMA_VERSION = 2;
@@ -59,15 +65,13 @@ const GROUP_STORES = [
   "backfill",
   "messages",
   "deliveries",
-] as const;
-const ACCOUNT_STORES = ["keyPackages", "invites", "groups", "intents"] as const;
+];
+const ACCOUNT_STORES = ["keyPackages", "invites", "groups", "intents"];
 
-function request<T>(req: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
+type Store = IDBPObjectStore<unknown, string[], string, IDBTransactionMode>;
+type WriteTx = IDBPTransaction<unknown, string[], "readwrite">;
+/** Resolves an object store, in a shared or a fresh transaction. */
+type StoreSource = (name: string) => Store | Promise<Store>;
 
 /**
  * Hidden, adapter-only fields kept on stored rows for indexing and stripped
@@ -76,12 +80,26 @@ function request<T>(req: IDBRequest<T>): Promise<T> {
  */
 const HIDDEN = ["_tags", "_evidence"] as const;
 
+/** Removes adapter-only fields and absent optionals from a stored row. */
+function clean<T>(row: unknown): T {
+  if (!row || typeof row !== "object") return row as T;
+  const copy = { ...(row as Record<string, unknown>) };
+  for (const key of HIDDEN) delete copy[key];
+  for (const key of Object.keys(copy))
+    if (copy[key] === undefined) delete copy[key];
+  return copy as T;
+}
+
+function byId<T extends { id: string }>(a: T, b: T): number {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 /** Drops every existing store; the schema is recreated from scratch. */
-function reset(db: IDBDatabase): void {
+function reset(db: IDBPDatabase): void {
   for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name);
 }
 
-function upgradeGroup(db: IDBDatabase): void {
+function upgradeGroup(db: IDBPDatabase): void {
   reset(db);
   db.createObjectStore("group");
   db.createObjectStore("treeNodes", { keyPath: "tag" });
@@ -105,7 +123,7 @@ function upgradeGroup(db: IDBDatabase): void {
   deliveries.createIndex("evidence", "_evidence");
 }
 
-function upgradeAccount(db: IDBDatabase): void {
+function upgradeAccount(db: IDBPDatabase): void {
   reset(db);
   db.createObjectStore("keyPackages", { keyPath: "ref" });
   const invites = db.createObjectStore("invites", { keyPath: "id" });
@@ -115,85 +133,92 @@ function upgradeAccount(db: IDBDatabase): void {
   db.createObjectStore("intents", { keyPath: "id" });
 }
 
-/** A lazily opened IndexedDB connection with transaction helpers. */
+/** A lazily opened IndexedDB connection. */
 class Connection {
-  #db: Promise<IDBDatabase> | undefined;
+  #db: Promise<IDBPDatabase> | undefined;
   #closed = false;
 
   constructor(
-    readonly factory: IDBFactory,
-    readonly keyRange: typeof IDBKeyRange,
     readonly name: string,
-    readonly stores: readonly string[],
-    readonly upgrade: (db: IDBDatabase) => void,
+    readonly stores: string[],
+    readonly upgrade: (db: IDBPDatabase) => void,
   ) {}
 
-  #open(): Promise<IDBDatabase> {
+  #open(): Promise<IDBPDatabase> {
     if (this.#closed) return Promise.reject(new Error("Database is closed"));
-    this.#db ??= new Promise((resolve, reject) => {
-      const req = this.factory.open(this.name, SCHEMA_VERSION);
-      req.onupgradeneeded = () => this.upgrade(req.result);
-      req.onsuccess = () => {
-        const db = req.result;
-        // Another context deleting or upgrading the database closes this one.
-        db.onversionchange = () => {
-          db.close();
-          this.#closed = true;
-        };
-        resolve(db);
-      };
-      req.onerror = () => reject(req.error);
-      req.onblocked = () =>
-        reject(new Error(`IndexedDB ${this.name} is blocked`));
-    });
-    return this.#db;
+    return (this.#db ??= openDB(this.name, SCHEMA_VERSION, {
+      upgrade: this.upgrade,
+      // Another context deleting or upgrading the database closes this one.
+      blocking: () => void this.close(),
+    }));
   }
 
-  async run<T>(
-    mode: IDBTransactionMode,
-    work: (tx: IDBTransaction) => Promise<T>,
-  ): Promise<T> {
+  /** One store in its own readonly transaction, for reads outside `write`. */
+  read: StoreSource = async (name) =>
+    (await this.#open()).transaction(name, "readonly").store;
+
+  /** Runs `work` in one strict-durability readwrite transaction. */
+  async write<T>(work: (tx: WriteTx) => Promise<T>): Promise<T> {
     const db = await this.#open();
-    const tx = db.transaction(this.stores as string[], mode, {
+    const tx = db.transaction(this.stores, "readwrite", {
       durability: "strict",
     });
-    const done = new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onabort = () => reject(tx.error ?? new Error("Transaction aborted"));
-      tx.onerror = () => reject(tx.error);
-    });
-    let result: T;
+    // Observed below; this only keeps an early abort from going unhandled.
+    tx.done.catch(() => undefined);
     try {
-      result = await work(tx);
+      const result = await work(tx);
+      await tx.done;
+      return result;
     } catch (error) {
       try {
         tx.abort();
       } catch {
         // Already finished.
       }
-      await done.catch(() => undefined);
+      await tx.done.catch(() => undefined);
       throw error;
     }
-    await done;
-    return result;
   }
 
   async close(): Promise<void> {
     this.#closed = true;
-    const db = await this.#db?.catch(() => undefined);
-    db?.close();
+    (await this.#db?.catch(() => undefined))?.close();
   }
 }
 
-/** Removes adapter-only fields and absent optionals from a stored row. */
-function clean<T>(row: unknown): T {
-  if (!row || typeof row !== "object") return row as T;
-  const copy = { ...(row as Record<string, unknown>) };
-  for (const key of HIDDEN) delete copy[key];
-  for (const key of Object.keys(copy))
-    if (copy[key] === undefined) delete copy[key];
-  return copy as T;
+/** Row helpers over a {@link StoreSource}. */
+function rows(store: StoreSource) {
+  return {
+    get: async <T>(name: string, key: string) => {
+      const row = await (await store(name)).get(key);
+      return row === undefined ? undefined : clean<T>(row);
+    },
+    /** All rows of a store, or of an index when `index` is given. */
+    all: async <T>(name: string, index?: string, key?: IDBValidKey) => {
+      const source = await store(name);
+      const found = index
+        ? await source.index(index).getAll(key)
+        : await source.getAll();
+      return found.map((row) => clean<T>(row));
+    },
+  };
 }
+
+/** Put/delete for one store of a write transaction. */
+function writer(tx: WriteTx, name: string) {
+  return {
+    put: async (row: object) => {
+      await tx.objectStore(name).put(row);
+    },
+    delete: async (key: string) => {
+      await tx.objectStore(name).delete(key);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
 /**
  * Walks an index newest first over `range`, collecting matching rows. With a
@@ -201,57 +226,54 @@ function clean<T>(row: unknown): T {
  * same-second ties are complete before the final sort.
  */
 async function walk(
-  source: IDBIndex,
+  index: IDBPIndex<unknown, string[], string, string, IDBTransactionMode>,
   range: IDBKeyRange,
   query: MessageQuery,
   out: Map<string, MessageRow>,
 ): Promise<void> {
   const found: MessageRow[] = [];
-  await new Promise<void>((resolve, reject) => {
-    const req = source.openCursor(range, "prev");
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => {
-      const cursor = req.result;
-      if (!cursor) return resolve();
-      const row = clean<MessageRow>(cursor.value);
-      const last = found.at(-1);
-      if (
-        query.limit !== undefined &&
-        found.length >= query.limit &&
-        last &&
-        row.createdAt < last.createdAt
-      )
-        return resolve();
-      if (matches(row, query)) found.push(row);
-      cursor.continue();
-    };
-  });
+  for (
+    let cursor = await index.openCursor(range, "prev");
+    cursor;
+    cursor = await cursor.continue()
+  ) {
+    const row = clean<MessageRow>(cursor.value);
+    const last = found.at(-1);
+    if (
+      query.limit !== undefined &&
+      found.length >= query.limit &&
+      last &&
+      row.createdAt < last.createdAt
+    )
+      break;
+    if (matches(row, query)) found.push(row);
+  }
   for (const row of found) out.set(row.id, row);
 }
 
 async function queryMessages(
-  tx: IDBTransaction,
+  store: Store,
   query: MessageQuery,
-  IDBKeyRange: typeof globalThis.IDBKeyRange,
 ): Promise<MessageRow[]> {
-  const store = tx.objectStore("messages");
   const since = query.since ?? -Infinity;
   const until = query.until ?? Infinity;
   const out = new Map<string, MessageRow>();
+  const keep = (row: unknown) => {
+    if (row === undefined) return;
+    const message = clean<MessageRow>(row);
+    if (matches(message, query)) out.set(message.id, message);
+  };
   const tagKeys = queryTagKeys(query);
   if (query.ids) {
-    for (const id of query.ids) {
-      const row = await request(store.get(id));
-      if (row && matches(clean(row), query)) out.set(id, clean(row));
-    }
+    for (const row of await Promise.all(query.ids.map((id) => store.get(id))))
+      keep(row);
   } else if (tagKeys.length) {
     // The first tag clause narrows candidates; the rest filter.
     const index = store.index("tags");
-    for (const key of tagKeys[0]!)
-      for (const row of await request(index.getAll(key))) {
-        const message = clean<MessageRow>(row);
-        if (matches(message, query)) out.set(message.id, message);
-      }
+    const found = await Promise.all(
+      tagKeys[0]!.map((key) => index.getAll(key)),
+    );
+    for (const row of found.flat()) keep(row);
   } else if (query.authors) {
     for (const pubkey of query.authors)
       await walk(
@@ -276,280 +298,145 @@ async function queryMessages(
       out,
     );
   }
-  const rows = [...out.values()].sort(compareMessages);
-  return query.limit === undefined ? rows : rows.slice(0, query.limit);
-}
-
-function byId<T extends { id: string }>(a: T, b: T): number {
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  const sorted = [...out.values()].sort(compareMessages);
+  return query.limit === undefined ? sorted : sorted.slice(0, query.limit);
 }
 
 // ---------------------------------------------------------------------------
 // Group database
 // ---------------------------------------------------------------------------
 
-function groupReader(
-  tx: () => Promise<IDBTransaction> | IDBTransaction,
-  keyRange: typeof IDBKeyRange,
-) {
-  const store = async (name: string) => (await tx()).objectStore(name);
-  const get = async <T>(name: string, key: string) => {
-    const row = await request((await store(name)).get(key));
-    return row === undefined ? undefined : clean<T>(row);
-  };
-  const reader: GroupReader = {
+function groupReader(store: StoreSource): GroupReader {
+  const { get, all } = rows(store);
+  return {
     group: async () =>
       (await get<GroupRecord>("group", GROUP_KEY)) ?? ({} as GroupRecord),
     treeNodes: {
-      all: async () =>
-        (await request((await store("treeNodes")).getAll())).map((row) =>
-          clean<TreeNodeRow>(row),
-        ),
+      all: () => all<TreeNodeRow>("treeNodes"),
       get: (tag) => get<TreeNodeRow>("treeNodes", tag),
     },
     wrappers: {
-      all: async () =>
-        (await request((await store("wrappers")).getAll())).map((row) =>
-          clean<WrapperRow>(row),
-        ),
+      all: () => all<WrapperRow>("wrappers"),
       get: (id) => get<WrapperRow>("wrappers", id),
     },
     effects: {
-      all: async () =>
-        (await request((await store("effects")).getAll())).map((row) =>
-          clean<EffectRow>(row),
-        ),
+      all: () => all<EffectRow>("effects"),
       get: (digest) => get<EffectRow>("effects", digest),
       // Index order within one state is primary-key (digest) order.
-      byState: async (state) =>
-        (
-          await request((await store("effects")).index("state").getAll(state))
-        ).map((row) => clean<EffectRow>(row)),
+      byState: (state) => all<EffectRow>("effects", "state", state),
     },
     backfill: {
-      all: async () =>
-        (await request((await store("backfill")).getAll())).map((row) =>
-          clean<BackfillRow>(row),
-        ),
+      all: () => all<BackfillRow>("backfill"),
       get: (relay) => get<BackfillRow>("backfill", relay),
     },
     messages: {
-      all: async () =>
-        (await request((await store("messages")).getAll())).map((row) =>
-          clean<MessageRow>(row),
-        ),
+      all: () => all<MessageRow>("messages"),
       get: (id) => get<MessageRow>("messages", id),
-      query: async (query) => queryMessages(await tx(), query, keyRange),
+      query: async (query) => queryMessages(await store("messages"), query),
     },
     deliveries: {
-      all: async () =>
-        (await request((await store("deliveries")).getAll())).map((row) =>
-          clean<DeliveryRow>(row),
-        ),
+      all: () => all<DeliveryRow>("deliveries"),
       byRumor: async (rumorId) =>
-        (
-          await request(
-            (await store("deliveries")).index("rumorId").getAll(rumorId),
-          )
-        )
-          .map((row) => clean<DeliveryRow>(row))
-          .sort(byId),
+        (await all<DeliveryRow>("deliveries", "rumorId", rumorId)).sort(byId),
       countByRumor: async (rumorId) =>
-        request((await store("deliveries")).index("rumorId").count(rumorId)),
+        (await store("deliveries")).index("rumorId").count(rumorId),
       withEvidence: async () =>
-        (await request((await store("deliveries")).index("evidence").getAll()))
-          .map((row) => clean<DeliveryRow>(row))
-          .sort(byId),
+        (await all<DeliveryRow>("deliveries", "evidence")).sort(byId),
     },
   };
-  return reader;
 }
 
-class IndexedDBGroupDatabase implements MarmotGroupDatabase {
-  readonly group: GroupReader["group"];
-  readonly treeNodes: GroupReader["treeNodes"];
-  readonly wrappers: GroupReader["wrappers"];
-  readonly effects: GroupReader["effects"];
-  readonly backfill: GroupReader["backfill"];
-  readonly messages: GroupReader["messages"];
-  readonly deliveries: GroupReader["deliveries"];
+function groupTransaction(tx: WriteTx): GroupTransaction {
+  const reader = groupReader((name) => tx.objectStore(name));
+  const w = (name: string) => writer(tx, name);
+  return {
+    ...reader,
+    updateGroup: async (update) => {
+      const store = tx.objectStore("group");
+      const current = clean<GroupRecord>((await store.get(GROUP_KEY)) ?? {});
+      await store.put(applyGroupUpdate(current, update), GROUP_KEY);
+    },
+    treeNodes: { ...reader.treeNodes, ...w("treeNodes") },
+    wrappers: {
+      ...reader.wrappers,
+      ...w("wrappers"),
+      deleteBelow: async (floor, except = []) => {
+        const keep = new Set(except);
+        const store = tx.objectStore("wrappers");
+        const ids = await store
+          .index("epoch")
+          .getAllKeys(IDBKeyRange.upperBound(floor, true));
+        await Promise.all(
+          ids.flatMap((id) =>
+            keep.has(id as string) ? [] : [store.delete(id)],
+          ),
+        );
+      },
+    },
+    effects: { ...reader.effects, ...w("effects") },
+    backfill: { ...reader.backfill, ...w("backfill") },
+    messages: {
+      ...reader.messages,
+      ...w("messages"),
+      put: (row) => w("messages").put({ ...row, _tags: indexTags(row.tags) }),
+    },
+    deliveries: {
+      ...reader.deliveries,
+      ...w("deliveries"),
+      put: (row) =>
+        w("deliveries").put(row.evidence ? { ...row, _evidence: 1 } : row),
+    },
+  };
+}
 
-  constructor(readonly connection: Connection) {
+function groupDatabase(connection: Connection): MarmotGroupDatabase {
+  return {
     // Each read outside a transaction runs in its own readonly transaction.
-    const read = <T>(fn: (reader: GroupReader) => Promise<T>) =>
-      connection.run("readonly", (tx) =>
-        fn(groupReader(() => tx, connection.keyRange)),
-      );
-    this.group = () => read((r) => r.group());
-    this.treeNodes = {
-      all: () => read((r) => r.treeNodes.all!()),
-      get: (tag) => read((r) => r.treeNodes.get(tag)),
-    };
-    this.wrappers = {
-      all: () => read((r) => r.wrappers.all!()),
-      get: (id) => read((r) => r.wrappers.get(id)),
-    };
-    this.effects = {
-      all: () => read((r) => r.effects.all!()),
-      get: (digest) => read((r) => r.effects.get(digest)),
-      byState: (state) => read((r) => r.effects.byState(state)),
-    };
-    this.backfill = {
-      all: () => read((r) => r.backfill.all!()),
-      get: (relay) => read((r) => r.backfill.get(relay)),
-    };
-    this.messages = {
-      all: () => read((r) => r.messages.all!()),
-      get: (id) => read((r) => r.messages.get(id)),
-      query: (query) => read((r) => r.messages.query(query)),
-    };
-    this.deliveries = {
-      all: () => read((r) => r.deliveries.all!()),
-      byRumor: (id) => read((r) => r.deliveries.byRumor(id)),
-      countByRumor: (id) => read((r) => r.deliveries.countByRumor(id)),
-      withEvidence: () => read((r) => r.deliveries.withEvidence()),
-    };
-  }
-
-  transaction<T>(fn: (tx: GroupTransaction) => Promise<T>): Promise<T> {
-    return this.connection.run("readwrite", (tx) => {
-      const reader = groupReader(() => tx, this.connection.keyRange);
-      const store = (name: string) => tx.objectStore(name);
-      const put = async (name: string, row: object) => {
-        await request(store(name).put(row));
-      };
-      const remove = async (name: string, key: string) => {
-        await request(store(name).delete(key));
-      };
-      return fn({
-        ...reader,
-        updateGroup: async (update) => {
-          const current = (await request(store("group").get(GROUP_KEY))) ?? {};
-          await request(
-            store("group").put(
-              applyGroupUpdate(clean<GroupRecord>(current), update),
-              GROUP_KEY,
-            ),
-          );
-        },
-        treeNodes: {
-          ...reader.treeNodes,
-          put: (row) => put("treeNodes", row),
-          delete: (tag) => remove("treeNodes", tag),
-        },
-        wrappers: {
-          ...reader.wrappers,
-          put: (row) => put("wrappers", row),
-          deleteBelow: async (floor, except = []) => {
-            const keep = new Set(except);
-            const index = store("wrappers").index("epoch");
-            const ids = (await request(
-              index.getAllKeys(
-                this.connection.keyRange.upperBound(floor, true),
-              ),
-            )) as string[];
-            for (const id of ids)
-              if (!keep.has(id)) await remove("wrappers", id);
-          },
-        },
-        effects: {
-          ...reader.effects,
-          put: (row) => put("effects", row),
-          delete: (digest) => remove("effects", digest),
-        },
-        backfill: {
-          ...reader.backfill,
-          put: (row) => put("backfill", row),
-          delete: (relay) => remove("backfill", relay),
-        },
-        messages: {
-          ...reader.messages,
-          put: (row) => put("messages", { ...row, _tags: indexTags(row.tags) }),
-          delete: (id) => remove("messages", id),
-        },
-        deliveries: {
-          ...reader.deliveries,
-          put: (row) =>
-            put(
-              "deliveries",
-              row.evidence ? { ...row, _evidence: 1 } : { ...row },
-            ),
-          delete: (id) => remove("deliveries", id),
-        },
-      });
-    });
-  }
-
-  close(): Promise<void> {
-    return this.connection.close();
-  }
+    ...groupReader(connection.read),
+    transaction: (fn) => connection.write((tx) => fn(groupTransaction(tx))),
+    close: () => connection.close(),
+  };
 }
 
-class IndexedDBGroupDatabases implements MarmotGroupDatabases {
-  readonly #open = new Map<string, Set<Connection>>();
-
-  constructor(
-    readonly factory: IDBFactory,
-    readonly keyRange: typeof IDBKeyRange,
-    readonly prefix: string,
-  ) {}
-
-  #name(groupId: string): string {
-    return `${this.prefix}:group:${groupId}`;
-  }
-
-  async list(): Promise<string[]> {
-    if (typeof this.factory.databases !== "function") {
-      throw new Error("IndexedDB database enumeration is not available");
-    }
-    const prefix = `${this.prefix}:group:`;
-    return (await this.factory.databases())
-      .flatMap(({ name }) =>
-        name?.startsWith(prefix) ? [name.slice(prefix.length)] : [],
-      )
-      .sort();
-  }
-
-  async open(groupId: string): Promise<MarmotGroupDatabase> {
-    const connection = new Connection(
-      this.factory,
-      this.keyRange,
-      this.#name(groupId),
-      GROUP_STORES,
-      upgradeGroup,
-    );
-    let set = this.#open.get(groupId);
-    if (!set) this.#open.set(groupId, (set = new Set()));
-    set.add(connection);
-    return new IndexedDBGroupDatabase(connection);
-  }
-
-  async drop(groupId: string): Promise<void> {
-    for (const connection of this.#open.get(groupId) ?? [])
-      await connection.close();
-    this.#open.delete(groupId);
-    await new Promise<void>((resolve, reject) => {
-      const req = this.factory.deleteDatabase(this.#name(groupId));
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-      req.onblocked = () =>
-        reject(new Error(`Deleting group database ${groupId} is blocked`));
-    });
-  }
+function groupDatabases(prefix: string): MarmotGroupDatabases {
+  const open = new Map<string, Set<Connection>>();
+  const name = (groupId: string) => `${prefix}:group:${groupId}`;
+  return {
+    async list() {
+      if (typeof indexedDB.databases !== "function")
+        throw new Error("IndexedDB database enumeration is not available");
+      const start = name("");
+      return (await indexedDB.databases())
+        .flatMap(({ name }) =>
+          name?.startsWith(start) ? [name.slice(start.length)] : [],
+        )
+        .sort();
+    },
+    async open(groupId) {
+      const connection = new Connection(
+        name(groupId),
+        GROUP_STORES,
+        upgradeGroup,
+      );
+      let set = open.get(groupId);
+      if (!set) open.set(groupId, (set = new Set()));
+      set.add(connection);
+      return groupDatabase(connection);
+    },
+    async drop(groupId) {
+      await Promise.all([...(open.get(groupId) ?? [])].map((c) => c.close()));
+      open.delete(groupId);
+      await deleteDB(name(groupId));
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Account database
 // ---------------------------------------------------------------------------
 
-function accountReader(tx: () => IDBTransaction): AccountReader {
-  const store = (name: string) => tx().objectStore(name);
-  const get = async <T>(name: string, key: string) => {
-    const row = await request(store(name).get(key));
-    return row === undefined ? undefined : clean<T>(row);
-  };
-  const all = async <T>(name: string) =>
-    (await request(store(name).getAll())).map((row) => clean<T>(row));
+function accountReader(store: StoreSource): AccountReader {
+  const { get, all } = rows(store);
   return {
     keyPackages: {
       get: (ref) => get<KeyPackageRow>("keyPackages", ref),
@@ -559,13 +446,15 @@ function accountReader(tx: () => IDBTransaction): AccountReader {
       all: () => all<InviteRow>("invites"),
       get: (id) => get<InviteRow>("invites", id),
       byState: async (state) =>
-        (await request(store("invites").index("state").getAll(state)))
-          .map((row) => clean<InviteRow>(row))
-          .sort((a, b) => a.receivedAt - b.receivedAt || byId(a, b)),
+        (await all<InviteRow>("invites", "state", state)).sort(
+          (a, b) => a.receivedAt - b.receivedAt || byId(a, b),
+        ),
       byRumor: async (rumorId) => {
-        const row = await request(
-          store("invites").index("rumorId").get(rumorId),
-        );
+        const row = await (
+          await store("invites")
+        )
+          .index("rumorId")
+          .get(rumorId);
         return row === undefined ? undefined : clean<InviteRow>(row);
       },
     },
@@ -577,90 +466,35 @@ function accountReader(tx: () => IDBTransaction): AccountReader {
   };
 }
 
-class IndexedDBAccountDatabase implements MarmotAccountDatabase {
-  readonly keyPackages: AccountReader["keyPackages"];
-  readonly invites: AccountReader["invites"];
-  readonly groups: AccountReader["groups"];
-  readonly intents: AccountReader["intents"];
-
-  constructor(readonly connection: Connection) {
-    const read = <T>(fn: (reader: AccountReader) => Promise<T>) =>
-      connection.run("readonly", (tx) => fn(accountReader(() => tx)));
-    this.keyPackages = {
-      get: (ref) => read((r) => r.keyPackages.get(ref)),
-      all: () => read((r) => r.keyPackages.all()),
-    };
-    this.invites = {
-      all: () => read((r) => r.invites.all!()),
-      get: (id) => read((r) => r.invites.get(id)),
-      byState: (state) => read((r) => r.invites.byState(state)),
-      byRumor: (id) => read((r) => r.invites.byRumor(id)),
-    };
-    this.groups = {
-      get: (id) => read((r) => r.groups.get(id)),
-      all: () => read((r) => r.groups.all()),
-    };
-    this.intents = { all: () => read((r) => r.intents.all()) };
-  }
-
-  transaction<T>(fn: (tx: AccountTransaction) => Promise<T>): Promise<T> {
-    return this.connection.run("readwrite", (tx) => {
-      const reader = accountReader(() => tx);
-      const store = (name: string) => tx.objectStore(name);
-      const put = async (name: string, row: object) => {
-        await request(store(name).put(row));
-      };
-      const remove = async (name: string, key: string) => {
-        await request(store(name).delete(key));
-      };
-      return fn({
-        keyPackages: {
-          ...reader.keyPackages,
-          put: (row) => put("keyPackages", row),
-          delete: (ref) => remove("keyPackages", ref),
-        },
-        invites: {
-          ...reader.invites,
-          put: (row) => put("invites", row),
-          delete: (id) => remove("invites", id),
-        },
-        groups: {
-          ...reader.groups,
-          put: (row) => put("groups", row),
-          delete: (id) => remove("groups", id),
-        },
-        intents: {
-          ...reader.intents,
-          put: (row) => put("intents", row),
-          delete: (id) => remove("intents", id),
-        },
-      });
-    });
-  }
-
-  close(): Promise<void> {
-    return this.connection.close();
-  }
+function accountTransaction(tx: WriteTx): AccountTransaction {
+  const reader = accountReader((name) => tx.objectStore(name));
+  return {
+    keyPackages: { ...reader.keyPackages, ...writer(tx, "keyPackages") },
+    invites: { ...reader.invites, ...writer(tx, "invites") },
+    groups: { ...reader.groups, ...writer(tx, "groups") },
+    intents: { ...reader.intents, ...writer(tx, "intents") },
+  };
 }
 
-/** A {@link MarmotDatabase} stored in IndexedDB (browsers, workers). */
+function accountDatabase(connection: Connection): MarmotAccountDatabase {
+  return {
+    ...accountReader(connection.read),
+    transaction: (fn) => connection.write((tx) => fn(accountTransaction(tx))),
+    close: () => connection.close(),
+  };
+}
+
+/** A {@link MarmotDatabase} stored in the global IndexedDB (browsers, workers). */
 export function indexedDBDatabase(
   options: IndexedDBDatabaseOptions = {},
 ): MarmotDatabase {
-  const factory = options.indexedDB ?? globalThis.indexedDB;
-  const keyRange = options.keyRange ?? globalThis.IDBKeyRange;
-  if (!factory || !keyRange) throw new Error("IndexedDB is not available");
+  if (!globalThis.indexedDB || !globalThis.IDBKeyRange)
+    throw new Error("IndexedDB is not available");
   const prefix = options.prefix ?? "marmot";
   return {
-    account: new IndexedDBAccountDatabase(
-      new Connection(
-        factory,
-        keyRange,
-        `${prefix}:account`,
-        ACCOUNT_STORES,
-        upgradeAccount,
-      ),
+    account: accountDatabase(
+      new Connection(`${prefix}:account`, ACCOUNT_STORES, upgradeAccount),
     ),
-    groups: new IndexedDBGroupDatabases(factory, keyRange, prefix),
+    groups: groupDatabases(prefix),
   };
 }

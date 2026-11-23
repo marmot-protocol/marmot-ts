@@ -47,7 +47,7 @@ Check MDK before implementing convergence, recovery, or wire encoding; record de
 
 ## Contributions and Agent Workflow
 
-Branch before committing; never commit on `master`. Use focused conventional commits (`fix:`, `feat:`, `docs:`, `chore:`) after relevant checks pass. PRs should explain behavior, link related issues, and report validation.
+Start development on the current branch; creating a new feature branch is not required. Never commit on `master`; switch to a non-`master` branch before committing if needed. Use focused conventional commits (`fix:`, `feat:`, `docs:`, `chore:`) after relevant checks pass. PRs should explain behavior, link related issues, and report validation.
 
 Commit each significant, coherent change after its relevant checks pass, without waiting for the user to request a commit. Stage only your own changes; preserve unrelated or concurrent work. Report the commit hashes and validation results, including any checks blocked by unrelated changes. Do not push unless requested.
 

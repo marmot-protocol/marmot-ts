@@ -46,9 +46,9 @@ signer relay is `wss://bucket.coracle.social`.
 
 `src/services.tsx` owns a shared transport, EventStore, and contacts service for
 the tab's current account and mode. Demos get the transport with `useTransport()`
-and use its `relays` and `network(actor)` methods rather than creating their own
-relay or hardcoding relay URLs. `createUserActor(account, transport, clientId)`
-builds the logged-in participant; `createPeerActor()` builds a throwaway peer.
+and subscribe to `relays$` rather than creating their own relay or hardcoding relay
+URLs. Client networking commands use those relay URLs. The shared `client` is the logged-in participant;
+`createPeerActor()` builds a throwaway peer when a demo needs one.
 
 The sidebar switches modes independently in each tab:
 
@@ -69,9 +69,53 @@ to the live network. NIP-46 login still contacts its explicitly selected signing
 even when the demo transport is local.
 
 `useContacts()` exposes `contacts$` (Applesauce `User[]`) and `error$`.
-`useDemoServices()` also exposes the mode, shared EventStore, and `session.client`.
+`useDemoServices()` also exposes `mode$`, `account$`, and `client`.
 Use this shared Marmot client for the active account so demos can receive Welcomes
 using the private key packages managed by the sidebar.
+
+### Reactive services
+
+Each service owns independent, readonly RxJS streams. Subscribe with Applesauce's
+`use$` hook; there is no combined session-state stream that rerenders every demo.
+The boundary exposes observable state and bound async commands, not concrete
+service instances, writable subjects, mutable arrays, or the underlying EventStore.
+
+```tsx
+import { use$ } from "applesauce-react/hooks";
+
+const { client, account$, keyPublication, transport } = useDemoServices();
+const account = use$(account$);
+const invites = use$(client.invites.unread$) ?? [];
+const packages = use$(client.keyPackages.state$) ?? [];
+const publication = use$(keyPublication.state$);
+const events = use$(transport.events$) ?? [];
+```
+
+- `account$` emits the account for this service scope. Changing accounts or modes
+  recreates the scope and client, rather than reusing state from another identity.
+- `mode$` emits the scope's local/live transport mode.
+- `client.groups.state$` emits loaded-group snapshots.
+- `client.invites.state$` emits unread invites annotated with joinability;
+  `unread$` and `received$` expose the underlying unread and received lists.
+  `preview$(invite)` exposes the Welcome preview without a component-managed effect.
+- `client.keyPackages.state$` emits stored key packages. `keyPublication.state$`
+  separately tracks sidebar publishing, enabled status, the current package, and errors;
+  its `publish()` and `rotate()` methods retain automatic upkeep.
+- `client.groups.observe(group)` returns stable per-group streams: `state$` and
+  `history$(filters)`. Use the factory form for queries:
+  `use$(() => client.groups.observe(group).history$({ kinds: [9] }), [client, group])`.
+- `transport` exposes `relays$`, `ready$`, `state$` (transport/control status), `events$`,
+  `log$`, and `peers$` (empty in live mode). Array emissions are snapshots, not
+  references to the transport's mutable arrays. Controls call `setPaused()` and `flush()`.
+- `useContacts()` retains `contacts$` and `error$`; `profile$(pubkey)` and
+  `outboxes$(pubkey)` query the internal shared EventStore through Applesauce casts.
+
+These adapters live only in the demo app. Demos read shared state exclusively through
+observables, with no snapshot fallbacks or direct library watchers. Commands such as `client.groups.send()`
+remain the normal async library methods. State subscriptions are shared and replay
+their latest value; the last unsubscribe cancels the underlying watcher. Account/mode
+teardown completes streams and prevents new work; unloading a group also closes its
+history streams.
 
 **Reset** remounts only the demo, keeping the shared transport and contacts.
 **Copy code** copies its source without opening a code panel.
@@ -195,13 +239,13 @@ Guidelines:
   the public API doesn't expose, that gap is a finding.
 - Keep library calls inline in the demo rather than hiding them in helpers;
   the code is the explanation.
-- Run as the logged-in user: get the account with `useAccount()` and build
-  the client with `createUserActor()`. Use `createPeerActor()` for anyone else.
+- Run as the logged-in user: get `client` and `account$` from `useDemoServices()`,
+  and subscribe with `use$`. Use `createPeerActor()` for anyone else.
 - Local shared relay code lives in `src/services/relay/`: `DemoRelay`, its
   SharedWorker, protocol and inspector types, inspector UI, and tests.
 - Shared helpers in `src/lib/` are limited to demo plumbing: the actor
-  factories, the React hooks (`useGroups`, `useGroupSnapshot`, `useWatch`,
-  `useSetup`) and UI pieces (`Panel`, `Action`, `Json`, `RelayLog`).
+  factories, the RxJS service adapters, and UI pieces
+  (`Panel`, `Action`, `Json`, `RelayLog`).
 - Style with [Tailwind CSS](https://tailwindcss.com) utilities and
   [daisyUI](https://daisyui.com) components (`btn`, `input`, `card`, `badge`,
   `alert`, …) instead of custom CSS. Use daisyUI's semantic colors

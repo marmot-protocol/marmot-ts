@@ -3,7 +3,7 @@ import { EventStore } from "applesauce-core";
 import { castUser } from "applesauce-common/casts";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { RelayPool } from "applesauce-relay";
-import { Subject, lastValueFrom, takeUntil, tap, toArray } from "rxjs";
+import { Subject, lastValueFrom, merge, takeUntil, tap, toArray } from "rxjs";
 import type { RelayLogEntry } from "../services/relay/demo-relay.js";
 import type { DemoTransport } from "./transport.js";
 
@@ -25,7 +25,14 @@ export class LiveTransport implements DemoTransport {
   constructor(
     readonly store: EventStore,
     readonly pool = new RelayPool(),
-  ) {}
+  ) {
+    merge(store.insert$, store.update$, store.remove$)
+      .pipe(takeUntil(this.#closed))
+      .subscribe(() => {
+        this.#version++;
+        for (const listener of this.#listeners) listener();
+      });
+  }
 
   get events(): NostrEvent[] {
     return [...this.store.getByFilters({})];
@@ -90,8 +97,6 @@ export class LiveTransport implements DemoTransport {
               takeUntil(this.#closed),
               tap((event) => {
                 this.store.add(event);
-                this.#version++;
-                for (const listener of this.#listeners) listener();
               }),
             )
             .subscribe(observer);

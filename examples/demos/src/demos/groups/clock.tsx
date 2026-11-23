@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { use$ } from "applesauce-react/hooks";
-import { castUser, type User } from "applesauce-common/casts";
+import type { User } from "applesauce-common/casts";
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import {
   createApplicationMessageIntent,
@@ -9,15 +9,13 @@ import {
   type AnnotatedInvite,
   type MarmotGroup,
 } from "@internet-privacy/marmot-ts/client";
-import { evaluateKeyPackageForGroup } from "@internet-privacy/marmot-ts/core";
-import { useAccount } from "../../accounts.js";
-import { useGroupSnapshot, useWatch } from "../../lib/hooks.js";
+import { filter, firstValueFrom, of, timeout } from "rxjs";
 import { LOOKUP_RELAYS } from "../../lib/live-transport.js";
 import { Action, Panel, short } from "../../lib/ui.js";
 import { useDemoServices } from "../../services.js";
 
 export default function ClockDemo() {
-  const { session } = useDemoServices();
+  const { client } = useDemoServices();
   const [mode, setMode] = useState<"host" | "receive">();
   const [controller] = useState(() => new AbortController());
   const owned = useRef(new Set<MarmotGroup>());
@@ -25,13 +23,13 @@ export default function ClockDemo() {
     () => () => {
       controller.abort();
       for (const group of owned.current)
-        void session.client.groups.unload(group.id).catch(console.error);
+        void client.groups.unload(group.id).catch(console.error);
     },
-    [controller, session],
+    [controller, client],
   );
   const adopt = (group: MarmotGroup) => {
     if (controller.signal.aborted)
-      void session.client.groups.unload(group.id).catch(console.error);
+      void client.groups.unload(group.id).catch(console.error);
     else owned.current.add(group);
   };
   if (mode === "host") return <Host signal={controller.signal} adopt={adopt} />;
@@ -60,28 +58,30 @@ type GroupActions = {
 };
 
 function Host({ signal, adopt }: GroupActions) {
-  const account = useAccount();
-  const { session, transport } = useDemoServices();
+  const { client, account$, transport } = useDemoServices();
+  const account = use$(account$)!;
+  const relays = use$(transport.relays$) ?? [];
+  const transportReady = use$(transport.ready$) ?? false;
   const [name, setName] = useState("Clock feed");
   const [group, setGroup] = useState<MarmotGroup>();
+  const snapshot = use$(
+    () => (group ? client.groups.observe(group).state$ : of(undefined)),
+    [client, group],
+  );
   const [running, setRunning] = useState(true);
   const [sent, setSent] = useState<Rumor[]>([]);
   const [error, setError] = useState<string>();
   const sending = useRef(false);
 
   async function create() {
-    await transport.ready;
     signal.throwIfAborted();
-    const group = await session.client.groups.create(
-      name.trim() || "Clock feed",
-      {
-        relays: transport.relays,
-        adminPubkeys: [account.pubkey],
-      },
-    );
+    const group = await client.groups.create(name.trim() || "Clock feed", {
+      relays,
+      adminPubkeys: [account.pubkey],
+    });
     adopt(group);
     signal.throwIfAborted();
-    await session.client.groups.connect(group.id, { signal });
+    await client.groups.connect(group.id, { signal });
     signal.throwIfAborted();
     setGroup(group);
   }
@@ -98,7 +98,7 @@ function Host({ signal, adopt }: GroupActions) {
           pubkey: account.pubkey,
           content: new Date().toISOString(),
         });
-        const results = await session.client.groups.send(
+        const results = await client.groups.send(
           group.id,
           createApplicationMessageIntent(rumor),
         );
@@ -123,7 +123,7 @@ function Host({ signal, adopt }: GroupActions) {
       stopped = true;
       clearInterval(timer);
     };
-  }, [group, running, account.pubkey, session, signal]);
+  }, [group, running, account.pubkey, client, signal]);
 
   return (
     <div className="space-y-4">
@@ -136,11 +136,13 @@ function Host({ signal, adopt }: GroupActions) {
               value={name}
               onChange={(event) => setName(event.target.value)}
             />
-            <Action run={create}>Start clock feed</Action>
+            <Action run={create} disabled={!transportReady}>
+              Start clock feed
+            </Action>
           </div>
         ) : (
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span>{group.snapshot.groupData?.name}</span>
+            <span>{snapshot?.groupData?.name}</span>
             <button
               className="btn btn-sm"
               onClick={() => setRunning((value) => !value)}
@@ -168,23 +170,29 @@ function InviteContacts({
   group: MarmotGroup;
   signal: AbortSignal;
 }) {
-  const { contacts, session, transport, mode, store } = useDemoServices();
+  const { contacts, client, account$, transport, mode$, outboxes$ } =
+    useDemoServices();
+  const mode = use$(mode$);
+  const account = use$(account$)!;
+  const transportRelays = use$(transport.relays$) ?? [];
   const users = use$(contacts.contacts$) ?? [];
-  const snapshot = useGroupSnapshot(group);
+  const observed = client.groups.observe(group);
+  const snapshot = use$(observed.state$);
 
   async function invite(user: User) {
-    const client = session.client;
-    let relays = transport.relays;
+    let relays = transportRelays;
     if (mode === "live") {
       await client.network.request(LOOKUP_RELAYS, {
         kinds: [10002],
         authors: [user.pubkey],
       });
-      const outboxes = await castUser(user.pubkey, store).outboxes$.$first(
-        1500,
-        [],
+      const outboxes = await firstValueFrom(
+        outboxes$(user.pubkey).pipe(
+          filter((relays) => relays !== undefined),
+          timeout({ first: 1500, with: () => of([]) }),
+        ),
       );
-      relays = [...new Set([...outboxes, ...transport.relays])];
+      relays = [...new Set([...outboxes, ...transportRelays])];
     }
     signal.throwIfAborted();
     const events = await client.network.request(relays, {
@@ -192,19 +200,20 @@ function InviteContacts({
       authors: [user.pubkey],
     });
     signal.throwIfAborted();
-    const candidates = events
-      .filter((event) => {
-        try {
-          createInviteIntent({
-            keyPackageEvent: event,
-            actorPubkey: session.pubkey,
-          });
-          return evaluateKeyPackageForGroup(group.state, event).eligible;
-        } catch {
-          return false;
-        }
-      })
-      .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
+    const valid = events.filter((event) => {
+      try {
+        createInviteIntent({
+          keyPackageEvent: event,
+          actorPubkey: account.pubkey,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const candidates = (
+      await firstValueFrom(observed.eligibleKeyPackages$(valid))
+    ).sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
     if (!candidates.length)
       throw new Error(
         "No compatible key package. Ask this contact to publish one.",
@@ -220,12 +229,12 @@ function InviteContacts({
             key={user.pubkey}
             className="flex items-center justify-between gap-2"
           >
-            <Identity user={user} />
+            <Identity pubkey={user.pubkey} />
             <Action
               run={() => invite(user)}
-              disabled={snapshot.members.includes(user.pubkey)}
+              disabled={!snapshot || snapshot.members.includes(user.pubkey)}
             >
-              {snapshot.members.includes(user.pubkey) ? "Invited" : "Invite"}
+              {snapshot?.members.includes(user.pubkey) ? "Invited" : "Invite"}
             </Action>
           </li>
         ))}
@@ -236,20 +245,22 @@ function InviteContacts({
 }
 
 function Receiver({ signal, adopt }: GroupActions) {
-  const { session } = useDemoServices();
-  const invites =
-    useWatch((signal) => session.client.watchInvites({ signal }), [session]) ??
-    [];
+  const { client, keyPublication } = useDemoServices();
+  const invites = use$(client.invites.state$) ?? [];
   const [group, setGroup] = useState<MarmotGroup>();
+  const snapshot = use$(
+    () => (group ? client.groups.observe(group).state$ : of(undefined)),
+    [client, group],
+  );
   const [error, setError] = useState<string>();
   const [needsUpdate, setNeedsUpdate] = useState(false);
   const messages =
-    useWatch(
-      (signal) =>
+    use$(
+      () =>
         group
-          ? group.history.subscribe({ kinds: [9], limit: 60 }, { signal })
-          : emptyMessages(),
-      [group],
+          ? client.groups.observe(group).history$({ kinds: [9], limit: 60 })
+          : of([]),
+      [client, group],
     ) ?? [];
 
   async function selfUpdate(group: MarmotGroup) {
@@ -261,14 +272,14 @@ function Receiver({ signal, adopt }: GroupActions) {
 
   async function accept({ invite }: AnnotatedInvite) {
     setError(undefined);
-    const { group } = await session.client.joinGroupFromWelcome({
+    const { group } = await client.joinGroupFromWelcome({
       welcomeRumor: invite,
     });
     adopt(group);
     signal.throwIfAborted();
-    await session.client.groups.connect(group.id, { signal });
+    await client.groups.connect(group.id, { signal });
     signal.throwIfAborted();
-    await session.client.invites.markAsRead(invite.id);
+    await client.invites.markAsRead(invite.id);
     setGroup(group);
     setNeedsUpdate(true);
     try {
@@ -278,14 +289,14 @@ function Receiver({ signal, adopt }: GroupActions) {
       if (!signal.aborted)
         setError(cause instanceof Error ? cause.message : String(cause));
     }
-    void session.publish().catch(() => {});
+    void keyPublication.publish().catch(() => {});
   }
 
   return (
     <div className="space-y-4">
       <Panel title="Receive clock">
         {group ? (
-          <span>{group.snapshot.groupData?.name || short(group.idStr)}</span>
+          <span>{snapshot?.groupData?.name || short(group.idStr)}</span>
         ) : (
           <>
             <ul className="space-y-2">
@@ -316,10 +327,6 @@ function Receiver({ signal, adopt }: GroupActions) {
   );
 }
 
-async function* emptyMessages(): AsyncGenerator<Rumor[]> {
-  yield [];
-}
-
 function Invite({
   invite,
   accept,
@@ -327,25 +334,16 @@ function Invite({
   invite: AnnotatedInvite;
   accept: () => Promise<void>;
 }) {
-  const { session, store } = useDemoServices();
-  const [name, setName] = useState("Group invite");
-  useEffect(() => {
-    let live = true;
-    void session.client
-      .previewWelcome(invite.invite)
-      .then((preview) => {
-        if (live && preview.group) setName(preview.group.name);
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [session, invite.invite]);
+  const { client } = useDemoServices();
+  const preview = use$(
+    () => client.invites.preview$(invite.invite),
+    [client, invite.invite],
+  );
   return (
     <li className="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <div>{name}</div>
-        <Identity user={castUser(invite.invite.pubkey, store)} />
+        <div>{preview?.group?.name || "Group invite"}</div>
+        <Identity pubkey={invite.invite.pubkey} />
       </div>
       <Action run={accept} disabled={!invite.joinable}>
         {invite.joinable ? "Accept invite" : "Key unavailable"}
@@ -354,11 +352,10 @@ function Invite({
   );
 }
 
-function Identity({ user }: { user: User }) {
-  const profile = use$(() => user.profile$, [user]);
-  return (
-    <span title={user.npub}>{profile?.displayName || short(user.pubkey)}</span>
-  );
+function Identity({ pubkey }: { pubkey: string }) {
+  const { profile$ } = useDemoServices();
+  const profile = use$(() => profile$(pubkey), [pubkey, profile$]);
+  return <span title={pubkey}>{profile?.displayName || short(pubkey)}</span>;
 }
 
 function Clock({

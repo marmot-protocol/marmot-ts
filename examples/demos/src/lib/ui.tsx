@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
-import { useRelay } from "./hooks.js";
-import { DemoRelay, type RelayLogEntry } from "../services/relay/demo-relay.js";
-import type { DemoTransport } from "./transport.js";
+import { use$ } from "applesauce-react/hooks";
+import type { RelayLogEntry } from "../services/relay/demo-relay.js";
+import type { ReactiveTransport } from "./reactive-transport.js";
 
 /** Shorten a hex id or pubkey for display. */
 export const short = (hex: string, n = 8) =>
@@ -100,36 +100,37 @@ function describe(entry: RelayLogEntry): string {
 }
 
 /** Live view of everything that crossed the demo relay. */
-export function RelayLog(props: { relay: DemoTransport; limit?: number }) {
-  const relay = useRelay(props.relay);
-  const entries = relay.log.slice(-(props.limit ?? 50)).reverse();
+export function RelayLog(props: { relay: ReactiveTransport; limit?: number }) {
+  const relay = props.relay;
+  const log = use$(relay.log$) ?? [];
+  const events = use$(relay.events$) ?? [];
+  const state = use$(relay.state$);
+  const entries = log.slice(-(props.limit ?? 50)).reverse();
   return (
     <Panel
-      title={`Relay traffic (${relay.events.length} stored${
-        relay.shared ? `, shared across tabs, this tab ${relay.tab}` : ""
+      title={`Relay traffic (${events.length} stored${
+        state?.shared ? `, shared across tabs, this tab ${state.tab}` : ""
       })`}
       actions={
-        relay instanceof DemoRelay ? (
+        state?.local ? (
           <>
             <label className="label text-xs">
               <input
                 type="checkbox"
                 className="toggle toggle-xs"
-                checked={relay.paused}
+                checked={state.paused}
                 onChange={(e) => {
-                  relay.paused = e.target.checked;
-                  // Releases anything held when un-pausing; always re-renders.
-                  relay.flush();
+                  relay.setPaused(e.target.checked);
                 }}
               />
               hold publishes
             </label>
-            {relay.queue.length > 0 && (
+            {state.queued > 0 && (
               <button
                 className="btn btn-xs btn-primary"
                 onClick={() => relay.flush()}
               >
-                deliver {relay.queue.length} held
+                deliver {state.queued} held
               </button>
             )}
           </>

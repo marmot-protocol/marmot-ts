@@ -1,4 +1,4 @@
-import { logout, switchAccount, useAccount } from "../accounts.js";
+import { logout, switchAccount } from "../accounts.js";
 import { hex, short } from "../lib/ui.js";
 import { getDevelopmentName } from "../lib/development-identity.js";
 import { useDemoServices } from "../services.js";
@@ -6,9 +6,9 @@ import { use$ } from "applesauce-react/hooks";
 
 /** Active account summary for the sidebar. */
 export function AccountBadge() {
-  const account = useAccount();
-  const { session } = useDemoServices();
-  const keys = use$(session.state$) ?? session.state$.value;
+  const { account$, keyPublication } = useDemoServices();
+  const account = use$(account$)!;
+  const keys = use$(keyPublication.state$) ?? { busy: false, enabled: false };
   return (
     <div className="flex flex-col gap-2 border-t border-base-300 p-4">
       <div>
@@ -29,14 +29,14 @@ export function AccountBadge() {
           <button
             className="btn btn-xs"
             disabled={keys.busy}
-            onClick={() => void session.publish().catch(() => {})}
+            onClick={() => void keyPublication.publish().catch(() => {})}
           >
             {keys.current ? "Publish again" : "Publish key package"}
           </button>
           <button
             className="btn btn-xs"
             disabled={keys.busy || !keys.current}
-            onClick={() => void session.rotate().catch(() => {})}
+            onClick={() => void keyPublication.rotate().catch(() => {})}
           >
             Rotate
           </button>

@@ -4,22 +4,17 @@ import {
   createApplicationMessageIntent,
   createChatRumor,
 } from "@internet-privacy/marmot-ts/client";
-import { castUser } from "applesauce-common/casts";
 import { use$ } from "applesauce-react/hooks";
-import { useAccount } from "../../accounts.js";
-import { useGroupSnapshot, useWatch } from "../../lib/hooks.js";
 import { Action, Panel, short } from "../../lib/ui.js";
 import { useContacts, useDemoServices, useTransport } from "../../services.js";
 
 export default function ChatDemo() {
-  const { session } = useDemoServices();
+  const { client, account$, signal } = useDemoServices();
   const relay = useTransport();
-  const account = useAccount();
-  const client = session.client;
-  const invites = useWatch(
-    (signal) => client.invites.watchUnread({ signal }),
-    [client],
-  );
+  const relays = use$(relay.relays$) ?? [];
+  const transportReady = use$(relay.ready$) ?? false;
+  const account = use$(account$)!;
+  const invites = use$(client.invites.unread$);
   const [mode, setMode] = useState("create");
   const [name, setName] = useState("Chat group");
   const [active, setActive] = useState<{
@@ -55,15 +50,14 @@ export default function ChatDemo() {
             onChange={(event) => setName(event.target.value)}
           />
           <Action
-            disabled={!name.trim()}
+            disabled={!name.trim() || !transportReady}
             run={async () => {
-              await relay.ready;
-              session.signal.throwIfAborted();
+              signal.throwIfAborted();
               const group = await client.groups.create(name.trim(), {
-                relays: relay.relays,
+                relays,
                 adminPubkeys: [account.pubkey],
               });
-              if (!session.signal.aborted) setActive({ group });
+              if (!signal.aborted) setActive({ group });
             }}
           >
             Create
@@ -90,7 +84,7 @@ export default function ChatDemo() {
                   const { group } = await client.joinGroupFromWelcome({
                     welcomeRumor: invite,
                   });
-                  if (!session.signal.aborted)
+                  if (!signal.aborted)
                     setActive({ group, inviteId: invite.id });
                 }}
               >
@@ -105,21 +99,24 @@ export default function ChatDemo() {
 }
 
 function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
-  const { session } = useDemoServices();
+  const { client, account$ } = useDemoServices();
   const relay = useTransport();
-  const account = useAccount();
+  const relays = use$(relay.relays$) ?? [];
+  const transport = use$(relay.state$);
+  const account = use$(account$)!;
   const contacts = use$(useContacts().contacts$) ?? [];
-  const snapshot = useGroupSnapshot(group);
-  const messages = useWatch(
-    (signal) => group.history.subscribe({ kinds: [9], limit: 100 }, { signal }),
-    [group],
+  const observed = client.groups.observe(group);
+  const snapshot = use$(observed.state$);
+  const messages = use$(
+    () => observed.history$({ kinds: [9], limit: 100 }),
+    [observed],
   );
   const [recipient, setRecipient] = useState("");
   const [text, setText] = useState("");
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
-  const isAdmin = snapshot.groupData?.adminPubkeys.includes(account.pubkey);
+  const isAdmin = snapshot?.groupData?.adminPubkeys.includes(account.pubkey);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -127,14 +124,14 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
     setError(undefined);
     void (async () => {
       try {
-        await session.client.groups.connect(group.id, {
+        await client.groups.connect(group.id, {
           signal: controller.signal,
         });
         controller.signal.throwIfAborted();
         // protocol-core/joining.md: catch up before rotating the joiner's leaf.
         if (inviteId) {
           await group.selfUpdate();
-          await session.client.invites.markAsRead(inviteId);
+          await client.invites.markAsRead(inviteId);
         }
         if (!controller.signal.aborted) setReady(true);
       } catch (cause) {
@@ -143,20 +140,20 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
       }
     })();
     return () => controller.abort();
-  }, [group, inviteId, session, attempt]);
+  }, [group, inviteId, client, attempt]);
 
   return (
     <>
-      <Panel title={snapshot.groupData?.name || "Chat group"}>
+      <Panel title={snapshot?.groupData?.name || "Chat group"}>
         <code className="text-xs" title={group.idStr}>
           {short(group.idStr)}
         </code>
         <p className="text-sm">
-          {ready ? "Connected" : "Connecting…"} · {relay.transport} ·{" "}
-          {snapshot.members.length} members
+          {ready ? "Connected" : "Connecting…"} · {transport?.transport} ·{" "}
+          {snapshot?.members.length ?? 0} members
         </p>
         <div className="flex flex-wrap gap-2 text-sm">
-          {snapshot.members.map((pubkey) => (
+          {snapshot?.members.map((pubkey) => (
             <Name key={pubkey} pubkey={pubkey} />
           ))}
         </div>
@@ -181,7 +178,7 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
             >
               <option value="">Choose contact</option>
               {contacts
-                .filter((user) => !snapshot.members.includes(user.pubkey))
+                .filter((user) => !snapshot?.members.includes(user.pubkey))
                 .map((user) => (
                   <ContactOption key={user.pubkey} pubkey={user.pubkey} />
                 ))}
@@ -189,13 +186,10 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
             <Action
               disabled={!ready || !recipient}
               run={async () => {
-                const packages = await session.client.network.request(
-                  relay.relays,
-                  {
-                    kinds: [30443],
-                    authors: [recipient],
-                  },
-                );
+                const packages = await client.network.request(relays, {
+                  kinds: [30443],
+                  authors: [recipient],
+                });
                 const keyPackage = packages.sort(
                   (a, b) => b.created_at - a.created_at,
                 )[0];
@@ -203,7 +197,7 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
                   throw new Error(
                     "No key package found. Ask this contact to publish one.",
                   );
-                await session.client.groups.invite(group.id, keyPackage);
+                await client.groups.invite(group.id, keyPackage);
                 setRecipient("");
               }}
             >
@@ -241,7 +235,7 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
             disabled={!ready || !text.trim()}
             run={async () => {
               const content = text.trim();
-              await session.client.groups.send(
+              await client.groups.send(
                 group.id,
                 createApplicationMessageIntent(
                   createChatRumor({ pubkey: account.pubkey, content }),
@@ -259,8 +253,8 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
 }
 
 function useName(pubkey: string) {
-  const { store } = useDemoServices();
-  const profile = use$(() => castUser(pubkey, store).profile$, [pubkey, store]);
+  const { profile$ } = useDemoServices();
+  const profile = use$(() => profile$(pubkey), [pubkey, profile$]);
   return profile?.displayName || short(pubkey);
 }
 

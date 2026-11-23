@@ -1,4 +1,5 @@
 import { useEffect, useState, type ComponentType } from "react";
+import { use$ } from "applesauce-react/hooks";
 import { useActiveAccount } from "./accounts.js";
 import { AccountBadge } from "./components/account-badge.js";
 import { LoginView } from "./components/login-view.js";
@@ -68,7 +69,8 @@ function Sidebar({
   active?: Demo;
   setMode: (mode: TransportMode) => void;
 }) {
-  const { mode } = useDemoServices();
+  const { mode$ } = useDemoServices();
+  const mode = use$(mode$);
   return (
     <nav className="sticky top-0 flex h-screen flex-col border-r border-base-300 bg-base-100">
       <h1 className="px-4 pt-4 pb-3 font-semibold">marmot-ts demos</h1>

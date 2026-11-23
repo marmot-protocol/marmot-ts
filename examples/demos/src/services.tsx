@@ -1,4 +1,5 @@
 import { EventStore } from "applesauce-core";
+import { castUser, type Profile, type User } from "applesauce-common/casts";
 import {
   createContext,
   useContext,
@@ -10,20 +11,38 @@ import { useAccount } from "./accounts.js";
 import { ContactsService } from "./lib/contacts.js";
 import { DemoRelay } from "./services/relay/demo-relay.js";
 import { LiveTransport } from "./lib/live-transport.js";
-import type { DemoTransport, TransportMode } from "./lib/transport.js";
+import type { TransportMode } from "./lib/transport.js";
 import {
   getDevelopmentName,
   publishDevelopmentProfile,
 } from "./lib/development-identity.js";
-import { SessionClient } from "./lib/session-client.js";
+import { SessionClient, type SessionKeyState } from "./lib/session-client.js";
+import type { IAccount } from "applesauce-accounts";
+import { of, takeUntil, type Observable } from "rxjs";
+import { aborted$ } from "./lib/observable.js";
+import { reactiveClient, type ReactiveClient } from "./lib/reactive-client.js";
+import {
+  reactiveTransport,
+  type ReactiveTransport,
+} from "./lib/reactive-transport.js";
 
-export type DemoServices = {
-  mode: TransportMode;
-  store: EventStore;
-  transport: DemoTransport;
-  contacts: ContactsService;
-  session: SessionClient;
-};
+/** Observable-only read boundary; concrete service lifecycles stay in this provider. */
+export type DemoServices = Readonly<{
+  mode$: Observable<TransportMode>;
+  transport: ReactiveTransport;
+  contacts: {
+    readonly contacts$: Observable<User[]>;
+    readonly error$: Observable<string | undefined>;
+  };
+  client: ReactiveClient;
+  account$: Observable<IAccount>;
+  profile$: (pubkey: string) => Observable<Profile | undefined>;
+  outboxes$: (pubkey: string) => Observable<string[] | undefined>;
+  signal: AbortSignal;
+  keyPublication: Pick<SessionClient, "publish" | "rotate"> & {
+    readonly state$: Observable<SessionKeyState>;
+  };
+}>;
 
 const ServicesContext = createContext<DemoServices | undefined>(undefined);
 
@@ -58,9 +77,12 @@ export function ServicesProvider({
       });
     }
     const unload = () => {
+      if (controller.signal.aborted) return;
       controller.abort();
+      contacts.close();
       session?.close();
       transport.close();
+      store.dispose();
     };
     addEventListener("pagehide", unload);
     void SessionClient.create(account, mode, transport).then(
@@ -70,7 +92,30 @@ export function ServicesProvider({
           session.close();
           return;
         }
-        setServices({ mode, store, transport, contacts, session });
+        setServices({
+          mode$: of(mode).pipe(takeUntil(aborted$(controller.signal))),
+          transport: reactiveTransport(transport, controller.signal),
+          contacts: {
+            contacts$: contacts.contacts$.asObservable(),
+            error$: contacts.error$.asObservable(),
+          },
+          client: reactiveClient(session.client, controller.signal),
+          account$: of(account).pipe(takeUntil(aborted$(controller.signal))),
+          profile$: (pubkey) =>
+            castUser(pubkey, store).profile$.pipe(
+              takeUntil(aborted$(controller.signal)),
+            ),
+          outboxes$: (pubkey) =>
+            castUser(pubkey, store).outboxes$.pipe(
+              takeUntil(aborted$(controller.signal)),
+            ),
+          signal: session.signal,
+          keyPublication: {
+            state$: session.state$.asObservable(),
+            publish: session.publish,
+            rotate: session.rotate,
+          },
+        });
         void session
           .start(mode === "local" && !!getDevelopmentName(account))
           .catch(() => {
@@ -84,11 +129,7 @@ export function ServicesProvider({
     );
     return () => {
       removeEventListener("pagehide", unload);
-      contacts.close();
-      controller.abort();
-      session?.close();
-      transport.close();
-      store.dispose();
+      unload();
     };
   }, [mode, account]);
   if (error)

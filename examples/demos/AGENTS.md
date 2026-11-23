@@ -8,4 +8,5 @@
 - Default to local tabs mode. Never bridge local events, identities, or group state into live mode; switching modes must dispose and reset the demo session.
 - Persist the active account only in sessionStorage so reloads keep the tab's identity. New sessions generate a development identity and publish its randomly named kind-0 profile only to the local worker relay.
 - Offer a header **Copy code** button, not an inline source viewer.
-- Use `useDemoServices().session.client` for the active account's Marmot operations and invites. The sidebar owns session key packages; don't create a second client that cannot access those private bundles.
+- Use `useDemoServices().client` for the active account's Marmot operations and invites, and subscribe to `account$` and service observables with `use$`. The sidebar owns key-package publication; don't create a second client that cannot access those private bundles.
+- Read shared state only through service observables with `use$`; do not read concrete service internals, `.value`, or group snapshots, or attach callback/async-generator watchers in demos. Keep commands as ordinary async library calls.

@@ -15,11 +15,6 @@ export type DisbandRequest =
       lastPreparedEpoch: null;
     };
 
-type StoredDisbandRequest = DisbandRequest & { version: 1 };
-
-/** Group-database meta key of the local disband request. */
-export const DISBAND_REQUEST_KEY = "disband/request";
-
 export interface StoredDisbandConvergence {
   readonly generation: number;
   readonly baseEpoch: number;
@@ -27,40 +22,39 @@ export interface StoredDisbandConvergence {
   readonly deadlineWallMs: number;
   readonly lastRelevantInputWallMs: number;
   readonly candidates: readonly {
+    /** Disband commit digest (hex). */
     readonly commitDigest: string;
     readonly actorPubkey: string;
     readonly sourceEpoch: number;
     readonly parentTag: string;
     readonly childTag: string;
-    readonly commitMessage: string;
-    readonly resultingState: string;
+    /** The disband commit (encoded MLS message). */
+    readonly commitMessage: Uint8Array;
+    /** The state the commit produced (serialized `ClientState`). */
+    readonly resultingState: Uint8Array;
   }[];
 }
 
-/** Group-database meta key of persisted disband convergence evidence. */
-export const DISBAND_CONVERGENCE_KEY = "disband/convergence";
-
-export function encodeDisbandConvergence(
-  record: StoredDisbandConvergence,
-): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify({ version: 1, ...record }));
+/** Durable disband records the engine owns, supplied by the client layer. */
+export interface DisbandRecordStore {
+  load(): Promise<{
+    request?: DisbandRequest;
+    convergence?: StoredDisbandConvergence;
+  }>;
+  /** Replaces the request; `null` deletes it. */
+  saveRequest(request: DisbandRequest | null): Promise<void>;
+  /** Replaces the convergence evidence; `null` deletes it. */
+  saveConvergence(convergence: StoredDisbandConvergence | null): Promise<void>;
 }
 
-export function decodeDisbandConvergence(
-  data: Uint8Array,
+/** Validates loaded disband convergence evidence; throws when malformed. */
+export function validateDisbandConvergence(
+  value: unknown,
 ): StoredDisbandConvergence {
-  let value: unknown;
-  try {
-    value = JSON.parse(new TextDecoder().decode(data));
-  } catch {
-    throw new Error("Invalid disband convergence encoding");
-  }
-  const record = value as Partial<StoredDisbandConvergence> & {
-    version?: number;
-  };
+  const record = value as Partial<StoredDisbandConvergence> | undefined;
   if (
     !record ||
-    record.version !== 1 ||
+    typeof record !== "object" ||
     !Number.isSafeInteger(record.generation) ||
     !Number.isSafeInteger(record.baseEpoch) ||
     typeof record.openedAtWallMs !== "number" ||
@@ -71,39 +65,28 @@ export function decodeDisbandConvergence(
     throw new Error("Invalid disband convergence record");
   for (const candidate of record.candidates) {
     if (
+      !candidate ||
+      typeof candidate.commitDigest !== "string" ||
+      typeof candidate.actorPubkey !== "string" ||
       !/^[0-9a-f]{64}$/i.test(candidate.commitDigest) ||
       !/^[0-9a-f]{64}$/i.test(candidate.actorPubkey) ||
       !Number.isSafeInteger(candidate.sourceEpoch) ||
       typeof candidate.parentTag !== "string" ||
       typeof candidate.childTag !== "string" ||
-      typeof candidate.commitMessage !== "string" ||
-      typeof candidate.resultingState !== "string" ||
-      !/^[0-9a-f]*$/i.test(candidate.commitMessage) ||
-      !/^[0-9a-f]*$/i.test(candidate.resultingState)
+      !(candidate.commitMessage instanceof Uint8Array) ||
+      !(candidate.resultingState instanceof Uint8Array)
     )
       throw new Error("Invalid disband convergence record");
   }
   return record as StoredDisbandConvergence;
 }
 
-export function encodeDisbandRequest(request: DisbandRequest): Uint8Array {
-  return new TextEncoder().encode(
-    JSON.stringify({ version: 1, ...request } satisfies StoredDisbandRequest),
-  );
-}
-
-export function decodeDisbandRequest(data: Uint8Array): DisbandRequest {
-  let value: unknown;
-  try {
-    value = JSON.parse(new TextDecoder().decode(data));
-  } catch {
-    throw new Error("Invalid disband request encoding");
-  }
+/** Validates a loaded disband request; throws when malformed. */
+export function validateDisbandRequest(value: unknown): DisbandRequest {
   if (!value || typeof value !== "object")
     throw new Error("Invalid disband request record");
-  const record = value as Partial<StoredDisbandRequest>;
+  const record = value as Partial<DisbandRequest> & { reason?: unknown };
   if (
-    record.version !== 1 ||
     typeof record.requestedAtMs !== "number" ||
     !Number.isFinite(record.requestedAtMs) ||
     (record.lastPreparedEpoch !== null &&

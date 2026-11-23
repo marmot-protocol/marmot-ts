@@ -1,5 +1,4 @@
 /** @module @category Client - Session */
-import { PENDING_PUBLICATION_KEY } from "../storage/pending-publication.js";
 import {
   mediaSourceStateToken,
   StaleMediaPreparationError,
@@ -7,9 +6,9 @@ import {
 
 import { deserializeApplicationData } from "../../core/application-rumor.js";
 import {
-  decodeDeliveryEvidence,
   deliveryId,
-  encodeDeliveryEvidence,
+  fromDeliveryRow,
+  toDeliveryRow,
 } from "../storage/delivered-payload-store.js";
 import { messageRow } from "../storage/database/message-database.js";
 import type { DeliveredAppPayload } from "../../engine/delivered-payloads.js";
@@ -65,19 +64,11 @@ import type {
   RemovalRecovery,
 } from "../../engine/fork-recovery.js";
 import type { DisbandRequest } from "../../engine/disband-request.js";
+import type { DisbandRecordStore } from "../../engine/disband-request.js";
 import {
-  DISBAND_CONVERGENCE_KEY,
-  DISBAND_REQUEST_KEY,
-} from "../../engine/disband-request.js";
-import {
-  decodeDisbandTombstone,
-  decodeDisbandTerminalIntent,
-  encodeDisbandTerminalIntent,
-  DISBAND_INTENT_KEY,
+  fromStoredDisbandTombstone,
+  toStoredDisbandTombstone,
   type DisbandTerminalIntent,
-  DISBAND_REGISTRY_STATE_KEY,
-  DISBAND_TOMBSTONE_KEY,
-  encodeDisbandTombstone,
   type DisbandTombstone,
 } from "../../engine/disband-tombstone.js";
 import { ingestResultDisposition as engineIngestResultDisposition } from "../../engine/ingest-disposition.js";
@@ -93,15 +84,15 @@ import type { StateNotification } from "../../engine/state-notifications.js";
 import {
   applyTreeWrite,
   GroupBatch,
-  groupMetaStore,
+  groupRecordStore,
   groupTreeStore,
-  type GroupMetaStore,
+  type GroupRecordStore,
 } from "../storage/database/group-batch.js";
 import type {
-  GroupMetaKey,
+  GroupRecordUpdate,
   MarmotGroupDatabase,
+  RemovalRecord,
 } from "../storage/database/types.js";
-import { groupKeys } from "../storage/storage-keys.js";
 import { NostrGroupPeeler } from "../group/nostr-peeler.js";
 import {
   ConvergenceEffectLedger,
@@ -177,9 +168,6 @@ export interface RemovalEvidence extends RemovalAttribution {
   notificationState: "pending" | "delivered";
   recoveryPending?: RemovalRecovery;
 }
-
-/** Group-database meta key of the removal evidence record. */
-export const REMOVAL_EVIDENCE_KEY = groupKeys.removalAttribution;
 
 type StagedWrapper = { outcome: TerminalWrapperOutcome; epoch: number };
 
@@ -291,10 +279,10 @@ export class GroupSession {
   /** This group's database. */
   readonly database: MarmotGroupDatabase;
   /**
-   * Single-record access to the database's `meta` table.
+   * Access to the database's singleton group record.
    * @internal
    */
-  readonly meta: GroupMetaStore;
+  readonly records: GroupRecordStore;
   readonly history?: GroupSessionHistory;
   readonly #dropDatabase?: () => Promise<void>;
 
@@ -365,7 +353,7 @@ export class GroupSession {
   constructor(options: GroupSessionOptions) {
     this.ciphersuite = options.ciphersuite;
     this.database = options.database;
-    this.meta = groupMetaStore(options.database);
+    this.records = groupRecordStore(options.database);
     this.#dropDatabase = options.dropDatabase;
     this.history = options.history;
     this.#onStateChanged = options.onStateChanged;
@@ -434,15 +422,7 @@ export class GroupSession {
       // Engine lifecycle writes also occur outside awaited session calls (for
       // example when a confirmed epoch refreshes a pending request). Route
       // every such write through the same destruction barrier.
-      storage: {
-        get: (key) => this.meta.get(key as GroupMetaKey),
-        set: async (key, value) => {
-          await this.#write(() => this.meta.set(key as GroupMetaKey, value));
-        },
-        delete: async (key) => {
-          await this.#write(() => this.meta.delete(key as GroupMetaKey));
-        },
-      },
+      storage: this.#disbandRecordStore(),
       onChanged: () => {
         if (!this.#destroyed && !this.#disposed) this.#onChanged?.();
       },
@@ -500,20 +480,57 @@ export class GroupSession {
       throw new Error("Group removed or removal recovery pending");
   }
 
+  /**
+   * The engine's disband records, kept in the group record. Engine lifecycle
+   * writes also occur outside awaited session calls (for example when a
+   * confirmed epoch refreshes a pending request), so every write goes through
+   * the same destruction barrier.
+   */
+  #disbandRecordStore(): DisbandRecordStore {
+    return {
+      load: async () => {
+        const record = await this.database.group();
+        return {
+          request: record.disbandRequest,
+          convergence: record.disbandConvergence,
+        };
+      },
+      saveRequest: async (request) => {
+        await this.#write(() =>
+          this.records.update({
+            disbandRequest: request && { ...request },
+          }),
+        );
+      },
+      saveConvergence: async (convergence) => {
+        await this.#write(() =>
+          this.records.update({
+            disbandConvergence: convergence && {
+              ...convergence,
+              candidates: convergence.candidates.map((candidate) => ({
+                ...candidate,
+              })),
+            },
+          }),
+        );
+      },
+    };
+  }
+
   async #hydrateRemovalEvidence(): Promise<void> {
-    const bytes = await this.meta.get(REMOVAL_EVIDENCE_KEY);
+    const stored = await this.database.group();
+    const removal = stored.removal;
     const marker =
       this.state.groupActiveState.kind === "removedFromGroup"
         ? undefined
-        : await this.meta.get(groupKeys.removed);
-    this.#removalFenced = !!bytes || marker?.[0] === 1;
+        : stored.removed;
+    this.#removalFenced = !!removal || marker === true;
     this.#onChanged?.();
-    if (!bytes) return;
+    if (!removal) return;
     try {
-      const record = JSON.parse(
-        new TextDecoder().decode(bytes),
-      ) as RemovalEvidence;
+      const record = removal as RemovalEvidence;
       if (
+        typeof record !== "object" ||
         ![1, 2].includes(record.version) ||
         (record.version === 2 &&
           (typeof record.removingCommitter !== "string" ||
@@ -542,7 +559,12 @@ export class GroupSession {
           !/^[0-9a-f]+$/.test(record.recoveryPending.selectedTip))
       )
         return;
-      this.#removalEvidence = record;
+      this.#removalEvidence = {
+        ...record,
+        recoveryPending: record.recoveryPending && {
+          ...record.recoveryPending,
+        },
+      };
       this.#clearPublications();
     } catch {
       /* Legacy or malformed authority cannot restore membership. */
@@ -553,12 +575,14 @@ export class GroupSession {
     if (!this.#removalFenced) this.#clearPublications();
     this.#removalFenced = true;
     this.#onChanged?.();
-    await this.#write(() =>
-      this.meta.set(
-        REMOVAL_EVIDENCE_KEY,
-        new TextEncoder().encode(JSON.stringify(evidence)),
-      ),
-    );
+    const removal: RemovalRecord = {
+      ...evidence,
+      recoveryPending: evidence.recoveryPending && {
+        ...evidence.recoveryPending,
+      },
+    };
+    if (!removal.recoveryPending) delete removal.recoveryPending;
+    await this.#write(() => this.records.update({ removal }));
     this.#removalEvidence = evidence;
   }
 
@@ -774,7 +798,7 @@ export class GroupSession {
       const tree = await this.#engine.history.stageFlush();
       batch.tree(tree.write);
       const deliveries = this.#stageDeliveries(batch);
-      batch.setMeta(groupKeys.state, serializeClientState(this.state));
+      batch.updateGroup({ state: serializeClientState(this.state) });
       const wrappers = this.#stageWrappers(batch);
       await batch.commit();
       tree.finish();
@@ -840,18 +864,14 @@ export class GroupSession {
       const record: PersistedDelivery = {
         rumorId: entry.rumorId!,
         stateTag: entry.stateTag,
+        transportId: entry.transportId!,
         epoch: entry.epoch,
         createdAt: known?.createdAt ?? now,
         evidence,
       };
-      batch.putDelivery({
-        id,
-        rumorId: record.rumorId,
-        epoch: record.epoch,
-        createdAt: record.createdAt,
-        value: new Uint8Array(),
-        evidence: evidence ? encodeDeliveryEvidence(entry) : undefined,
-      });
+      batch.putDelivery(
+        toDeliveryRow(entry, { createdAt: record.createdAt, evidence }),
+      );
       changed.set(id, record);
       if (!known) stageMessage(entry.payload);
     }
@@ -864,9 +884,10 @@ export class GroupSession {
           batch.putDelivery({
             id,
             rumorId: record.rumorId,
+            stateTag: record.stateTag,
             epoch: record.epoch,
+            transportId: record.transportId,
             createdAt: record.createdAt,
-            value: new Uint8Array(),
           });
           changed.set(id, record);
         }
@@ -1032,7 +1053,7 @@ export class GroupSession {
           const batch = new GroupBatch(this.database);
           const tree = await this.historyTree.stageFlush();
           batch.tree(tree.write);
-          batch.setMeta(groupKeys.state, stateBytes);
+          batch.updateGroup({ state: stateBytes });
           const deliveries = this.#stageDeliveries(batch, keep);
           const wrappers = this.#stageWrappers(batch);
           this.#wrapperLedger.stageCompaction(
@@ -1131,7 +1152,7 @@ export class GroupSession {
       !(await this.#engine.validateRemovalRecovery(evidence, authority))
     )
       return;
-    const bytes = await this.meta.get(groupKeys.state);
+    const bytes = (await this.database.group()).state;
     if (!bytes) return;
     let durable: ClientState;
     try {
@@ -1149,10 +1170,7 @@ export class GroupSession {
       return;
     // Keep notification identity and selection authority until the marker write settles.
     await this.#write(() =>
-      this.database.transaction(async (tx) => {
-        await tx.meta.delete(groupKeys.removed);
-        await tx.meta.delete(REMOVAL_EVIDENCE_KEY);
-      }),
+      this.records.update({ removed: null, removal: null }),
     );
     this.#removalEvidence = undefined;
     this.#removalFenced = false;
@@ -1256,27 +1274,29 @@ export class GroupSession {
     const tree = await GroupHistoryTree.stagePurge(
       groupTreeStore(this.database),
     );
+    const clearRecord: Required<GroupRecordUpdate> = {
+      state: null,
+      registryState: null,
+      removed: null,
+      removal: null,
+      disbandRequest: null,
+      disbandConvergence: null,
+      disbandTombstone: null,
+      publication: null,
+      checkpoint: null,
+    };
     await this.database.transaction(async (tx) => {
       for (const tag of tree.deletes) await tx.treeNodes.delete(tag);
       await tx.wrappers.deleteBelow(Number.MAX_SAFE_INTEGER);
+      await ConvergenceEffectLedger.clear(tx);
       for (const row of await tx.deliveries.withEvidence())
         await tx.deliveries.delete(row.id);
-      for (const row of await tx.messages.query({}))
+      for (const row of await tx.messages.query({})) {
+        for (const delivery of await tx.deliveries.byRumor(row.id))
+          await tx.deliveries.delete(delivery.id);
         await tx.messages.delete(row.id);
-      for (const key of [
-        groupKeys.state,
-        groupKeys.removed,
-        groupKeys.removalAttribution,
-        groupKeys.publication,
-        groupKeys.effects,
-        "tree",
-        DISBAND_REQUEST_KEY,
-        DISBAND_CONVERGENCE_KEY,
-        DISBAND_TOMBSTONE_KEY,
-        DISBAND_INTENT_KEY,
-        DISBAND_REGISTRY_STATE_KEY,
-      ] as const)
-        await tx.meta.delete(key);
+      }
+      await tx.updateGroup(clearRecord);
     });
   }
 
@@ -1325,10 +1345,9 @@ export class GroupSession {
       ...current,
       notificationState: "delivered",
     };
-    await this.meta.set(
-      DISBAND_TOMBSTONE_KEY,
-      encodeDisbandTombstone(delivered),
-    );
+    await this.records.update({
+      disbandTombstone: toStoredDisbandTombstone(delivered),
+    });
     this.assertOpen();
     this.#terminalTombstone = delivered;
     return delivered;
@@ -1435,13 +1454,11 @@ export class GroupSession {
   async #writeDisbandProjection(): Promise<void> {
     if (!this.#terminalIntent) return;
     const intent = this.#terminalIntent;
-    const intentBytes = encodeDisbandTerminalIntent(intent);
-    const tombstoneBytes = encodeDisbandTombstone(this.#terminalTombstone!);
-    // Terminal authority commits atomically; cleanup below is repeatable.
-    await this.database.transaction(async (tx) => {
-      await tx.meta.set(DISBAND_INTENT_KEY, intentBytes);
-      await tx.meta.set(DISBAND_TOMBSTONE_KEY, tombstoneBytes);
-      await tx.meta.set(DISBAND_REGISTRY_STATE_KEY, intent.registryState);
+    // Terminal authority (tombstone + scrubbed registry shell) commits in one
+    // record update; cleanup below is repeatable.
+    await this.records.update({
+      disbandTombstone: toStoredDisbandTombstone(this.#terminalTombstone!),
+      registryState: intent.registryState,
     });
     this.assertOpen();
     await this.#cleanupAfterDisband();
@@ -1450,29 +1467,29 @@ export class GroupSession {
 
   async #hydrateDisbandTombstone(): Promise<void> {
     const idHex = bytesToHex(this.id);
-    const intentBytes = await this.meta.get(DISBAND_INTENT_KEY);
-    const bytes = await this.meta.get(DISBAND_TOMBSTONE_KEY);
-    if ((!bytes && !intentBytes) || this.#destroyed || this.#disposed) return;
-    const intent = intentBytes
-      ? decodeDisbandTerminalIntent(intentBytes)
-      : undefined;
-    const tombstone = bytes ? decodeDisbandTombstone(bytes) : intent!.tombstone;
-    if (
-      intent &&
-      (bytesToHex(intent.tombstone.groupId) !== idHex ||
-        bytesToHex(intent.tombstone.commitDigest) !==
-          bytesToHex(tombstone.commitDigest))
-    )
-      throw new Error("Invalid disband terminal intent identity");
-    if (bytesToHex(tombstone.groupId) !== idHex)
-      throw new Error("Invalid disband tombstone group id");
-    if (
-      intent &&
-      bytesToHex(
-        deserializeClientState(intent.registryState).groupContext.groupId,
-      ) !== idHex
-    )
-      throw new Error("Invalid disband terminal intent shell group id");
+    const stored = await this.database.group();
+    if (!stored.disbandTombstone || this.#destroyed || this.#disposed) return;
+    // The tombstone and registry shell are written together: they are the
+    // terminal authority. The group id is implicit in the group database.
+    const tombstone = fromStoredDisbandTombstone(
+      stored.disbandTombstone,
+      this.id,
+    );
+    let intent: DisbandTerminalIntent | undefined;
+    if (stored.registryState !== undefined) {
+      if (
+        !(stored.registryState instanceof Uint8Array) ||
+        !stored.registryState.length
+      )
+        throw new Error("Invalid disband terminal intent");
+      if (
+        bytesToHex(
+          deserializeClientState(stored.registryState).groupContext.groupId,
+        ) !== idHex
+      )
+        throw new Error("Invalid disband terminal intent shell group id");
+      intent = { tombstone, registryState: stored.registryState };
+    }
     this.#terminalTombstone = tombstone;
     this.#terminalIntent = intent ?? {
       tombstone,
@@ -1490,11 +1507,11 @@ export class GroupSession {
     // Retraction decoding still depends on the abandoned branch's nodes.
     await this.#engine.history.flush();
     await this.#persistDelivered();
-    await this.database.transaction(async (tx) => {
-      await tx.meta.delete(DISBAND_REQUEST_KEY);
-      await tx.meta.delete(DISBAND_CONVERGENCE_KEY);
-      await tx.meta.delete(groupKeys.removed);
-      await tx.meta.delete(groupKeys.state);
+    await this.records.update({
+      disbandRequest: null,
+      disbandConvergence: null,
+      removed: null,
+      state: null,
     });
     await this.#wrapperLedger.clear();
     await this.#cleanupTerminalHistory();
@@ -1513,7 +1530,7 @@ export class GroupSession {
       for (const row of await tx.messages.query({}))
         await tx.messages.delete(row.id);
       await applyTreeWrite(tx, tree);
-      await tx.meta.delete(PENDING_PUBLICATION_KEY);
+      await tx.updateGroup({ publication: null });
     });
     this.#deliveries.clear();
   }
@@ -2222,13 +2239,14 @@ export class GroupSession {
     const rows = await this.database.deliveries.withEvidence();
     if (this.#destroyed || this.#disposed) return;
     const entries = rows.map((row) =>
-      decodeDeliveryEvidence(row.evidence!, this.#engine.history),
+      fromDeliveryRow(row, this.#engine.history),
     );
     this.#engine.importDeliveredPayloads(entries);
     rows.forEach((row, index) =>
       this.#deliveries.set(row.id, {
         rumorId: row.rumorId,
         stateTag: entries[index]!.stateTag,
+        transportId: entries[index]!.transportId!,
         epoch: row.epoch,
         createdAt: row.createdAt,
         evidence: true,
@@ -2253,6 +2271,7 @@ export class GroupSession {
 type PersistedDelivery = {
   rumorId: string;
   stateTag: string;
+  transportId: string;
   epoch: number;
   createdAt: number;
   /** Whether the row still holds re-adoption evidence. */

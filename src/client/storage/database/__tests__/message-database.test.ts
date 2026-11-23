@@ -38,7 +38,7 @@ async function setup(...rumors: Rumor[]) {
 }
 
 describe("messageRow", () => {
-  it("indexes single-letter tags and round-trips the rumor", () => {
+  it("copies the rumor's fields and round-trips it", () => {
     const r = rumor(5, {
       tags: [["e", "x"], ["p", "y"], ["e", "x"], ["subject", "hi"], ["t"]],
     });
@@ -49,7 +49,8 @@ describe("messageRow", () => {
       pubkey: ALICE,
       createdAt: 5,
     });
-    expect(row.tags).toEqual(["e:x", "p:y"]);
+    expect(row.tags).toEqual(r.tags);
+    expect(row.tags[0]).not.toBe(r.tags[0]);
     expect(rumorOfRow(row)).toEqual(r);
   });
 });
@@ -59,7 +60,7 @@ describe("filterToQuery", () => {
     expect(
       filterToQuery({ kinds: [9], authors: [ALICE], "#e": ["x"], limit: 3 }),
     ).toEqual({
-      query: { kinds: [9], authors: [ALICE], tags: [["e:x"]], limit: 3 },
+      query: { kinds: [9], authors: [ALICE], tags: { e: ["x"] }, limit: 3 },
       exact: true,
     });
     const search = filterToQuery({ search: "hi", limit: 3 });

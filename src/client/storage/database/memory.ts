@@ -1,10 +1,17 @@
 /** @module @category Storage */
+import {
+  applyGroupUpdate,
+  compareMessages,
+  matchesMessageQuery,
+} from "./query.js";
 import type {
   AccountReader,
   AccountTransaction,
+  BackfillRow,
   DeliveryRow,
-  GroupMetaKey,
+  EffectRow,
   GroupReader,
+  GroupRecord,
   GroupRow,
   GroupTransaction,
   IntentRow,
@@ -14,7 +21,6 @@ import type {
   MarmotDatabase,
   MarmotGroupDatabase,
   MarmotGroupDatabases,
-  MessageQuery,
   MessageRow,
   TreeNodeRow,
   WrapperRow,
@@ -22,44 +28,8 @@ import type {
 
 type Tables = Record<string, Map<string, unknown>>;
 
-/** Copies byte fields so callers never share buffers with the store. */
-function copyRow<T>(row: T): T {
-  if (row instanceof Uint8Array) return row.slice() as T;
-  if (!row || typeof row !== "object") return row;
-  const copy: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(row)) {
-    if (value === undefined) continue;
-    copy[key] =
-      value instanceof Uint8Array
-        ? value.slice()
-        : Array.isArray(value)
-          ? [...value]
-          : value;
-  }
-  return copy as T;
-}
-
-/** Newest first, then id ascending. */
-export function compareMessages(a: MessageRow, b: MessageRow): number {
-  if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-/** Whether a message row satisfies a {@link MessageQuery} (ignoring `limit`). */
-export function matchesMessageQuery(
-  row: MessageRow,
-  query: MessageQuery,
-): boolean {
-  if (query.ids && !query.ids.includes(row.id)) return false;
-  if (query.kinds && !query.kinds.includes(row.kind)) return false;
-  if (query.authors && !query.authors.includes(row.pubkey)) return false;
-  if (query.since !== undefined && row.createdAt < query.since) return false;
-  if (query.until !== undefined && row.createdAt > query.until) return false;
-  if (query.tags)
-    for (const alternatives of query.tags)
-      if (!alternatives.some((tag) => row.tags.includes(tag))) return false;
-  return true;
-}
+/** Deep-copies a row so callers never share objects or buffers with the store. */
+const copy = <T>(value: T): T => structuredClone(value);
 
 /**
  * Serializes transactions and gives each one a copy-on-write view of the
@@ -70,17 +40,12 @@ class MemoryStore {
   #queue: Promise<unknown> = Promise.resolve();
   closed = false;
 
-  constructor(names: readonly string[]) {
-    this.committed = Object.fromEntries(names.map((name) => [name, new Map()]));
+  constructor(readonly names: readonly string[]) {
+    this.committed = MemoryStore.empty(names);
   }
 
-  read<T>(table: string, key: string): T | undefined {
-    const row = this.committed[table].get(key) as T | undefined;
-    return row === undefined ? undefined : copyRow(row);
-  }
-
-  rows<T>(tables: Tables, table: string): T[] {
-    return [...tables[table].values()].map((row) => copyRow(row as T));
+  static empty(names: readonly string[]): Tables {
+    return Object.fromEntries(names.map((name) => [name, new Map()]));
   }
 
   run<T>(
@@ -98,7 +63,7 @@ class MemoryStore {
           working[table] = new Map(working[table]);
           copied.add(table);
         }
-        return working[table];
+        return working[table]!;
       };
       const result = await fn(working, write);
       this.committed = working;
@@ -109,85 +74,109 @@ class MemoryStore {
   }
 }
 
+const rows = <T>(tables: Tables, table: string): T[] =>
+  [...tables[table]!.values()].map((row) => copy(row as T));
+const get = <T>(tables: Tables, table: string, key: string): T | undefined => {
+  const row = tables[table]!.get(key) as T | undefined;
+  return row === undefined ? undefined : copy(row);
+};
+const byKey =
+  <T>(key: (row: T) => string) =>
+  (a: T, b: T) =>
+    key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0;
+
 // ---------------------------------------------------------------------------
 // Group database
 // ---------------------------------------------------------------------------
 
 const GROUP_TABLES = [
-  "meta",
+  "group",
   "treeNodes",
   "wrappers",
+  "effects",
+  "backfill",
   "messages",
   "deliveries",
 ] as const;
 
-function groupReader(store: MemoryStore, tables: () => Tables): GroupReader {
-  const get = <T>(table: string, key: string): T | undefined => {
-    const row = tables()[table].get(key) as T | undefined;
-    return row === undefined ? undefined : copyRow(row);
-  };
-  const deliveries = () => store.rows<DeliveryRow>(tables(), "deliveries");
+function groupReader(tables: () => Tables): GroupReader {
+  const deliveries = () => rows<DeliveryRow>(tables(), "deliveries");
+  const byId = byKey<DeliveryRow>((row) => row.id);
   return {
-    meta: {
-      get: async (key: GroupMetaKey) => get<Uint8Array>("meta", key),
+    group: async () => get<GroupRecord>(tables(), "group", "group") ?? {},
+    treeNodes: {
+      get: async (tag) => get<TreeNodeRow>(tables(), "treeNodes", tag),
     },
-    treeNodes: { get: async (tag) => get<TreeNodeRow>("treeNodes", tag) },
-    wrappers: { get: async (id) => get<WrapperRow>("wrappers", id) },
+    wrappers: { get: async (id) => get<WrapperRow>(tables(), "wrappers", id) },
+    effects: {
+      get: async (digest) => get<EffectRow>(tables(), "effects", digest),
+      byState: async (state) =>
+        rows<EffectRow>(tables(), "effects")
+          .filter((row) => row.state === state)
+          .sort(byKey((row) => row.digest)),
+    },
+    backfill: {
+      get: async (relay) => get<BackfillRow>(tables(), "backfill", relay),
+    },
     messages: {
-      get: async (id) => get<MessageRow>("messages", id),
+      get: async (id) => get<MessageRow>(tables(), "messages", id),
       query: async (query) => {
-        const rows = store
-          .rows<MessageRow>(tables(), "messages")
+        const found = rows<MessageRow>(tables(), "messages")
           .filter((row) => matchesMessageQuery(row, query))
           .sort(compareMessages);
-        return query.limit === undefined ? rows : rows.slice(0, query.limit);
+        return query.limit === undefined ? found : found.slice(0, query.limit);
       },
     },
     deliveries: {
       byRumor: async (rumorId) =>
         deliveries()
           .filter((row) => row.rumorId === rumorId)
-          .sort((a, b) => (a.id < b.id ? -1 : 1)),
+          .sort(byId),
       countByRumor: async (rumorId) =>
         deliveries().filter((row) => row.rumorId === rumorId).length,
       withEvidence: async () =>
         deliveries()
           .filter((row) => row.evidence !== undefined)
-          .sort((a, b) => (a.id < b.id ? -1 : 1)),
+          .sort(byId),
     },
   };
 }
 
 class MemoryGroupDatabase implements MarmotGroupDatabase {
-  readonly meta: GroupReader["meta"];
+  readonly group: GroupReader["group"];
   readonly treeNodes: GroupReader["treeNodes"];
   readonly wrappers: GroupReader["wrappers"];
+  readonly effects: GroupReader["effects"];
+  readonly backfill: GroupReader["backfill"];
   readonly messages: GroupReader["messages"];
   readonly deliveries: GroupReader["deliveries"];
 
   constructor(readonly store: MemoryStore) {
-    const reader = groupReader(store, () => store.committed);
-    this.meta = reader.meta;
+    const reader = groupReader(() => store.committed);
+    this.group = reader.group;
     this.treeNodes = reader.treeNodes;
     this.wrappers = reader.wrappers;
+    this.effects = reader.effects;
+    this.backfill = reader.backfill;
     this.messages = reader.messages;
     this.deliveries = reader.deliveries;
   }
 
   transaction<T>(fn: (tx: GroupTransaction) => Promise<T>): Promise<T> {
     return this.store.run((tables, write) => {
-      const reader = groupReader(this.store, () => tables);
+      const reader = groupReader(() => tables);
       const put = (table: string, key: string, row: unknown) => {
-        write(table).set(key, copyRow(row));
+        write(table).set(key, copy(row));
       };
       const remove = (table: string, key: string) => {
         write(table).delete(key);
       };
       const tx: GroupTransaction = {
-        meta: {
-          ...reader.meta,
-          set: async (key, value) => put("meta", key, value),
-          delete: async (key) => remove("meta", key),
+        ...reader,
+        updateGroup: async (update) => {
+          const current =
+            (tables.group!.get("group") as GroupRecord | undefined) ?? {};
+          put("group", "group", applyGroupUpdate(current, update));
         },
         treeNodes: {
           ...reader.treeNodes,
@@ -204,6 +193,16 @@ class MemoryGroupDatabase implements MarmotGroupDatabase {
               if ((row as WrapperRow).epoch < floor && !keep.has(id))
                 table.delete(id);
           },
+        },
+        effects: {
+          ...reader.effects,
+          put: async (row) => put("effects", row.digest, row),
+          delete: async (digest) => remove("effects", digest),
+        },
+        backfill: {
+          ...reader.backfill,
+          put: async (row) => put("backfill", row.relay, row),
+          delete: async (relay) => remove("backfill", relay),
         },
         messages: {
           ...reader.messages,
@@ -246,9 +245,7 @@ export class MemoryGroupDatabases implements MarmotGroupDatabases {
     if (store) {
       // Handles still open on a dropped database see it empty and read-only.
       store.closed = true;
-      store.committed = Object.fromEntries(
-        GROUP_TABLES.map((name) => [name, new Map()]),
-      );
+      store.committed = MemoryStore.empty(GROUP_TABLES);
     }
     this.#stores.delete(groupId);
   }
@@ -263,37 +260,21 @@ export class MemoryGroupDatabases implements MarmotGroupDatabases {
 // Account database
 // ---------------------------------------------------------------------------
 
-const ACCOUNT_TABLES = [
-  "meta",
-  "keyPackages",
-  "invites",
-  "groups",
-  "intents",
-] as const;
+const ACCOUNT_TABLES = ["keyPackages", "invites", "groups", "intents"] as const;
 
-const byId = (a: { id: string }, b: { id: string }) =>
-  a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-
-function accountReader(
-  store: MemoryStore,
-  tables: () => Tables,
-): AccountReader {
-  const get = <T>(table: string, key: string): T | undefined => {
-    const row = tables()[table].get(key) as T | undefined;
-    return row === undefined ? undefined : copyRow(row);
-  };
-  const invites = () => store.rows<InviteRow>(tables(), "invites");
+function accountReader(tables: () => Tables): AccountReader {
+  const byId = byKey<{ id: string }>((row) => row.id);
+  const invites = () => rows<InviteRow>(tables(), "invites");
   return {
-    meta: { get: async (key) => get<Uint8Array>("meta", key) },
     keyPackages: {
-      get: async (ref) => get<KeyPackageRow>("keyPackages", ref),
+      get: async (ref) => get<KeyPackageRow>(tables(), "keyPackages", ref),
       all: async () =>
-        store
-          .rows<KeyPackageRow>(tables(), "keyPackages")
-          .sort((a, b) => (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0)),
+        rows<KeyPackageRow>(tables(), "keyPackages").sort(
+          byKey((row) => row.ref),
+        ),
     },
     invites: {
-      get: async (id) => get<InviteRow>("invites", id),
+      get: async (id) => get<InviteRow>(tables(), "invites", id),
       byState: async (state) =>
         invites()
           .filter((row) => row.state === state)
@@ -302,11 +283,11 @@ function accountReader(
         invites().find((row) => row.rumorId === rumorId),
     },
     groups: {
-      get: async (id) => get<GroupRow>("groups", id),
-      all: async () => store.rows<GroupRow>(tables(), "groups").sort(byId),
+      get: async (id) => get<GroupRow>(tables(), "groups", id),
+      all: async () => rows<GroupRow>(tables(), "groups").sort(byId),
     },
     intents: {
-      all: async () => store.rows<IntentRow>(tables(), "intents").sort(byId),
+      all: async () => rows<IntentRow>(tables(), "intents").sort(byId),
     },
   };
 }
@@ -315,15 +296,13 @@ function accountReader(
 export class MemoryAccountDatabase implements MarmotAccountDatabase {
   /** @internal */
   readonly store = new MemoryStore(ACCOUNT_TABLES);
-  readonly meta: AccountReader["meta"];
   readonly keyPackages: AccountReader["keyPackages"];
   readonly invites: AccountReader["invites"];
   readonly groups: AccountReader["groups"];
   readonly intents: AccountReader["intents"];
 
   constructor() {
-    const reader = accountReader(this.store, () => this.store.committed);
-    this.meta = reader.meta;
+    const reader = accountReader(() => this.store.committed);
     this.keyPackages = reader.keyPackages;
     this.invites = reader.invites;
     this.groups = reader.groups;
@@ -332,19 +311,14 @@ export class MemoryAccountDatabase implements MarmotAccountDatabase {
 
   transaction<T>(fn: (tx: AccountTransaction) => Promise<T>): Promise<T> {
     return this.store.run((tables, write) => {
-      const reader = accountReader(this.store, () => tables);
+      const reader = accountReader(() => tables);
       const put = (table: string, key: string, row: unknown) => {
-        write(table).set(key, copyRow(row));
+        write(table).set(key, copy(row));
       };
       const remove = (table: string, key: string) => {
         write(table).delete(key);
       };
       const tx: AccountTransaction = {
-        meta: {
-          ...reader.meta,
-          set: async (key, value) => put("meta", key, value),
-          delete: async (key) => remove("meta", key),
-        },
         keyPackages: {
           ...reader.keyPackages,
           put: async (row) => put("keyPackages", row.ref, row),

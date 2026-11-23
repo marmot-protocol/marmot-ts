@@ -11,7 +11,6 @@ import {
 import { EventEmitter } from "eventemitter3";
 import { WELCOME_EVENT_KIND } from "../core/protocol.js";
 import { getWelcome } from "../core/welcome.js";
-import { decodeRecord, encodeRecord } from "./storage/record-codec.js";
 import type {
   InviteRow,
   InviteState,
@@ -150,15 +149,43 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
     this.received = new InviteRecords(
       options.database,
       "received",
-      (record) => ({
-        rumorId: record.rumor?.id,
+      (id, record) => ({
+        id,
+        state: "received",
         receivedAt: record.giftwrap.created_at,
+        giftwrap: record.giftwrap,
+        ...(record.rumor !== undefined
+          ? { rumorId: record.rumor.id, rumor: record.rumor }
+          : {}),
+        ...(record.attempted !== undefined
+          ? { attempted: record.attempted }
+          : {}),
+        ...(record.invalid !== undefined ? { invalid: record.invalid } : {}),
       }),
+      (row) =>
+        row.giftwrap && isGiftWrap(row.giftwrap)
+          ? {
+              giftwrap: row.giftwrap,
+              ...(row.attempted !== undefined
+                ? { attempted: row.attempted }
+                : {}),
+              ...(row.rumor !== undefined ? { rumor: row.rumor } : {}),
+              ...(row.invalid !== undefined ? { invalid: row.invalid } : {}),
+            }
+          : undefined,
     );
-    this.unread = new InviteRecords(options.database, "unread", (rumor) => ({
-      rumorId: rumor.id,
-      receivedAt: rumor.created_at,
-    }));
+    this.unread = new InviteRecords(
+      options.database,
+      "unread",
+      (id, rumor) => ({
+        id,
+        state: "unread",
+        rumorId: rumor.id,
+        receivedAt: rumor.created_at,
+        rumor,
+      }),
+      (row) => row.rumor,
+    );
     this.network = options.network;
     this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
   }
@@ -587,12 +614,7 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
 
 /** The tombstone a finished gift wrap leaves so it is never re-ingested. */
 function seenRow(row: InviteRow): InviteRow {
-  return {
-    id: row.id,
-    state: "seen",
-    receivedAt: row.receivedAt,
-    value: new Uint8Array(),
-  };
+  return { id: row.id, state: "seen", receivedAt: row.receivedAt };
 }
 
 /**
@@ -603,21 +625,17 @@ class InviteRecords<T> {
   constructor(
     readonly database: MarmotAccountDatabase,
     readonly state: Exclude<InviteState, "seen">,
-    readonly columns: (value: T) => Pick<InviteRow, "rumorId" | "receivedAt">,
+    readonly toRow: (id: string, value: T) => InviteRow,
+    readonly fromRow: (row: InviteRow) => T | undefined,
   ) {}
 
   async get(id: string): Promise<T | undefined> {
     const row = await this.database.invites.get(id);
-    return row?.state === this.state ? decodeRecord<T>(row.value) : undefined;
+    return row?.state === this.state ? this.fromRow(row) : undefined;
   }
 
   async set(id: string, value: T): Promise<void> {
-    const row: InviteRow = {
-      id,
-      state: this.state,
-      ...this.columns(value),
-      value: encodeRecord(value),
-    };
+    const row = this.toRow(id, value);
     await this.database.transaction((tx) => tx.invites.put(row));
   }
 

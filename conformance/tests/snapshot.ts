@@ -13,7 +13,7 @@ import {
   type RequiredCapabilities,
   type ExtensionRequiredCapabilities,
 } from "ts-mls";
-import { getCredentialPubkey } from "../../core/credential.js";
+import { getCredentialPubkey } from "../../src/core/credential.js";
 
 export interface CanonicalConformanceSnapshot {
   group_id: string;

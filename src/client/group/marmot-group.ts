@@ -41,7 +41,6 @@ import type { DisbandTombstone } from "../../engine/disband-tombstone.js";
 import { buildForkTreeView, type ForkTreeView } from "./fork-tree-view.js";
 import { logger } from "../../utils/debug.js";
 import type { MarmotGroupDatabase } from "../storage/database/types.js";
-import { groupKeys } from "../storage/storage-keys.js";
 import {
   getMarmotGroupInfo,
   type MarmotGroupInfo,
@@ -628,11 +627,6 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
     return this.session.profileSupport;
   }
 
-  /** Group-scoped durable key for removal realization state. */
-  get #removedMarkerKey() {
-    return groupKeys.removed;
-  }
-
   /**
    * The group's lifecycle state (`group-state.md`). A new local commit may only
    * be prepared while `Stable`; the commit flow moves through `PendingPublish`
@@ -959,18 +953,16 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
 
     this.idStr = bytesToHex(this.id);
     this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
-    const meta = this.session.meta;
+    const records = this.session.records;
     this.runtime = new GroupRuntime({
       welcomeDelivery: new NostrWelcomeDelivery({
         signer: this.signer,
         network: this.network,
       }),
       pendingPublications: new PendingPublicationStore({
-        get: (key) => meta.get(key),
-        set: (key, value) =>
-          this.session.persistPublication(() => meta.set(key, value)),
-        delete: (key) =>
-          this.session.persistPublication(() => meta.delete(key)),
+        get: () => records.get(),
+        update: (update) =>
+          this.session.persistPublication(() => records.update(update)),
       }),
       restorePending: (pending) =>
         this.session.restorePendingPublication(pending),
@@ -1496,9 +1488,9 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
     if (this.session.terminalTombstone) return;
     if (this.state.groupActiveState.kind !== "removedFromGroup") return;
 
-    const alreadyRealized = await this.session.meta.get(this.#removedMarkerKey);
-    if (alreadyRealized?.[0] === 1) return;
-    await this.session.meta.set(this.#removedMarkerKey, Uint8Array.of(1));
+    const alreadyRealized = (await this.session.records.get()).removed;
+    if (alreadyRealized === true) return;
+    await this.session.records.update({ removed: true });
     await this.session.markRemovalNotificationDelivered();
 
     this.#rejectQueuedOutbound("Removed from group; outbound cancelled.");

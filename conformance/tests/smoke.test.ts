@@ -1,24 +1,32 @@
-import manifestJson from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/manifest.v1.json" with { type: "json" };
+import manifestJson from "../../refs/mdk/crates/cgka-conformance-simulator/vectors/manifest.v1.json" with { type: "json" };
 import { readFileSync } from "node:fs";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { describe, expect, it } from "vitest";
 import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 
-import { decodeNostrRoutingV1 } from "../../core/components/nostr-routing.js";
+import { decodeNostrRoutingV1 } from "../../src/core/components/nostr-routing.js";
 import {
   resolveManifestArtifact,
   validateConformanceManifest,
 } from "./manifest.js";
-import { MockNetwork } from "../helpers/mock-network.js";
-import { createCredential } from "../../core/credential.js";
-import { createSimpleGroup } from "../../core/group.js";
-import { generateKeyPackage } from "../../core/key-package.js";
-import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { memoryGroupDatabase } from "../helpers/database.js";
-import { testAccount } from "../helpers/test-accounts.js";
+import { MockNetwork } from "../../src/__tests__/helpers/mock-network.js";
+import { createCredential } from "../../src/core/credential.js";
+import { createSimpleGroup } from "../../src/core/group.js";
+import { generateKeyPackage } from "../../src/core/key-package.js";
+import { MarmotGroup } from "../../src/client/group/marmot-group.js";
+import { memoryGroupDatabase } from "../../src/__tests__/helpers/database.js";
+import { testAccount } from "../../src/__tests__/helpers/test-accounts.js";
 import { MarmotConformanceSubject, parseMdkScenarioStep } from "./subject.js";
 
 const VECTORS_ROOT = "refs/mdk/crates/cgka-conformance-simulator/vectors";
+// Inventory only: these operations must remain rejected until implemented.
+const UNSUPPORTED_OPERATIONS = new Set([
+  "set_account_devices_support",
+  "require_account_devices",
+  "expect_require_account_devices_error",
+  "remove_own_account_devices",
+  "self_update",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -43,7 +51,7 @@ describe("portable MDK conformance smoke corpus", () => {
   const represented = new Set<string>();
 
   for (const entry of portable) {
-    it(entry.id, async () => {
+    it(`inventory: ${entry.id}`, async () => {
       expect(entry.artifact).toBeDefined();
       const fixture = requireRecord(
         JSON.parse(
@@ -76,6 +84,15 @@ describe("portable MDK conformance smoke corpus", () => {
         expect(fixture.fixture_name).toMatch(
           /^marmot\.transport\.nostr\.routing\.v1\//,
         );
+      } else if (fixture.vector_type === "wire_format") {
+        // This smoke check inventories the fixture; it does not claim wire
+        // decoding coverage. Unknown wire fixtures require explicit review.
+        expect(entry.id).toBe(
+          "marmot.transport.nostr.welcome/nip44-extended-length/v1",
+        );
+        expect(fixture.fixture_name).toBe(entry.id);
+        expect(requireRecord(fixture.nostr_event).kind).toBe(1059);
+        expect(requireRecord(fixture.expected).valid).toBe(true);
       } else {
         const scenario = requireRecord(fixture.scenario);
         expect(scenario.name).toBe(entry.id);
@@ -102,6 +119,13 @@ describe("portable MDK conformance smoke corpus", () => {
           },
         });
         for (const rawStep of scenario.steps) {
+          const operation = requireText(requireRecord(rawStep).type);
+          if (UNSUPPORTED_OPERATIONS.has(operation)) {
+            expect(() => parseMdkScenarioStep(rawStep)).toThrow(
+              `Unsupported Scenario IR operation ${operation}`,
+            );
+            continue;
+          }
           const action = parseMdkScenarioStep(rawStep);
           if (action.type !== "scenario_operation") {
             expect(subject.support(action)).toBeUndefined();

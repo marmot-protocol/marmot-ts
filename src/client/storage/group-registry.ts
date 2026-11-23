@@ -10,14 +10,9 @@ import { GroupHistoryTree } from "../../engine/history-tree.js";
 import type { IngestionPoolOptions } from "../../engine/ingestion-pool.js";
 import type { AuditContextOptions, AuditSink } from "../../audit/index.js";
 import { RetainedHistoryStore } from "../../engine/retained-store.js";
-import {
-  DISBAND_REGISTRY_STATE_KEY,
-  DISBAND_TOMBSTONE_KEY,
-} from "../../engine/disband-tombstone.js";
 import { logger } from "../../utils/debug.js";
 import { groupTreeStore } from "./database/group-batch.js";
 import type { MarmotDatabase, MarmotGroupDatabase } from "./database/types.js";
-import { groupKeys } from "./storage-keys.js";
 import {
   MarmotGroup,
   type GroupDisbandedEvent,
@@ -143,9 +138,9 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
         // An interrupted create/join is complete once its first save landed
         // (a disbanded group keeps its tombstone instead of canonical state).
         const database = await this.database.groups.open(id);
+        const record = await database.group();
         const saved =
-          (await database.meta.get(groupKeys.state)) !== undefined ||
-          (await database.meta.get(DISBAND_TOMBSTONE_KEY)) !== undefined;
+          record.state !== undefined || record.disbandTombstone !== undefined;
         await database.close();
         if (saved)
           await this.database.account.transaction((tx) =>
@@ -176,12 +171,7 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
     const intentId = `destroy:${id}`;
     await this.database.account.transaction((tx) =>
-      tx.intents.put({
-        id: intentId,
-        kind: "destroy",
-        groupId: id,
-        value: new Uint8Array(),
-      }),
+      tx.intents.put({ id: intentId, kind: "destroy", groupId: id }),
     );
     await this.#finishDrop(id, intentId);
   }
@@ -200,13 +190,8 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     const id = bytesToHex(state.groupContext.groupId);
     const intentId = `${kind}:${id}`;
     await this.database.account.transaction(async (tx) => {
-      await tx.groups.put({ id, status: "active", value: new Uint8Array() });
-      await tx.intents.put({
-        id: intentId,
-        kind,
-        groupId: id,
-        value: new Uint8Array(),
-      });
+      await tx.groups.put({ id, status: "active" });
+      await tx.intents.put({ id: intentId, kind, groupId: id });
     });
     return {
       database: await this.database.groups.open(id),
@@ -249,10 +234,9 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     if (!(await this.database.account.groups.get(idHex)))
       throw new Error(`Group ${idHex} not found`);
     const database = await this.database.groups.open(idHex);
-    const canonicalBytes = await database.meta.get(groupKeys.state);
-    const canonical = canonicalBytes !== undefined;
-    const stateBytes =
-      canonicalBytes ?? (await database.meta.get(DISBAND_REGISTRY_STATE_KEY));
+    const record = await database.group();
+    const canonical = record.state !== undefined;
+    const stateBytes = record.state ?? record.registryState;
 
     if (!stateBytes) {
       await database.close();
@@ -292,7 +276,7 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     // checkpoint means required history was lost. A terminal (disbanded)
     // group may have purged its tree.
     const store = groupTreeStore(database);
-    if (!(await store.meta())) {
+    if (!(await store.checkpoint())) {
       if (
         canonical &&
         (await database.treeNodes.get(bytesToHex(state.confirmationTag)))
@@ -476,9 +460,9 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     if (!(await this.database.account.groups.get(key))) return false;
     const database = await this.database.groups.open(key);
     try {
+      const record = await database.group();
       return (
-        (await database.meta.get(groupKeys.state)) !== undefined ||
-        (await database.meta.get(DISBAND_TOMBSTONE_KEY)) !== undefined
+        record.state !== undefined || record.disbandTombstone !== undefined
       );
     } finally {
       await database.close();

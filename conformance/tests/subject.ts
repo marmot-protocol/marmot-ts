@@ -1,15 +1,15 @@
-import type { MarmotGroup } from "../../client/group/marmot-group.js";
-import type { MockNetwork } from "../helpers/mock-network.js";
+import type { MarmotGroup } from "../../src/client/group/marmot-group.js";
+import type { MockNetwork } from "../../src/__tests__/helpers/mock-network.js";
 import type { CanonicalConformanceSnapshot } from "./snapshot.js";
 import { projectCanonicalConformanceSnapshot } from "./snapshot.js";
 import type { ConformanceCapability } from "./manifest.js";
 import {
   createApplicationMessageIntent,
   createChatRumor,
-} from "../../client/group/application-message.js";
-import { deserializeApplicationRumor } from "../../core/application-rumor.js";
-import { proposeUpdateMetadata } from "../../client/group/proposals/update-metadata.js";
-import { proposeInviteUser } from "../../client/group/proposals/invite-user.js";
+} from "../../src/client/group/application-message.js";
+import { deserializeApplicationRumor } from "../../src/core/application-rumor.js";
+import { proposeUpdateMetadata } from "../../src/client/group/proposals/update-metadata.js";
+import { proposeInviteUser } from "../../src/client/group/proposals/invite-user.js";
 import type { KeyPackage } from "ts-mls";
 
 export type ConformanceAction =

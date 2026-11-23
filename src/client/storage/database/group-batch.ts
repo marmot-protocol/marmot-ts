@@ -3,9 +3,13 @@ import type {
   HistoryTreeStore,
   HistoryTreeWrite,
 } from "../../../engine/history-tree-store.js";
+import { applyGroupUpdate } from "./query.js";
 import type {
+  BackfillRow,
   DeliveryRow,
-  GroupMetaKey,
+  EffectRow,
+  GroupRecord,
+  GroupRecordUpdate,
   GroupTransaction,
   MarmotGroupDatabase,
   MessageRow,
@@ -14,19 +18,18 @@ import type {
 
 type Step = (tx: GroupTransaction) => Promise<void>;
 
-/** Single-record access to a group database's `meta` table. */
-export interface GroupMetaStore {
-  get(key: GroupMetaKey): Promise<Uint8Array | undefined>;
-  set(key: GroupMetaKey, value: Uint8Array): Promise<void>;
-  delete(key: GroupMetaKey): Promise<void>;
+/** Access to a group database's singleton {@link GroupRecord}. */
+export interface GroupRecordStore {
+  get(): Promise<GroupRecord>;
+  /** Applies a partial update in one transaction (`null` deletes a field). */
+  update(update: GroupRecordUpdate): Promise<void>;
 }
 
-/** {@link GroupMetaStore} over a group database; each write is one transaction. */
-export function groupMetaStore(db: MarmotGroupDatabase): GroupMetaStore {
+/** {@link GroupRecordStore} over a group database; each update is one transaction. */
+export function groupRecordStore(db: MarmotGroupDatabase): GroupRecordStore {
   return {
-    get: (key) => db.meta.get(key),
-    set: (key, value) => db.transaction((tx) => tx.meta.set(key, value)),
-    delete: (key) => db.transaction((tx) => tx.meta.delete(key)),
+    get: () => db.group(),
+    update: (update) => db.transaction((tx) => tx.updateGroup(update)),
   };
 }
 
@@ -36,28 +39,28 @@ export async function applyTreeWrite(
   write: HistoryTreeWrite,
 ): Promise<void> {
   for (const tag of write.deletes) await tx.treeNodes.delete(tag);
-  for (const [tag, value] of write.puts) await tx.treeNodes.put({ tag, value });
-  if (write.meta === null) await tx.meta.delete("tree");
-  else if (write.meta) await tx.meta.set("tree", write.meta);
+  for (const node of write.puts.values()) await tx.treeNodes.put(node);
+  if (write.checkpoint !== undefined)
+    await tx.updateGroup({ checkpoint: write.checkpoint });
 }
 
 /** The {@link HistoryTreeStore} of one group database. */
 export function groupTreeStore(db: MarmotGroupDatabase): HistoryTreeStore {
   return {
-    meta: () => db.meta.get("tree"),
-    node: async (tag) => (await db.treeNodes.get(tag))?.value,
+    checkpoint: async () => (await db.group()).checkpoint,
+    node: (tag) => db.treeNodes.get(tag),
     commit: (write) => db.transaction((tx) => applyTreeWrite(tx, write)),
   };
 }
 
 /**
  * Collects writes for one atomic group transaction. Values are prepared
- * before the transaction opens; reads of `meta` see this batch's own pending
- * writes first.
+ * before the transaction opens; {@link getGroup} sees this batch's own
+ * pending record updates first.
  */
 export class GroupBatch {
   readonly #db: MarmotGroupDatabase;
-  readonly #meta = new Map<GroupMetaKey, Uint8Array | null>();
+  #update: GroupRecordUpdate = {};
   #steps: Step[] = [];
 
   constructor(db: MarmotGroupDatabase) {
@@ -66,31 +69,29 @@ export class GroupBatch {
 
   /** Whether the batch holds any writes. */
   get size(): number {
-    return this.#meta.size + this.#steps.length;
+    return Object.keys(this.#update).length + this.#steps.length;
   }
 
-  async getMeta(key: GroupMetaKey): Promise<Uint8Array | undefined> {
-    if (this.#meta.has(key)) return this.#meta.get(key) ?? undefined;
-    return this.#db.meta.get(key);
+  /** The group record with this batch's staged updates applied. */
+  async getGroup(): Promise<GroupRecord> {
+    return applyGroupUpdate(await this.#db.group(), this.#update);
   }
 
-  setMeta(key: GroupMetaKey, value: Uint8Array): void {
-    this.#meta.set(key, value);
-  }
-
-  deleteMeta(key: GroupMetaKey): void {
-    this.#meta.set(key, null);
+  /** Stages a partial group-record update (`null` deletes a field). */
+  updateGroup(update: GroupRecordUpdate): void {
+    const next: GroupRecordUpdate = { ...this.#update };
+    for (const [key, value] of Object.entries(update))
+      if (value !== undefined) (next as Record<string, unknown>)[key] = value;
+    this.#update = next;
   }
 
   /** Stages a history-tree write. */
   tree(write: HistoryTreeWrite): void {
-    if (write.meta !== undefined) {
-      if (write.meta === null) this.deleteMeta("tree");
-      else this.setMeta("tree", write.meta);
-    }
+    if (write.checkpoint !== undefined)
+      this.updateGroup({ checkpoint: write.checkpoint });
     if (write.puts.size || write.deletes.size)
       this.#steps.push((tx) =>
-        applyTreeWrite(tx, { ...write, meta: undefined }),
+        applyTreeWrite(tx, { ...write, checkpoint: undefined }),
       );
   }
 
@@ -100,6 +101,18 @@ export class GroupBatch {
 
   deleteWrappersBelow(floor: number, except: readonly string[] = []): void {
     this.#steps.push((tx) => tx.wrappers.deleteBelow(floor, except));
+  }
+
+  putEffect(row: EffectRow): void {
+    this.#steps.push((tx) => tx.effects.put(row));
+  }
+
+  deleteEffect(digest: string): void {
+    this.#steps.push((tx) => tx.effects.delete(digest));
+  }
+
+  putBackfill(row: BackfillRow): void {
+    this.#steps.push((tx) => tx.backfill.put(row));
   }
 
   putMessage(row: MessageRow): void {
@@ -125,17 +138,14 @@ export class GroupBatch {
   /** Commits every staged write atomically; a no-op when empty. */
   async commit(): Promise<void> {
     if (!this.size) return;
-    const meta = [...this.#meta];
+    const update = this.#update;
     const steps = this.#steps;
     await this.#db.transaction(async (tx) => {
-      for (const [key, value] of meta)
-        if (value === null) await tx.meta.delete(key);
-        else await tx.meta.set(key, value);
+      if (Object.keys(update).length) await tx.updateGroup(update);
       for (const step of steps) await step(tx);
     });
     // Keep writes staged after a failed commit; drop only what committed.
-    for (const [key, value] of meta)
-      if (this.#meta.get(key) === value) this.#meta.delete(key);
+    if (this.#update === update) this.#update = {};
     this.#steps = this.#steps.slice(steps.length);
   }
 }

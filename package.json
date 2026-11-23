@@ -18,7 +18,7 @@
     "format": "prettier --write .",
     "test": "vitest",
     "typecheck:tests": "tsc -p tsconfig.tests.json",
-    "conformance:extended": "vitest run --config vitest.extended.config.ts",
+    "conformance": "node conformance/run.mjs",
     "docs": "vitepress dev",
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
@@ -26,7 +26,7 @@
     "docs:preview": "vitepress preview",
     "typedoc:build": "typedoc",
     "typedoc:serve": "pnpx serve .vitepress/dist/reference",
-    "check": "pnpm lint && pnpm typecheck:tests && pnpm vitest run && pnpm build"
+    "check": "pnpm lint && pnpm typecheck:tests && pnpm vitest run && pnpm conformance && pnpm build"
   },
   "repository": {
     "type": "git",

@@ -1,9 +1,9 @@
-import committerFixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/convergence-committer-selected.v1.json" with { type: "json" };
-import witnessFixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/convergence-witness-selected.v1.json" with { type: "json" };
-import adminFixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/admin-policy-update.v1.json" with { type: "json" };
-import groupDataFixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/group-data-update.v1.json" with { type: "json" };
-import groupDataForkFixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/group-data-fork-recovery.v1.json" with { type: "json" };
-import inviteForkFixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/concurrent-invite-fork-recovery.v1.json" with { type: "json" };
+import committerFixture from "../../refs/mdk/crates/cgka-conformance-simulator/vectors/convergence-committer-selected.v1.json" with { type: "json" };
+import witnessFixture from "../../refs/mdk/crates/cgka-conformance-simulator/vectors/convergence-witness-selected.v1.json" with { type: "json" };
+import adminFixture from "../../refs/mdk/crates/cgka-conformance-simulator/vectors/admin-policy-update.v1.json" with { type: "json" };
+import groupDataFixture from "../../refs/mdk/crates/cgka-conformance-simulator/vectors/group-data-update.v1.json" with { type: "json" };
+import groupDataForkFixture from "../../refs/mdk/crates/cgka-conformance-simulator/vectors/group-data-fork-recovery.v1.json" with { type: "json" };
+import inviteForkFixture from "../../refs/mdk/crates/cgka-conformance-simulator/vectors/concurrent-invite-fork-recovery.v1.json" with { type: "json" };
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import {
   createCommit,
@@ -19,19 +19,19 @@ import {
 import { describe, expect, it } from "vitest";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
-import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { proposeInviteUser } from "../../client/group/proposals/invite-user.js";
-import { proposeUpdateMetadata } from "../../client/group/proposals/update-metadata.js";
-import { createCredential } from "../../core/credential.js";
-import { commitDigest } from "../../core/convergence.js";
-import { createSimpleGroup } from "../../core/group.js";
-import { getGroupMemberPubkeys } from "../../core/group-members.js";
-import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryGroupDatabase } from "../helpers/database.js";
-import { MockNetwork } from "../helpers/mock-network.js";
+import { MarmotGroup } from "../../src/client/group/marmot-group.js";
+import { proposeInviteUser } from "../../src/client/group/proposals/invite-user.js";
+import { proposeUpdateMetadata } from "../../src/client/group/proposals/update-metadata.js";
+import { createCredential } from "../../src/core/credential.js";
+import { commitDigest } from "../../src/core/convergence.js";
+import { createSimpleGroup } from "../../src/core/group.js";
+import { getGroupMemberPubkeys } from "../../src/core/group-members.js";
+import { generateKeyPackage } from "../../src/core/key-package.js";
+import { memoryGroupDatabase } from "../../src/__tests__/helpers/database.js";
+import { MockNetwork } from "../../src/__tests__/helpers/mock-network.js";
 import { MarmotConformanceSubject, parseMdkScenarioStep } from "./subject.js";
 import type { CanonicalConformanceSnapshot } from "./snapshot.js";
-import type { MarmotAuditEvent } from "../../audit/types.js";
+import type { MarmotAuditEvent } from "../../src/audit/types.js";
 
 const RAW_FIXTURES = [
   committerFixture,

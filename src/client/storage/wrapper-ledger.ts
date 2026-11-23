@@ -1,11 +1,16 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import type { StateNotification } from "../../engine/state-notifications.js";
-import { decodeRecord, encodeRecord } from "./record-codec.js";
 import type { GroupBatch } from "./database/group-batch.js";
-import type { MarmotGroupDatabase, WrapperRow } from "./database/types.js";
-import { groupKeys } from "./storage-keys.js";
+import type {
+  EffectRow,
+  GroupTransaction,
+  MarmotGroupDatabase,
+  StateNotificationRecord,
+  WrapperOutcome,
+  WrapperRow,
+} from "./database/types.js";
 
-export type TerminalWrapperOutcome = "accepted" | "stale" | "invalidated";
+export type TerminalWrapperOutcome = WrapperOutcome;
 
 const safeEpoch = (epoch: unknown): epoch is number =>
   Number.isSafeInteger(epoch) && (epoch as number) >= 0;
@@ -22,19 +27,12 @@ const HEX_ID = /^[a-f0-9]{64}$/;
 export class TerminalWrapperLedger {
   constructor(readonly db: MarmotGroupDatabase) {}
 
-  #decode(bytes: Uint8Array): TerminalWrapperOutcome | undefined {
-    try {
-      const outcome = decodeRecord<unknown>(bytes);
-      if (outcomeValid(outcome)) return outcome;
-    } catch {
-      // Corrupt evidence is ignored; the verified wrapper remains processable.
-    }
-    return undefined;
-  }
-
+  /** Corrupt evidence is ignored; the verified wrapper remains processable. */
   async get(eventId: string): Promise<TerminalWrapperOutcome | undefined> {
     const row = await this.db.wrappers.get(eventId);
-    return row && safeEpoch(row.epoch) ? this.#decode(row.value) : undefined;
+    return row && safeEpoch(row.epoch) && outcomeValid(row.outcome)
+      ? row.outcome
+      : undefined;
   }
 
   #row(
@@ -44,7 +42,7 @@ export class TerminalWrapperLedger {
   ): WrapperRow {
     if (!outcomeValid(outcome) || !safeEpoch(epoch))
       throw new Error("Invalid wrapper record");
-    return { id: eventId, epoch, value: encodeRecord(outcome) };
+    return { id: eventId, epoch, outcome };
   }
 
   /** Stages a terminal record into a caller-owned atomic batch. */
@@ -86,16 +84,6 @@ export class TerminalWrapperLedger {
   }
 }
 
-type StoredEffect = {
-  state: "pending" | "observed";
-  direction: "withdrawal" | "adoption";
-  forkEpoch?: number;
-  producingEpoch?: number;
-  notifications: Array<
-    Omit<StateNotification, "commitDigest"> & { commitDigest: string }
-  >;
-};
-
 export type PendingConvergenceEffect =
   | {
       kind: "stateInvalidated";
@@ -110,83 +98,81 @@ export type PendingConvergenceEffect =
       notifications: StateNotification[];
     };
 
-type EffectMap = Record<string, unknown>;
-
-function validEffect(value: unknown): value is StoredEffect {
-  const effect = value as StoredEffect;
+/** Whether a stored effect row is well-formed (and keyed by its digest). */
+function validEffect(row: unknown, digest?: string): row is EffectRow {
+  const effect = row as EffectRow;
   return (
     !!effect &&
     typeof effect === "object" &&
+    typeof effect.digest === "string" &&
+    HEX_ID.test(effect.digest) &&
+    (digest === undefined || effect.digest === digest) &&
     (effect.state === "pending" || effect.state === "observed") &&
     (effect.direction === "withdrawal" || effect.direction === "adoption") &&
     Array.isArray(effect.notifications) &&
     (effect.forkEpoch === undefined || safeEpoch(effect.forkEpoch)) &&
     (effect.direction !== "withdrawal" || safeEpoch(effect.forkEpoch)) &&
     (effect.producingEpoch === undefined || safeEpoch(effect.producingEpoch)) &&
-    effect.notifications.every((notification) =>
-      HEX_ID.test(notification.commitDigest),
+    effect.notifications.every(
+      (notification) =>
+        !!notification &&
+        typeof notification === "object" &&
+        typeof notification.commitDigest === "string" &&
+        HEX_ID.test(notification.commitDigest),
     )
+  );
+}
+
+function encodeNotifications(
+  notifications: readonly StateNotification[],
+): StateNotificationRecord[] {
+  return notifications.map(
+    (notification) =>
+      ({
+        ...notification,
+        commitDigest: bytesToHex(notification.commitDigest),
+      }) as StateNotificationRecord,
+  );
+}
+
+function decodeNotifications(
+  notifications: readonly StateNotificationRecord[],
+): StateNotification[] {
+  return notifications.map(
+    (notification) =>
+      ({
+        ...notification,
+        commitDigest: hexToBytes(notification.commitDigest),
+      }) as StateNotification,
   );
 }
 
 /**
  * Durable observation verdicts for branch-selection withdrawal/re-adoption,
- * kept as one `effects` map keyed by commit digest. Every change is a
- * read-modify-write inside one group transaction.
+ * one `effects` row per commit digest. Every change is a read-modify-write
+ * inside one group transaction.
  */
 export class ConvergenceEffectLedger {
   constructor(readonly db: MarmotGroupDatabase) {}
 
-  /** Decodes the map; `undefined` when the record itself is corrupt. */
-  static #decode(bytes: Uint8Array | undefined): EffectMap | undefined {
-    if (!bytes) return {};
-    try {
-      const value = decodeRecord<unknown>(bytes);
-      if (value && typeof value === "object" && !Array.isArray(value))
-        return value as EffectMap;
-    } catch {
-      // Corrupt local evidence cannot establish an observation boundary.
-    }
-    return undefined;
-  }
-
-  async #read(): Promise<EffectMap | undefined> {
-    return ConvergenceEffectLedger.#decode(
-      await this.db.meta.get(groupKeys.effects),
-    );
-  }
-
-  /** Atomically updates one digest's entry. */
+  /** Atomically updates one digest's row. */
   async #update(
     digest: Uint8Array,
-    change: (existing: StoredEffect | undefined) => StoredEffect | undefined,
+    change: (existing: EffectRow | undefined) => EffectRow | undefined,
   ): Promise<void> {
     const hex = bytesToHex(digest);
     await this.db.transaction(async (tx) => {
-      const map = ConvergenceEffectLedger.#decode(
-        await tx.meta.get(groupKeys.effects),
-      );
-      if (!map) throw new Error("Corrupt convergence effect ledger");
-      const existing = validEffect(map[hex]) ? map[hex] : undefined;
-      const next = change(existing);
+      const row = await tx.effects.get(hex);
+      const next = change(validEffect(row, hex) ? row : undefined);
       if (!next) return;
-      await tx.meta.set(
-        groupKeys.effects,
-        encodeRecord({ ...map, [hex]: next }),
-      );
+      await tx.effects.put(next);
     });
   }
 
-  async #get(digest: Uint8Array): Promise<StoredEffect | undefined> {
-    const entry = (await this.#read())?.[bytesToHex(digest)];
-    return validEffect(entry) ? entry : undefined;
-  }
-
-  #encodeNotifications(notifications: readonly StateNotification[]) {
-    return notifications.map((notification) => ({
-      ...notification,
-      commitDigest: bytesToHex(notification.commitDigest),
-    }));
+  async #get(digest: Uint8Array): Promise<EffectRow | undefined> {
+    const hex = bytesToHex(digest);
+    const row = await this.db.effects.get(hex);
+    return validEffect(row, hex) ? row : undefined;
   }
 
   async prepareWithdrawal(
@@ -202,13 +188,15 @@ export class ConvergenceEffectLedger {
         notification.kind === "epochAdvanced" &&
         bytesToHex(notification.commitDigest) === bytesToHex(digest),
     ) as Extract<StateNotification, { kind: "epochAdvanced" }> | undefined;
-    await this.#update(digest, () => ({
+    const row: EffectRow = {
+      digest: bytesToHex(digest),
       producingEpoch: producing?.to,
       state: "pending",
       direction: "withdrawal",
       forkEpoch,
-      notifications: this.#encodeNotifications(notifications),
-    }));
+      notifications: encodeNotifications(notifications),
+    };
+    await this.#update(digest, () => row);
     return true;
   }
 
@@ -220,18 +208,20 @@ export class ConvergenceEffectLedger {
     if (!existing) return false;
     if (existing.direction === "adoption") return existing.state === "pending";
     if (existing.state !== "observed") return false;
-    await this.#update(digest, () => ({
+    const row: EffectRow = {
+      digest: existing.digest,
       producingEpoch: existing.producingEpoch,
       state: "pending",
       direction: "adoption",
-      notifications: this.#encodeNotifications(notifications),
-    }));
+      notifications: encodeNotifications(notifications),
+    };
+    await this.#update(digest, () => row);
     return true;
   }
 
   async acknowledge(
     digest: Uint8Array,
-    direction: StoredEffect["direction"],
+    direction: EffectRow["direction"],
   ): Promise<void> {
     await this.#update(digest, (existing) =>
       existing &&
@@ -244,20 +234,16 @@ export class ConvergenceEffectLedger {
 
   async pending(): Promise<PendingConvergenceEffect[]> {
     const pending: PendingConvergenceEffect[] = [];
-    for (const [hex, value] of Object.entries((await this.#read()) ?? {})) {
-      if (!HEX_ID.test(hex) || !validEffect(value) || value.state !== "pending")
-        continue;
-      const digest = hexToBytes(hex);
-      const notifications = value.notifications.map((notification) => ({
-        ...notification,
-        commitDigest: hexToBytes(notification.commitDigest),
-      })) as StateNotification[];
+    for (const row of await this.db.effects.byState("pending")) {
+      if (!validEffect(row) || row.state !== "pending") continue;
+      const digest = hexToBytes(row.digest);
+      const notifications = decodeNotifications(row.notifications);
       pending.push(
-        value.direction === "withdrawal"
+        row.direction === "withdrawal"
           ? {
               kind: "stateInvalidated",
               commitDigest: digest,
-              forkEpoch: value.forkEpoch!,
+              forkEpoch: row.forkEpoch!,
               withdrawn: notifications,
             }
           : {
@@ -273,31 +259,30 @@ export class ConvergenceEffectLedger {
 
   /** Stages retirement of observed effects no retained member names. */
   stageCompaction(batch: GroupBatch, digests: ReadonlySet<string>): void {
-    batch.then(async (tx) => {
-      const map = ConvergenceEffectLedger.#decode(
-        await tx.meta.get(groupKeys.effects),
-      );
-      if (!map) return;
-      const kept = Object.fromEntries(
-        Object.entries(map).filter(
-          ([hex, value]) =>
-            !HEX_ID.test(hex) ||
-            !validEffect(value) ||
-            value.state === "pending" ||
-            digests.has(hex),
-        ),
-      );
-      if (Object.keys(kept).length !== Object.keys(map).length)
-        await tx.meta.set(groupKeys.effects, encodeRecord(kept));
+    batch.then(async (tx: GroupTransaction) => {
+      for (const row of await tx.effects.byState("observed"))
+        if (
+          validEffect(row) &&
+          row.state === "observed" &&
+          !digests.has(row.digest)
+        )
+          await tx.effects.delete(row.digest);
     });
   }
 
-  /** A corrupt record blocks provenance release. */
+  /** A corrupt row blocks provenance release. */
   async hasOpaqueDependency(): Promise<boolean> {
-    const map = await this.#read();
-    if (!map) return true;
-    return Object.entries(map).some(
-      ([hex, value]) => HEX_ID.test(hex) && !validEffect(value),
-    );
+    const rows = [
+      ...(await this.db.effects.byState("pending")),
+      ...(await this.db.effects.byState("observed")),
+    ];
+    return rows.some((row) => !validEffect(row));
+  }
+
+  /** Removes every effect (terminal group cleanup). */
+  static async clear(tx: GroupTransaction): Promise<void> {
+    for (const state of ["pending", "observed"] as const)
+      for (const row of await tx.effects.byState(state))
+        await tx.effects.delete(row.digest);
   }
 }

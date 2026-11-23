@@ -65,8 +65,8 @@ jobs:
       - name: Run tests
         run: pnpm vitest run
 
-      - name: Run extended conformance tests
-        run: pnpm conformance:extended
+      - name: Run conformance tests
+        run: pnpm conformance
 
   test-deno:
     name: Test on Deno ${{ matrix.deno-version }}
@@ -118,8 +118,8 @@ jobs:
       - name: Run tests with Deno
         run: deno run -A --node-modules-dir=auto npm:vitest@3.2.6 run
 
-      - name: Run extended conformance tests with Deno
-        run: deno run -A --node-modules-dir=auto npm:vitest@3.2.6 run --config vitest.extended.config.ts
+      - name: Run conformance tests with Deno
+        run: deno run -A --node-modules-dir=auto npm:vitest@3.2.6 run --config conformance/vitest.config.mjs
 
   test-bun:
     name: Test on Bun ${{ matrix.bun-version }}
@@ -171,5 +171,5 @@ jobs:
       - name: Run tests with Bun
         run: bun run vitest run
 
-      - name: Run extended conformance tests with Bun
-        run: bun run vitest run --config vitest.extended.config.ts
+      - name: Run conformance tests with Bun
+        run: bun run vitest run --config conformance/vitest.config.mjs

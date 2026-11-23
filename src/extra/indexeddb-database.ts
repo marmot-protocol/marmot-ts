@@ -8,11 +8,21 @@
  *
  * @module @category Storage
  */
+import {
+  applyGroupUpdate,
+  compareMessages,
+  indexTags,
+  matchesMessageQuery as matches,
+  queryTagKeys,
+} from "../client/storage/database/query.js";
 import type {
   AccountReader,
   AccountTransaction,
+  BackfillRow,
   DeliveryRow,
+  EffectRow,
   GroupReader,
+  GroupRecord,
   GroupRow,
   GroupTransaction,
   IntentRow,
@@ -38,21 +48,19 @@ export interface IndexedDBDatabaseOptions {
   keyRange?: typeof IDBKeyRange;
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+/** Key of the singleton group record in the `group` store. */
+const GROUP_KEY = "group";
 const GROUP_STORES = [
-  "meta",
+  "group",
   "treeNodes",
   "wrappers",
+  "effects",
+  "backfill",
   "messages",
   "deliveries",
 ] as const;
-const ACCOUNT_STORES = [
-  "meta",
-  "keyPackages",
-  "invites",
-  "groups",
-  "intents",
-] as const;
+const ACCOUNT_STORES = ["keyPackages", "invites", "groups", "intents"] as const;
 
 function request<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -61,26 +69,44 @@ function request<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
+/**
+ * Hidden, adapter-only fields kept on stored rows for indexing and stripped
+ * on read: `_tags` holds a message's {@link indexTags} keys, `_evidence`
+ * marks deliveries that hold evidence (a sparse index).
+ */
+const HIDDEN = ["_tags", "_evidence"] as const;
+
+/** Drops every existing store; the schema is recreated from scratch. */
+function reset(db: IDBDatabase): void {
+  for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name);
+}
+
 function upgradeGroup(db: IDBDatabase): void {
-  db.createObjectStore("meta");
+  reset(db);
+  db.createObjectStore("group");
   db.createObjectStore("treeNodes", { keyPath: "tag" });
   db.createObjectStore("wrappers", { keyPath: "id" }).createIndex(
     "epoch",
     "epoch",
   );
+  db.createObjectStore("effects", { keyPath: "digest" }).createIndex(
+    "state",
+    "state",
+  );
+  db.createObjectStore("backfill", { keyPath: "relay" });
   const messages = db.createObjectStore("messages", { keyPath: "id" });
   messages.createIndex("createdAt", ["createdAt", "id"]);
   messages.createIndex("kind", ["kind", "createdAt", "id"]);
   messages.createIndex("pubkey", ["pubkey", "createdAt", "id"]);
-  messages.createIndex("tags", "tags", { multiEntry: true });
+  messages.createIndex("tags", "_tags", { multiEntry: true });
   const deliveries = db.createObjectStore("deliveries", { keyPath: "id" });
   deliveries.createIndex("rumorId", "rumorId");
   // Sparse: only rows holding evidence carry the indexed flag.
-  deliveries.createIndex("hasEvidence", "hasEvidence");
+  deliveries.createIndex("evidence", "_evidence");
 }
 
 function upgradeAccount(db: IDBDatabase): void {
-  db.createObjectStore("meta");
+  reset(db);
   db.createObjectStore("keyPackages", { keyPath: "ref" });
   const invites = db.createObjectStore("invites", { keyPath: "id" });
   invites.createIndex("state", "state");
@@ -163,27 +189,10 @@ class Connection {
 function clean<T>(row: unknown): T {
   if (!row || typeof row !== "object") return row as T;
   const copy = { ...(row as Record<string, unknown>) };
-  delete copy.hasEvidence;
+  for (const key of HIDDEN) delete copy[key];
   for (const key of Object.keys(copy))
     if (copy[key] === undefined) delete copy[key];
   return copy as T;
-}
-
-function compareMessages(a: MessageRow, b: MessageRow): number {
-  if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-function matches(row: MessageRow, query: MessageQuery): boolean {
-  if (query.ids && !query.ids.includes(row.id)) return false;
-  if (query.kinds && !query.kinds.includes(row.kind)) return false;
-  if (query.authors && !query.authors.includes(row.pubkey)) return false;
-  if (query.since !== undefined && row.createdAt < query.since) return false;
-  if (query.until !== undefined && row.createdAt > query.until) return false;
-  if (query.tags)
-    for (const alternatives of query.tags)
-      if (!alternatives.some((tag) => row.tags.includes(tag))) return false;
-  return true;
 }
 
 /**
@@ -229,16 +238,17 @@ async function queryMessages(
   const since = query.since ?? -Infinity;
   const until = query.until ?? Infinity;
   const out = new Map<string, MessageRow>();
+  const tagKeys = queryTagKeys(query);
   if (query.ids) {
     for (const id of query.ids) {
       const row = await request(store.get(id));
       if (row && matches(clean(row), query)) out.set(id, clean(row));
     }
-  } else if (query.tags?.length) {
+  } else if (tagKeys.length) {
     // The first tag clause narrows candidates; the rest filter.
     const index = store.index("tags");
-    for (const tag of query.tags[0]!)
-      for (const row of await request(index.getAll(tag))) {
+    for (const key of tagKeys[0]!)
+      for (const row of await request(index.getAll(key))) {
         const message = clean<MessageRow>(row);
         if (matches(message, query)) out.set(message.id, message);
       }
@@ -288,13 +298,19 @@ function groupReader(
     return row === undefined ? undefined : clean<T>(row);
   };
   const reader: GroupReader = {
-    meta: {
-      get: async (key) =>
-        (await request((await store("meta")).get(key))) as
-          Uint8Array | undefined,
-    },
+    group: async () =>
+      (await get<GroupRecord>("group", GROUP_KEY)) ?? ({} as GroupRecord),
     treeNodes: { get: (tag) => get<TreeNodeRow>("treeNodes", tag) },
     wrappers: { get: (id) => get<WrapperRow>("wrappers", id) },
+    effects: {
+      get: (digest) => get<EffectRow>("effects", digest),
+      // Index order within one state is primary-key (digest) order.
+      byState: async (state) =>
+        (
+          await request((await store("effects")).index("state").getAll(state))
+        ).map((row) => clean<EffectRow>(row)),
+    },
+    backfill: { get: (relay) => get<BackfillRow>("backfill", relay) },
     messages: {
       get: (id) => get<MessageRow>("messages", id),
       query: async (query) => queryMessages(await tx(), query, keyRange),
@@ -311,11 +327,7 @@ function groupReader(
       countByRumor: async (rumorId) =>
         request((await store("deliveries")).index("rumorId").count(rumorId)),
       withEvidence: async () =>
-        (
-          await request(
-            (await store("deliveries")).index("hasEvidence").getAll(),
-          )
-        )
+        (await request((await store("deliveries")).index("evidence").getAll()))
           .map((row) => clean<DeliveryRow>(row))
           .sort(byId),
     },
@@ -324,9 +336,11 @@ function groupReader(
 }
 
 class IndexedDBGroupDatabase implements MarmotGroupDatabase {
-  readonly meta: GroupReader["meta"];
+  readonly group: GroupReader["group"];
   readonly treeNodes: GroupReader["treeNodes"];
   readonly wrappers: GroupReader["wrappers"];
+  readonly effects: GroupReader["effects"];
+  readonly backfill: GroupReader["backfill"];
   readonly messages: GroupReader["messages"];
   readonly deliveries: GroupReader["deliveries"];
 
@@ -336,9 +350,14 @@ class IndexedDBGroupDatabase implements MarmotGroupDatabase {
       connection.run("readonly", (tx) =>
         fn(groupReader(() => tx, connection.keyRange)),
       );
-    this.meta = { get: (key) => read((r) => r.meta.get(key)) };
+    this.group = () => read((r) => r.group());
     this.treeNodes = { get: (tag) => read((r) => r.treeNodes.get(tag)) };
     this.wrappers = { get: (id) => read((r) => r.wrappers.get(id)) };
+    this.effects = {
+      get: (digest) => read((r) => r.effects.get(digest)),
+      byState: (state) => read((r) => r.effects.byState(state)),
+    };
+    this.backfill = { get: (relay) => read((r) => r.backfill.get(relay)) };
     this.messages = {
       get: (id) => read((r) => r.messages.get(id)),
       query: (query) => read((r) => r.messages.query(query)),
@@ -361,12 +380,15 @@ class IndexedDBGroupDatabase implements MarmotGroupDatabase {
         await request(store(name).delete(key));
       };
       return fn({
-        meta: {
-          ...reader.meta,
-          set: async (key, value) => {
-            await request(store("meta").put(value, key));
-          },
-          delete: (key) => remove("meta", key),
+        ...reader,
+        updateGroup: async (update) => {
+          const current = (await request(store("group").get(GROUP_KEY))) ?? {};
+          await request(
+            store("group").put(
+              applyGroupUpdate(clean<GroupRecord>(current), update),
+              GROUP_KEY,
+            ),
+          );
         },
         treeNodes: {
           ...reader.treeNodes,
@@ -388,9 +410,19 @@ class IndexedDBGroupDatabase implements MarmotGroupDatabase {
               if (!keep.has(id)) await remove("wrappers", id);
           },
         },
+        effects: {
+          ...reader.effects,
+          put: (row) => put("effects", row),
+          delete: (digest) => remove("effects", digest),
+        },
+        backfill: {
+          ...reader.backfill,
+          put: (row) => put("backfill", row),
+          delete: (relay) => remove("backfill", relay),
+        },
         messages: {
           ...reader.messages,
-          put: (row) => put("messages", row),
+          put: (row) => put("messages", { ...row, _tags: indexTags(row.tags) }),
           delete: (id) => remove("messages", id),
         },
         deliveries: {
@@ -398,7 +430,7 @@ class IndexedDBGroupDatabase implements MarmotGroupDatabase {
           put: (row) =>
             put(
               "deliveries",
-              row.evidence ? { ...row, hasEvidence: 1 } : { ...row },
+              row.evidence ? { ...row, _evidence: 1 } : { ...row },
             ),
           delete: (id) => remove("deliveries", id),
         },
@@ -465,10 +497,6 @@ function accountReader(tx: () => IDBTransaction): AccountReader {
   const all = async <T>(name: string) =>
     (await request(store(name).getAll())).map((row) => clean<T>(row));
   return {
-    meta: {
-      get: async (key) =>
-        (await request(store("meta").get(key))) as Uint8Array | undefined,
-    },
     keyPackages: {
       get: (ref) => get<KeyPackageRow>("keyPackages", ref),
       all: () => all<KeyPackageRow>("keyPackages"),
@@ -495,7 +523,6 @@ function accountReader(tx: () => IDBTransaction): AccountReader {
 }
 
 class IndexedDBAccountDatabase implements MarmotAccountDatabase {
-  readonly meta: AccountReader["meta"];
   readonly keyPackages: AccountReader["keyPackages"];
   readonly invites: AccountReader["invites"];
   readonly groups: AccountReader["groups"];
@@ -504,7 +531,6 @@ class IndexedDBAccountDatabase implements MarmotAccountDatabase {
   constructor(readonly connection: Connection) {
     const read = <T>(fn: (reader: AccountReader) => Promise<T>) =>
       connection.run("readonly", (tx) => fn(accountReader(() => tx)));
-    this.meta = { get: (key) => read((r) => r.meta.get(key)) };
     this.keyPackages = {
       get: (ref) => read((r) => r.keyPackages.get(ref)),
       all: () => read((r) => r.keyPackages.all()),
@@ -532,13 +558,6 @@ class IndexedDBAccountDatabase implements MarmotAccountDatabase {
         await request(store(name).delete(key));
       };
       return fn({
-        meta: {
-          ...reader.meta,
-          set: async (key, value) => {
-            await request(store("meta").put(value, key));
-          },
-          delete: (key) => remove("meta", key),
-        },
         keyPackages: {
           ...reader.keyPackages,
           put: (row) => put("keyPackages", row),

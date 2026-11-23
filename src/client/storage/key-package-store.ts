@@ -1,12 +1,18 @@
 /** @module @category Client - Key Package Manager */
-import { bytesToHex } from "@noble/hashes/utils.js";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { NostrEvent } from "applesauce-core/helpers/event";
 import { EventEmitter } from "eventemitter3";
 import {
   CryptoProvider,
+  decode,
   defaultCryptoProvider,
+  encode,
   KeyPackage,
+  keyPackageDecoder,
+  keyPackageEncoder,
   PrivateKeyPackage,
+  privateKeyPackageDecoder,
+  privateKeyPackageEncoder,
 } from "ts-mls";
 
 import { validateKeyPackageAccountIdentityProof } from "../../core/components/account-identity-proof.js";
@@ -21,7 +27,6 @@ import {
 import { validateKeyPackageSlot } from "../../core/key-package-event-encode.js";
 import { isValidRelayUrl, normalizeRelayUrl } from "../../utils/relay-url.js";
 import { logger } from "../../utils/debug.js";
-import { AccountRecordTable } from "./record-codec.js";
 import type { KeyPackageRow, MarmotAccountDatabase } from "./database/types.js";
 
 /**
@@ -76,6 +81,65 @@ function deduplicatePublishedEvents(events: NostrEvent[]): NostrEvent[] {
 /** Local transport destinations, never derived from signed event tags. */
 export function normalizeKeyPackageRelays(relays: readonly string[]): string[] {
   return [...new Set(relays.filter(isValidRelayUrl).map(normalizeRelayUrl))];
+}
+
+/** Maps a stored entry to its account-database row. */
+function keyPackageRow(ref: string, entry: StoredKeyPackage): KeyPackageRow {
+  return {
+    ref,
+    publicPackage: encode(keyPackageEncoder, entry.publicPackage),
+    ...(entry.privatePackage !== undefined
+      ? {
+          privatePackage: encode(
+            privateKeyPackageEncoder,
+            entry.privatePackage,
+          ),
+        }
+      : {}),
+    ...(entry.identifier !== undefined ? { identifier: entry.identifier } : {}),
+    notBefore: Number(entry.publicPackage.leafNode.lifetime?.notBefore ?? 0n),
+    used: entry.used === true,
+    published: entry.published ?? [],
+    ...(entry.publicationRelays !== undefined
+      ? { relays: entry.publicationRelays }
+      : {}),
+    consumptionReceipts: (entry.consumptionReceipts ?? []).map((receipt) => ({
+      groupId: bytesToHex(receipt.groupId),
+      keyPackageRef: bytesToHex(receipt.keyPackageRef),
+    })),
+  };
+}
+
+/** Decodes an account-database row. Throws when its MLS objects are corrupt. */
+function storedKeyPackage(row: KeyPackageRow): StoredKeyPackage {
+  const publicPackage = decode(keyPackageDecoder, row.publicPackage);
+  if (!publicPackage)
+    throw new Error(`Stored key package ${row.ref} has a corrupt KeyPackage`);
+  let privatePackage: PrivateKeyPackage | undefined;
+  if (row.privatePackage !== undefined) {
+    privatePackage = decode(privateKeyPackageDecoder, row.privatePackage);
+    if (!privatePackage)
+      throw new Error(
+        `Stored key package ${row.ref} has a corrupt private key package`,
+      );
+  }
+  return {
+    keyPackageRef: hexToBytes(row.ref),
+    publicPackage,
+    ...(privatePackage !== undefined ? { privatePackage } : {}),
+    ...(row.identifier !== undefined ? { identifier: row.identifier } : {}),
+    ...(row.published.length ? { published: row.published } : {}),
+    ...(row.relays !== undefined ? { publicationRelays: row.relays } : {}),
+    ...(row.used ? { used: true } : {}),
+    ...(row.consumptionReceipts.length
+      ? {
+          consumptionReceipts: row.consumptionReceipts.map((receipt) => ({
+            groupId: hexToBytes(receipt.groupId),
+            keyPackageRef: hexToBytes(receipt.keyPackageRef),
+          })),
+        }
+      : {}),
+  } as StoredKeyPackage;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +270,7 @@ export type KeyPackageStoreEvents = {
  * darkmatter's `AccountSecretStore` seam.
  */
 export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
-  readonly #store: AccountRecordTable<StoredKeyPackage, KeyPackageRow>;
+  readonly #database: MarmotAccountDatabase;
   readonly #cryptoProvider: CryptoProvider;
   #log = logger.extend("KeyPackageStore");
 
@@ -215,21 +279,31 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
     cryptoProvider: CryptoProvider = defaultCryptoProvider,
   ) {
     super();
-    this.#store = new AccountRecordTable<StoredKeyPackage, KeyPackageRow>(
-      database.keyPackages,
-      (fn) => database.transaction((tx) => fn(tx.keyPackages)),
-      (ref, entry, value) => ({
-        ref,
-        identifier: entry.identifier,
-        notBefore: Number(
-          entry.publicPackage.leafNode.lifetime?.notBefore ?? 0n,
-        ),
-        used: entry.used === true,
-        value,
-      }),
-      (row) => row.ref,
-    );
+    this.#database = database;
     this.#cryptoProvider = cryptoProvider;
+  }
+
+  /** Reads and decodes one stored entry. */
+  async #get(key: string): Promise<StoredKeyPackage | undefined> {
+    const row = await this.#database.keyPackages.get(key);
+    return row && storedKeyPackage(row);
+  }
+
+  /** Encodes and writes one entry. */
+  async #set(key: string, entry: StoredKeyPackage): Promise<void> {
+    const row = keyPackageRow(key, entry);
+    await this.#database.transaction((tx) => tx.keyPackages.put(row));
+  }
+
+  async #delete(key: string): Promise<void> {
+    await this.#database.transaction((tx) => tx.keyPackages.delete(key));
+  }
+
+  /** Every stored ref, sorted. */
+  async #ids(): Promise<string[]> {
+    return (await this.#database.keyPackages.all())
+      .map((row) => row.ref)
+      .sort();
   }
 
   /** Resolves a ref argument to a hex storage key */
@@ -278,7 +352,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         : {}),
     };
 
-    await this.#store.set(key, entry);
+    await this.#set(key, entry);
     this.emit("added", entry);
     this.#log(
       "added %s" + (entry.privatePackage ? " with private key" : ""),
@@ -327,7 +401,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       );
     }
 
-    const existing = await this.#store.get(key);
+    const existing = await this.#get(key);
 
     if (existing) {
       const publicationRelays = normalizeKeyPackageRelays([
@@ -365,7 +439,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         publicationRelays,
       };
 
-      await this.#store.set(key, updated);
+      await this.#set(key, updated);
       this.emit("updated", updated);
       this.#log("stored published event %s for %s", event.id, ref);
     } else {
@@ -378,7 +452,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         publicationRelays: normalizeKeyPackageRelays(relays),
       };
 
-      await this.#store.set(key, entry);
+      await this.#set(key, entry);
       this.emit("added", entry);
       this.#log("added key package from event %s", event.id);
     }
@@ -390,7 +464,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    */
   async get(ref: Uint8Array | string): Promise<StoredKeyPackage | null> {
     const key = this.#resolveKey(ref);
-    return (await this.#store.get(key)) ?? null;
+    return (await this.#get(key)) ?? null;
   }
 
   /**
@@ -398,8 +472,8 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    */
   async remove(ref: Uint8Array | string): Promise<void> {
     const key = this.#resolveKey(ref);
-    const stored = await this.#store.get(key);
-    await this.#store.delete(key);
+    const stored = await this.#get(key);
+    await this.#delete(key);
 
     if (stored) {
       this.emit("removed", stored.keyPackageRef);
@@ -416,11 +490,9 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    * verify per stored package.
    */
   async list(): Promise<ListedKeyPackage[]> {
-    const allKeys = await this.#store.ids();
+    const allKeys = await this.#ids();
 
-    const packages = await Promise.all(
-      allKeys.map((key) => this.#store.get(key)),
-    );
+    const packages = await Promise.all(allKeys.map((key) => this.#get(key)));
 
     // Oldest first (signed lifetime start), so selection is deterministic and
     // independent of the storage adapter's key order.
@@ -492,7 +564,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   /** Checks whether a key package with local private material exists. */
   async has(ref: Uint8Array | string): Promise<boolean> {
     const key = this.#resolveKey(ref);
-    const item = await this.#store.get(key);
+    const item = await this.#get(key);
     return item !== undefined && item.privatePackage !== undefined;
   }
 
@@ -506,7 +578,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
     ref: Uint8Array | string,
   ): Promise<PrivateKeyPackage | null> {
     const key = this.#resolveKey(ref);
-    const stored = await this.#store.get(key);
+    const stored = await this.#get(key);
     return stored?.privatePackage ?? null;
   }
 
@@ -519,11 +591,11 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
    */
   async markUsed(ref: Uint8Array | string): Promise<void> {
     const key = this.#resolveKey(ref);
-    const existing = await this.#store.get(key);
+    const existing = await this.#get(key);
     if (!existing) return;
 
     const updated: StoredKeyPackage = { ...existing, used: true };
-    await this.#store.set(key, updated);
+    await this.#set(key, updated);
     this.emit("updated", updated);
     this.#log("marked key package %s as used", key);
   }
@@ -531,7 +603,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   /** Records validated intent before adoption, without altering private material. */
   async recordConsumption(groupId: Uint8Array, ref: Uint8Array): Promise<void> {
     const key = this.#resolveKey(ref);
-    const existing = await this.#store.get(key);
+    const existing = await this.#get(key);
     // Direct GroupsManager users can supply external candidates without a local entry.
     if (!existing) return;
     const receipts = existing.consumptionReceipts ?? [];
@@ -541,7 +613,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       )
     )
       return;
-    await this.#store.set(key, {
+    await this.#set(key, {
       ...existing,
       consumptionReceipts: [
         ...receipts,
@@ -557,8 +629,8 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   async finalizeConsumptions(
     hasAdoptedGroup: (groupId: Uint8Array) => Promise<boolean>,
   ): Promise<void> {
-    for (const key of await this.#store.ids()) {
-      const entry = await this.#store.get(key);
+    for (const key of await this.#ids()) {
+      const entry = await this.#get(key);
       if (!entry?.consumptionReceipts?.length) continue;
       let adopted = false;
       const remaining: KeyPackageConsumptionReceipt[] = [];
@@ -580,7 +652,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
         ? { ...entry, used: true }
         : { ...publicMetadata, used: true };
       // Persist retirement before clearing the receipt, making retries idempotent.
-      await this.#store.set(key, {
+      await this.#set(key, {
         ...retired,
         consumptionReceipts: entry.consumptionReceipts,
       });
@@ -588,7 +660,7 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       const updated = remaining.length
         ? { ...finished, consumptionReceipts: remaining }
         : finished;
-      await this.#store.set(key, updated);
+      await this.#set(key, updated);
       this.emit("updated", updated);
       // Never zero privatePackage: adopted MLS state can alias its arrays.
       void privatePackage;
@@ -597,10 +669,10 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
 
   /** Clears all entries (local and tracked) from the store. */
   async clear(): Promise<void> {
-    const allKeys = await this.#store.ids();
+    const allKeys = await this.#ids();
     for (const key of allKeys) {
-      const stored = await this.#store.get(key);
-      await this.#store.delete(key);
+      const stored = await this.#get(key);
+      await this.#delete(key);
       if (stored) {
         this.emit("removed", stored.keyPackageRef);
       }

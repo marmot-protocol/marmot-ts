@@ -27,7 +27,6 @@ import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { logger } from "../utils/debug.js";
 import { hasAck } from "../utils/index.js";
 import type { MarmotDatabase } from "./storage/database/types.js";
-import type { GroupMetaKey } from "./storage/database/types.js";
 import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import {
   MarmotGroup,
@@ -69,12 +68,10 @@ import {
 } from "./group-backfill.js";
 import {
   type BackfillProgress,
-  backfillCursorKey,
-  backfillProgressKey,
-  encodeBackfillCursor,
-  encodeBackfillProgress,
+  type BackfillUpdate,
   readBackfillCursor,
   readBackfillProgress,
+  updateBackfillRecord,
 } from "./storage/backfill-cursor.js";
 import { GroupRegistry } from "./storage/group-registry.js";
 import type { GroupRuntime } from "./runtime/group-runtime.js";
@@ -1167,7 +1164,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       const resume = new Map<string, BackfillProgress>();
       for (const relay of relays) {
         const cursor = await readBackfillCursor(
-          group.session.meta,
+          group.session.database,
           relay,
           nowSeconds(),
         );
@@ -1176,7 +1173,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
           since.set(relay, Math.max(0, Math.floor(cursor - slack)));
         }
         const progress = await readBackfillProgress(
-          group.session.meta,
+          group.session.database,
           relay,
           nowSeconds(),
         );
@@ -1257,23 +1254,27 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
   }
 
   /**
-   * Writes one of a group's backfill records (removes it without `value`),
-   * unless the group is destroyed or disbanded. Their cleanup purges the
-   * group's ingest state, possibly while this write is in flight, so a record
-   * written as the group closes is removed again.
+   * Updates a relay's backfill row (`null` removes a field), unless the group
+   * is destroyed or disbanded. Their cleanup purges the group's ingest state,
+   * possibly while this write is in flight, so a field written as the group
+   * closes is removed again.
    */
   async #writeBackfillRecord(
     group: MarmotGroup,
-    key: GroupMetaKey,
-    value?: Uint8Array,
+    relay: string,
+    update: BackfillUpdate,
   ): Promise<void> {
     const closed = () =>
       group.session.destroyed || group.session.terminalTombstone !== undefined;
     if (closed()) return;
-    const store = group.session.meta;
-    if (value === undefined) return store.delete(key);
-    await store.set(key, value);
-    if (closed()) await store.delete(key);
+    const db = group.session.database;
+    await updateBackfillRecord(db, relay, update);
+    if (!closed()) return;
+    const undo: BackfillUpdate = {};
+    if (update.cursor != null) undo.cursor = null;
+    if (update.progress != null) undo.progress = null;
+    if (undo.cursor === null || undo.progress === null)
+      await updateBackfillRecord(db, relay, undo);
   }
 
   /**
@@ -1306,11 +1307,9 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       });
       if (next === undefined || next === previous) continue;
       try {
-        await this.#writeBackfillRecord(
-          group,
-          backfillCursorKey(outcome.relay),
-          encodeBackfillCursor(next),
-        );
+        await this.#writeBackfillRecord(group, outcome.relay, {
+          cursor: next,
+        });
       } catch (err) {
         log("connect: failed to persist cursor for %s: %o", group.idStr, err);
       }
@@ -1333,11 +1332,11 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
     walkStart: number,
   ): Promise<void> {
     for (const outcome of backfill.relays) {
-      const key = backfillProgressKey(outcome.relay);
+      const relay = outcome.relay;
       try {
         if (outcome.status === "complete") {
           if (recorded.has(outcome.relay))
-            await this.#writeBackfillRecord(group, key);
+            await this.#writeBackfillRecord(group, relay, { progress: null });
         } else if (outcome.status === "capped") {
           const from = outcome.until;
           // End strictly below the oldest held event: its whole second must
@@ -1348,15 +1347,13 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
             oldestHeld === undefined ? walkStart : oldestHeld - 1,
           );
           if (from <= to)
-            await this.#writeBackfillRecord(
-              group,
-              key,
-              encodeBackfillProgress({ from, to }),
-            );
+            await this.#writeBackfillRecord(group, relay, {
+              progress: { from, to },
+            });
           // Nothing durable to record: drop any older range, which may
           // cover the held event too.
           else if (recorded.has(outcome.relay))
-            await this.#writeBackfillRecord(group, key);
+            await this.#writeBackfillRecord(group, relay, { progress: null });
         }
       } catch (err) {
         log("connect: failed to persist backfill progress: %o", err);

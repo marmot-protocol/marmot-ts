@@ -129,12 +129,6 @@ import {
   validateGroupImageProposals,
 } from "../core/components/image-validation.js";
 import { logger } from "../utils/debug.js";
-/** Durable singleton records the engine owns (disband request and convergence). */
-export interface EngineRecordStore {
-  get(key: string): Promise<Uint8Array | undefined>;
-  set(key: string, value: Uint8Array): Promise<void>;
-  delete(key: string): Promise<void>;
-}
 import {
   createAdminCommitPolicyCallback,
   findProposalSenderViolation,
@@ -203,12 +197,9 @@ import type {
 } from "./types.js";
 import { openConvergencePass, refreshConvergencePass } from "./types.js";
 import {
-  decodeDisbandConvergence,
-  decodeDisbandRequest,
-  DISBAND_CONVERGENCE_KEY,
-  DISBAND_REQUEST_KEY,
-  encodeDisbandConvergence,
-  encodeDisbandRequest,
+  type DisbandRecordStore,
+  validateDisbandConvergence,
+  validateDisbandRequest,
   type DisbandRequest,
 } from "./disband-request.js";
 
@@ -373,7 +364,7 @@ export type MarmotGroupEngineOptions<TEnvelope> = {
   /** Required when `audit` is set; contains stable engine/account/session metadata. */
   auditContext?: AuditContextOptions;
   /** The group's durable store for lifecycle (disband) records. */
-  storage?: EngineRecordStore;
+  storage?: DisbandRecordStore;
 };
 
 /**
@@ -492,7 +483,7 @@ export class MarmotGroupEngine<TEnvelope> {
   /** Handle of the pending settle-check timer, if any (cleared/reset per pass). */
   #settleTimer: TimerHandle | undefined;
   readonly #audit?: AuditEmitter;
-  readonly #storage?: EngineRecordStore;
+  readonly #storage?: DisbandRecordStore;
   #disbandRequest: DisbandRequest | undefined;
   readonly #disbandHydrated: Promise<void>;
   readonly #wallNow: () => number;
@@ -1093,16 +1084,14 @@ export class MarmotGroupEngine<TEnvelope> {
     try {
       await this.#disbandHydrated;
       if (!this.#storage) return;
-      const key = DISBAND_CONVERGENCE_KEY;
       if (!this.#convergencePass || this.#disbandCandidates.size === 0) {
-        await this.#storage.delete(key);
+        await this.#storage.saveConvergence(null);
         return;
       }
       const wallNow = this.#wallNow();
       const monoNow = this.#now();
-      await this.#storage.set(
-        key,
-        encodeDisbandConvergence({
+      await this.#storage.saveConvergence(
+        validateDisbandConvergence({
           generation: this.#convergencePass.generation,
           baseEpoch: this.#convergencePass.baseEpoch,
           openedAtWallMs: this.#passOpenedWallMs ?? wallNow,
@@ -1117,8 +1106,8 @@ export class MarmotGroupEngine<TEnvelope> {
               sourceEpoch: evidence.sourceEpoch,
               parentTag: evidence.parentTag,
               childTag: bytesToHex(resultingState.confirmationTag),
-              commitMessage: bytesToHex(encode(mlsMessageEncoder, message)),
-              resultingState: bytesToHex(serializeClientState(resultingState)),
+              commitMessage: encode(mlsMessageEncoder, message),
+              resultingState: serializeClientState(resultingState),
             }),
           ),
         }),
@@ -3494,11 +3483,11 @@ export class MarmotGroupEngine<TEnvelope> {
 
   async #hydrateDisbandState(): Promise<void> {
     if (!this.#storage) return;
-    const encoded = await this.#storage.get(DISBAND_REQUEST_KEY);
-    if (encoded) this.#disbandRequest = decodeDisbandRequest(encoded);
-    const convergence = await this.#storage.get(DISBAND_CONVERGENCE_KEY);
-    if (!convergence) return;
-    const stored = decodeDisbandConvergence(convergence);
+    const loaded = await this.#storage.load();
+    if (loaded.request)
+      this.#disbandRequest = validateDisbandRequest(loaded.request);
+    if (!loaded.convergence) return;
+    const stored = validateDisbandConvergence(loaded.convergence);
     const monoNow = this.#now();
     const wallNow = this.#wallNow();
     for (const candidate of stored.candidates) {
@@ -3509,10 +3498,10 @@ export class MarmotGroupEngine<TEnvelope> {
           : undefined);
       const resultingState =
         (await this.#tree.stateAt(candidate.childTag)) ??
-        deserializeClientState(hexToBytes(candidate.resultingState));
+        deserializeClientState(candidate.resultingState);
       const message =
         (await this.#tree.commitMessageOf(candidate.childTag)) ??
-        decode(mlsMessageDecoder, hexToBytes(candidate.commitMessage));
+        decode(mlsMessageDecoder, candidate.commitMessage);
       if (!parentState || !resultingState || !message)
         throw new Error(
           "Persisted disband candidate is missing history material",
@@ -3558,10 +3547,7 @@ export class MarmotGroupEngine<TEnvelope> {
 
   async #persistDisbandRequest(): Promise<void> {
     if (!this.#storage || !this.#disbandRequest) return;
-    await this.#storage.set(
-      DISBAND_REQUEST_KEY,
-      encodeDisbandRequest(this.#disbandRequest),
-    );
+    await this.#storage.saveRequest({ ...this.#disbandRequest });
   }
 
   async #failDisbandRequest(

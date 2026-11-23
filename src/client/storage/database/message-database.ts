@@ -8,27 +8,28 @@ import {
 import { matchFilters, type Filter } from "applesauce-core/helpers/filter";
 import type { MarmotGroupDatabase, MessageQuery, MessageRow } from "./types.js";
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder("utf-8", { fatal: true });
-
-/** Builds the indexed row for a rumor. */
+/** The message row of a rumor. */
 export function messageRow(rumor: Rumor): MessageRow {
-  const tags = new Set<string>();
-  for (const tag of rumor.tags)
-    if (tag.length >= 2 && tag[0].length === 1) tags.add(`${tag[0]}:${tag[1]}`);
   return {
     id: rumor.id,
     kind: rumor.kind,
     pubkey: rumor.pubkey,
     createdAt: rumor.created_at,
-    tags: [...tags],
-    value: encoder.encode(JSON.stringify(rumor)),
+    content: rumor.content,
+    tags: rumor.tags.map((tag) => [...tag]),
   };
 }
 
-/** Decodes the rumor stored in a message row. */
+/** The rumor stored in a message row. */
 export function rumorOfRow(row: MessageRow): Rumor {
-  return JSON.parse(decoder.decode(row.value)) as Rumor;
+  return {
+    id: row.id,
+    kind: row.kind,
+    pubkey: row.pubkey,
+    created_at: row.createdAt,
+    content: row.content,
+    tags: row.tags,
+  } as Rumor;
 }
 
 /**
@@ -42,7 +43,8 @@ export function filterToQuery(filter: Filter): {
 } {
   const query: MessageQuery = {};
   let exact = true;
-  const tags: string[][] = [];
+  const tags: Record<string, string[]> = {};
+  let tagged = false;
   for (const [key, value] of Object.entries(filter)) {
     if (value === undefined) continue;
     switch (key) {
@@ -64,12 +66,13 @@ export function filterToQuery(filter: Filter): {
       case "limit":
         break;
       default:
-        if (key.startsWith("#") && key.length === 2)
-          tags.push((value as string[]).map((v) => `${key[1]}:${v}`));
-        else exact = false;
+        if (key.startsWith("#") && key.length === 2) {
+          tags[key[1]!] = value as string[];
+          tagged = true;
+        } else exact = false;
     }
   }
-  if (tags.length) query.tags = tags;
+  if (tagged) query.tags = tags;
   // A post-filtered query cannot apply its limit inside the database.
   if (exact && filter.limit !== undefined) query.limit = filter.limit;
   return { query, exact };

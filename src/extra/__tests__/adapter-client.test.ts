@@ -150,7 +150,7 @@ describe.each(adapters)("MarmotClient on %s", (_name, storage) => {
     const after = open();
     expect(await after.account.groups.all()).toEqual([]);
     const db = await after.groups.open(group.idStr);
-    expect(await db.meta.get("state")).toBeUndefined();
+    expect((await db.group()).state).toBeUndefined();
     expect(await db.messages.query({})).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import fixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/deferred-tick-catchup.v1.json" with { type: "json" };
+import fixture from "../../refs/mdk/crates/cgka-conformance-simulator/vectors/deferred-tick-catchup.v1.json" with { type: "json" };
 import {
   createCommit,
   defaultCryptoProvider,
@@ -11,12 +11,12 @@ import {
 import { describe, expect, it } from "vitest";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 
-import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { createCredential } from "../../core/credential.js";
-import { createSimpleGroup } from "../../core/group.js";
-import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryGroupDatabase } from "../helpers/database.js";
-import { MockNetwork } from "../helpers/mock-network.js";
+import { MarmotGroup } from "../../src/client/group/marmot-group.js";
+import { createCredential } from "../../src/core/credential.js";
+import { createSimpleGroup } from "../../src/core/group.js";
+import { generateKeyPackage } from "../../src/core/key-package.js";
+import { memoryGroupDatabase } from "../../src/__tests__/helpers/database.js";
+import { MockNetwork } from "../../src/__tests__/helpers/mock-network.js";
 import { MarmotConformanceSubject, parseMdkScenarioStep } from "./subject.js";
 
 const CLIENTS = ["alice", "bob", "carol", "dave"] as const;

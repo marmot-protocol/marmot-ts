@@ -1,6 +1,5 @@
 import { MarmotClient } from "@internet-privacy/marmot-ts/client";
 import {
-  BehaviorSubject,
   Observable,
   combineLatest,
   fromEvent,
@@ -14,9 +13,6 @@ import { transport$ } from "./transport.js";
 import { clientId$ } from "./client-id.js";
 import { sessionDatabase } from "./internal/session-database.js";
 
-const errors = new BehaviorSubject<string | undefined>(undefined);
-export const error$ = errors.asObservable();
-
 /** The actual library client. No facade, decorated managers, or forwarded methods. */
 export const client$: Observable<MarmotClient | undefined> = combineLatest([
   account$,
@@ -24,7 +20,6 @@ export const client$: Observable<MarmotClient | undefined> = combineLatest([
   clientId$,
 ]).pipe(
   switchMap(([account, transport, clientId]) => {
-    errors.next(undefined);
     if (!account) return of(undefined);
     return new Observable<MarmotClient | undefined>((subscriber) => {
       let client: MarmotClient | undefined;
@@ -48,8 +43,7 @@ export const client$: Observable<MarmotClient | undefined> = combineLatest([
           subscriber.next(client);
         })
         .catch((cause: unknown) => {
-          if (!subscriber.closed)
-            errors.next(cause instanceof Error ? cause.message : String(cause));
+          subscriber.error(cause);
         });
     });
   }),

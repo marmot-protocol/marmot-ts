@@ -4,7 +4,7 @@ import { account$ } from "./services/accounts.js";
 import { AccountBadge } from "./components/account-badge.js";
 import { LoginView } from "./components/login-view.js";
 import { categories, demos, type Demo } from "./demos.js";
-import { client$, error$ } from "./services/client.js";
+import { client$ } from "./services/client.js";
 import { mode$, type TransportMode } from "./services/mode.js";
 import { Contacts } from "./components/contacts.js";
 import { RelayView } from "./components/relay/relay-view.js";
@@ -35,18 +35,11 @@ function DemoApp() {
   const mode = use$(mode$);
   const client = use$(client$);
   const clientId = use$(clientId$);
-  const error = use$(error$);
   useEffect(() => {
     document.title = getPageTitle(location.pathname, account);
   }, [account]);
   // Every demo runs as the logged-in user, so nothing renders until login.
   if (!account) return <LoginView />;
-  if (error)
-    return (
-      <p role="alert" className="p-4 text-error">
-        {error}
-      </p>
-    );
   if (!client) return <span className="loading loading-spinner m-4" />;
   return <DemoShell key={`${account.id}:${mode}:${clientId}`} />;
 }

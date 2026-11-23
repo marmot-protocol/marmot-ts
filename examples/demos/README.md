@@ -58,7 +58,8 @@ dependencies directly and owns its resource lifetime:
 
 ```text
 mode$ ──► transport$
-account$ + transport$ + clientId$ ──► client$ ──► key-package publication
+account$ + mode$ + clientId$ ──► sessionDatabase$
+sessionDatabase$ + account$ + transport$ + clientId$ ──► client$ ──► key-package publication
 account$ + transport$ ──► contacts$ (Users with reactive profiles)
 ```
 
@@ -113,7 +114,10 @@ const invites = useAsyncLatest(
 - `services/client-id.ts` exports the readonly `clientId$` and async
   `rotateClientId()` action. The shared ID persists in localStorage; rotation
   starts fresh for all accounts and propagates to other open tabs.
-- `services/client.ts` exports `client$` and initialization `error$`. It emits
+- `services/session-database.ts` exports `sessionDatabase$`, which owns database
+  initialization and closing for the active account, mode, and client ID. It emits
+  `undefined` while logged out or opening a database.
+- `services/client.ts` exports `client$`. It emits
   `undefined` while logged out or replacing a client. Call APIs such as
   `client.groups.create()`, `client.groups.send()`, and `client.invites.markAsRead()`
   directly. Missing client API surface is a library finding, not a reason to add a wrapper.

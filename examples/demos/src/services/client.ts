@@ -1,55 +1,37 @@
 import { MarmotClient } from "@internet-privacy/marmot-ts/client";
 import {
   Observable,
-  combineLatest,
   fromEvent,
   of,
   shareReplay,
   switchMap,
   takeUntil,
+  withLatestFrom,
 } from "rxjs";
 import { account$ } from "./accounts.js";
 import { transport$ } from "./transport.js";
 import { clientId$ } from "./client-id.js";
-import { mode$ } from "./mode.js";
-import { sessionDatabase } from "./internal/session-database.js";
+import { sessionDatabase$ } from "./session-database.js";
 
 /** The actual library client. No facade, decorated managers, or forwarded methods. */
-export const client$: Observable<MarmotClient | undefined> = combineLatest([
-  account$,
-  transport$,
-  clientId$,
-]).pipe(
-  switchMap(([account, network, clientId]) => {
-    // The writable root is already updated when its new transport is emitted.
-    const mode = mode$.getValue();
-    if (!account) return of(undefined);
-    return new Observable<MarmotClient | undefined>((subscriber) => {
-      let client: MarmotClient | undefined;
-      subscriber.next(undefined);
-      subscriber.add(() => {
-        for (const group of client?.groups.loaded ?? []) group.dispose();
-        void client?.database.account.close();
-      });
-      void sessionDatabase(account.pubkey, mode, clientId)
-        .then((database) => {
-          if (subscriber.closed) {
-            void database.account.close();
-            return;
-          }
-          client = new MarmotClient({
-            signer: account.signer,
-            database,
-            clientId,
-            network,
-          });
-          subscriber.next(client);
-        })
-        .catch((cause: unknown) => {
-          subscriber.error(cause);
+export const client$: Observable<MarmotClient | undefined> =
+  sessionDatabase$.pipe(
+    // Rebuild only after the database invalidates or finishes opening, never
+    // combine a new account or transport with the previous account's database.
+    withLatestFrom(account$, transport$, clientId$),
+    switchMap(([database, account, network, clientId]) => {
+      if (!database || !account) return of(undefined);
+      return new Observable<MarmotClient>((subscriber) => {
+        const client = new MarmotClient({
+          signer: account.signer,
+          database,
+          clientId,
+          network,
         });
-    });
-  }),
-  takeUntil(fromEvent(globalThis, "pagehide")),
-  shareReplay({ bufferSize: 1, refCount: true }),
-);
+        subscriber.next(client);
+        return () => client.dispose();
+      });
+    }),
+    takeUntil(fromEvent(globalThis, "pagehide")),
+    shareReplay({ bufferSize: 1, refCount: true }),
+  );

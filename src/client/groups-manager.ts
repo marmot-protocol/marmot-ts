@@ -1397,12 +1397,22 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       }
       await options?.beforeAdopt?.();
 
-      const { database } = await this.#registry.prepare(state);
-      const group = await this.#registry.build(state, database);
+      const handle = await this.#registry.prepare(
+        state,
+        eventName === "joined" ? "join" : "create",
+      );
+      const group = await this.#registry.build(state, handle.database);
 
       // Persist initial state via the group's own save() path.
       // MarmotGroup.save() is the single writer into the group state store.
-      await group.save(true);
+      try {
+        await group.save(true);
+      } catch (error) {
+        group.dispose();
+        await handle.abort().catch(() => undefined);
+        throw error;
+      }
+      await handle.complete();
 
       await this.#registry.track(group);
       this.emit(eventName, group);

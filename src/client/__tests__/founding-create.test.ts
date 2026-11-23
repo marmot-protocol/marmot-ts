@@ -97,7 +97,12 @@ class RecordingStorage {
           },
         }),
       );
-    return { database, dropDatabase: async () => {} };
+    return {
+      database,
+      dropDatabase: async () => {},
+      complete: async () => {},
+      abort: async () => {},
+    };
   };
 }
 

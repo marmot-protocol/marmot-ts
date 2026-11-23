@@ -1703,3 +1703,82 @@ describe("group history checkpoint", () => {
     );
   });
 });
+
+describe("cross-database intents", () => {
+  const options = (database: MarmotDatabase) => ({
+    database,
+    signer: ADMIN_ACCOUNT.signer,
+    network: new MockNetwork(),
+  });
+  const empty = new Uint8Array();
+
+  it("rolls back a creation interrupted before its first save", async () => {
+    const database = memoryDatabase();
+    const id = "ab".repeat(32);
+    await database.account.transaction(async (tx) => {
+      await tx.groups.put({ id, status: "active", value: empty });
+      await tx.intents.put({
+        id: `create:${id}`,
+        kind: "create",
+        groupId: id,
+        value: empty,
+      });
+    });
+    await (
+      await openGroup(database, id)
+    ).transaction((tx) =>
+      tx.messages.put({
+        id: "cd".repeat(32),
+        kind: 9,
+        pubkey: "ef".repeat(32),
+        createdAt: 1,
+        tags: [],
+        value: empty,
+      }),
+    );
+
+    expect(await new GroupsManager(options(database)).listIds()).toEqual([]);
+    expect(await database.account.groups.all()).toEqual([]);
+    expect(await database.account.intents.all()).toEqual([]);
+    expect(await (await openGroup(database, id)).messages.query({})).toEqual(
+      [],
+    );
+  });
+
+  it("completes a creation whose first save landed", async () => {
+    const database = memoryDatabase();
+    const group = await new GroupsManager(options(database)).create("Kept");
+    await database.account.transaction((tx) =>
+      tx.intents.put({
+        id: `create:${group.idStr}`,
+        kind: "create",
+        groupId: group.idStr,
+        value: empty,
+      }),
+    );
+
+    const restarted = new GroupsManager(options(database));
+    expect((await restarted.listIds()).map(bytesToHex)).toEqual([group.idStr]);
+    expect(await database.account.intents.all()).toEqual([]);
+  });
+
+  it("finishes a destroy interrupted between the two databases", async () => {
+    const database = memoryDatabase();
+    const group = await new GroupsManager(options(database)).create("Gone");
+    await database.account.transaction((tx) =>
+      tx.intents.put({
+        id: `destroy:${group.idStr}`,
+        kind: "destroy",
+        groupId: group.idStr,
+        value: empty,
+      }),
+    );
+
+    expect(await new GroupsManager(options(database)).listIds()).toEqual([]);
+    expect(await database.account.groups.all()).toEqual([]);
+    expect(await database.account.intents.all()).toEqual([]);
+    expect(
+      await (await openGroup(database, group.id)).meta.get("state"),
+    ).toBeUndefined();
+  });
+});

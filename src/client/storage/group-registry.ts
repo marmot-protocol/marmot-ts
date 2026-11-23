@@ -43,10 +43,14 @@ export type GroupRegistryOptions = {
   ingestionPool?: IngestionPoolOptions;
 };
 
-/** A new group's opened database and how to delete it. */
+/** A new group's opened database and how to finish or undo its creation. */
 export type GroupStorageHandle = {
   database: MarmotGroupDatabase;
   dropDatabase: () => Promise<void>;
+  /** Clears the creation intent once the first save is durable. */
+  complete: () => Promise<void>;
+  /** Rolls the creation back (database, row and intent). */
+  abort: () => Promise<void>;
 };
 
 /** Cache-level events emitted by {@link GroupRegistry}. */
@@ -122,29 +126,94 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     return this.#groups.get(id);
   }
 
+  #reconciled: Promise<void> | undefined;
+
   /**
-   * Permanently deletes a group: its database, then its account row. Missing
-   * groups are not an error.
+   * Finishes or undoes operations that span the account and a group database
+   * and were interrupted (see `intents`). Runs once, before the first read.
    */
-  async drop(groupId: Uint8Array | string): Promise<void> {
-    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
+  #reconcile(): Promise<void> {
+    this.#reconciled ??= (async () => {
+      for (const intent of await this.database.account.intents.all()) {
+        const id = intent.groupId;
+        if (intent.kind === "destroy") {
+          await this.#finishDrop(id, intent.id);
+          continue;
+        }
+        // An interrupted create/join is complete once its first save landed
+        // (a disbanded group keeps its tombstone instead of canonical state).
+        const database = await this.database.groups.open(id);
+        const saved =
+          (await database.meta.get(groupKeys.state)) !== undefined ||
+          (await database.meta.get(DISBAND_TOMBSTONE_KEY)) !== undefined;
+        await database.close();
+        if (saved)
+          await this.database.account.transaction((tx) =>
+            tx.intents.delete(intent.id),
+          );
+        else await this.#finishDrop(id, intent.id);
+      }
+    })();
+    return this.#reconciled;
+  }
+
+  /** Drops a group's database, then its row and the given intent together. */
+  async #finishDrop(id: string, intentId: string): Promise<void> {
     await this.database.groups.drop(id);
-    await this.database.account.transaction((tx) => tx.groups.delete(id));
+    await this.database.account.transaction(async (tx) => {
+      await tx.groups.delete(id);
+      await tx.intents.delete(intentId);
+    });
   }
 
   /**
-   * Registers a new group and opens its database. The account row is written
-   * first, so a crash before the group's first save leaves a row without state,
-   * which {@link has} and {@link listIds} ignore.
+   * Permanently deletes a group: its database, then its account row. A
+   * `destroy` intent makes the two steps resumable after a crash. Missing
+   * groups are not an error.
    */
-  async prepare(state: ClientState): Promise<GroupStorageHandle> {
-    const id = bytesToHex(state.groupContext.groupId);
+  async drop(groupId: Uint8Array | string): Promise<void> {
+    await this.#reconcile();
+    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
+    const intentId = `destroy:${id}`;
     await this.database.account.transaction((tx) =>
-      tx.groups.put({ id, status: "active", value: new Uint8Array() }),
+      tx.intents.put({
+        id: intentId,
+        kind: "destroy",
+        groupId: id,
+        value: new Uint8Array(),
+      }),
     );
+    await this.#finishDrop(id, intentId);
+  }
+
+  /**
+   * Registers a new group and opens its database. The account row and a
+   * `create` intent commit together; call `complete()` after the group's first
+   * save, or `abort()` if it failed. An interrupted creation is completed or
+   * rolled back the next time the registry starts.
+   */
+  async prepare(
+    state: ClientState,
+    kind: "create" | "join" = "create",
+  ): Promise<GroupStorageHandle> {
+    await this.#reconcile();
+    const id = bytesToHex(state.groupContext.groupId);
+    const intentId = `${kind}:${id}`;
+    await this.database.account.transaction(async (tx) => {
+      await tx.groups.put({ id, status: "active", value: new Uint8Array() });
+      await tx.intents.put({
+        id: intentId,
+        kind,
+        groupId: id,
+        value: new Uint8Array(),
+      });
+    });
     return {
       database: await this.database.groups.open(id),
       dropDatabase: () => this.drop(id),
+      complete: () =>
+        this.database.account.transaction((tx) => tx.intents.delete(intentId)),
+      abort: () => this.#finishDrop(id, intentId),
     };
   }
 
@@ -176,6 +245,7 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     const id = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
     const idHex = bytesToHex(id);
     log("loading group %s from store", idHex);
+    await this.#reconcile();
     if (!(await this.database.account.groups.get(idHex)))
       throw new Error(`Group ${idHex} not found`);
     const database = await this.database.groups.open(idHex);
@@ -389,6 +459,7 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
 
   /** Lists the ids of every persisted group (from the account `groups` table). */
   async listIds(): Promise<Uint8Array[]> {
+    await this.#reconcile();
     const ids: Uint8Array[] = [];
     for (const row of await this.database.account.groups.all())
       if (await this.has(row.id)) ids.push(hexToBytes(row.id));
@@ -401,6 +472,7 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
    */
   async has(groupId: Uint8Array | string): Promise<boolean> {
     const key = typeof groupId === "string" ? groupId : bytesToHex(groupId);
+    await this.#reconcile();
     if (!(await this.database.account.groups.get(key))) return false;
     const database = await this.database.groups.open(key);
     try {

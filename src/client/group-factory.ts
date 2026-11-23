@@ -184,7 +184,8 @@ export class GroupFactory {
         : undefined;
 
     const state = founding?.state ?? clientState;
-    const { database, dropDatabase } = await this.#prepare(state);
+    const handle = await this.#prepare(state);
+    const { database, dropDatabase } = handle;
     const group = new MarmotGroup(state, {
       ciphersuite: ciphersuiteImpl,
       database,
@@ -202,7 +203,14 @@ export class GroupFactory {
     // GroupHistoryTree) — a supplied tree must be bound here before saving,
     // or save()'s history.flush() would throw.
     if (founding) founding.historyTree.bindStore(groupTreeStore(database));
-    await group.save(true);
+    try {
+      await group.save(true);
+    } catch (error) {
+      group.dispose();
+      await handle.abort().catch(() => undefined);
+      throw error;
+    }
+    await handle.complete();
 
     // D-05/D-07/D-12: fan out directly, bypassing GroupRuntime entirely — no
     // GroupPublishWork, no GroupEffects, no GroupRuntime publish call. Never

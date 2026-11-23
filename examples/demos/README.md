@@ -130,15 +130,17 @@ const invites = useAsyncLatest(
   interface directly to MarmotClient, without a transport wrapper or state facade.
 - `services/relays.ts` exports the mode-dependent `relays$` configuration used by
   demo operations and key-package publication.
-- `services/key-packages.ts` owns sidebar publication state and async
-  `publish()` / `rotate()` actions. It maintains packages and invite listening
-  using the real client's APIs, without owning or wrapping the client.
+- `services/key-packages.ts` publishes once for newly generated local identities.
+  The sidebar watches key packages and calls the library directly for explicit
+  publication and rotation. Replacing a package retains old private bundles for
+  delayed Welcomes; the demo does not schedule private-key retirement.
+- `services/invites.ts` owns invite listening independently of publication.
 - `services/relay.ts` provides the anonymous inspector's state and reset action.
 
 Use `useAsyncLatest` for the library's async watchers, forwarding its abort signal.
 No parallel observable API is attached to the client. Internal implementations
 live under `services/internal/`; JSX lives under `components/`, pure helpers under
-`utils/`, and existing test fixtures under `testing/`.
+`utils/`.
 
 **Reset** remounts only the demo, keeping the shared transport and contacts.
 **Copy code** copies its source without opening a code panel.

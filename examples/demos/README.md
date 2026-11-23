@@ -31,9 +31,17 @@ Its signed kind-0 profile is published to the local worker relay, never automati
 to public relays. Generating an identity in one tab does not change another tab's
 active account.
 
-The shared session client keeps its own Marmot `clientId` and private key packages
-in sessionStorage, separately for each account and local/live mode. Simulated
+`src/services/client-id.ts` generates one Marmot `clientId` and saves it in
+localStorage, shared by all accounts and tabs. Private key packages stay in
+sessionStorage, separated by client ID, account, and local/live mode. Simulated
 actors can still use their own ephemeral client ids.
+
+The service's `rotateClientId()` action rotates this ID, rebuilds active clients across
+open tabs, and remounts their demos. Every account then uses a fresh key-package
+namespace, without automatically publishing. Saved logins and relay events are
+unchanged. Old private bundles remain in their previous sessionStorage namespaces,
+but are no longer loaded; storage from the earlier per-account client IDs is also
+left unused.
 
 The account switcher opens a login screen supporting a NIP-07
 extension, NIP-46 remote signers (bunker URI or `nostrconnect://` QR code), and
@@ -50,7 +58,7 @@ dependencies directly and owns its resource lifetime:
 
 ```text
 mode$ ──► transport$
-account$ + transport$ ──► client$ ──► key-package publication
+account$ + transport$ + clientId$ ──► client$ ──► key-package publication
 account$ + transport$ ──► contacts$ (Users with reactive profiles)
 ```
 
@@ -100,6 +108,9 @@ const invites = useAsyncLatest(
 
 - `services/mode.ts` exports the deliberately writable `mode$` BehaviorSubject.
   The sidebar calls `mode$.next("local" | "live")`.
+- `services/client-id.ts` exports the readonly `clientId$` and async
+  `rotateClientId()` action. The shared ID persists in localStorage; rotation
+  starts fresh for all accounts and propagates to other open tabs.
 - `services/client.ts` exports `client$` and initialization `error$`. It emits
   `undefined` while logged out or replacing a client. Call APIs such as
   `client.groups.create()`, `client.groups.send()`, and `client.invites.markAsRead()`

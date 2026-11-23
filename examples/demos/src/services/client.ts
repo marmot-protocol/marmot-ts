@@ -11,6 +11,7 @@ import {
 } from "rxjs";
 import { account$ } from "./accounts.js";
 import { transport$ } from "./transport.js";
+import { clientId$ } from "./client-id.js";
 import { sessionDatabase } from "./internal/session-database.js";
 
 const errors = new BehaviorSubject<string | undefined>(undefined);
@@ -20,8 +21,9 @@ export const error$ = errors.asObservable();
 export const client$: Observable<MarmotClient | undefined> = combineLatest([
   account$,
   transport$,
+  clientId$,
 ]).pipe(
-  switchMap(([account, transport]) => {
+  switchMap(([account, transport, clientId]) => {
     errors.next(undefined);
     if (!account) return of(undefined);
     return new Observable<MarmotClient | undefined>((subscriber) => {
@@ -33,8 +35,8 @@ export const client$: Observable<MarmotClient | undefined> = combineLatest([
         for (const group of client?.groups.loaded ?? []) group.dispose();
         void client?.database.account.close();
       });
-      void sessionDatabase(account.pubkey, transport.mode)
-        .then(({ database, clientId }) => {
+      void sessionDatabase(account.pubkey, transport.mode, clientId)
+        .then((database) => {
           if (controller.signal.aborted) {
             void database.account.close();
             return;

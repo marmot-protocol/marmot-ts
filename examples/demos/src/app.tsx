@@ -9,6 +9,7 @@ import { mode$, type TransportMode } from "./services/mode.js";
 import { Contacts } from "./components/contacts.js";
 import { RelayView } from "./components/relay/relay-view.js";
 import { getPageTitle } from "./utils/page-title.js";
+import { clientId$ } from "./services/client-id.js";
 
 function useHashId() {
   const read = () => decodeURIComponent(location.hash.replace(/^#\/?/, ""));
@@ -33,6 +34,7 @@ function DemoApp() {
   const account = use$(account$);
   const mode = use$(mode$);
   const client = use$(client$);
+  const clientId = use$(clientId$);
   const error = use$(error$);
   useEffect(() => {
     document.title = getPageTitle(location.pathname, account);
@@ -46,7 +48,7 @@ function DemoApp() {
       </p>
     );
   if (!client) return <span className="loading loading-spinner m-4" />;
-  return <DemoShell key={`${account.id}:${mode}`} />;
+  return <DemoShell key={`${account.id}:${mode}:${clientId}`} />;
 }
 
 function DemoShell() {

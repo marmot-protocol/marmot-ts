@@ -20,7 +20,8 @@
 ## Service Dependencies
 
 - Import services directly from `src/services/*.ts`; do not add a React provider, context, service registry, or aggregate session/scope object.
-- `mode$` and `account$` are the roots. The account-independent `transport$` depends only on mode; the bare `client$` and contacts depend on the active account and transport.
+- `mode$`, `account$`, and `clientId$` are the roots. The account-independent `transport$` depends only on mode; the bare `client$` depends on account, transport, and the browser-wide client ID. Contacts depend on account and transport.
+- Keep the client ID in its dedicated localStorage-backed service, shared by all accounts. Rotating it replaces clients and selects fresh private-storage namespaces without automatically publishing key packages.
 - `client$` must emit the actual, unmodified `MarmotClient`. Do not decorate its managers, forward its methods, or mask missing library APIs.
 - Keep profiles paired with the contact list through Applesauce User casts; do not create a separate profile service.
 - Public service modules export observable interfaces, async actions, and types. `mode$` is intentionally a writable BehaviorSubject; other shared subjects stay private.

@@ -3,35 +3,30 @@ import {
   type KeyPackageRow,
   type MarmotDatabase,
 } from "@internet-privacy/marmot-ts/client";
-import { bytesToHex as hex } from "applesauce-core/helpers/event";
 import type { TransportMode } from "./transport.js";
 
 type SavedPackage = Omit<KeyPackageRow, "publicPackage" | "privatePackage"> & {
   publicPackage: number[];
   privatePackage?: number[];
 };
-type SavedSession = { version: 1; clientId: string; packages: SavedPackage[] };
+type SavedSession = { version: 1; packages: SavedPackage[] };
 
 /** Only account key bundles survive reloads; group state stays demo-local. */
 export async function sessionDatabase(
   pubkey: string,
   mode: TransportMode,
+  clientId: string,
   storage: Pick<Storage, "getItem" | "setItem"> = sessionStorage,
-): Promise<{ database: MarmotDatabase; clientId: string }> {
-  const key = `marmot-demos:mls:${mode}:${pubkey}`;
+): Promise<MarmotDatabase> {
+  const key = `marmot-demos:mls:${clientId}:${mode}:${pubkey}`;
   const saved = storage.getItem(key);
   const state: SavedSession = saved
     ? JSON.parse(saved)
     : {
         version: 1,
-        clientId: hex(crypto.getRandomValues(new Uint8Array(32))),
         packages: [],
       };
-  if (
-    state.version !== 1 ||
-    !/^[0-9a-f]{64}$/.test(state.clientId) ||
-    !Array.isArray(state.packages)
-  )
+  if (state.version !== 1 || !Array.isArray(state.packages))
     throw new Error("Invalid session key-package storage");
   const database = memoryDatabase();
   await database.account.transaction(async (tx) => {
@@ -67,5 +62,5 @@ export async function sessionDatabase(
       storage.setItem(key, JSON.stringify({ ...state, packages }));
       return result;
     });
-  return { database, clientId: state.clientId };
+  return database;
 }

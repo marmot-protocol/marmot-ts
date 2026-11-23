@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { DEMO_RELAY_CHANNEL } from "../lib/demo-relay.js";
-import type { InspectorResponse, RelayState } from "../lib/relay-inspector.js";
-import { Json } from "../lib/ui.js";
+import { DEMO_RELAY_CHANNEL } from "./demo-relay.js";
+import type { InspectorResponse, RelayState } from "./relay-inspector.js";
+import { Json } from "../../lib/ui.js";
 import { EventsTable, TrafficTable } from "./relay-tables.js";
 
 export function RelayView() {
@@ -25,7 +25,7 @@ export function RelayView() {
     let relay: SharedWorker;
     try {
       relay = new SharedWorker(
-        new URL("../lib/demo-relay.worker.ts", import.meta.url),
+        new URL("./demo-relay.worker.ts", import.meta.url),
         { type: "module", name: DEMO_RELAY_CHANNEL },
       );
     } catch (cause) {

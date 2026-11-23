@@ -1,6 +1,6 @@
 import type { NostrNetworkInterface } from "@internet-privacy/marmot-ts/client";
 import type { NostrEvent } from "applesauce-core/helpers/event";
-import type { RelayLogEntry } from "./demo-relay.js";
+import type { RelayLogEntry } from "../services/relay/demo-relay.js";
 
 export type TransportMode = "local" | "live";
 

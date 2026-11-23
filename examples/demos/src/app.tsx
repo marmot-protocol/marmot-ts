@@ -6,7 +6,7 @@ import { categories, demos, type Demo } from "./demos.js";
 import { ServicesProvider, useDemoServices } from "./services.js";
 import type { TransportMode } from "./lib/transport.js";
 import { Contacts } from "./components/contacts.js";
-import { RelayView } from "./components/relay-view.js";
+import { RelayView } from "./services/relay/relay-view.js";
 import { getPageTitle } from "./lib/page-title.js";
 
 function useHashId() {

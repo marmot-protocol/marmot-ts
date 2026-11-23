@@ -4,12 +4,12 @@ import {
   createApplicationMessageIntent,
   createChatRumor,
 } from "@internet-privacy/marmot-ts/client";
-import { DemoRelay } from "../../lib/demo-relay.js";
+import { DemoRelay } from "../../services/relay/demo-relay.js";
 import { SessionClient } from "../../lib/session-client.js";
 
 it("creates, invites, joins, and exchanges encrypted chat across tab transports", async () => {
   // Run the actual relay worker with separate MessagePorts, just like browser tabs.
-  await import("../../lib/demo-relay.worker.js");
+  await import("../../services/relay/demo-relay.worker.js");
   const connect = (
     globalThis as unknown as {
       onconnect: (event: { ports: MessagePort[] }) => void;

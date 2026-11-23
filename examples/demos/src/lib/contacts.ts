@@ -16,7 +16,7 @@ import {
   switchMap,
   tap,
 } from "rxjs";
-import { DemoRelay } from "./demo-relay.js";
+import { DemoRelay } from "../services/relay/demo-relay.js";
 import { LOOKUP_RELAYS } from "./live-transport.js";
 import type { DemoTransport } from "./transport.js";
 

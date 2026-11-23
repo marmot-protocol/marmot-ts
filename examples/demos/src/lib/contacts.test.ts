@@ -5,7 +5,7 @@ import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Filter } from "applesauce-core/helpers/filter";
 import type { Observer } from "@internet-privacy/marmot-ts/client";
 import { ContactsService } from "./contacts.js";
-import { DemoRelay } from "./demo-relay.js";
+import { DemoRelay } from "../services/relay/demo-relay.js";
 import { LIVE_RELAYS } from "./live-transport.js";
 import type { DemoTransport } from "./transport.js";
 

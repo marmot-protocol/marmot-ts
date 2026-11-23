@@ -197,8 +197,10 @@ Guidelines:
   the code is the explanation.
 - Run as the logged-in user: get the account with `useAccount()` and build
   the client with `createUserActor()`. Use `createPeerActor()` for anyone else.
+- Local shared relay code lives in `src/services/relay/`: `DemoRelay`, its
+  SharedWorker, protocol and inspector types, inspector UI, and tests.
 - Shared helpers in `src/lib/` are limited to demo plumbing: the actor
-  factories, `DemoRelay`, the React hooks (`useGroups`, `useGroupSnapshot`, `useWatch`,
+  factories, the React hooks (`useGroups`, `useGroupSnapshot`, `useWatch`,
   `useSetup`) and UI pieces (`Panel`, `Action`, `Json`, `RelayLog`).
 - Style with [Tailwind CSS](https://tailwindcss.com) utilities and
   [daisyUI](https://daisyui.com) components (`btn`, `input`, `card`, `badge`,

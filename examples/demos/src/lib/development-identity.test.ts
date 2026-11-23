@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { EventStore } from "applesauce-core";
 import { castUser } from "applesauce-common/casts";
-import { DemoRelay } from "./demo-relay.js";
+import { DemoRelay } from "../services/relay/demo-relay.js";
 import {
   createDevelopmentAccount,
   getDevelopmentName,

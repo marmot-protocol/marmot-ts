@@ -4,7 +4,7 @@ import {
   createApplicationMessageIntent,
   createChatRumor,
 } from "@internet-privacy/marmot-ts/client";
-import { DemoRelay } from "./demo-relay.js";
+import { DemoRelay } from "../services/relay/demo-relay.js";
 import { SessionClient } from "./session-client.js";
 
 const memoryStorage = () => {

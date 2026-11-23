@@ -8,7 +8,7 @@ import {
 } from "react";
 import { useAccount } from "./accounts.js";
 import { ContactsService } from "./lib/contacts.js";
-import { DemoRelay } from "./lib/demo-relay.js";
+import { DemoRelay } from "./services/relay/demo-relay.js";
 import { LiveTransport } from "./lib/live-transport.js";
 import type { DemoTransport, TransportMode } from "./lib/transport.js";
 import {

@@ -5,7 +5,7 @@ import {
   createApplicationMessageIntent,
   createChatRumor,
 } from "@internet-privacy/marmot-ts/client";
-import { createPeerActor } from "./actor.js";
+import { createPeerActor } from "../../lib/actor.js";
 import { DemoRelay, type SyncMessage } from "./demo-relay.js";
 
 afterEach(() => vi.unstubAllGlobals());

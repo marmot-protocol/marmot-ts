@@ -4,7 +4,7 @@ import { castUser } from "applesauce-common/casts";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { RelayPool } from "applesauce-relay";
 import { Subject, lastValueFrom, takeUntil, tap, toArray } from "rxjs";
-import type { RelayLogEntry } from "./demo-relay.js";
+import type { RelayLogEntry } from "../services/relay/demo-relay.js";
 import type { DemoTransport } from "./transport.js";
 
 export const LIVE_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];

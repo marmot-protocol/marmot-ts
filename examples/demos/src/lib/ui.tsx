@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useRelay } from "./hooks.js";
-import { DemoRelay, type RelayLogEntry } from "./demo-relay.js";
+import { DemoRelay, type RelayLogEntry } from "../services/relay/demo-relay.js";
 import type { DemoTransport } from "./transport.js";
 
 /** Shorten a hex id or pubkey for display. */

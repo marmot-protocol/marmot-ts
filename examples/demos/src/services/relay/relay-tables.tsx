@@ -1,7 +1,7 @@
 import { useId, useState, type ReactNode } from "react";
 import type { NostrEvent } from "applesauce-core/helpers/event";
-import type { RelayLogEntry } from "../lib/demo-relay.js";
-import { Json, short } from "../lib/ui.js";
+import type { RelayLogEntry } from "./demo-relay.js";
+import { Json, short } from "../../lib/ui.js";
 
 function InspectableRow({
   children,

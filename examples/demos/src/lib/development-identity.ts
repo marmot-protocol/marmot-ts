@@ -1,6 +1,6 @@
 import type { IAccount } from "applesauce-accounts";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
-import type { DemoRelay } from "./demo-relay.js";
+import type { DemoRelay } from "../services/relay/demo-relay.js";
 
 const ADJECTIVES = [
   "Amber",

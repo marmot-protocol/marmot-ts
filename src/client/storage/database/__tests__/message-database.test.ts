@@ -4,7 +4,6 @@ import { getEventHash } from "applesauce-core/helpers/event";
 import { describe, expect, it } from "vitest";
 import { memoryDatabase } from "../memory.js";
 import {
-  filterToQuery,
   GroupMessageDatabase,
   messageRow,
   rumorOfRow,
@@ -55,20 +54,6 @@ describe("messageRow", () => {
   });
 });
 
-describe("filterToQuery", () => {
-  it("maps indexable clauses and flags the rest for post-filtering", () => {
-    expect(
-      filterToQuery({ kinds: [9], authors: [ALICE], "#e": ["x"], limit: 3 }),
-    ).toEqual({
-      query: { kinds: [9], authors: [ALICE], tags: { e: ["x"] }, limit: 3 },
-      exact: true,
-    });
-    const search = filterToQuery({ search: "hi", limit: 3 });
-    expect(search.exact).toBe(false);
-    expect(search.query.limit).toBeUndefined();
-  });
-});
-
 describe("GroupMessageDatabase", () => {
   it("answers timelines through the index, newest first", async () => {
     const a = rumor(1);
@@ -92,7 +77,7 @@ describe("GroupMessageDatabase", () => {
     expect(await messages.hasEvent("f".repeat(64))).toBe(false);
   });
 
-  it("post-filters clauses the index cannot express", async () => {
+  it("passes NIP-91 filters through and limits each filter alone", async () => {
     const both = rumor(1, {
       tags: [
         ["t", "a"],
@@ -101,12 +86,20 @@ describe("GroupMessageDatabase", () => {
     });
     const one = rumor(2, { tags: [["t", "a"]] });
     const { messages } = await setup(both, one);
-    // NIP-91 `&` requires every value; the index only knows alternatives.
+    // NIP-91 `&` requires every value.
     expect(
       (await messages.getByFilters({ "&t": ["a", "b"], limit: 5 })).map(
         (r) => r.id,
       ),
     ).toEqual([both.id]);
+    expect(
+      (
+        await messages.getTimeline([
+          { "#t": ["a"], limit: 1 },
+          { "#t": ["b"], limit: 1 },
+        ])
+      ).map((r) => r.id),
+    ).toEqual([one.id, both.id]);
   });
 
   it("resolves replaceable and addressable rumors", async () => {

@@ -1,9 +1,5 @@
 /** @module @category Storage */
-import {
-  applyGroupUpdate,
-  compareMessages,
-  matchesMessageQuery,
-} from "./query.js";
+import { applyGroupUpdate, selectMessages } from "./query.js";
 import type {
   AccountReader,
   AccountTransaction,
@@ -132,12 +128,8 @@ function groupReader(tables: () => Tables): GroupReader {
       all: async () =>
         rows<MessageRow>(tables(), "messages").sort(byKey((row) => row.id)),
       get: async (id) => get<MessageRow>(tables(), "messages", id),
-      query: async (query) => {
-        const found = rows<MessageRow>(tables(), "messages")
-          .filter((row) => matchesMessageQuery(row, query))
-          .sort(compareMessages);
-        return query.limit === undefined ? found : found.slice(0, query.limit);
-      },
+      query: async (filter) =>
+        selectMessages(rows<MessageRow>(tables(), "messages"), filter),
     },
     deliveries: {
       all: async () => deliveries().sort(byId),

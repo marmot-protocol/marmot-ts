@@ -11,13 +11,16 @@
  */
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { NostrEvent } from "applesauce-core/helpers/event";
+import { matchFilter } from "applesauce-core/helpers/filter";
 import { describe, expect, it } from "vitest";
+import { compareMessages } from "../query.js";
 import type {
   DeliveryRow,
   EffectRow,
   InviteRow,
   KeyPackageRow,
   MarmotDatabase,
+  MessageFilter,
   MessageRow,
   PublicationRecord,
   TreeNodeRow,
@@ -437,7 +440,7 @@ export function runDatabaseConformance(
         expect(await tx.deliveries.countByRumor("m1")).toBe(1);
         await tx.messages.put(message("m1", 1, { tags: [["e", "x"]] }));
         expect(
-          (await tx.messages.query({ tags: { e: ["x"] } })).map((r) => r.id),
+          (await tx.messages.query({ "#e": ["x"] })).map((r) => r.id),
         ).toEqual(["m1"]);
       });
     });
@@ -497,7 +500,7 @@ export function runDatabaseConformance(
         const again = await restored.groups.open("aa");
         expectBytes((await again.group()).state, bytes(1));
         expect(
-          (await again.messages.query({ tags: { e: ["x"] } })).map((r) => r.id),
+          (await again.messages.query({ "#e": ["x"] })).map((r) => r.id),
         ).toEqual(["m1"]);
         expect(
           (await again.deliveries.withEvidence()).map((r) => r.id),
@@ -658,8 +661,8 @@ export function runDatabaseConformance(
         await tx.messages.put(message("c", 10));
         await tx.messages.put(message("d", 30));
       });
-      const ids = async (query = {}) =>
-        (await db.messages.query(query)).map((row) => row.id);
+      const ids = async (filter: MessageFilter = {}) =>
+        (await db.messages.query(filter)).map((row) => row.id);
       expect(await ids()).toEqual(["d", "a", "b", "c"]);
       expect(await ids({ limit: 2 })).toEqual(["d", "a"]);
       expect(await ids({ limit: 0 })).toEqual([]);
@@ -702,29 +705,26 @@ export function runDatabaseConformance(
           message("m4", 4, { tags: [["subject", "x"], ["e"]] }),
         );
       });
-      const ids = async (query = {}) =>
-        (await db.messages.query(query)).map((row) => row.id);
+      const ids = async (filter: MessageFilter = {}) =>
+        (await db.messages.query(filter)).map((row) => row.id);
       expect(await ids({ kinds: [9] })).toEqual(["m4", "m3", "m1"]);
       expect(await ids({ kinds: [7, 9], limit: 2 })).toEqual(["m4", "m3"]);
       expect(await ids({ authors: [BOB] })).toEqual(["m3", "m2"]);
-      expect(await ids({ tags: { e: ["x"] } })).toEqual(["m2", "m1"]);
-      expect(await ids({ tags: { e: ["x", "z"] } })).toEqual([
-        "m3",
-        "m2",
-        "m1",
-      ]);
+      expect(await ids({ "#e": ["x"] })).toEqual(["m2", "m1"]);
+      expect(await ids({ "#e": ["x", "z"] })).toEqual(["m3", "m2", "m1"]);
       // Duplicate tags do not duplicate results.
-      expect(await ids({ tags: { e: ["z"] } })).toEqual(["m3"]);
-      expect(await ids({ tags: { e: ["x"], p: ["y"] } })).toEqual(["m1"]);
-      expect(await ids({ tags: { e: ["x", "z"], p: ["y"] } })).toEqual([
+      expect(await ids({ "#e": ["z"] })).toEqual(["m3"]);
+      expect(await ids({ "#e": ["x"], "#p": ["y"] })).toEqual(["m1"]);
+      expect(await ids({ "#e": ["x", "z"], "#p": ["y"] })).toEqual([
         "m3",
         "m1",
       ]);
-      expect(await ids({ tags: { s: ["x"] } })).toEqual([]);
-      expect(await ids({ tags: { e: [] } })).toEqual([]);
+      expect(await ids({ "#s": ["x"] })).toEqual([]);
+      // An empty tag clause is ignored, as in applesauce's matchFilter.
+      expect(await ids({ "#e": [] })).toEqual(["m4", "m3", "m2", "m1"]);
       expect(await ids({ kinds: [9], authors: [BOB] })).toEqual(["m3"]);
       expect(
-        await ids({ kinds: [9], tags: { p: ["y"] }, since: 2, until: 3 }),
+        await ids({ kinds: [9], "#p": ["y"], since: 2, until: 3 }),
       ).toEqual(["m3"]);
       expect(await ids({ kinds: [1] })).toEqual([]);
       expect(await ids({ authors: [] })).toEqual([]);
@@ -732,8 +732,118 @@ export function runDatabaseConformance(
       await db.transaction((tx) =>
         tx.messages.put(message("m1", 1, { tags: [["e", "w"]] })),
       );
-      expect(await ids({ tags: { e: ["x"] } })).toEqual(["m2"]);
-      expect(await ids({ tags: { e: ["w"] } })).toEqual(["m1"]);
+      expect(await ids({ "#e": ["x"] })).toEqual(["m2"]);
+      expect(await ids({ "#e": ["w"] })).toEqual(["m1"]);
+    });
+
+    it("answers NIP-91 AND tags, non-indexable tags and search", async () => {
+      const { groups } = await create();
+      const db = await groups.open("aa");
+      await db.transaction(async (tx) => {
+        await tx.messages.put(
+          message("m1", 1, {
+            content: "Hello World",
+            tags: [["t", "a"], ["t", "b"], ["subject", "x"], ["-"]],
+          }),
+        );
+        await tx.messages.put(
+          message("m2", 2, { content: "hello", tags: [["t", "a"]] }),
+        );
+        await tx.messages.put(message("m3", 3, { tags: [["t", "b"]] }));
+      });
+      const ids = async (filter: MessageFilter) =>
+        (await db.messages.query(filter)).map((row) => row.id);
+      expect(await ids({ "&t": ["a", "b"] })).toEqual(["m1"]);
+      expect(await ids({ "&t": ["a"] })).toEqual(["m2", "m1"]);
+      // `#` values also listed under `&` are dropped from the `#` clause.
+      expect(await ids({ "&t": ["a"], "#t": ["a", "b"] })).toEqual(["m1"]);
+      expect(await ids({ "&t": ["a"], "#t": ["a"] })).toEqual(["m2", "m1"]);
+      expect(await ids({ "&t": [] })).toEqual(["m3", "m2", "m1"]);
+      // Only single-letter tags are indexed.
+      expect(await ids({ "#subject": ["x"] })).toEqual([]);
+      expect(await ids({ "#-": [""] })).toEqual([]);
+      expect(await ids({ search: "HELLO" })).toEqual(["m2", "m1"]);
+      expect(await ids({ search: "world", "#t": ["a"] })).toEqual(["m1"]);
+      expect(await ids({ search: "hello", limit: 1 })).toEqual(["m2"]);
+      expect(await ids({ since: 3, until: 2 })).toEqual([]);
+      expect(await ids({ until: 0 })).toEqual([]);
+    });
+
+    it("answers random filters like applesauce's matchFilter", async () => {
+      const { groups } = await create();
+      const db = await groups.open("aa");
+      // Deterministic PRNG (mulberry32).
+      let seed = 0x5eed;
+      const random = () => {
+        seed = (seed + 0x6d2b79f5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+      const int = (max: number) => Math.floor(random() * max);
+      const pick = <T>(values: readonly T[]) => values[int(values.length)]!;
+      const some = <T>(values: readonly T[], max = 3) =>
+        Array.from({ length: 1 + int(max) }, () => pick(values));
+      const authors = ["a", "b", "c", "d"].map((c) => c.repeat(64));
+      const kinds = [1, 7, 9];
+      const refs = ["r0", "r1", "r2", "r3", "r4", "r5"];
+      const topics = ["x", "y", "z"];
+      const rows: MessageRow[] = Array.from({ length: 300 }, (_, i) => {
+        const tags: string[][] = [];
+        for (let n = int(3); n > 0; n--) tags.push(["e", pick(refs)]);
+        if (random() < 0.6) tags.push(["p", pick(authors)]);
+        for (let n = int(3); n > 0; n--) tags.push(["t", pick(topics)]);
+        if (random() < 0.2) tags.push(["subject", pick(topics)]);
+        return message(`m${String(i).padStart(3, "0")}`, 1 + int(40), {
+          kind: pick(kinds),
+          pubkey: pick(authors),
+          content: random() < 0.3 ? "Needle in a stack" : `row ${i}`,
+          tags,
+        });
+      });
+      await db.transaction(async (tx) => {
+        for (const row of rows) await tx.messages.put(row);
+      });
+      for (let n = 0; n < 300; n++) {
+        const filter: MessageFilter = {};
+        if (random() < 0.1)
+          filter.ids = some(
+            rows.map((row) => row.id),
+            5,
+          );
+        if (random() < 0.4) filter.kinds = some(kinds, 2);
+        if (random() < 0.3) filter.authors = some(authors, 2);
+        if (random() < 0.4) filter["#e"] = some(refs);
+        if (random() < 0.2) filter["&t"] = some(topics, 2);
+        if (random() < 0.3) filter["#t"] = some(topics, 2);
+        if (random() < 0.2) filter["#p"] = some(authors, 2);
+        if (random() < 0.3) filter.since = 1 + int(40);
+        if (random() < 0.3) filter.until = 1 + int(40);
+        if (random() < 0.1) filter.search = "needle";
+        if (random() < 0.6) filter.limit = 1 + int(25);
+        const expected = rows
+          .filter((row) =>
+            matchFilter(filter, {
+              id: row.id,
+              kind: row.kind,
+              pubkey: row.pubkey,
+              created_at: row.createdAt,
+              content: row.content,
+              tags: row.tags,
+            } as Rumor),
+          )
+          // applesauce's matchFilter ignores NIP-50 search.
+          .filter(
+            (row) =>
+              !filter.search ||
+              row.content.toLowerCase().includes(filter.search),
+          )
+          .sort(compareMessages)
+          .slice(0, filter.limit)
+          .map((row) => row.id);
+        const actual = (await db.messages.query(filter)).map((row) => row.id);
+        expect({ filter, ids: actual }).toEqual({ filter, ids: expected });
+      }
     });
 
     it("round-trips delivery evidence and indexes it sparsely", async () => {

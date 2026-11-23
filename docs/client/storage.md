@@ -57,13 +57,13 @@ All groups share the connection; each group's rows carry its id, and indexes cov
 
 ## Querying messages
 
-Messages are rows in the group's `messages` table, indexed by `kind`, `pubkey`, `createdAt` and single-letter tags. `group.history` reads them through applesauce (see [History](/client/history)), and you can query the table directly:
+Messages are rows in the group's `messages` table, indexed by `kind`, `pubkey`, `createdAt` and single-letter tags. `group.history` reads them through applesauce (see [History](/client/history)), and you can query the table directly with any Nostr filter: NIP-01 fields and `#` tags, NIP-91 `&` tags (every value required) and NIP-50 `search` (a case-insensitive substring of the content). Results are newest first and truncated to `limit`:
 
 ```typescript
 const db = group.database;
 const replies = await db.messages.query({
   kinds: [9],
-  tags: [[`e:${parentId}`]],
+  "#e": [parentId],
   limit: 50,
 });
 const deliveries = await db.deliveries.byRumor(replies[0].id);
@@ -135,6 +135,7 @@ Requirements:
 - `fn` only awaits the transaction's own methods: the library prepares every value before the transaction opens, which keeps IndexedDB transactions alive.
 - Reads outside a transaction see committed data.
 - Index the columns each query names: `wrappers.deleteBelow` by `epoch`, `messages.query` by time, kind, author and tags, `deliveries.byRumor` / `countByRumor` by `rumorId`, `deliveries.withEvidence` (rows that still hold `evidence`), and `invites.byState` / `byRumor`.
+- `messages.query(filter)` answers one Nostr filter. `compileMessageFilter` and `matchesMessage` (from `@internet-privacy/marmot-ts/client`) define the matching rules, `indexTags` the tag keys to index, and `selectMessages` answers a filter over rows you have loaded, for clauses your store cannot index.
 - Store `value` and `evidence` byte for byte.
 - One `MarmotDatabase` holds one account. Run only one `MarmotClient` at a time over it.
 

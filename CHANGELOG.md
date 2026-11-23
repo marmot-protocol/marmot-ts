@@ -25,6 +25,8 @@
 
 - `watchKeyPackages()`, `invites.watchUnread()`, `invites.watchReceived()`, `watchInvites()`, and `history.subscribe()` accept an optional `{ signal }` to stop watching, matching `groups.watch()`.
 
+- `group.database.messages.query()` takes any Nostr filter, including NIP-91 `&` tags and NIP-50 `search`, and every adapter answers it in the database, so `group.history` no longer filters `&` tags in memory or drops limits for them. The IndexedDB adapter intersects small index clauses and walks tag, kind and author indexes newest first, so limited queries read only the rows they return. Custom adapters can reuse `compileMessageFilter`, `matchesMessage`, `selectMessages` and `indexTags` to match the built-in semantics.
+
 ### Fixed
 
 - `ensurePublished()` now replaces expired or not-yet-valid KeyPackages instead of treating them as current. Signed lifetimes must be within the protocol range cap; existing private bundles are preserved for separate retirement maintenance.

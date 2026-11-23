@@ -21,6 +21,7 @@
  */
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
 import type { NostrEvent } from "applesauce-core/helpers/event";
+import type { Filter } from "applesauce-core/helpers/filter";
 
 // ---------------------------------------------------------------------------
 // Group database: the group record
@@ -316,22 +317,13 @@ export interface DeliveryRow {
 }
 
 /**
- * A message query. Clauses intersect; values inside one clause are
- * alternatives. Results are newest first (`createdAt` descending, then `id`
- * ascending).
+ * A message query: one Nostr filter over message rows (NIP-01, NIP-91 `&`
+ * tags and NIP-50 `search`). Results are newest first (`createdAt`
+ * descending, then `id` ascending) and truncated to `limit`. Matching follows
+ * `compileMessageFilter`; adapters that cannot index a clause may
+ * answer it with `selectMessages` over the rows they load.
  */
-export interface MessageQuery {
-  ids?: readonly string[];
-  kinds?: readonly number[];
-  authors?: readonly string[];
-  /** Single-letter tag name → accepted values; every listed tag must match. */
-  tags?: Readonly<Record<string, readonly string[]>>;
-  /** Inclusive lower bound on `createdAt`. */
-  since?: number;
-  /** Inclusive upper bound on `createdAt`. */
-  until?: number;
-  limit?: number;
-}
+export type MessageFilter = Filter;
 
 /**
  * Read access to one group's tables.
@@ -367,8 +359,8 @@ export interface GroupReader {
     /** All rows, ordered by id (unlike the time-ordered query). */
     all?(): Promise<MessageRow[]>;
     get(id: string): Promise<MessageRow | undefined>;
-    /** Index-backed query; see {@link MessageQuery}. */
-    query(query: MessageQuery): Promise<MessageRow[]>;
+    /** Index-backed query; see {@link MessageFilter}. */
+    query(filter: MessageFilter): Promise<MessageRow[]>;
   };
   deliveries: {
     /** All rows, ordered by id, including deliveries without evidence or a rumor. */

@@ -5,8 +5,8 @@ import {
   getReplaceableIdentifier,
   isAddressableKind,
 } from "applesauce-core/helpers/event";
-import { matchFilters, type Filter } from "applesauce-core/helpers/filter";
-import type { MarmotGroupDatabase, MessageQuery, MessageRow } from "./types.js";
+import type { Filter } from "applesauce-core/helpers/filter";
+import type { MarmotGroupDatabase, MessageRow } from "./types.js";
 
 /** The message row of a rumor. */
 export function messageRow(rumor: Rumor): MessageRow {
@@ -33,52 +33,6 @@ export function rumorOfRow(row: MessageRow): Rumor {
 }
 
 /**
- * Translates one NIP-01 filter into an index query. `exact` is false when the
- * filter has clauses the query cannot express (`search`, `&` tags, multi-letter
- * tags); callers then post-filter.
- */
-export function filterToQuery(filter: Filter): {
-  query: MessageQuery;
-  exact: boolean;
-} {
-  const query: MessageQuery = {};
-  let exact = true;
-  const tags: Record<string, string[]> = {};
-  let tagged = false;
-  for (const [key, value] of Object.entries(filter)) {
-    if (value === undefined) continue;
-    switch (key) {
-      case "ids":
-        query.ids = value as string[];
-        break;
-      case "kinds":
-        query.kinds = value as number[];
-        break;
-      case "authors":
-        query.authors = value as string[];
-        break;
-      case "since":
-        query.since = value as number;
-        break;
-      case "until":
-        query.until = value as number;
-        break;
-      case "limit":
-        break;
-      default:
-        if (key.startsWith("#") && key.length === 2) {
-          tags[key[1]!] = value as string[];
-          tagged = true;
-        } else exact = false;
-    }
-  }
-  if (tagged) query.tags = tags;
-  // A post-filtered query cannot apply its limit inside the database.
-  if (exact && filter.limit !== undefined) query.limit = filter.limit;
-  return { query, exact };
-}
-
-/**
  * Exposes a group database's `messages` table as an applesauce
  * `IAsyncEventDatabase<Rumor>`, for `AsyncRumorStore` and applesauce models.
  *
@@ -92,15 +46,11 @@ export class GroupMessageDatabase implements IAsyncEventDatabase<Rumor> {
   async #query(filters: Filter | Filter[]): Promise<Rumor[]> {
     const list = Array.isArray(filters) ? filters : [filters];
     const byId = new Map<string, Rumor>();
-    for (const filter of list) {
-      const { query, exact } = filterToQuery(filter);
-      let rumors = (await this.database.messages.query(query)).map(rumorOfRow);
-      if (!exact) {
-        rumors = rumors.filter((rumor) => matchFilters([filter], rumor));
-        if (filter.limit !== undefined) rumors = rumors.slice(0, filter.limit);
-      }
-      for (const rumor of rumors) byId.set(rumor.id, rumor);
-    }
+    // Each filter's limit applies to that filter alone (NIP-01).
+    for (const rows of await Promise.all(
+      list.map((filter) => this.database.messages.query(filter)),
+    ))
+      for (const row of rows) byId.set(row.id, rumorOfRow(row));
     return [...byId.values()];
   }
 

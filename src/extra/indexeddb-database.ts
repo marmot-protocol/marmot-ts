@@ -22,8 +22,9 @@ import {
   applyGroupUpdate,
   compareMessages,
   indexTags,
-  matchesMessageQuery as matches,
-  queryTagKeys,
+  compileMessageFilter,
+  matchesMessage,
+  type MessageFilterPlan,
 } from "../client/storage/database/query.js";
 import type {
   AccountReader,
@@ -42,7 +43,7 @@ import type {
   MarmotDatabase,
   MarmotGroupDatabase,
   MarmotGroupDatabases,
-  MessageQuery,
+  MessageFilter,
   MessageRow,
   TreeNodeRow,
   WrapperRow,
@@ -54,7 +55,7 @@ export interface IndexedDBDatabaseOptions {
   prefix?: string;
 }
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 /** Key of the singleton group record in the `group` store. */
 const GROUP_KEY = "group";
 const GROUP_STORES = [
@@ -75,7 +76,8 @@ type StoreSource = (name: string) => Store | Promise<Store>;
 
 /**
  * Hidden, adapter-only fields kept on stored rows for indexing and stripped
- * on read: `_tags` holds a message's {@link indexTags} keys, `_evidence`
+ * on read: `_tags` holds a message's {@link indexTags} keys paired with its
+ * `createdAt` (so tag lookups are time-ordered like kind and author), `_evidence`
  * marks deliveries that hold evidence (a sparse index).
  */
 const HIDDEN = ["_tags", "_evidence"] as const;
@@ -116,6 +118,7 @@ function upgradeGroup(db: IDBPDatabase): void {
   messages.createIndex("createdAt", ["createdAt", "id"]);
   messages.createIndex("kind", ["kind", "createdAt", "id"]);
   messages.createIndex("pubkey", ["pubkey", "createdAt", "id"]);
+  // Each `[tagKey, createdAt]` entry is its own (array) index key.
   messages.createIndex("tags", "_tags", { multiEntry: true });
   const deliveries = db.createObjectStore("deliveries", { keyPath: "id" });
   deliveries.createIndex("rumorId", "rumorId");
@@ -221,85 +224,204 @@ function writer(tx: WriteTx, name: string) {
 // ---------------------------------------------------------------------------
 
 /**
- * Walks an index newest first over `range`, collecting matching rows. With a
- * limit, it stops once the limit is met and the timestamp has moved on, so
- * same-second ties are complete before the final sort.
+ * Keys read per clause when sizing it. A clause under the cap yields its
+ * exact key set; larger clauses are only walked. Bounded `getAllKeys` stays
+ * cheap where `count()` scans the whole range.
  */
-async function walk(
-  index: IDBPIndex<unknown, string[], string, string, IDBTransactionMode>,
-  range: IDBKeyRange,
-  query: MessageQuery,
-  out: Map<string, MessageRow>,
-): Promise<void> {
+const PROBE_LIMIT = 1024;
+/** Candidate sets up to this size are loaded directly rather than walked. */
+const LOAD_LIMIT = 256;
+
+type Index = IDBPIndex<unknown, string[], string, string, IDBTransactionMode>;
+
+/**
+ * One index clause of a filter: the union of `ranges` in `index` holds every
+ * match. Every clause index (`tags`, `kind`, `pubkey`) leads with the clause
+ * value and then `createdAt`, so ranges carry `since`/`until` and walk newest
+ * first.
+ */
+interface Clause {
+  index: string;
+  ranges: IDBKeyRange[];
+  /** The clause's primary keys, when it is under {@link PROBE_LIMIT}. */
+  keys?: Set<string>;
+}
+
+/**
+ * Collects matching rows newest first. With a limit it is done once the limit
+ * is met and the timestamp has moved on, so same-second ties are complete
+ * before the final sort.
+ */
+function collector(plan: MessageFilterPlan) {
   const found: MessageRow[] = [];
+  return {
+    found,
+    done: (createdAt: number) =>
+      plan.limit !== undefined &&
+      found.length >= plan.limit &&
+      createdAt < found.at(-1)!.createdAt,
+    add: (row: MessageRow) => {
+      if (matchesMessage(row, plan)) found.push(row);
+    },
+  };
+}
+
+/** Walks one range newest first, reading each row. */
+async function walkRows(
+  index: Index,
+  range: IDBKeyRange,
+  plan: MessageFilterPlan,
+): Promise<MessageRow[]> {
+  const out = collector(plan);
   for (
     let cursor = await index.openCursor(range, "prev");
     cursor;
     cursor = await cursor.continue()
   ) {
     const row = clean<MessageRow>(cursor.value);
-    const last = found.at(-1);
-    if (
-      query.limit !== undefined &&
-      found.length >= query.limit &&
-      last &&
-      row.createdAt < last.createdAt
-    )
-      break;
-    if (matches(row, query)) found.push(row);
+    if (out.done(row.createdAt)) break;
+    out.add(row);
   }
-  for (const row of found) out.set(row.id, row);
+  return out.found;
 }
 
+/**
+ * Walks one clause range newest first by key alone, reading only rows among
+ * `candidates`, so a limited query skips non-candidates without loading them.
+ */
+async function walkCandidates(
+  store: Store,
+  index: Index,
+  range: IDBKeyRange,
+  candidates: Set<string>,
+  plan: MessageFilterPlan,
+): Promise<MessageRow[]> {
+  const out = collector(plan);
+  for (
+    let cursor = await index.openKeyCursor(range, "prev");
+    cursor;
+    cursor = await cursor.continue()
+  ) {
+    if (out.done((cursor.key as [unknown, number])[1])) break;
+    const id = cursor.primaryKey as string;
+    if (candidates.has(id)) out.add(clean(await store.get(id)));
+  }
+  return out.found;
+}
+
+/** Loads rows by primary key, keeping the matches. */
+async function loadRows(
+  store: Store,
+  ids: Iterable<string>,
+  plan: MessageFilterPlan,
+): Promise<MessageRow[]> {
+  const rows = await Promise.all([...ids].map((id) => store.get(id)));
+  return rows.flatMap((row) => {
+    if (row === undefined) return [];
+    const message = clean<MessageRow>(row);
+    return matchesMessage(message, plan) ? [message] : [];
+  });
+}
+
+/**
+ * Answers one filter, borrowing nostr-idb's approach: each index clause
+ * (`&`/`#` tags, kinds, authors) is probed for at most
+ * {@link PROBE_LIMIT} keys, and the exact key sets of small clauses are
+ * intersected. Small candidate sets are loaded directly; otherwise the
+ * smallest clause is walked newest first, by key when there are candidates
+ * to check, so a limited query reads about `limit` rows.
+ */
 async function queryMessages(
   store: Store,
-  query: MessageQuery,
+  filter: MessageFilter,
 ): Promise<MessageRow[]> {
-  const since = query.since ?? -Infinity;
-  const until = query.until ?? Infinity;
-  const out = new Map<string, MessageRow>();
-  const keep = (row: unknown) => {
-    if (row === undefined) return;
-    const message = clean<MessageRow>(row);
-    if (matches(message, query)) out.set(message.id, message);
+  const plan = compileMessageFilter(filter);
+  if (!plan.possible) return [];
+  const finish = (rows: MessageRow[]) => {
+    const unique = [...new Map(rows.map((row) => [row.id, row])).values()];
+    unique.sort(compareMessages);
+    return plan.limit === undefined ? unique : unique.slice(0, plan.limit);
   };
-  const tagKeys = queryTagKeys(query);
-  if (query.ids) {
-    for (const row of await Promise.all(query.ids.map((id) => store.get(id))))
-      keep(row);
-  } else if (tagKeys.length) {
-    // The first tag clause narrows candidates; the rest filter.
-    const index = store.index("tags");
-    const found = await Promise.all(
-      tagKeys[0]!.map((key) => index.getAll(key)),
-    );
-    for (const row of found.flat()) keep(row);
-  } else if (query.authors) {
-    for (const pubkey of query.authors)
-      await walk(
-        store.index("pubkey"),
-        IDBKeyRange.bound([pubkey, since], [pubkey, until, []]),
-        query,
-        out,
-      );
-  } else if (query.kinds) {
-    for (const kind of query.kinds)
-      await walk(
-        store.index("kind"),
-        IDBKeyRange.bound([kind, since], [kind, until, []]),
-        query,
-        out,
-      );
-  } else {
-    await walk(
-      store.index("createdAt"),
-      IDBKeyRange.bound([since], [until, []]),
-      query,
-      out,
+  if (plan.ids) return finish(await loadRows(store, new Set(plan.ids), plan));
+
+  const since = plan.since ?? -Infinity;
+  const until = plan.until ?? Infinity;
+  const clause = (index: string, values: readonly IDBValidKey[]): Clause => ({
+    index,
+    ranges: values.map((value) =>
+      IDBKeyRange.bound([value, since], [value, until, []]),
+    ),
+  });
+  const clauses = [
+    ...plan.allTags.map((key) => clause("tags", [key])),
+    ...plan.anyTags.map((keys) => clause("tags", keys)),
+  ];
+  if (plan.kinds) clauses.push(clause("kind", plan.kinds));
+  if (plan.authors) clauses.push(clause("pubkey", plan.authors));
+
+  if (!clauses.length) {
+    const index = store.index("createdAt");
+    const time = IDBKeyRange.bound([since], [until, []]);
+    if (plan.limit !== undefined)
+      return finish(await walkRows(index, time, plan));
+    return finish(
+      (await index.getAll(time))
+        .map((row) => clean<MessageRow>(row))
+        .filter((row) => matchesMessage(row, plan)),
     );
   }
-  const sorted = [...out.values()].sort(compareMessages);
-  return query.limit === undefined ? sorted : sorted.slice(0, query.limit);
+
+  // Sizing only pays off when there is something to intersect.
+  if (clauses.length > 1)
+    await Promise.all(
+      clauses.map(async (clause) => {
+        const index = store.index(clause.index);
+        const parts = await Promise.all(
+          clause.ranges.map((range) => index.getAllKeys(range, PROBE_LIMIT)),
+        );
+        if (parts.every((part) => part.length < PROBE_LIMIT))
+          clause.keys = new Set(parts.flat() as string[]);
+      }),
+    );
+  const sized = clauses
+    .filter((clause) => clause.keys)
+    .sort((a, b) => a.keys!.size - b.keys!.size);
+  let candidates: Set<string> | undefined;
+  for (const { keys } of sized)
+    candidates = candidates
+      ? new Set([...candidates].filter((id) => keys!.has(id)))
+      : keys;
+  if (candidates?.size === 0) return [];
+  if (candidates && (plan.limit === undefined || candidates.size <= LOAD_LIMIT))
+    return finish(await loadRows(store, candidates, plan));
+
+  // Walk the smallest clause; every range is newest first.
+  const driver = sized[0] ?? clauses[0]!;
+  const index = store.index(driver.index);
+  if (plan.limit === undefined) {
+    const rows = await Promise.all(
+      driver.ranges.map((range) => index.getAll(range)),
+    );
+    return finish(
+      rows
+        .flat()
+        .map((row) => clean<MessageRow>(row))
+        .filter((row) => matchesMessage(row, plan)),
+    );
+  }
+  // Candidates narrower than the driver are checked by key before loading.
+  const narrower =
+    candidates && candidates.size < (driver.keys?.size ?? Infinity)
+      ? candidates
+      : undefined;
+  const walks = await Promise.all(
+    driver.ranges.map((range) =>
+      narrower
+        ? walkCandidates(store, index, range, narrower, plan)
+        : walkRows(index, range, plan),
+    ),
+  );
+  return finish(walks.flat());
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +454,7 @@ function groupReader(store: StoreSource): GroupReader {
     messages: {
       all: () => all<MessageRow>("messages"),
       get: (id) => get<MessageRow>("messages", id),
-      query: async (query) => queryMessages(await store("messages"), query),
+      query: async (filter) => queryMessages(await store("messages"), filter),
     },
     deliveries: {
       all: () => all<DeliveryRow>("deliveries"),
@@ -378,7 +500,11 @@ function groupTransaction(tx: WriteTx): GroupTransaction {
     messages: {
       ...reader.messages,
       ...w("messages"),
-      put: (row) => w("messages").put({ ...row, _tags: indexTags(row.tags) }),
+      put: (row) =>
+        w("messages").put({
+          ...row,
+          _tags: indexTags(row.tags).map((key) => [key, row.createdAt]),
+        }),
     },
     deliveries: {
       ...reader.deliveries,

@@ -14,7 +14,11 @@
  * @module @category Storage
  */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { indexTags, queryTagKeys } from "../client/storage/database/query.js";
+import {
+  compileMessageFilter,
+  indexTags,
+  matchesMessage,
+} from "../client/storage/database/query.js";
 import type {
   AccountReader,
   AccountTransaction,
@@ -33,7 +37,6 @@ import type {
   MarmotDatabase,
   MarmotGroupDatabase,
   MarmotGroupDatabases,
-  MessageQuery,
   MessageRow,
   TreeNodeRow,
   WrapperRow,
@@ -590,40 +593,47 @@ function groupReader(p: string, gid: string, execute: Execute): GroupReader {
         );
         return row ? messageFromRow(row) : undefined;
       },
-      query: async (query: MessageQuery) => {
+      query: async (filter) => {
+        const plan = compileMessageFilter(filter);
+        if (!plan.possible) return [];
         const where = ["m.gid = ?"];
         const params: unknown[] = [gid];
         const list = (column: string, values: readonly unknown[]) => {
-          where.push(
-            values.length ? `${column} IN (${placeholders(values)})` : "0",
-          );
+          where.push(`${column} IN (${placeholders(values)})`);
           params.push(...values);
         };
-        if (query.ids) list("m.id", query.ids);
-        if (query.kinds) list("m.kind", query.kinds);
-        if (query.authors) list("m.pubkey", query.authors);
-        if (query.since !== undefined) {
+        if (plan.ids) list("m.id", plan.ids);
+        if (plan.kinds) list("m.kind", plan.kinds);
+        if (plan.authors) list("m.pubkey", plan.authors);
+        if (plan.since !== undefined) {
           where.push("m.created_at >= ?");
-          params.push(query.since);
+          params.push(plan.since);
         }
-        if (query.until !== undefined) {
+        if (plan.until !== undefined) {
           where.push("m.created_at <= ?");
-          params.push(query.until);
+          params.push(plan.until);
         }
-        for (const alternatives of queryTagKeys(query)) {
+        for (const alternatives of [
+          ...plan.allTags.map((key) => [key]),
+          ...plan.anyTags,
+        ]) {
           where.push(
-            alternatives.length
-              ? `EXISTS (SELECT 1 FROM ${p}message_tags t WHERE t.gid = m.gid AND t.message_id = m.id AND t.tag IN (${placeholders(alternatives)}))`
-              : "0",
+            `EXISTS (SELECT 1 FROM ${p}message_tags t WHERE t.gid = m.gid AND t.message_id = m.id AND t.tag IN (${placeholders(alternatives)}))`,
           );
           params.push(...alternatives);
         }
         let sql = `SELECT m.* FROM ${p}messages m WHERE ${where.join(" AND ")} ORDER BY m.created_at DESC, m.id ASC`;
-        if (query.limit !== undefined) {
+        // SQLite's LOWER() folds ASCII only, so search is matched in JS.
+        if (plan.limit !== undefined && plan.search === undefined) {
           sql += " LIMIT ?";
-          params.push(query.limit);
+          params.push(plan.limit);
         }
-        return (await execute(sql, params)).map(messageFromRow);
+        let rows = (await execute(sql, params)).map(messageFromRow);
+        if (plan.search !== undefined) {
+          rows = rows.filter((row) => matchesMessage(row, plan));
+          if (plan.limit !== undefined) rows = rows.slice(0, plan.limit);
+        }
+        return rows;
       },
     },
     deliveries: {

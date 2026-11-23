@@ -1,6 +1,7 @@
 /** @module @category Client - Group Manager */
 import type { NostrEvent } from "applesauce-core/helpers";
 import type { Filter } from "applesauce-core/helpers/filter";
+import { matchFilter } from "applesauce-core/helpers/filter";
 
 import { logger } from "../utils/debug.js";
 import type { NostrNetworkInterface } from "./nostr-interface.js";
@@ -79,7 +80,9 @@ export type RelayBackfillOutcome =
    * The request failed, was aborted, or the relay answered outside the
    * requested `since`/`until` window.
    */
-  | { relay: string; status: "failed" };
+  | { relay: string; status: "failed" }
+  /** Adapter could not establish completeness for the requested range. */
+  | { relay: string; status: "incomplete" | "skipped" };
 
 /** Result of {@link fetchPagedBackfill}. */
 export interface PagedBackfillResult {
@@ -99,6 +102,83 @@ export interface PagedBackfillResult {
   relays: RelayBackfillOutcome[];
   /** The accepted events each relay returned (see `accept`). */
   relayEvents: ReadonlyMap<string, readonly NostrEvent[]>;
+}
+
+/**
+ * Uses the adapter's backfill when available, otherwise the paginated fallback.
+ * Each relay gets its own cursor range. Pagination resume records are used only
+ * by the fallback; adapter implementations own their retrieval strategy.
+ */
+export async function fetchGroupBackfill(
+  network: NostrNetworkInterface,
+  relays: string[],
+  filter: Filter,
+  options: PagedBackfillOptions,
+): Promise<PagedBackfillResult> {
+  if (!network.backfill)
+    return fetchPagedBackfill(network, relays, filter, options);
+
+  options.signal?.throwIfAborted();
+  const settled = await Promise.allSettled(
+    relays.map(async (relay) => {
+      const since = options.since?.get(relay);
+      const range = { ...filter, ...(since !== undefined ? { since } : {}) };
+      const result = await network.backfill!([relay], range, {
+        signal: options.signal,
+      });
+      const outcomes = result.relays.filter((entry) => entry.relay === relay);
+      const outcome = outcomes.length === 1 ? outcomes[0] : undefined;
+      const events = result.events.filter((event) => matchFilter(range, event));
+      const ids = new Set(events.map((event) => event.id));
+      // Missing provenance or out-of-range answers cannot justify a cursor.
+      const valid =
+        outcome &&
+        events.length === result.events.length &&
+        outcome.eventIds.every((id) => ids.has(id));
+      return {
+        events,
+        outcome: {
+          relay,
+          status: valid ? outcome.status : ("failed" as const),
+        },
+        ids: new Set(outcome?.eventIds ?? []),
+      };
+    }),
+  );
+  options.signal?.throwIfAborted();
+  const failures = settled.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length && failures.length === settled.length)
+    throw failures[0]!.reason;
+
+  const accepted = new Map<string, NostrEvent>();
+  const rejected = new Map<string, NostrEvent>();
+  const outcomes: RelayBackfillOutcome[] = [];
+  const relayEvents = new Map<string, readonly NostrEvent[]>();
+  for (const [i, result] of settled.entries()) {
+    if (result.status === "rejected") {
+      outcomes.push({ relay: relays[i]!, status: "failed" });
+      continue;
+    }
+    const { events, outcome, ids } = result.value;
+    const trusted = new Map<string, NostrEvent>();
+    for (const event of events) {
+      if (!options.accept || options.accept(event)) {
+        accepted.set(event.id, event);
+        if (ids.has(event.id)) trusted.set(event.id, event);
+      } else rejected.set(event.id, event);
+    }
+    outcomes.push(outcome);
+    relayEvents.set(outcome.relay, [...trusted.values()]);
+  }
+  for (const id of accepted.keys()) rejected.delete(id);
+  return {
+    events: [...accepted.values(), ...rejected.values()],
+    complete: outcomes.every((outcome) => outcome.status === "complete"),
+    relays: outcomes,
+    relayEvents,
+  };
 }
 
 /**

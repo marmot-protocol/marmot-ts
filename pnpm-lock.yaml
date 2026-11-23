@@ -132,6 +132,9 @@ importers:
       react:
         specifier: ^19.3.0
         version: 19.3.0
+      rxjs:
+        specifier: ^7.8.2
+        version: 7.8.2
     devDependencies:
       '@types/bun':
         specifier: ^1.4.2

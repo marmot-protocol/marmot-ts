@@ -1,20 +1,19 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Filter } from "applesauce-core/helpers/filter";
 import type { RelayPool as AsRelayPool } from "applesauce-relay/pool";
-import type {
-  AuthSigner,
-  RelayAuthHandler,
-  RelayRequestOptions,
-} from "applesauce-relay/types";
+import type { AuthSigner, RelayRequestOptions } from "applesauce-relay/types";
 
 import type {
   NostrNetworkInterface,
+  BackfillOptions,
+  BackfillResult,
   PublishResponse,
   Subscribable,
 } from "@internet-privacy/marmot-ts/client";
 
 import { createRelayAuthHandler } from "./relay-auth.js";
 import type { Directory } from "./discovery.js";
+import { syncBackfill } from "./sync-backfill.js";
 
 function resolveRelays(relays: string[], fallback: string[]): string[] {
   return relays.length ? relays : fallback;
@@ -43,8 +42,9 @@ export class RelayPool implements NostrNetworkInterface {
 
   readonly #pool: AsRelayPool;
   readonly #directory: Directory;
-  #onAuthRequired?: RelayAuthHandler;
+  #onAuthRequired?: ReturnType<typeof createRelayAuthHandler>;
   #closed = false;
+  readonly #backfillAbort = new AbortController();
 
   constructor(
     pool: AsRelayPool,
@@ -126,6 +126,30 @@ export class RelayPool implements NostrNetworkInterface {
     return collected;
   }
 
+  backfill(
+    relays: string[],
+    filter: Filter,
+    options: BackfillOptions = {},
+  ): Promise<BackfillResult> {
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, this.#backfillAbort.signal])
+      : this.#backfillAbort.signal;
+    return syncBackfill(
+      this.#pool,
+      resolveRelays(relays, this.defaultRelays),
+      filter,
+      {
+        signal,
+        onAuthRequired: this.#onAuthRequired
+          ? (context) =>
+              this.#onAuthRequired!({
+                relay: this.#pool.relay(context.url),
+              })
+          : undefined,
+      },
+    );
+  }
+
   subscription(
     relays: string[],
     filters: Filter | Filter[],
@@ -160,6 +184,7 @@ export class RelayPool implements NostrNetworkInterface {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#backfillAbort.abort();
     this.#directory.close();
     this.#pool.close();
   }

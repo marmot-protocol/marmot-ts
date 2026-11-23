@@ -65,7 +65,7 @@ const connection = client.groups.connectAll();
 connection.unsubscribe();
 ```
 
-Use `client.groups.connect(groupId)` to connect a single group instead. Both accept `{ signal, fallbackRelays }`. Groups with no relays of their own use `fallbackRelays`; groups with neither are skipped. On memory-constrained devices you can bound backfill with `backfillPageSize` and `backfillMaxPages`.
+Use `client.groups.connect(groupId)` to connect a single group instead. Both accept `{ signal, fallbackRelays }`. Groups with no relays of their own use `fallbackRelays`; groups with neither are skipped. Implement the optional [network `backfill`](/client/network#exhaustive-backfill) method to use your transport's history reconciliation. Otherwise, Marmot uses paginated requests, which you can bound with `backfillPageSize` and `backfillMaxPages`; these bounds apply only to the fallback.
 
 ## Handle incoming messages
 

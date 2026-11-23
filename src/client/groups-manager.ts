@@ -63,7 +63,7 @@ import {
   DEFAULT_BACKFILL_PAGE_SIZE,
   DEFAULT_BACKFILL_SLACK_SECONDS,
   type PagedBackfillResult,
-  fetchPagedBackfill,
+  fetchGroupBackfill,
   nextBackfillCursor,
   oldestCreatedAt,
 } from "./group-backfill.js";
@@ -168,11 +168,11 @@ export interface ConnectOptions {
    * skew and late-propagating events. Defaults to 600 (10 minutes).
    */
   backfillSlackSeconds?: number;
-  /** `limit` of each backfill page request. Defaults to 500. */
+  /** Fallback pagination page size. Ignored by network.backfill. Defaults to 500. */
   backfillPageSize?: number;
   /**
-   * Maximum pages fetched from each relay per connect. When a relay hits the
-   * cap the fetched events are still ingested, but its cursor is not
+   * Maximum fallback pages per relay per connect (ignored by network.backfill).
+   * When a relay hits the cap the fetched events are still ingested, but its cursor is not
    * advanced, so the remainder is retried on the next connect. Defaults to 50.
    */
   backfillMaxPages?: number;
@@ -1152,9 +1152,9 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
     // Backfill before subscribing (mirrors the proven attach order): the backlog
     // ingests as one batch so out-of-order commits resolve together. Each relay
     // is fetched from its own cursor (newest event ingested from its last
-    // complete backfill) minus a slack window, and paged so relay result caps
-    // cannot silently truncate it; a relay without a cursor is paged through
-    // its full history. Per-relay cursors let a failing or incomplete relay be
+    // complete backfill) minus a slack window, using the adapter's backfill
+    // or the paginated fallback. A relay without a cursor requests its full
+    // history. Per-relay cursors let a failing or incomplete relay be
     // re-read without holding back the others.
     try {
       const { slack, pageSize, maxPages } = backfillBounds(options);
@@ -1187,7 +1187,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
           });
       }
       const walkStart = nowSeconds();
-      const backfill = await fetchPagedBackfill(this.network, relays, filter, {
+      const backfill = await fetchGroupBackfill(this.network, relays, filter, {
         since,
         pageSize,
         maxPages,

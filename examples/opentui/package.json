@@ -26,7 +26,8 @@
     "debug": "^4.4.3",
     "jpeg-js": "^0.4.4",
     "pngjs": "^7.0.0",
-    "react": "^19.3.0"
+    "react": "^19.3.0",
+    "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",

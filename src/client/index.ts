@@ -1,4 +1,10 @@
 export * from "./nostr-interface.js";
+export {
+  fetchPagedBackfill,
+  type PagedBackfillOptions,
+  type PagedBackfillResult,
+  type RelayBackfillOutcome,
+} from "./group-backfill.js";
 export * from "./marmot-client.js";
 export * from "./key-package-manager.js";
 export type {

@@ -15,6 +15,8 @@
 
 ### Added
 
+- Optional `NostrNetworkInterface.backfill()` lets adapters retrieve group history using negentropy or their own pagination, with per-relay completeness and safe cursor advancement; existing adapters keep the paginated fallback, and the OpenTUI example uses Applesauce's sync loader.
+
 - `indexedDBDatabase()` and `sqliteDatabase()` storage adapters in `@internet-privacy/marmot-ts/extra`, and `memoryDatabase()` for tests.
 
 - `watchKeyPackages()`, `invites.watchUnread()`, `invites.watchReceived()`, `watchInvites()`, and `history.subscribe()` accept an optional `{ signal }` to stop watching, matching `groups.watch()`.

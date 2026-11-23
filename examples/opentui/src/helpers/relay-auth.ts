@@ -1,7 +1,9 @@
 import type { AuthSigner, RelayAuthHandler } from "applesauce-relay/types";
 
 /** Authenticate only when an operation is refused, never on a bare challenge. */
-export function createRelayAuthHandler(signer: AuthSigner): RelayAuthHandler {
+export function createRelayAuthHandler(
+  signer: AuthSigner,
+): (context: Pick<Parameters<RelayAuthHandler>[0], "relay">) => Promise<void> {
   return async ({ relay }) => {
     const response = await relay.authenticate(signer);
     if (!response.ok) {

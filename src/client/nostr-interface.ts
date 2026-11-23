@@ -50,6 +50,36 @@ export interface NostrPoolRead {
 /** Merged interface for a nostr relay pool */
 export interface NostrPool extends NostrPoolWrite, NostrPoolRead {}
 
+/** Options for a historical backfill. Retrieval policy belongs to the adapter. */
+export interface BackfillOptions {
+  /** Abort must stop underlying requests and reject the operation. */
+  signal?: AbortSignal;
+}
+
+/** Outcome for one requested relay, keyed by the exact requested URL. */
+export type RelayBackfillResult = {
+  relay: string;
+  /** IDs in `events` retrieved from, or confirmed present on, this relay. */
+  eventIds: string[];
+} & (
+  | { status: "complete" }
+  | { status: "incomplete"; reason?: string }
+  | { status: "failed"; error?: unknown }
+  | { status: "skipped"; reason?: string }
+);
+
+/** History available for ingestion, with explicit per-relay completeness. */
+export interface BackfillResult {
+  /**
+   * All matching events available for ingestion, including cached events used
+   * in reconciliation. Cached does not mean durably ingested by Marmot.
+   * Deduplicate only verified copies: an invalid copy must not hide a valid one.
+   */
+  events: NostrEvent[];
+  /** One outcome for every requested relay; partial failures preserve events. */
+  relays: RelayBackfillResult[];
+}
+
 /**
  * Interface for group-specific nostr operations.
  * This is the only network interface used by MarmotGroup.
@@ -64,6 +94,18 @@ export interface NostrNetworkInterface {
 
   /** Make a single request to the given relays with filters */
   request(relays: string[], filters: Filter | Filter[]): Promise<NostrEvent[]>;
+
+  /**
+   * Exhaust a historical filter using pagination, reconciliation, or another
+   * retrieval strategy. `complete` means the range was exhausted, not merely
+   * that a stream ended. `filter.limit` must not truncate the history.
+   * When absent, Marmot uses its paginated request fallback.
+   */
+  backfill?(
+    relays: string[],
+    filter: Filter,
+    options?: BackfillOptions,
+  ): Promise<BackfillResult>;
 
   /** Open a subscription to the given relays and filters */
   subscription(

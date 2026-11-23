@@ -190,8 +190,16 @@ export type KeyPackageManagerEvents = {
 export type KeyPackageManagerOptions = {
   /** The account database; key packages (with private keys) live in `keyPackages`. */
   database: MarmotAccountDatabase;
-  /** Confirms durable adoption when recovering consumption receipts on startup/retry. */
-  hasAdoptedGroup?: (groupId: Uint8Array) => Promise<boolean>;
+  /**
+   * Confirms durable adoption on startup/retry. When `adoptionTag` is supplied,
+   * require the group's persisted Welcome adoption IDs to contain it and
+   * canonical state or a disband tombstone to exist. Retain IDs across rejoins
+   * and disband so delayed retirement can still finish.
+   */
+  hasAdoptedGroup?: (
+    groupId: Uint8Array,
+    adoptionTag?: string,
+  ) => Promise<boolean>;
   /** Default `d` tag value for {@link KeyPackageManager.create} and {@link KeyPackageManager.rotate}. Falls back to this when no explicit `d` is passed. */
   clientId?: string;
   /** The signer used for the clients identity */
@@ -236,8 +244,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
    */
   readonly #verifyEvent: VerifyEventMethod;
   #log = logger.extend("KeyPackageManager");
-  readonly #hasAdoptedGroup:
-    ((groupId: Uint8Array) => Promise<boolean>) | undefined;
+  readonly #hasAdoptedGroup: KeyPackageManagerOptions["hasAdoptedGroup"];
   #ready: Promise<void> = Promise.resolve();
   #consumptionWork: Promise<void> = Promise.resolve();
 
@@ -733,10 +740,14 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
   }
 
   /** Records an intent after all Welcome checks and before durable adoption. */
-  async recordConsumption(groupId: Uint8Array, ref: Uint8Array): Promise<void> {
+  async recordConsumption(
+    groupId: Uint8Array,
+    ref: Uint8Array,
+    adoptionTag?: string,
+  ): Promise<void> {
     await this.#ready;
     const work = this.#consumptionWork.then(() =>
-      this.#store.recordConsumption(groupId, ref),
+      this.#store.recordConsumption(groupId, ref, adoptionTag),
     );
     this.#consumptionWork = work.catch(() => {});
     return work;

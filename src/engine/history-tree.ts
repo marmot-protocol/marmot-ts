@@ -635,6 +635,16 @@ export class GroupHistoryTree {
   }
 
   /**
+   * Transfers a loaded tree to an owner's storage capability without turning
+   * lazy, already-persisted nodes into dirty nodes.
+   * @internal The replacement must address the same persisted tree.
+   */
+  rebindStore(store: HistoryTreeStore): void {
+    this.#assertMutable();
+    this.#store = store;
+  }
+
+  /**
    * Persists all unflushed nodes incrementally: each dirty node's light edge
    * record, snapshot, and commit bytes are written under its own keys, plus the
    * meta (root) record. Append-only — already-persisted nodes are untouched, so

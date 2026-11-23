@@ -177,6 +177,8 @@ export interface GroupRecord {
   state?: Uint8Array;
   /** Scrubbed state shell kept after disband (MLS `ClientState`). */
   registryState?: Uint8Array;
+  /** Committed Welcome confirmation tags (hex), retained across epochs, rejoins and disband. */
+  adoptionIds?: string[];
   /** Whether the client's removal has been realized. */
   removed?: boolean;
   removal?: RemovalRecord;
@@ -454,7 +456,12 @@ export interface KeyPackageRow {
   /** Relays it was published to. */
   relays?: string[];
   /** Groups whose Welcome consumed it, awaiting retirement (hex ids). */
-  consumptionReceipts: { groupId: string; keyPackageRef: string }[];
+  consumptionReceipts: {
+    groupId: string;
+    keyPackageRef: string;
+    /** Hex Welcome confirmation tag; absent on legacy group-only receipts. */
+    adoptionTag?: string;
+  }[];
 }
 
 /** Lifecycle state of an invite gift wrap. */

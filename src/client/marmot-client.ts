@@ -1,4 +1,5 @@
 /** @module @category Client - Marmot Client */
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { watchCurrent } from "../utils/watch-current.js";
 import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
 import { EventSigner } from "applesauce-core";
@@ -169,7 +170,20 @@ export class MarmotClient {
       capabilities: options.capabilities,
       getSignatureKeyPair: options.getSignatureKeyPair,
       verifyEvent,
-      hasAdoptedGroup: (groupId) => this.groups.has(groupId),
+      hasAdoptedGroup: async (groupId, adoptionTag) => {
+        if (adoptionTag === undefined) return this.groups.has(groupId);
+        const database = await this.database.groups.open(bytesToHex(groupId));
+        try {
+          const record = await database.group();
+          return (
+            (record.state !== undefined ||
+              record.disbandTombstone !== undefined) &&
+            record.adoptionIds?.includes(adoptionTag) === true
+          );
+        } finally {
+          await database.close();
+        }
+      },
     });
 
     this.groups = new GroupsManager({
@@ -396,8 +410,8 @@ export class MarmotClient {
       welcome,
       candidates,
       ciphersuiteImpl,
-      beforeAdopt: (groupId, ref) =>
-        this.keyPackages.recordConsumption(groupId, ref),
+      beforeAdopt: (groupId, ref, adoptionTag) =>
+        this.keyPackages.recordConsumption(groupId, ref, adoptionTag),
     });
 
     // Receipt retirement follows durable group adoption. A crash between stores

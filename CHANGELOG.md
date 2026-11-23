@@ -15,6 +15,8 @@
 
 ### Added
 
+- Removed members can accept a fresh invitation after missing multiple epochs, preserving the existing group object, watchers, and earlier message history without gaining access to messages sent during their absence.
+
 - Optional table `all()` methods and `database.groups.list()` enable adapter-independent inspection, including unregistered groups; all built-in adapters support them, and existing custom adapters need no changes.
 
 - `MarmotClient.dispose()` releases loaded groups and their connections without deleting persisted state or closing caller-owned storage and transport.

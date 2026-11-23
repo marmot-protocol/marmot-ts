@@ -241,6 +241,8 @@ export type GroupSessionOptions = {
   audit?: AuditSink;
   /** Required when `audit` is set; contains stable engine/account/session metadata. */
   auditContext?: AuditContextOptions;
+  /** @internal Admission capability owned by this cryptographic incarnation. */
+  assertAdmission?: () => void;
 };
 
 export function ingestResultDisposition(result: IngestResult): Disposition {
@@ -349,6 +351,7 @@ export class GroupSession {
   readonly #onApplicationMessage?: (message: Uint8Array) => void;
   readonly #onHistoryError?: (error: Error) => void;
   readonly #onHistoryChanged?: () => void;
+  readonly #assertAdmission?: () => void;
 
   constructor(options: GroupSessionOptions) {
     this.ciphersuite = options.ciphersuite;
@@ -362,6 +365,7 @@ export class GroupSession {
     this.#onApplicationMessage = options.onApplicationMessage;
     this.#onHistoryError = options.onHistoryError;
     this.#onHistoryChanged = options.onHistoryChanged;
+    this.#assertAdmission = options.assertAdmission;
 
     this.#peeler = new NostrGroupPeeler(this.ciphersuite);
     this.#peeler.wrapGroupMessage = async (message, state, metadata) => {
@@ -397,6 +401,7 @@ export class GroupSession {
     };
     this.#wrapperLedger = new TerminalWrapperLedger(this.database);
     this.#effectLedger = new ConvergenceEffectLedger(this.database);
+    options.historyTree?.rebindStore(groupTreeStore(this.database));
     this.#engine = new MarmotGroupEngine({
       state: options.state,
       ciphersuite: this.ciphersuite,
@@ -676,6 +681,7 @@ export class GroupSession {
   assertOpen(): void {
     if (this.#destroyed) throw new Error("Group destroyed");
     if (this.#disposed) throw new Error("Group unloaded");
+    this.#assertAdmission?.();
   }
 
   /** Synchronous publication/preparation fence after admitted lifecycle hydration. */
@@ -1111,6 +1117,7 @@ export class GroupSession {
     await this.#removalHydrated;
     await this.#deliveredHydrated;
     if (this.#destroyed) return [];
+    this.assertOpen();
     if (this.#terminalTombstone) return this.#resumeTerminalWork();
     if (this.removalBlocked || this.#removalEvidence) {
       await this.finishRemovalRecovery();
@@ -1209,6 +1216,8 @@ export class GroupSession {
   async driveConvergence(): Promise<DispositionedIngestResult[]> {
     await this.#terminalHydrated;
     await this.#removalHydrated;
+    if (this.#destroyed) return [];
+    this.assertOpen();
     if (this.removalBlocked || this.#removalEvidence) return this.reconverge();
     await this.#deliveredHydrated;
     if (this.#destroyed) return [];
@@ -1238,8 +1247,12 @@ export class GroupSession {
   /** Track local writes so destruction waits for any already admitted I/O. */
   async #write<T>(operation: () => Promise<T> | T): Promise<T | undefined> {
     if (this.#destroyed || this.#disposed) return undefined;
+    this.#assertAdmission?.();
     const write = Promise.resolve().then(() => {
-      if (!this.#destroyed && !this.#disposed) return operation();
+      if (!this.#destroyed && !this.#disposed) {
+        this.#assertAdmission?.();
+        return operation();
+      }
       return undefined;
     });
     this.#localWrites.add(write);
@@ -1277,6 +1290,7 @@ export class GroupSession {
     const clearRecord: Required<GroupRecordUpdate> = {
       state: null,
       registryState: null,
+      adoptionIds: null,
       removed: null,
       removal: null,
       disbandRequest: null,
@@ -1985,6 +1999,7 @@ export class GroupSession {
     await this.#removalHydrated;
     await this.#deliveredHydrated;
     if (this.#destroyed) return;
+    this.assertOpen();
     if (
       this.#removalFenced &&
       this.state.groupActiveState.kind !== "removedFromGroup"

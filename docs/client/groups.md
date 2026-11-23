@@ -139,6 +139,45 @@ await client.groups.commit(group.id, {
 
 If the removed user was an admin, they are dropped from the admin list in the same commit. A commit that would leave the group with no admin is refused.
 
+## Rejoin after removal
+
+An admin can invite a removed member again, even after the group has advanced
+through several epochs. The member publishes a fresh key package and accepts the
+new Welcome through the usual invitation API:
+
+```typescript
+const existing = await client.groups.get(groupId); // status: "removed"
+const { group } = await client.joinGroupFromWelcome({ welcomeRumor });
+
+console.log(group === existing); // true
+console.log(group.status); // "active"
+```
+
+The existing `MarmotGroup`, its `history`, and its `watch()` subscriptions remain
+usable. Previously received messages stay available. Messages sent during the
+member's absence remain inaccessible, including when relays backfill them after
+rejoining. Normal messaging resumes from the new Welcome's epoch.
+
+Accepting the invitation replaces the old cryptographic session and its recovery
+state. If the group replacement transaction fails, the removed group and the new
+key package remain available so the same invitation can be retried. Once
+replacement commits, pending key-package cleanup is retried on restart.
+Membership and message history survive restarting the client.
+
+Fully drain any in-flight `ingest()` batch before accepting the new invitation.
+If acceptance reports that ingestion is still running, finish that batch and
+retry the same invitation.
+
+`client.groups.connectAll()` reconnects the group after rejoining. A manual
+`client.groups.connect()` connection ends on removal; call `connect()` again
+after accepting the new invitation.
+
+Rejoining requires a fresh, valid Welcome from an Add commit after the removal
+commit. Active groups still reject duplicate invitations, generic state imports cannot
+replace a retained group, and disbanded groups cannot rejoin under the same group
+id. Applications do not need to destroy or manually clear a removed group before
+accepting its new invitation.
+
 ## Leave a group
 
 `leave()` publishes a self-remove proposal, then deletes your local copy of the group. Another member commits your removal later.

@@ -106,6 +106,9 @@ function keyPackageRow(ref: string, entry: StoredKeyPackage): KeyPackageRow {
     consumptionReceipts: (entry.consumptionReceipts ?? []).map((receipt) => ({
       groupId: bytesToHex(receipt.groupId),
       keyPackageRef: bytesToHex(receipt.keyPackageRef),
+      ...(receipt.adoptionTag !== undefined
+        ? { adoptionTag: receipt.adoptionTag }
+        : {}),
     })),
   };
 }
@@ -136,6 +139,9 @@ function storedKeyPackage(row: KeyPackageRow): StoredKeyPackage {
           consumptionReceipts: row.consumptionReceipts.map((receipt) => ({
             groupId: hexToBytes(receipt.groupId),
             keyPackageRef: hexToBytes(receipt.keyPackageRef),
+            ...(receipt.adoptionTag !== undefined
+              ? { adoptionTag: receipt.adoptionTag }
+              : {}),
           })),
         }
       : {}),
@@ -150,6 +156,8 @@ function storedKeyPackage(row: KeyPackageRow): StoredKeyPackage {
 export type KeyPackageConsumptionReceipt = {
   groupId: Uint8Array;
   keyPackageRef: Uint8Array;
+  /** Hex confirmation tag identifying this Welcome adoption, if known. */
+  adoptionTag?: string;
 };
 
 /**
@@ -601,7 +609,11 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
   }
 
   /** Records validated intent before adoption, without altering private material. */
-  async recordConsumption(groupId: Uint8Array, ref: Uint8Array): Promise<void> {
+  async recordConsumption(
+    groupId: Uint8Array,
+    ref: Uint8Array,
+    adoptionTag?: string,
+  ): Promise<void> {
     const key = this.#resolveKey(ref);
     const existing = await this.#get(key);
     // Direct GroupsManager users can supply external candidates without a local entry.
@@ -609,7 +621,9 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
     const receipts = existing.consumptionReceipts ?? [];
     if (
       receipts.some(
-        (receipt) => bytesToHex(receipt.groupId) === bytesToHex(groupId),
+        (receipt) =>
+          bytesToHex(receipt.groupId) === bytesToHex(groupId) &&
+          receipt.adoptionTag === adoptionTag,
       )
     )
       return;
@@ -617,17 +631,24 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       ...existing,
       consumptionReceipts: [
         ...receipts,
-        { groupId: groupId.slice(), keyPackageRef: ref.slice() },
+        {
+          groupId: groupId.slice(),
+          keyPackageRef: ref.slice(),
+          ...(adoptionTag !== undefined ? { adoptionTag } : {}),
+        },
       ],
     });
   }
 
   /**
    * Separate stores are not atomic: a crash may delay retirement until recovery.
-   * Pre-adoption receipts remain harmless until their group actually exists.
+   * Tagged receipts require proof of that exact Welcome adoption, not just a group id.
    */
   async finalizeConsumptions(
-    hasAdoptedGroup: (groupId: Uint8Array) => Promise<boolean>,
+    hasAdoptedGroup: (
+      groupId: Uint8Array,
+      adoptionTag?: string,
+    ) => Promise<boolean>,
   ): Promise<void> {
     for (const key of await this.#ids()) {
       const entry = await this.#get(key);
@@ -637,7 +658,8 @@ export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
       for (const receipt of entry.consumptionReceipts) {
         if (bytesToHex(receipt.keyPackageRef) !== key)
           throw new Error("Consumption receipt KeyPackageRef mismatch");
-        if (await hasAdoptedGroup(receipt.groupId)) adopted = true;
+        if (await hasAdoptedGroup(receipt.groupId, receipt.adoptionTag))
+          adopted = true;
         else remaining.push(receipt);
       }
       if (!adopted) continue;

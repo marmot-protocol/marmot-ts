@@ -20,7 +20,8 @@ import {
 } from "../../core/key-package-event.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { AccountRecordTable, decodeRecord } from "../storage/record-codec.js";
+import { KeyPackageStore } from "../storage/key-package-store.js";
+import { MarmotClient } from "../marmot-client.js";
 import { memoryDatabase } from "../../__tests__/helpers/database.js";
 import type {
   KeyPackageRow,
@@ -38,6 +39,8 @@ import {
   getCiphersuiteImpl,
   makeCustomExtension,
   mlsMessageEncoder,
+  keyPackageEncoder,
+  privateKeyPackageEncoder,
   wireformats,
   type CiphersuiteImpl,
 } from "ts-mls";
@@ -50,18 +53,41 @@ const TEST_CLIENT_ID = "ab".repeat(32);
 
 /** The stored key package records of `storage`, for inspection and injection. */
 function keyPackageRecords(storage: MarmotAccountDatabase) {
-  return new AccountRecordTable<StoredKeyPackage, KeyPackageRow>(
-    storage.keyPackages,
-    (fn) => storage.transaction((tx) => fn(tx.keyPackages)),
-    (ref, entry, value) => ({
-      ref,
-      identifier: entry.identifier,
-      notBefore: Number(entry.publicPackage.leafNode.lifetime?.notBefore ?? 0n),
-      used: entry.used === true,
-      value,
-    }),
-    (row) => row.ref,
-  );
+  const store = new KeyPackageStore(storage);
+  return {
+    get: (ref: string) => store.get(ref),
+    set: async (ref: string, entry: StoredKeyPackage) => {
+      const row: KeyPackageRow = {
+        ref,
+        publicPackage: encode(keyPackageEncoder, entry.publicPackage),
+        ...(entry.privatePackage
+          ? {
+              privatePackage: encode(
+                privateKeyPackageEncoder,
+                entry.privatePackage,
+              ),
+            }
+          : {}),
+        identifier: entry.identifier,
+        notBefore: Number(
+          entry.publicPackage.leafNode.lifetime?.notBefore ?? 0n,
+        ),
+        used: entry.used === true,
+        published: entry.published ?? [],
+        relays: entry.publicationRelays,
+        consumptionReceipts: (entry.consumptionReceipts ?? []).map(
+          (receipt) => ({
+            groupId: bytesToHex(receipt.groupId),
+            keyPackageRef: bytesToHex(receipt.keyPackageRef),
+            ...(receipt.adoptionTag !== undefined
+              ? { adoptionTag: receipt.adoptionTag }
+              : {}),
+          }),
+        ),
+      };
+      await storage.transaction((tx) => tx.keyPackages.put(row));
+    },
+  };
 }
 
 describe("publication slots and durable routes", () => {
@@ -328,14 +354,20 @@ describe("publication slots and durable routes", () => {
 describe("durable KeyPackage consumption receipts", () => {
   async function fixture(isLastResort = false) {
     const account = PrivateKeyAccount.generateNew();
-    const storage = memoryDatabase().account;
+    const database = memoryDatabase();
+    const storage = database.account;
     const store = keyPackageRecords(storage);
     let adopted = false;
     const options = {
       database: storage,
       signer: account.signer,
       network: new MockNetwork(),
-      hasAdoptedGroup: async () => adopted,
+      hasAdoptedGroup: async (groupId: Uint8Array, adoptionTag?: string) =>
+        adopted &&
+        (adoptionTag === undefined ||
+          (
+            await (await database.groups.open(bytesToHex(groupId))).group()
+          ).adoptionIds?.includes(adoptionTag) === true),
     };
     const manager = new KeyPackageManager(options);
     const ciphersuiteImpl = await getCiphersuiteImpl(
@@ -353,6 +385,7 @@ describe("durable KeyPackage consumption receipts", () => {
     const groupId = new Uint8Array(32).fill(7);
     return {
       manager,
+      database,
       storage,
       store,
       options,
@@ -365,6 +398,253 @@ describe("durable KeyPackage consumption receipts", () => {
       },
     };
   }
+
+  it("does not retire a failed rejoin receipt merely because the removed group exists", async () => {
+    const f = await fixture();
+    const group = await f.database.groups.open(bytesToHex(f.groupId));
+    await group.transaction((tx) =>
+      tx.updateGroup({ removed: true, adoptionIds: ["11".repeat(32)] }),
+    );
+    f.adopt();
+    const adoptionTag = "22".repeat(32);
+    await f.manager.recordConsumption(
+      f.groupId,
+      f.entry.keyPackageRef,
+      adoptionTag,
+    );
+    // Retrying the same Welcome is idempotent; a different Welcome is distinct.
+    await f.manager.recordConsumption(
+      f.groupId,
+      f.entry.keyPackageRef,
+      adoptionTag,
+    );
+    await f.manager.recordConsumption(
+      f.groupId,
+      f.entry.keyPackageRef,
+      "33".repeat(32),
+    );
+    const restarted = new KeyPackageManager(f.options);
+    expect(await restarted.getPrivateKey(f.ref)).toEqual(f.kp.privatePackage);
+    expect((await restarted.get(f.ref))?.used).toBeUndefined();
+    expect((await restarted.get(f.ref))?.consumptionReceipts).toEqual([
+      { groupId: f.groupId, keyPackageRef: f.entry.keyPackageRef, adoptionTag },
+      {
+        groupId: f.groupId,
+        keyPackageRef: f.entry.keyPackageRef,
+        adoptionTag: "33".repeat(32),
+      },
+    ]);
+  });
+
+  it.each([false, true])(
+    "recovers a matching Welcome adoption after later epochs (reusable: %s)",
+    async (reusable) => {
+      const f = await fixture(reusable);
+      const adoptionTag = "44".repeat(32);
+      await f.manager.recordConsumption(
+        f.groupId,
+        f.entry.keyPackageRef,
+        adoptionTag,
+      );
+      const group = await f.database.groups.open(bytesToHex(f.groupId));
+      await group.transaction((tx) =>
+        tx.updateGroup({
+          adoptionIds: [adoptionTag],
+          removed: false,
+          state: new Uint8Array([1]),
+        }),
+      );
+      f.adopt();
+      // Later canonical state updates must not replace the durable Welcome marker.
+      await group.transaction((tx) =>
+        tx.updateGroup({ state: new Uint8Array([2]) }),
+      );
+      const restarted = new KeyPackageManager(f.options);
+      expect(await restarted.getPrivateKey(f.ref)).toEqual(
+        reusable ? f.kp.privatePackage : null,
+      );
+      expect((await restarted.get(f.ref))?.used).toBe(true);
+      expect((await restarted.get(f.ref))?.consumptionReceipts).toBeUndefined();
+      expect((await group.group()).adoptionIds).toEqual([adoptionTag]);
+      await restarted.finalizeConsumptions();
+      expect((await restarted.get(f.ref))?.consumptionReceipts).toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
+      name: "matching canonical adoption",
+      canonical: true,
+      matches: true,
+      retired: true,
+    },
+    {
+      name: "old removed adoption",
+      canonical: true,
+      matches: false,
+      retired: false,
+    },
+    {
+      name: "terminal shell without canonical state",
+      canonical: false,
+      matches: true,
+      retired: true,
+    },
+  ])(
+    "MarmotClient recovery handles $name",
+    async ({ canonical, matches, retired }) => {
+      const f = await fixture();
+      const adoptionTag = "55".repeat(32);
+      await f.manager.recordConsumption(
+        f.groupId,
+        f.entry.keyPackageRef,
+        adoptionTag,
+      );
+      const id = bytesToHex(f.groupId);
+      await f.database.account.transaction((tx) =>
+        tx.groups.put({ id, status: "active" }),
+      );
+      const group = await f.database.groups.open(id);
+      await group.transaction((tx) =>
+        tx.updateGroup({
+          ...(canonical
+            ? { state: new Uint8Array([1]), removed: !matches }
+            : {
+                disbandTombstone: {
+                  selectedEpoch: 1,
+                  commitDigest: "aa".repeat(32),
+                  actorPubkey: "bb".repeat(32),
+                  notificationState: "delivered",
+                },
+              }),
+          adoptionIds: [matches ? adoptionTag : "66".repeat(32)],
+        }),
+      );
+      const restarted = new MarmotClient({
+        database: f.database,
+        signer: f.options.signer,
+        network: f.options.network,
+      });
+      expect(await restarted.keyPackages.getPrivateKey(f.ref)).toEqual(
+        retired ? null : f.kp.privatePackage,
+      );
+      expect((await restarted.keyPackages.get(f.ref))?.used === true).toBe(
+        retired,
+      );
+    },
+  );
+
+  it("does not retire an initial Welcome whose marker persisted before its first state save", async () => {
+    const f = await fixture();
+    const adoptionTag = "ee".repeat(32);
+    await f.manager.recordConsumption(
+      f.groupId,
+      f.entry.keyPackageRef,
+      adoptionTag,
+    );
+    const id = bytesToHex(f.groupId);
+    const group = await f.database.groups.open(id);
+    await group.transaction((tx) =>
+      tx.updateGroup({ adoptionIds: [adoptionTag] }),
+    );
+    // Simulate interruption between the initial marker write and the first save.
+    // There is no canonical state, terminal evidence or registered account row.
+    const restarted = new MarmotClient({
+      database: f.database,
+      signer: f.options.signer,
+      network: f.options.network,
+    });
+    expect(await restarted.keyPackages.getPrivateKey(f.ref)).toEqual(
+      f.kp.privatePackage,
+    );
+    expect((await restarted.keyPackages.get(f.ref))?.used).toBeUndefined();
+    expect(
+      (await restarted.keyPackages.get(f.ref))?.consumptionReceipts,
+    ).toHaveLength(1);
+    await restarted.keyPackages.finalizeConsumptions();
+    expect(await restarted.keyPackages.getPrivateKey(f.ref)).toEqual(
+      f.kp.privatePackage,
+    );
+    // Once the actual state is durable, the same receipt can safely finish.
+    const reopened = await f.database.groups.open(id);
+    await reopened.transaction((tx) =>
+      tx.updateGroup({ state: new Uint8Array([1]) }),
+    );
+    await restarted.keyPackages.finalizeConsumptions();
+    expect(await restarted.keyPackages.getPrivateKey(f.ref)).toBeNull();
+    expect(
+      (await restarted.keyPackages.get(f.ref))?.consumptionReceipts,
+    ).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "retires delayed receipts for both committed adoptions after another rejoin (disbanded: %s)",
+    async (disbanded) => {
+      const f = await fixture();
+      const firstTag = "88".repeat(32);
+      const secondTag = "99".repeat(32);
+      const second = await f.manager.create({
+        relays: ["wss://relay.test"],
+        identifier: "aa".repeat(32),
+        isLastResort: false,
+      });
+      const id = bytesToHex(f.groupId);
+      const group = await f.database.groups.open(id);
+      await f.manager.recordConsumption(
+        f.groupId,
+        f.entry.keyPackageRef,
+        firstTag,
+      );
+      await group.transaction((tx) =>
+        tx.updateGroup({ state: new Uint8Array([1]), adoptionIds: [firstTag] }),
+      );
+      // No retirement runs before the second Welcome is durably adopted.
+      await f.manager.recordConsumption(
+        f.groupId,
+        second.keyPackageRef,
+        secondTag,
+      );
+      await group.transaction(async (tx) => {
+        const record = await tx.group();
+        await tx.updateGroup({
+          state: new Uint8Array([2]),
+          adoptionIds: [...(record.adoptionIds ?? []), secondTag],
+        });
+      });
+      if (disbanded)
+        await group.transaction((tx) =>
+          tx.updateGroup({
+            state: null,
+            disbandTombstone: {
+              selectedEpoch: 3,
+              commitDigest: "cc".repeat(32),
+              actorPubkey: "dd".repeat(32),
+              notificationState: "delivered",
+            },
+          }),
+        );
+      await f.database.account.transaction((tx) =>
+        tx.groups.put({ id, status: disbanded ? "terminal" : "active" }),
+      );
+      const restarted = new MarmotClient({
+        database: f.database,
+        signer: f.options.signer,
+        network: f.options.network,
+      });
+      for (const ref of [f.entry.keyPackageRef, second.keyPackageRef]) {
+        expect(await restarted.keyPackages.getPrivateKey(ref)).toBeNull();
+        expect((await restarted.keyPackages.get(ref))?.used).toBe(true);
+        expect(
+          (await restarted.keyPackages.get(ref))?.consumptionReceipts,
+        ).toBeUndefined();
+      }
+      const reopened = await f.database.groups.open(id);
+      expect((await reopened.group()).adoptionIds).toEqual([
+        firstTag,
+        secondTag,
+      ]);
+    },
+  );
 
   it("leaves pre-adoption receipts and private material unchanged across restart", async () => {
     const f = await fixture();
@@ -410,11 +690,26 @@ describe("durable KeyPackage consumption receipts", () => {
     expect((await restarted.get(f.ref))?.consumptionReceipts).toBeUndefined();
   });
 
-  it.each(["retirement", "receipt-clear"])(
-    "recovers after a crash during %s persistence",
-    async (point) => {
+  it.each([
+    ["retirement", undefined],
+    ["receipt-clear", undefined],
+    ["retirement", "77".repeat(32)],
+    ["receipt-clear", "77".repeat(32)],
+  ])(
+    "recovers after a crash during %s persistence (adoption: %s)",
+    async (point, adoptionTag) => {
       const f = await fixture();
-      await f.manager.recordConsumption(f.groupId, f.entry.keyPackageRef);
+      await f.manager.recordConsumption(
+        f.groupId,
+        f.entry.keyPackageRef,
+        adoptionTag,
+      );
+      if (adoptionTag !== undefined) {
+        const group = await f.database.groups.open(bytesToHex(f.groupId));
+        await group.transaction((tx) =>
+          tx.updateGroup({ adoptionIds: [adoptionTag] }),
+        );
+      }
       f.adopt();
       const before = structuredClone(await f.store.get(f.ref));
       const transaction = f.storage.transaction.bind(f.storage);
@@ -427,10 +722,9 @@ describe("durable KeyPackage consumption receipts", () => {
               keyPackages: {
                 ...tx.keyPackages,
                 put: async (row) => {
-                  const record = decodeRecord<StoredKeyPackage>(row.value);
                   if (
-                    record.used &&
-                    (point === "retirement" || !record.consumptionReceipts)
+                    row.used &&
+                    (point === "retirement" || !row.consumptionReceipts.length)
                   )
                     throw new Error("simulated crash");
                   return tx.keyPackages.put(row);

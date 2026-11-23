@@ -332,6 +332,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
   readonly #admissions = new Map<
     string,
     {
+      session: GroupSession;
       tail: Promise<unknown>;
       seen: BoundedIdCache;
       /** Set once an admitted batch fails to ingest; never cleared. */
@@ -341,6 +342,25 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       cleanup: () => void;
     }
   >();
+  readonly #connections = new Map<
+    MarmotGroup,
+    Set<{ session: GroupSession; unsubscribe: () => void }>
+  >();
+
+  #retireConnections(group: MarmotGroup, session?: GroupSession): void {
+    for (const connection of [...(this.#connections.get(group) ?? [])])
+      if (!session || connection.session === session) connection.unsubscribe();
+    const admission = this.#admissions.get(group.idStr);
+    if (admission && (!session || admission.session === session)) {
+      // Retire admission immediately, but let its already-running drain
+      // forward the removal result emitted after the removed lifecycle event.
+      // The drain's cleanup detaches it when the last pending batch settles.
+      if (!admission.pending && !admission.connections) admission.cleanup();
+      if (this.#admissions.get(group.idStr) === admission)
+        this.#admissions.delete(group.idStr);
+    }
+  }
+
   /** Builds new groups (the identity-signer/ciphersuite consumer). */
   readonly #factory: GroupFactory;
   /** The injectable event verifier gating the 445 drain (SEC-01). */
@@ -428,7 +448,10 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       this.emit("updated", groups);
     });
     this.#registry.on("loaded", (group) => this.emit("loaded", group));
-    this.#registry.on("removed", (group) => this.emit("removed", group.id));
+    this.#registry.on("removed", (group) => {
+      this.#retireConnections(group);
+      this.emit("removed", group.id);
+    });
     this.#registry.on("disbanded", (group, evidence) =>
       this.emit("disbanded", group.id, evidence),
     );
@@ -885,6 +908,8 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
    * then opens a live subscription that ingests each subsequent event. Inbound
    * events are de-duplicated, and unreadable ones surface via the `unreadable`
    * event. Call `.unsubscribe()` on the result to disconnect.
+   * Removal also retires this connection. After rejoining, call `connect()`
+   * again, or use `connectAll()` to reconnect automatically.
    *
    * This is the inbound counterpart to the library's outbound publishing — the
    * relay-subscription/backfill/drain loop an app would otherwise hand-write.
@@ -914,6 +939,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
     >();
 
     const connect = (group: MarmotGroup) => {
+      if (group.status === "removed" || group.status === "disbanded") return;
       if (records.has(group.idStr)) return;
       if (options?.signal?.aborted) return;
       const record: { controller: AbortController; sub?: Unsubscribable } = {
@@ -981,12 +1007,16 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
     return { unsubscribe };
   }
 
-  /** Backfill + live-subscribe a single group instance to its transport events. */
+  /**
+   * Backfill + live-subscribe one cryptographic incarnation. Removal retires
+   * manual handles; reconnect explicitly afterwards, or use connectAll().
+   */
   async #connectGroup(
     group: MarmotGroup,
     options?: ConnectOptions,
   ): Promise<Unsubscribable> {
     const noop: Unsubscribable = { unsubscribe: () => {} };
+    const session = group.session;
     if (
       this.#closeController.signal.aborted ||
       group.closedSignal.aborted ||
@@ -1020,14 +1050,20 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
     // strictly after both trust gates below — never add a rejected event's id
     // here (T-03-24), so a valid same-id event can never be censored by forgery.
     let admission = this.#admissions.get(group.idStr);
+    if (admission && admission.session !== session) {
+      this.#retireConnections(group, admission.session);
+      admission = undefined;
+    }
     if (!admission) {
       const forward = (result: DispositionedIngestResult) => {
+        if (group.session !== session) return;
         if (result.kind === "unreadable")
           this.emit("unreadable", group.id, result.event);
         this.emit("ingestResult", group.id, result);
       };
       group.on("ingestResult", forward);
       admission = {
+        session,
         tail: Promise.resolve(),
         seen: new BoundedIdCache(SUBSCRIPTION_ID_CACHE_CAPACITY),
         ingestFailed: false,
@@ -1038,6 +1074,11 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       this.#admissions.set(group.idStr, admission);
     }
     const record = admission;
+    const ownsSession = () =>
+      group.session === session &&
+      this.#admissions.get(group.idStr) === record &&
+      !session.destroyed &&
+      !group.closedSignal.aborted;
     record.connections++;
     const cleanup = () => {
       if (record.connections || record.pending) return;
@@ -1056,15 +1097,30 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       this.#closeController.signal.removeEventListener("abort", unsubscribe);
       options?.signal?.removeEventListener("abort", unsubscribe);
       group.off("disbanded", unsubscribe);
-      sub?.unsubscribe();
+      group.off("removed", unsubscribe);
+      group.off("disposed", unsubscribe);
+      const connections = this.#connections.get(group);
+      connections?.delete(connection);
+      if (!connections?.size) this.#connections.delete(group);
+      try {
+        sub?.unsubscribe();
+      } catch (error) {
+        log("connect: subscription cleanup failed: %o", error);
+      }
       record.connections--;
       cleanup();
     };
+    let connections = this.#connections.get(group);
+    if (!connections) this.#connections.set(group, (connections = new Set()));
+    const connection = { session, unsubscribe };
+    connections.add(connection);
     options?.signal?.addEventListener("abort", unsubscribe, { once: true });
     this.#closeController.signal.addEventListener("abort", unsubscribe, {
       once: true,
     });
     group.once("disbanded", unsubscribe);
+    group.once("removed", unsubscribe);
+    group.once("disposed", unsubscribe);
     const seen = record.seen;
     type DrainOutcome = {
       /**
@@ -1076,6 +1132,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       failed: boolean;
     };
     const drain = async (events: NostrEvent[]): Promise<DrainOutcome> => {
+      if (cancelled || !ownsSession()) return { trusted: [], failed: true };
       // `seen` is shared by every connection to this group, so a backfill can
       // re-fetch events an earlier batch already ingested. They count towards
       // the backfill cursor unless an admitted batch has failed. A same-id
@@ -1122,6 +1179,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       // Result delivery uses the facade event only; consuming yields as well
       // would duplicate live results and still miss timer-driven results.
       for await (const result of group.ingest(trusted)) void result;
+      if (cancelled || !ownsSession()) return { trusted: [], failed: true };
       return outcome;
     };
     /**
@@ -1133,7 +1191,8 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       events: NostrEvent[],
       settle?: (outcome: DrainOutcome) => Promise<void>,
     ): Promise<DrainOutcome> => {
-      if (cancelled) return Promise.resolve({ trusted: [], failed: true });
+      if (cancelled || !ownsSession())
+        return Promise.resolve({ trusted: [], failed: true });
       record.pending++;
       const work = record.tail
         .then(async () => {
@@ -1145,7 +1204,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
             record.ingestFailed = true;
             outcome = { trusted: [], failed: true };
           }
-          if (settle) {
+          if (settle && !cancelled && ownsSession()) {
             try {
               await settle(outcome);
             } catch (err) {
@@ -1184,7 +1243,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       const resume = new Map<string, BackfillProgress>();
       for (const relay of relays) {
         const cursor = await readBackfillCursor(
-          group.session.database,
+          session.database,
           relay,
           nowSeconds(),
         );
@@ -1193,7 +1252,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
           since.set(relay, Math.max(0, Math.floor(cursor - slack)));
         }
         const progress = await readBackfillProgress(
-          group.session.database,
+          session.database,
           relay,
           nowSeconds(),
         );
@@ -1220,7 +1279,12 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
         // Decided inside the admission queue: no other batch for this group
         // can be ingested (and pool, retain, or fail) between reading the
         // state below and persisting the cursor and progress.
-        if (drained.failed || cancelled || group.session.terminalTombstone)
+        if (
+          drained.failed ||
+          cancelled ||
+          !ownsSession() ||
+          session.terminalTombstone
+        )
           return;
         // Events the group holds only in memory are lost on restart, so
         // neither the cursor nor recorded progress may pass them: the
@@ -1228,10 +1292,11 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
         // without yielding a result), and input retained while a commit
         // publication or merge is in progress.
         const held = group.pendingEvents();
-        const retained = group.session.retainedEvents();
+        const retained = session.retainedEvents();
 
         await this.#recordBackfillProgress(
           group,
+          session,
           backfill,
           resume,
           [...held, ...retained],
@@ -1240,6 +1305,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
 
         await this.#advanceBackfillCursors(
           group,
+          session,
           backfill,
           drained.trusted,
           held,
@@ -1251,7 +1317,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
 
       // Backfill may itself have selected terminal state. Never seed a live route
       // after the durable tombstone has won.
-      if (cancelled || group.session.terminalTombstone) {
+      if (cancelled || !ownsSession() || session.terminalTombstone) {
         unsubscribe();
         return noop;
       }
@@ -1281,13 +1347,16 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
    */
   async #writeBackfillRecord(
     group: MarmotGroup,
+    session: GroupSession,
     relay: string,
     update: BackfillUpdate,
   ): Promise<void> {
     const closed = () =>
-      group.session.destroyed || group.session.terminalTombstone !== undefined;
+      group.session !== session ||
+      session.destroyed ||
+      session.terminalTombstone !== undefined;
     if (closed()) return;
-    const db = group.session.database;
+    const db = session.database;
     await updateBackfillRecord(db, relay, update);
     if (!closed()) return;
     const undo: BackfillUpdate = {};
@@ -1305,6 +1374,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
    */
   async #advanceBackfillCursors(
     group: MarmotGroup,
+    session: GroupSession,
     backfill: PagedBackfillResult,
     trusted: readonly NostrEvent[],
     held: readonly NostrEvent[],
@@ -1327,7 +1397,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       });
       if (next === undefined || next === previous) continue;
       try {
-        await this.#writeBackfillRecord(group, outcome.relay, {
+        await this.#writeBackfillRecord(group, session, outcome.relay, {
           cursor: next,
         });
       } catch (err) {
@@ -1346,6 +1416,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
    */
   async #recordBackfillProgress(
     group: MarmotGroup,
+    session: GroupSession,
     backfill: PagedBackfillResult,
     recorded: ReadonlyMap<string, BackfillProgress>,
     held: readonly NostrEvent[],
@@ -1356,7 +1427,9 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       try {
         if (outcome.status === "complete") {
           if (recorded.has(outcome.relay))
-            await this.#writeBackfillRecord(group, relay, { progress: null });
+            await this.#writeBackfillRecord(group, session, relay, {
+              progress: null,
+            });
         } else if (outcome.status === "capped") {
           const from = outcome.until;
           // End strictly below the oldest held event: its whole second must
@@ -1367,13 +1440,15 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
             oldestHeld === undefined ? walkStart : oldestHeld - 1,
           );
           if (from <= to)
-            await this.#writeBackfillRecord(group, relay, {
+            await this.#writeBackfillRecord(group, session, relay, {
               progress: { from, to },
             });
           // Nothing durable to record: drop any older range, which may
           // cover the held event too.
           else if (recorded.has(outcome.relay))
-            await this.#writeBackfillRecord(group, relay, { progress: null });
+            await this.#writeBackfillRecord(group, session, relay, {
+              progress: null,
+            });
         }
       } catch (err) {
         log("connect: failed to persist backfill progress: %o", err);
@@ -1399,6 +1474,22 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       beforeAdopt?: () => Promise<void>;
     },
   ): Promise<MarmotGroup> {
+    return this.#adoptClientState(state, options);
+  }
+
+  /**
+   * Only a fully validated Welcome may enter the rejoin path. Choosing the
+   * public `joined` event when importing a state does not authorize replacement.
+   */
+  async #adoptClientState(
+    state: ClientState,
+    options?: {
+      emit?: "imported" | "joined";
+      beforeAdopt?: () => Promise<void>;
+      allowRejoin?: boolean;
+      adoptionId?: string;
+    },
+  ): Promise<MarmotGroup> {
     const eventName = options?.emit ?? "imported";
     const id = bytesToHex(state.groupContext.groupId);
     const previous = this.#adoptions.get(id) ?? Promise.resolve();
@@ -1410,6 +1501,30 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
     await previous;
     try {
       if (await this.#registry.has(state.groupContext.groupId)) {
+        if (options?.allowRejoin) {
+          const existing = await this.#registry.get(state.groupContext.groupId);
+          if (existing.status === "removed") {
+            const previousSession = existing.session;
+            await existing.rejoinFromWelcome(state, {
+              beforeAdopt: options.beforeAdopt,
+              adoptionId: options.adoptionId,
+            });
+            this.#retireConnections(existing, previousSession);
+            // Adoption is already durable. Application observers must not turn
+            // success into an apparent failure (and an unsafe duplicate retry).
+            try {
+              this.#registry.emit("updated", this.#registry.loaded);
+            } catch (error) {
+              log("rejoin updated listener failed: %o", error);
+            }
+            try {
+              this.emit("joined", existing);
+            } catch (error) {
+              log("rejoin joined listener failed: %o", error);
+            }
+            return existing;
+          }
+        }
         throw new Error(`Group ${id} already exists`);
       }
       await options?.beforeAdopt?.();
@@ -1423,6 +1538,11 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       // Persist initial state via the group's own save() path.
       // MarmotGroup.save() is the single writer into the group state store.
       try {
+        // A failed initial save and failed rollback may leave a marker-only
+        // database. Never let a later import inherit that Welcome's proof.
+        await group.session.records.update({
+          adoptionIds: options?.adoptionId ? [options.adoptionId] : null,
+        });
         await group.save(true);
       } catch (error) {
         group.dispose();
@@ -1474,6 +1594,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
     beforeAdopt?: (
       groupId: Uint8Array,
       keyPackageRef: Uint8Array,
+      adoptionId: string,
     ) => Promise<void>;
   }): Promise<{
     group: MarmotGroup;
@@ -1526,11 +1647,18 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
     // Full tentative validation precedes the serialized persistence boundary.
     validateWelcomeGroup(clientState, groupInfo!);
     const ref = consumedKeyPackageRef;
-    const group = await this.adoptClientState(clientState, {
+    const adoptionId = bytesToHex(clientState.confirmationTag);
+    const group = await this.#adoptClientState(clientState, {
       emit: "joined",
+      allowRejoin: true,
+      adoptionId,
       beforeAdopt: async () => {
         if (ref)
-          await options.beforeAdopt?.(clientState.groupContext.groupId, ref);
+          await options.beforeAdopt?.(
+            clientState.groupContext.groupId,
+            ref,
+            adoptionId,
+          );
       },
     });
     return { group, consumedKeyPackageRef };

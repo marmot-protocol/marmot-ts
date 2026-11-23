@@ -63,7 +63,7 @@ export interface SQLiteDatabaseOptions {
   tablePrefix?: string;
 }
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 type Execute = (
   sql: string,
@@ -213,6 +213,7 @@ function schema(p: string): string[] {
       gid TEXT PRIMARY KEY,
       state BLOB,
       registry_state BLOB,
+      adoption_ids TEXT,
       removed INTEGER,
       removal TEXT,
       disband_request TEXT,
@@ -330,10 +331,16 @@ class Lane {
         // Older schemas predate a released format: start over.
         await this.execute("BEGIN IMMEDIATE");
         try {
-          if (version !== undefined)
-            for (const table of ALL_TABLES)
-              await this.execute(`DROP TABLE IF EXISTS ${p}${table}`);
-          for (const statement of schema(p)) await this.execute(statement);
+          if (version === 2) {
+            await this.execute(
+              `ALTER TABLE ${p}group_records ADD COLUMN adoption_ids TEXT`,
+            );
+          } else {
+            if (version !== undefined)
+              for (const table of ALL_TABLES)
+                await this.execute(`DROP TABLE IF EXISTS ${p}${table}`);
+            for (const statement of schema(p)) await this.execute(statement);
+          }
           await this.execute(`DELETE FROM ${p}schema`);
           await this.execute(`INSERT INTO ${p}schema (version) VALUES (?)`, [
             SCHEMA_VERSION,
@@ -381,6 +388,7 @@ const GROUP_FIELDS: {
 } = {
   state: { column: "state", kind: "bytes" },
   registryState: { column: "registry_state", kind: "bytes" },
+  adoptionIds: { column: "adoption_ids", kind: "json" },
   removed: { column: "removed", kind: "boolean" },
   removal: { column: "removal", kind: "json" },
   disbandRequest: { column: "disband_request", kind: "json" },

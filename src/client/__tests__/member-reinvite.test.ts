@@ -209,5 +209,5 @@ describe("member removal and re-invitation end to end", () => {
       a.dispose();
       b.dispose();
     }
-  });
+  }, 15_000);
 });

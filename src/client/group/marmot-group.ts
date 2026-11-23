@@ -9,6 +9,8 @@ import {
   CryptoProvider,
   defaultCryptoProvider,
   encode,
+  getCredentialFromLeafIndex,
+  type LeafIndex,
   mlsMessageEncoder,
   protocolVersions,
   Proposal,
@@ -76,6 +78,13 @@ import {
   type EncryptMediaMetadata,
 } from "./group-media-service.js";
 import { GroupHistory } from "../storage/group-history.js";
+import { SessionDatabase } from "../session/session-database.js";
+import { MemoryGroupDatabases } from "../storage/database/memory.js";
+import { GroupHistoryTree as HistoryTree } from "../../engine/history-tree.js";
+import { serializeClientState } from "../../core/client-state.js";
+import { groupTreeStore } from "../storage/database/group-batch.js";
+import { ConvergenceEffectLedger } from "../storage/wrapper-ledger.js";
+import { getCredentialPubkey } from "../../core/credential.js";
 
 export { createAdminCommitPolicyCallback } from "../../engine/admin-policy.js";
 export type { ProposalAction, ProposalContext } from "../../engine/types.js";
@@ -441,9 +450,21 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
   readonly history: GroupHistory;
 
   /** Protocol state owner for this group. Prefer this over convenience methods. */
-  readonly session: GroupSession;
+  #session!: GroupSession;
+  get session(): GroupSession {
+    return this.#session;
+  }
   /** Runtime publisher for driving session effects through transport. */
-  readonly runtime: GroupRuntime;
+  #runtime!: GroupRuntime;
+  get runtime(): GroupRuntime {
+    return this.#runtime;
+  }
+  readonly #options: MarmotGroupOptions;
+  #sessionDatabase: SessionDatabase;
+  #generation = 0;
+  #adopting = false;
+  #adoptionFinished?: Promise<void>;
+  #ingestions = 0;
   /** Optional media helper for group encrypted attachments. */
   readonly mediaService: GroupMediaService;
   /** Dedicated canonical group-image source and retrieval service. */
@@ -911,77 +932,24 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
 
   constructor(state: ClientState, options: MarmotGroupOptions) {
     super();
+    // Loaded cryptographic history belongs only to the initial session, never
+    // to the reusable facade's construction template.
+    this.#options = {
+      ...options,
+      retained: undefined,
+      historyTree: undefined,
+    };
     this.database = options.database;
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
     this.network = options.network;
 
     this.history = GroupHistory.forDatabase(options.database);
-
-    this.session = new GroupSession({
-      state,
-      ciphersuite: this.ciphersuite,
-      database: this.database,
-      dropDatabase: options.dropDatabase,
-      retained: options.retained,
-      historyTree: options.historyTree,
-      convergencePolicy: options.convergencePolicy,
-      ingestionPool: options.ingestionPool,
-      history: this.history,
-      now: options.now,
-      settlementQuiescenceMs: options.settlementQuiescenceMs,
-      scheduler: options.scheduler,
-      audit: options.audit,
-      auditContext: options.auditContext,
-      // When the quiescence window elapses, release any queued outbound (B5).
-      onSettleCheck: () => this.#settleAndDrive(),
-      onChanged: () => this.#refreshSnapshot(),
-      onStateChanged: (newState) => {
-        this.#stateRevision++;
-        this.#refreshSnapshot();
-        this.emit("stateChanged", newState);
-      },
-      onStateSaved: () => this.emit("stateSaved", this),
-      onApplicationMessage: (message) =>
-        this.emit("applicationMessage", message),
-      onHistoryError: (error) => this.emit("historyError", error),
-      onHistoryChanged: () => {
-        this.#refreshSnapshot();
-        this.emit("historyChanged", this);
-      },
-    });
-
+    this.#sessionDatabase = new SessionDatabase(this.database);
+    this.#session = this.#createSession(state, options, this.#sessionDatabase);
     this.idStr = bytesToHex(this.id);
     this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
-    const records = this.session.records;
-    this.runtime = new GroupRuntime({
-      welcomeDelivery: new NostrWelcomeDelivery({
-        signer: this.signer,
-        network: this.network,
-      }),
-      pendingPublications: new PendingPublicationStore({
-        get: () => records.get(),
-        update: (update) =>
-          this.session.persistPublication(() => records.update(update)),
-      }),
-      restorePending: (pending) =>
-        this.session.restorePendingPublication(pending),
-      isApplied: (pending) =>
-        bytesToHex(this.state.confirmationTag) ===
-        bytesToHex(pending.newState.confirmationTag),
-      getNetwork: () => this.network,
-      getRelays: () => this.relays,
-      getGroupRef: () => this.idStr,
-      getGroupData: () => this.groupData,
-      assertOpen: () => this.session.assertOutboundOpen(),
-      confirmPublished: (pending) => this.session.confirmPublished(pending),
-      publishFailed: (pending) => this.session.publishFailed(pending),
-      save: () => this.save(),
-      log: this.log,
-      audit: options.audit,
-      auditContext: options.auditContext,
-    });
-    linkPublicationRetention(this.runtime, this.session);
+    this.#runtime = this.#createRuntime(this.session, this.#sessionDatabase);
     this.mediaService = new GroupMediaService({
       assertOpen: () => this.session.assertOutboundOpen(),
       getState: () => this.state,
@@ -995,6 +963,303 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
     });
     this.#snapshotReady = true;
     this.#refreshSnapshot();
+  }
+
+  #createSession(
+    state: ClientState,
+    options: MarmotGroupOptions,
+    database: SessionDatabase,
+    generation = this.#generation,
+  ): GroupSession {
+    const current = () => generation === this.#generation && !this.#adopting;
+    return new GroupSession({
+      state,
+      ciphersuite: this.ciphersuite,
+      database: database.database,
+      assertAdmission: () => database.assertOpen(),
+      dropDatabase: options.dropDatabase,
+      retained: options.retained,
+      historyTree: options.historyTree,
+      convergencePolicy: options.convergencePolicy,
+      ingestionPool: options.ingestionPool,
+      history: {
+        saveMessage: (message) =>
+          database.run(() => this.history.saveMessage(message)),
+        removeMessage: (id) =>
+          database.run(() => this.history.removeMessage(id)),
+        purgeMessages: () => database.run(() => this.history.purgeMessages()),
+      },
+      now: options.now,
+      settlementQuiescenceMs: options.settlementQuiescenceMs,
+      scheduler: options.scheduler,
+      audit: options.audit,
+      auditContext: options.auditContext,
+      // When the quiescence window elapses, release any queued outbound (B5).
+      onSettleCheck: () => {
+        if (current()) return this.#settleAndDrive();
+        return undefined;
+      },
+      onChanged: () => {
+        if (current()) this.#refreshSnapshot();
+      },
+      onStateChanged: (newState) => {
+        if (!current()) return;
+        this.#stateRevision++;
+        this.#refreshSnapshot();
+        this.emit("stateChanged", newState);
+      },
+      onStateSaved: () => {
+        if (current()) this.emit("stateSaved", this);
+      },
+      onApplicationMessage: (message) => {
+        if (current()) this.emit("applicationMessage", message);
+      },
+      onHistoryError: (error) => {
+        if (current()) this.emit("historyError", error);
+      },
+      onHistoryChanged: () => {
+        if (!current()) return;
+        this.#refreshSnapshot();
+        this.emit("historyChanged", this);
+      },
+    });
+  }
+
+  #createRuntime(
+    session: GroupSession,
+    database: SessionDatabase,
+  ): GroupRuntime {
+    const options = this.#options;
+    const records = session.records;
+    const runtime = new GroupRuntime({
+      welcomeDelivery: new NostrWelcomeDelivery({
+        signer: this.signer,
+        network: this.network,
+      }),
+      pendingPublications: new PendingPublicationStore({
+        get: () => records.get(),
+        update: (update) =>
+          session.persistPublication(() => records.update(update)),
+      }),
+      restorePending: (pending) => session.restorePendingPublication(pending),
+      isApplied: (pending) =>
+        bytesToHex(session.state.confirmationTag) ===
+        bytesToHex(pending.newState.confirmationTag),
+      getNetwork: () => this.network,
+      getRelays: () => session.groupData?.relays,
+      getGroupRef: () => this.idStr,
+      getGroupData: () => session.groupData,
+      assertOpen: () => {
+        database.assertOpen();
+        session.assertOutboundOpen();
+      },
+      confirmPublished: (pending) => {
+        database.assertOpen();
+        return session.confirmPublished(pending);
+      },
+      publishFailed: (pending) => session.publishFailed(pending),
+      save: () => {
+        database.assertOpen();
+        return this.#isCurrent(session) ? this.save() : session.save();
+      },
+      log: this.log,
+      audit: options.audit,
+      auditContext: options.auditContext,
+    });
+    linkPublicationRetention(runtime, session);
+    return runtime;
+  }
+
+  /**
+   * Explicitly discards a removed copy's cryptographic history and installs a
+   * validated, newer Welcome. The facade, decrypted history and watchers survive.
+   * Welcome authentication/authorization belongs to the caller's tentative join.
+   * This is not repair-by-Welcome for an active copy (protocol-core/joining.md).
+   * @internal
+   */
+  async rejoinFromWelcome(
+    state: ClientState,
+    options: { beforeAdopt?: () => Promise<void>; adoptionId?: string } = {},
+  ): Promise<void> {
+    if (this.#adopting) throw new Error("Group rejoin already in progress");
+    if (this.#ingestions > 0)
+      throw new Error("Group ingestion must be fully drained before rejoining");
+    state = structuredClone(state);
+    this.session.assertOpen();
+    if (this.closedSignal.aborted) throw new Error("Group closed");
+    const validate = () => {
+      if (
+        this.status !== "removed" ||
+        this.state.groupActiveState.kind !== "removedFromGroup"
+      )
+        throw new Error("Only a removed group can rejoin from a Welcome");
+      if (bytesToHex(state.groupContext.groupId) !== this.idStr)
+        throw new Error("Rejoin Welcome group id mismatch");
+      if (
+        state.groupContext.cipherSuite !== this.state.groupContext.cipherSuite
+      )
+        throw new Error("Rejoin Welcome ciphersuite mismatch");
+      if (state.groupActiveState.kind !== "active")
+        throw new Error("Rejoin Welcome must contain active membership");
+      const removal = this.session.removalEvidence;
+      const removalEpoch = removal
+        ? BigInt(removal.parentEpoch) + 1n
+        : this.state.groupContext.epoch + 1n;
+      if (
+        state.groupContext.epoch <= this.state.groupContext.epoch ||
+        state.groupContext.epoch <= removalEpoch
+      )
+        throw new Error("Rejoin Welcome must be newer than the removed copy");
+    };
+    validate();
+    this.#adopting = true;
+    let finishAdoption!: () => void;
+    this.#adoptionFinished = new Promise<void>((resolve) => {
+      finishAdoption = resolve;
+    });
+    const previous = this.session;
+    const previousDatabase = this.#sessionDatabase;
+    let staged: GroupSession | undefined;
+    let stagedDatabase: SessionDatabase | undefined;
+    let committed = false;
+    try {
+      await previous.hydrateLifecycleEvidence();
+      validate();
+      const ownIdentity = getCredentialPubkey(
+        getCredentialFromLeafIndex(
+          state.ratchetTree,
+          state.privatePath.leafIndex as LeafIndex,
+        ),
+      );
+      const localIdentity = await this.signer.getPublicKey();
+      if (
+        ownIdentity !== localIdentity ||
+        (previous.removalEvidence &&
+          previous.removalEvidence.localIdentity !== localIdentity)
+      )
+        throw new Error("Rejoin Welcome local member identity mismatch");
+      // Fence all old transactions, including adapter-queued transactions, and
+      // wait until none can overlap the replacement commit.
+      await previousDatabase.pause();
+      validate();
+      const memory = await new MemoryGroupDatabases().open(this.idStr);
+      stagedDatabase = new SessionDatabase(memory);
+      // Never carry historical receiver keys, retained states, forks or pending
+      // proposals across this membership boundary.
+      const fresh = structuredClone(state);
+      fresh.historicalReceiverData.clear();
+      fresh.unappliedProposals = {};
+      staged = this.#createSession(
+        fresh,
+        { ...this.#options, retained: undefined, historyTree: undefined },
+        stagedDatabase,
+        this.#generation + 1,
+      );
+      await staged.hydrateLifecycleEvidence();
+      await staged.save(true);
+      const runtime = this.#createRuntime(staged, stagedDatabase);
+      await runtime.hydratePublication();
+      const record = await memory.group();
+      const nodes = await memory.treeNodes.all!();
+      const purge = await HistoryTree.stagePurge(groupTreeStore(this.database));
+      if ((await this.database.group()).disbandTombstone)
+        throw new GroupTerminalError();
+      const oldRelays = this.relays ?? [];
+      const serialized = serializeClientState(fresh);
+      await options.beforeAdopt?.();
+      if (previous.destroyed || this.closedSignal.aborted)
+        throw new Error("Group closed");
+      validate();
+      await this.database.transaction(async (tx) => {
+        const current = await tx.group();
+        if (current.disbandTombstone) throw new GroupTerminalError();
+        for (const tag of purge.deletes) await tx.treeNodes.delete(tag);
+        for (const node of nodes) await tx.treeNodes.put(node);
+        await tx.wrappers.deleteBelow(Number.MAX_SAFE_INTEGER);
+        await ConvergenceEffectLedger.clear(tx);
+        // Preserve rumor rows and non-secret delivery attribution, not replay
+        // material that can be re-adopted by the discarded branch.
+        for (const row of await tx.deliveries.withEvidence()) {
+          const { evidence: _evidence, ...attribution } = row;
+          await tx.deliveries.put(attribution);
+        }
+        const relays = tx.backfill.all
+          ? (await tx.backfill.all()).map((row) => row.relay)
+          : [...oldRelays, ...(staged!.groupData?.relays ?? [])];
+        for (const relay of relays) await tx.backfill.delete(relay);
+        await tx.updateGroup({
+          state: serialized,
+          adoptionIds: options.adoptionId
+            ? [...new Set([...(current.adoptionIds ?? []), options.adoptionId])]
+            : current.adoptionIds,
+          checkpoint: record.checkpoint,
+          registryState: null,
+          removed: null,
+          removal: null,
+          disbandRequest: null,
+          disbandConvergence: null,
+          disbandTombstone: null,
+          publication: null,
+        });
+        if (previous.destroyed || this.closedSignal.aborted)
+          throw new Error("Group closed");
+      });
+      // No awaits between durable installation and publishing the new owner.
+      committed = true;
+      previousDatabase.revoke();
+      stagedDatabase.activate(this.database);
+      this.#session = staged;
+      this.#sessionDatabase = stagedDatabase;
+      this.#runtime = runtime;
+      this.#generation++;
+      this.#foundingWelcome = undefined;
+      this.#removalRealizationInFlight = undefined;
+      this.#rejectQueuedOutbound("Group rejoined; old outbound cancelled.");
+      this.#stateRevision++;
+      // Closing the facade can race the adapter's durable commit acknowledgement
+      // after its callback returned. A committed replacement must inherit that
+      // closure before it becomes available to any caller.
+      if (this.closedSignal.aborted) {
+        staged.beginDestroy();
+        staged.dispose();
+      }
+      try {
+        previous.beginDestroy();
+        previous.dispose();
+      } catch (error) {
+        // The revoked database/callback capability is the authoritative fence;
+        // optional scheduler/resource cleanup cannot undo durable adoption.
+        this.log("retired session cleanup failed: %o", error);
+      }
+    } finally {
+      this.#adopting = false;
+      if (!committed) {
+        stagedDatabase?.revoke();
+        previousDatabase.resume();
+        try {
+          staged?.dispose();
+        } catch (error) {
+          this.log("staged session cleanup failed: %o", error);
+        }
+      }
+      finishAdoption();
+      this.#adoptionFinished = undefined;
+    }
+    if (this.closedSignal.aborted) return;
+    // Observers cannot roll back an already committed cryptographic adoption.
+    for (const notify of [
+      () => this.image.retireRetained([this.state]),
+      () => this.#refreshSnapshot(),
+      () => this.emit("stateChanged", this.state),
+      () => this.emit("historyChanged", this),
+      () => this.emit("stateSaved", this),
+    ]) {
+      try {
+        notify();
+      } catch (error) {
+        this.log("rejoin observer failed: %o", error);
+      }
+    }
   }
 
   /** Creates a new {@link MarmotGroup} instance from a {@link ClientState} object */
@@ -1033,13 +1298,18 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
 
   /** Consumes a durable at-most-once callback attempt; projection is authority. */
   async realizeDisbandIfNeeded(): Promise<void> {
+    const session = this.session;
+    if (this.#adopting) return;
     if (this.closedSignal.aborted) return;
     if (this.session.terminalTombstone)
-      for (const result of await this.session.driveConvergence()) {
+      for (const result of await session.driveConvergence()) {
+        if (!this.#isCurrent(session)) return;
         await this.#applyRemovalWithdrawal(result);
+        if (!this.#isCurrent(session)) return;
         this.emit("ingestResult", result);
       }
-    const tombstone = await this.session.markDisbandNotificationDelivered();
+    const tombstone = await session.markDisbandNotificationDelivered();
+    if (!this.#isCurrent(session)) return;
     if (!tombstone) return;
     this.#closeController.abort();
     this.image.close();
@@ -1063,11 +1333,22 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
   }
 
   #assertNotDisbanded(): void {
+    if (this.#adopting) throw new Error("Group rejoin in progress");
     // Destruction remains the strongest fence; retained terminal facades keep
     // their typed disband error even after releasing in-memory resources.
     if (this.session.destroyed) this.session.assertOpen();
     if (this.session.terminalTombstone) throw new GroupTerminalError();
+    if (this.closedSignal.aborted) throw new Error("Group unloaded");
     this.session.assertOpen();
+  }
+
+  #isCurrent(session: GroupSession): boolean {
+    return session === this.session && !this.#adopting;
+  }
+
+  #assertCurrent(session: GroupSession): void {
+    if (!this.#isCurrent(session))
+      throw new Error("Group session was replaced or is rejoining");
   }
 
   /**
@@ -1079,7 +1360,10 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
    *   having to mutate `dirty` externally.
    */
   async save(force = false) {
-    await this.session.save(force);
+    const session = this.session;
+    if (this.#adopting) throw new Error("Group rejoin in progress");
+    await session.save(force);
+    if (!this.#isCurrent(session)) return;
     // The canonical media view omits selectable sibling and exactly pinned
     // branches. Load the actual tree membership before releasing owned images.
     // Cache cleanup is optional: failed or changing captures defer retirement
@@ -1090,6 +1374,7 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
       const states = await Promise.all(
         tags.map((tag) => this.forkTree.stateAt(tag)),
       );
+      if (!this.#isCurrent(session)) return;
       if (
         states.some((state) => !state) ||
         tags.join() !== this.forkTree.tags().join()
@@ -1120,9 +1405,13 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
   async reconverge(): Promise<void> {
     if (this.session.destroyed) return;
     this.#assertNotDisbanded();
-    const results = await this.session.reconverge();
+    const session = this.session;
+    const results = await session.reconverge();
+    if (!this.#isCurrent(session)) return;
     for (const result of results) {
+      if (!this.#isCurrent(session)) return;
       await this.#applyRemovalWithdrawal(result);
+      if (!this.#isCurrent(session)) return;
       this.emit("ingestResult", result);
     }
     // A tree-fed switch can also land us ON a branch that removes us. The
@@ -1168,6 +1457,7 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
     ...args: Args
   ): Promise<Record<string, PublishResponse>> {
     this.#assertNotDisbanded();
+    const session = this.session;
     const groupData = this.groupData;
     if (!groupData) throw new NoMarmotGroupDataError();
 
@@ -1185,6 +1475,7 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
     }
 
     const proposalArray = Array.isArray(proposals) ? proposals : [proposals];
+    this.#assertCurrent(session);
 
     const responses: Record<string, PublishResponse> = {};
     for (const proposal of proposalArray) {
@@ -1218,8 +1509,12 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
     intent: GroupSessionSendIntent,
   ): Promise<GroupPublishResult[]> {
     this.#assertNotDisbanded();
-    await this.runtime.retryPendingPublication();
-    await this.session.hydrateLifecycleEvidence();
+    const session = this.session;
+    const runtime = this.runtime;
+    await runtime.retryPendingPublication();
+    this.#assertCurrent(session);
+    await session.hydrateLifecycleEvidence();
+    this.#assertCurrent(session);
     if (this.session.removalBlocked)
       throw new Error("Group removed or removal recovery pending");
     // Snapshot immutable expected-parent evidence before a convergence wait.
@@ -1269,9 +1564,12 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
   /** Atomically enables lifecycle-v1 for a legacy group and publishes it once. */
   async enableDisbanding(): Promise<EnableDisbandingResult> {
     this.#assertNotDisbanded();
+    const session = this.session;
+    const runtime = this.runtime;
     let effects;
     try {
-      effects = await this.session.enableGroupDisbanding();
+      effects = await session.enableGroupDisbanding();
+      this.#assertCurrent(session);
     } catch (error) {
       const message = errorMessage(error);
       const reason =
@@ -1286,7 +1584,7 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
     }
     if (effects.publish.length === 0) return { kind: "alreadyEnabled" };
     try {
-      const [publication] = await this.runtime.publishEffects(effects);
+      const [publication] = await runtime.publishEffects(effects);
       if (!publication)
         return {
           kind: "rejected",
@@ -1302,12 +1600,16 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
   /** Persists irreversible intent, publishes one candidate, and retains it until selection. */
   async disband(): Promise<DisbandResult> {
     this.#assertNotDisbanded();
-    const existing = await this.session.disbandRequest();
+    const session = this.session;
+    const runtime = this.runtime;
+    const existing = await session.disbandRequest();
+    this.#assertCurrent(session);
     if (existing?.status === "failed")
       return { kind: "failed", reason: existing.reason };
     let effects;
     try {
-      effects = await this.session.requestDisband();
+      effects = await session.requestDisband();
+      this.#assertCurrent(session);
     } catch (error) {
       const message = errorMessage(error);
       return {
@@ -1316,7 +1618,8 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
         error: message,
       };
     }
-    const request = await this.session.disbandRequest();
+    const request = await session.disbandRequest();
+    this.#assertCurrent(session);
     if (request?.status === "failed")
       return { kind: "failed", reason: request.reason };
     if (!request)
@@ -1327,7 +1630,7 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
       };
     if (effects.publish.length === 0) return { kind: "pending", request };
     try {
-      const [publication] = await this.runtime.publishEffects(effects);
+      const [publication] = await runtime.publishEffects(effects);
       if (!publication) return { kind: "pending", request };
       return { kind: "acknowledged", request, publication };
     } catch (error) {
@@ -1339,6 +1642,8 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
   async #sendNow(
     intent: GroupSessionSendIntent,
   ): Promise<GroupPublishResult[]> {
+    const session = this.session;
+    const runtime = this.runtime;
     const signal = intent.kind === "commit" ? intent.signal : undefined;
     signal?.throwIfAborted();
     return new Promise<GroupPublishResult[]>((resolve, reject) => {
@@ -1348,16 +1653,20 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
       // Observe late preparation while releasing its caller/FIFO promptly.
       // Start publication in the same continuation that acquires the effects,
       // leaving no orphan staged commit between cancellation and runtime handoff.
-      void this.session.send(intent).then(
+      void session.send(intent).then(
         (effects) => {
           cleanup();
+          if (!this.#isCurrent(session)) {
+            reject(new Error("Group session replaced"));
+            return;
+          }
           if (signal?.aborted) {
             for (const work of effects.publish)
-              if ("pending" in work) this.session.publishFailed(work.pending);
+              if ("pending" in work) session.publishFailed(work.pending);
             reject(signal.reason);
             return;
           }
-          resolve(this.runtime.publishEffects(effects));
+          resolve(runtime.publishEffects(effects));
         },
         (error) => {
           cleanup();
@@ -1388,6 +1697,8 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
 
   /** Gives one pre-existing state intent a preparation attempt, then resumes inbound. */
   async #settleAndDrive(): Promise<void> {
+    if (this.#adopting) return;
+    const session = this.session;
     const settledQueueLength = this.#outboundQueue.length;
     const fairIndex = selectFairQueuedStateIntent(
       this.#outboundQueue,
@@ -1407,17 +1718,23 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
       }
     }
 
-    const resumed = await this.session.driveConvergence();
+    if (!this.#isCurrent(session)) return;
+    const resumed = await session.driveConvergence();
+    if (!this.#isCurrent(session)) return;
     for (const result of resumed) {
+      if (!this.#isCurrent(session)) return;
       await this.#applyRemovalWithdrawal(result);
+      if (!this.#isCurrent(session)) return;
       if (result.kind === "removed") await this.#realizeRemovalIfNeeded();
       this.emit("ingestResult", result);
     }
     await this.realizeDisbandIfNeeded();
+    if (!this.#isCurrent(session)) return;
     // CR-04: routed through the single resume seam rather than repeating its
     // predicate, so the profile gate (D-12) and the already-disbanded check
     // cannot be present on one resume path and missing on the other.
     await this.resumePendingDisband();
+    if (!this.#isCurrent(session)) return;
     // Drain even when retained input was resumed (#109): `#drainOutbound`
     // re-checks the release gate, so it is a no-op if that input reopened the
     // window (which arms a fresh settle check). Resumed input that is not
@@ -1432,6 +1749,8 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
    * request mid-session, so both resume paths share one predicate.
    */
   async resumePendingDisband(): Promise<void> {
+    if (this.#adopting) return;
+    const session = this.session;
     if (this.session.removalBlocked) return;
     if (this.session.destroyed) return;
     // D-12: nothing is published automatically for a group outside the current
@@ -1443,7 +1762,8 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
     if (
       this.status !== "disbanded" &&
       this.lifecycle === groupLifecycleStates.stable &&
-      (await this.session.disbandRequest())?.status === "pending"
+      (await session.disbandRequest())?.status === "pending" &&
+      this.#isCurrent(session)
     )
       await this.disband();
   }
@@ -1485,13 +1805,18 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
   }
 
   async #performRemovalRealization(): Promise<void> {
+    if (this.#adopting) return;
+    const session = this.session;
     if (this.session.terminalTombstone) return;
     if (this.state.groupActiveState.kind !== "removedFromGroup") return;
 
-    const alreadyRealized = (await this.session.records.get()).removed;
+    const alreadyRealized = (await session.records.get()).removed;
+    if (!this.#isCurrent(session)) return;
     if (alreadyRealized === true) return;
-    await this.session.records.update({ removed: true });
-    await this.session.markRemovalNotificationDelivered();
+    await session.records.update({ removed: true });
+    if (!this.#isCurrent(session)) return;
+    await session.markRemovalNotificationDelivered();
+    if (!this.#isCurrent(session)) return;
 
     this.#rejectQueuedOutbound("Removed from group; outbound cancelled.");
     this.#emitRemovedSafely();
@@ -1531,108 +1856,126 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
     events: NostrEvent[],
     options?: { maxRetries?: number },
   ): AsyncGenerator<DispositionedIngestResult> {
-    await this.runtime.hydratePublication();
-    // The fork-history tree can grow during ingest (new commits / forks) without
-    // the canonical state changing — track its size to emit `historyChanged`.
-    const historySizeBefore = this.session.historyTree.size;
-    for await (const result of this.session.ingest(events, options)) {
-      // The engine elected us to commit a peer's departure (B6): publish the
-      // staged self_remove-only commit (publish-before-apply). On publish
-      // failure the staged commit is rolled back and the self_remove stays
-      // pending, so a later ingest re-elects and retries — swallow the throw so
-      // it does not abort delivery of the rest of the batch.
-      if (result.kind === "autoCommit") {
-        let applied: AppliedNotificationsIngestResult | undefined;
-        try {
-          const [confirmed] = await this.runtime.publishEffects({
-            publish: [
-              {
-                kind: "groupEvolution",
-                envelope: result.event,
-                pending: result.pending,
-                actorPubkey: result.actorPubkey,
-              },
-            ],
-          });
-          if (!result.pending.commitMessage)
-            throw new Error("Auto-commit pending state has no commit message");
-          applied = {
-            kind: "appliedNotifications" as const,
-            commitDigest: commitDigest(
-              encode(mlsMessageEncoder, result.pending.commitMessage),
-            ),
-            notifications: confirmed!.notifications,
-          };
-        } catch {
-          /* rolled back; retried on a later ingest */
+    this.#ingestions++;
+    try {
+      if (this.#adopting) throw new Error("Group rejoin in progress");
+      const session = this.session;
+      const runtime = this.runtime;
+      await runtime.hydratePublication();
+      if (!this.#isCurrent(session)) return;
+      // The fork-history tree can grow during ingest (new commits / forks) without
+      // the canonical state changing — track its size to emit `historyChanged`.
+      const historySizeBefore = this.session.historyTree.size;
+      for await (const result of session.ingest(events, options)) {
+        if (!this.#isCurrent(session)) return;
+        // The engine elected us to commit a peer's departure (B6): publish the
+        // staged self_remove-only commit (publish-before-apply). On publish
+        // failure the staged commit is rolled back and the self_remove stays
+        // pending, so a later ingest re-elects and retries — swallow the throw so
+        // it does not abort delivery of the rest of the batch.
+        if (result.kind === "autoCommit") {
+          let applied: AppliedNotificationsIngestResult | undefined;
+          try {
+            const [confirmed] = await runtime.publishEffects({
+              publish: [
+                {
+                  kind: "groupEvolution",
+                  envelope: result.event,
+                  pending: result.pending,
+                  actorPubkey: result.actorPubkey,
+                },
+              ],
+            });
+            if (!result.pending.commitMessage)
+              throw new Error(
+                "Auto-commit pending state has no commit message",
+              );
+            applied = {
+              kind: "appliedNotifications" as const,
+              commitDigest: commitDigest(
+                encode(mlsMessageEncoder, result.pending.commitMessage),
+              ),
+              notifications: confirmed!.notifications,
+            };
+          } catch {
+            /* rolled back; retried on a later ingest */
+          }
+          if (!this.#isCurrent(session)) return;
+          this.emit("ingestResult", result);
+          yield result;
+          if (applied) {
+            const reconciled = {
+              ...applied,
+              disposition: ingestResultDisposition(applied),
+            };
+            this.emit("ingestResult", reconciled);
+            yield reconciled;
+          }
+          continue;
         }
+
+        // An inbound commit removed us (involuntary Remove, or a peer committing
+        // our own self_remove). The session has already applied + persisted the
+        // `removedFromGroup` tombstone; surface it so the app can react. Per the
+        // chosen policy we keep the tombstone rather than auto-destroying — the
+        // app calls destroy() when it wants to purge. Realization (marker +
+        // reject-queued-outbound + `removed` emit) is the single idempotent
+        // `#realizeRemovalIfNeeded` (D-12), shared with the `fromClientState`
+        // load-time path so the two can never diverge.
+        if (result.kind === "removed") {
+          this.log("removed from group by inbound commit");
+          // CR-05: persist the tombstone BEFORE the marker is written. The
+          // session only reaches its own trailing `save()` after this generator
+          // is fully drained, so writing the marker first leaves a window —
+          // a throwing `removed` listener, a consumer that `break`s out of the
+          // `for await`, a process exit, or a rejected `save()` — in which the
+          // marker says "already realized" while the persisted `ClientState` is
+          // NOT the tombstone. On the next load `#realizeRemovalIfNeeded`
+          // returns early (state is not the tombstone), and when the removing
+          // commit is re-ingested it returns early again (marker set), so the
+          // `removed` event is never emitted and queued outbound is never
+          // rejected — the permanent silent suppression the marker exists to
+          // prevent.
+          //
+          // Forced, because the removal may have arrived on a path that left
+          // `#dirty` false. If it rejects, the marker is never written and the
+          // removal simply realizes on the next load — the safe direction.
+          await this.save(true);
+          if (!this.#isCurrent(session)) return;
+          await this.#realizeRemovalIfNeeded();
+        }
+
+        if (result.kind === "processed" && result.selectedTerminal)
+          await this.realizeDisbandIfNeeded();
+
+        await this.#applyRemovalWithdrawal(result);
+        if (!this.#isCurrent(session)) return;
         this.emit("ingestResult", result);
         yield result;
-        if (applied) {
-          const reconciled = {
-            ...applied,
-            disposition: ingestResultDisposition(applied),
-          };
-          this.emit("ingestResult", reconciled);
-          yield reconciled;
-        }
-        continue;
       }
 
-      // An inbound commit removed us (involuntary Remove, or a peer committing
-      // our own self_remove). The session has already applied + persisted the
-      // `removedFromGroup` tombstone; surface it so the app can react. Per the
-      // chosen policy we keep the tombstone rather than auto-destroying — the
-      // app calls destroy() when it wants to purge. Realization (marker +
-      // reject-queued-outbound + `removed` emit) is the single idempotent
-      // `#realizeRemovalIfNeeded` (D-12), shared with the `fromClientState`
-      // load-time path so the two can never diverge.
-      if (result.kind === "removed") {
-        this.log("removed from group by inbound commit");
-        // CR-05: persist the tombstone BEFORE the marker is written. The
-        // session only reaches its own trailing `save()` after this generator
-        // is fully drained, so writing the marker first leaves a window —
-        // a throwing `removed` listener, a consumer that `break`s out of the
-        // `for await`, a process exit, or a rejected `save()` — in which the
-        // marker says "already realized" while the persisted `ClientState` is
-        // NOT the tombstone. On the next load `#realizeRemovalIfNeeded`
-        // returns early (state is not the tombstone), and when the removing
-        // commit is re-ingested it returns early again (marker set), so the
-        // `removed` event is never emitted and queued outbound is never
-        // rejected — the permanent silent suppression the marker exists to
-        // prevent.
-        //
-        // Forced, because the removal may have arrived on a path that left
-        // `#dirty` false. If it rejects, the marker is never written and the
-        // removal simply realizes on the next load — the safe direction.
-        await this.save(true);
-        await this.#realizeRemovalIfNeeded();
-      }
+      // WR-16: same trailing re-assert as `reconverge()`, so the live and
+      // load-time rewind paths run an identical sequence (per-result
+      // withdrawal handling, then a state-derived realization check). A rewind
+      // during ingest can land us ON a branch that removes us without producing
+      // a `removed` result, and the realization obligation is state-derived
+      // (D-12). Idempotent: a no-op unless canonical state is the tombstone and
+      // realization has not happened yet.
+      if (!this.#isCurrent(session)) return;
+      await this.#realizeRemovalIfNeeded();
+      if (!this.#isCurrent(session)) return;
+      // WR-01: the same state-derived re-assert for a selected disband that
+      // reached no `processed` result (the session persisted it from engine
+      // state). Idempotent: a no-op unless a tombstone awaits notification.
+      await this.realizeDisbandIfNeeded();
+      if (!this.#isCurrent(session)) return;
 
-      if (result.kind === "processed" && result.selectedTerminal)
-        await this.realizeDisbandIfNeeded();
-
-      await this.#applyRemovalWithdrawal(result);
-      this.emit("ingestResult", result);
-      yield result;
+      this.#refreshSnapshot();
+      if (this.session.historyTree.size !== historySizeBefore)
+        this.emit("historyChanged", this);
+    } finally {
+      this.#ingestions--;
     }
-
-    // WR-16: same trailing re-assert as `reconverge()`, so the live and
-    // load-time rewind paths run an identical sequence (per-result
-    // withdrawal handling, then a state-derived realization check). A rewind
-    // during ingest can land us ON a branch that removes us without producing
-    // a `removed` result, and the realization obligation is state-derived
-    // (D-12). Idempotent: a no-op unless canonical state is the tombstone and
-    // realization has not happened yet.
-    await this.#realizeRemovalIfNeeded();
-    // WR-01: the same state-derived re-assert for a selected disband that
-    // reached no `processed` result (the session persisted it from engine
-    // state). Idempotent: a no-op unless a tombstone awaits notification.
-    await this.realizeDisbandIfNeeded();
-
-    this.#refreshSnapshot();
-    if (this.session.historyTree.size !== historySizeBefore)
-      this.emit("historyChanged", this);
   }
 
   /**
@@ -1728,6 +2071,13 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
 
   /** Destroys the group and purges the group history */
   async destroy() {
+    // Close admission immediately, but let an adapter acknowledge its in-flight
+    // replacement before choosing the session/database owner to destroy.
+    const adoption = this.#adoptionFinished;
+    if (adoption) {
+      this.dispose();
+      await adoption;
+    }
     this.log("destroying group");
     this.image.close();
     this.session.beginDestroy();

@@ -1,7 +1,6 @@
 import type {
   NostrNetworkInterface,
   PublishResponse,
-  Subscribable,
 } from "@internet-privacy/marmot-ts/client";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { matchFilters, type Filter } from "applesauce-core/helpers/filter";
@@ -24,7 +23,7 @@ export const DEMO_RELAY_CHANNEL = "marmot-demo-relay";
 const SYNC_TIMEOUT_MS = 150;
 
 /**
- * A tiny in-browser Nostr relay shared by every actor in a demo. It ignores
+ * A tiny in-browser Nostr transport for demo tabs. It ignores
  * relay URLs (all "relays" are this one store) so demos can run several
  * clients side by side with no network access.
  *
@@ -34,7 +33,7 @@ const SYNC_TIMEOUT_MS = 150;
  * Events are in memory only and disappear when the worker is terminated.
  * The mode-driven transport service owns its lifetime.
  */
-export class DemoRelay {
+export class DemoRelay implements NostrNetworkInterface {
   readonly relays = [DEMO_RELAY_URL];
   readonly events: NostrEvent[] = [];
 
@@ -44,7 +43,6 @@ export class DemoRelay {
   #ids = new Set<string>();
   #subs = new Set<{
     id: string;
-    actor: string;
     filters: Filter[];
     next: (event: NostrEvent) => void;
     complete: () => void;
@@ -59,7 +57,7 @@ export class DemoRelay {
 
   constructor(options: DemoRelayOptions = {}) {
     this.#channelName = options.channel ?? DEMO_RELAY_CHANNEL;
-    this.open();
+    this.#connect();
   }
 
   /** Resolves once events from already-open tabs have been copied in. */
@@ -67,12 +65,8 @@ export class DemoRelay {
     return this.#ready;
   }
 
-  /**
-   * Join the shared channel and copy in events other tabs already store.
-   * Called by the constructor; only needed again after `close()`.
-   */
-  open() {
-    this.#disposed = false;
+  /** Join the shared channel and copy in events other tabs already store. */
+  #connect() {
     if (this.#channel || this.#worker || this.#channelName === false) return;
     if (typeof SharedWorker !== "undefined") {
       const worker = new SharedWorker(
@@ -111,7 +105,7 @@ export class DemoRelay {
         : "local";
   }
 
-  /** Leave the shared channel; stored events stay. Reopen with `open()`. */
+  /** Permanently dispose this connection and its subscriptions. */
   close() {
     if (this.#disposed) return;
     this.#disposed = true;
@@ -183,83 +177,74 @@ export class DemoRelay {
     if (this.#store(event)) this.#post({ type: "event", event });
   }
 
-  /** Build the `NostrNetworkInterface` one actor hands to its `MarmotClient`. */
-  network(actor: string): NostrNetworkInterface {
+  publish: NostrNetworkInterface["publish"] = async (relays, event) => {
     this.#assertOpen();
+    this.#record({ op: "publish", event });
+    this.#deliver(event);
+    const out: Record<string, PublishResponse> = {};
+    for (const from of relays) out[from] = { from, ok: true };
+    return out;
+  };
+
+  request: NostrNetworkInterface["request"] = async (_relays, filters) => {
+    this.#assertOpen();
+    // Don't answer before other tabs have shared what they already store.
+    await this.ready;
+    this.#assertOpen();
+    const list = Array.isArray(filters) ? filters : [filters];
+    const results = this.events.filter((e) => matchFilters(list, e));
+    this.#record({
+      op: "request",
+      filters: list,
+      results: results.length,
+    });
+    return results;
+  };
+
+  subscription: NostrNetworkInterface["subscription"] = (_relays, filters) => {
+    this.#assertOpen();
+    const list = Array.isArray(filters) ? filters : [filters];
     return {
-      publish: async (relays, event) => {
+      subscribe: (observer) => {
         this.#assertOpen();
-        this.#record({ actor, op: "publish", event });
-        this.#deliver(event);
-        const out: Record<string, PublishResponse> = {};
-        for (const from of relays) out[from] = { from, ok: true };
-        return out;
-      },
-
-      request: async (_relays, filters) => {
-        this.#assertOpen();
-        // Don't answer before other tabs have shared what they already store.
-        await this.ready;
-        this.#assertOpen();
-        const list = Array.isArray(filters) ? filters : [filters];
-        const results = this.events.filter((e) => matchFilters(list, e));
-        this.#record({
-          actor,
-          op: "request",
+        this.#record({ op: "subscribe", filters: list });
+        const sub = {
+          id: crypto.randomUUID(),
           filters: list,
-          results: results.length,
-        });
-        return results;
-      },
-
-      subscription: (_relays, filters): Subscribable<NostrEvent> => {
-        this.#assertOpen();
-        const list = Array.isArray(filters) ? filters : [filters];
+          next: (event: NostrEvent) => observer.next?.(event),
+          complete: () => observer.complete?.(),
+        };
+        // Events synced in from other tabs later arrive through `#store`.
+        for (const event of this.events)
+          if (matchFilters(list, event)) sub.next(event);
+        this.#subs.add(sub);
+        const subscription = {
+          id: sub.id,
+          filters: list,
+          tab: this.tab,
+          at: Date.now(),
+        };
+        this.#post({ type: "subscription", subscription, active: true });
         return {
-          subscribe: (observer) => {
-            this.#assertOpen();
-            this.#record({ actor, op: "subscribe", filters: list });
-            const sub = {
-              id: crypto.randomUUID(),
-              actor,
-              filters: list,
-              next: (event: NostrEvent) => observer.next?.(event),
-              complete: () => observer.complete?.(),
-            };
-            // Events synced in from other tabs later arrive through `#store`.
-            for (const event of this.events)
-              if (matchFilters(list, event)) sub.next(event);
-            this.#subs.add(sub);
-            const subscription = {
-              id: sub.id,
-              actor,
-              filters: list,
-              tab: this.tab,
-              at: Date.now(),
-            };
-            this.#post({ type: "subscription", subscription, active: true });
-            return {
-              unsubscribe: () => {
-                if (!this.#subs.delete(sub)) return;
-                this.#post({
-                  type: "subscription",
-                  subscription,
-                  active: false,
-                });
-                this.#record({ actor, op: "unsubscribe", filters: list });
-              },
-            };
+          unsubscribe: () => {
+            if (!this.#subs.delete(sub)) return;
+            this.#post({
+              type: "subscription",
+              subscription,
+              active: false,
+            });
+            this.#record({ op: "unsubscribe", filters: list });
           },
         };
       },
-
-      // Every actor's inbox is the single demo relay.
-      getUserInboxRelays: async () => {
-        this.#assertOpen();
-        return [DEMO_RELAY_URL];
-      },
     };
-  }
+  };
+
+  getUserInboxRelays: NostrNetworkInterface["getUserInboxRelays"] =
+    async () => {
+      this.#assertOpen();
+      return [DEMO_RELAY_URL];
+    };
 }
 
 export const DEMO_RELAY_URL = "wss://demo.relay.invalid";

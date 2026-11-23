@@ -141,7 +141,7 @@ export function RelayView() {
           <input
             aria-label="Filter relay data"
             className="input input-sm w-full max-w-md"
-            placeholder="Filter by kind, actor, ID, content…"
+            placeholder="Filter by kind, tab, ID, content…"
             value={search}
             onChange={(event) => {
               setSearch(event.target.value);
@@ -169,7 +169,7 @@ export function RelayView() {
               {subscriptions.map((sub) => (
                 <div key={sub.id} className="py-2">
                   <p className="break-all font-mono text-xs">
-                    {sub.actor}@{sub.tab} · {sub.id} ·{" "}
+                    {sub.tab} · {sub.id} ·{" "}
                     {new Date(sub.at).toLocaleTimeString()}
                   </p>
                   <Json value={sub.filters} />

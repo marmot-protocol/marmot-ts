@@ -19,7 +19,7 @@ export const transport$ = mode$.pipe(
       new Observable<NostrNetworkInterface>((subscriber) => {
         const transport =
           mode === "local" ? new DemoRelay() : new LiveTransport();
-        subscriber.next(transport.network("you"));
+        subscriber.next(transport);
         return () => transport.close();
       }),
   ),

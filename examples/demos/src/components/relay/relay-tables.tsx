@@ -50,7 +50,6 @@ export function TrafficTable({ entries }: { entries: RelayLogEntry[] }) {
           <tr>
             {[
               "Time",
-              "Actor",
               "Tab",
               "Operation",
               "Event / filters",
@@ -69,7 +68,7 @@ export function TrafficTable({ entries }: { entries: RelayLogEntry[] }) {
               key={entry.id}
               value={entry}
               label={`Inspect traffic entry ${entry.id}`}
-              columns={7}
+              columns={6}
             >
               <td className="whitespace-nowrap tabular-nums">
                 <time
@@ -79,7 +78,6 @@ export function TrafficTable({ entries }: { entries: RelayLogEntry[] }) {
                   {new Date(entry.at).toLocaleTimeString()}
                 </time>
               </td>
-              <td>{entry.actor}</td>
               <td className="font-mono text-xs">{entry.tab ?? "—"}</td>
               <td>
                 <span
@@ -110,7 +108,7 @@ export function TrafficTable({ entries }: { entries: RelayLogEntry[] }) {
           ))}
           {!entries.length && (
             <tr>
-              <td colSpan={7} className="py-8 text-center text-base-content/60">
+              <td colSpan={6} className="py-8 text-center text-base-content/60">
                 No traffic.
               </td>
             </tr>

@@ -4,7 +4,6 @@ import type { Filter } from "applesauce-core/helpers/filter";
 export type RelayLogEntry = {
   id: number;
   at: number;
-  actor: string;
   tab?: string;
   op: "publish" | "request" | "subscribe" | "unsubscribe";
   event?: NostrEvent;
@@ -15,7 +14,6 @@ export type RelayLogEntry = {
 export type RelaySubscription = {
   id: string;
   tab: string;
-  actor: string;
   filters: Filter[];
   at: number;
 };

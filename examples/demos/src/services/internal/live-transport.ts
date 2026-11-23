@@ -4,7 +4,7 @@ import { Subject, lastValueFrom, takeUntil, toArray } from "rxjs";
 import { LIVE_RELAYS, LOOKUP_RELAYS } from "./relays.js";
 
 /** Relay networking only; contacts owns its event cache and discovery. */
-export class LiveTransport {
+export class LiveTransport implements NostrNetworkInterface {
   readonly #closed = new Subject<void>();
   #disposed = false;
 
@@ -14,61 +14,53 @@ export class LiveTransport {
     if (this.#disposed) throw new Error("Transport closed");
   }
 
-  network(_actor: string): NostrNetworkInterface {
+  publish: NostrNetworkInterface["publish"] = async (relays, event) => {
     this.#assertOpen();
-    const network: NostrNetworkInterface = {
-      publish: async (relays, event) => {
+    const responses = await this.pool.publish(relays, event);
+    this.#assertOpen();
+    return Object.fromEntries(
+      responses.map((response) => [response.from, response]),
+    );
+  };
+
+  request: NostrNetworkInterface["request"] = async (relays, filters) => {
+    this.#assertOpen();
+    const list = Array.isArray(filters) ? filters : [filters];
+    const events = await lastValueFrom(
+      this.pool.request(relays, list).pipe(takeUntil(this.#closed), toArray()),
+    );
+    this.#assertOpen();
+    return events;
+  };
+
+  subscription: NostrNetworkInterface["subscription"] = (relays, filters) => {
+    this.#assertOpen();
+    return {
+      subscribe: (observer) => {
         this.#assertOpen();
-        const responses = await this.pool.publish(relays, event);
-        this.#assertOpen();
-        return Object.fromEntries(
-          responses.map((response) => [response.from, response]),
-        );
-      },
-      request: async (relays, filters) => {
-        this.#assertOpen();
-        const list = Array.isArray(filters) ? filters : [filters];
-        const events = await lastValueFrom(
-          this.pool
-            .request(relays, list)
-            .pipe(takeUntil(this.#closed), toArray()),
-        );
-        this.#assertOpen();
-        return events;
-      },
-      subscription: (relays, filters) => {
-        this.#assertOpen();
-        return {
-          subscribe: (observer) => {
-            this.#assertOpen();
-            return this.pool
-              .subscription(
-                relays,
-                Array.isArray(filters) ? filters : [filters],
-              )
-              .pipe(takeUntil(this.#closed))
-              .subscribe(observer);
-          },
-        };
-      },
-      getUserInboxRelays: async (pubkey) => {
-        const events = await network.request(LOOKUP_RELAYS, {
-          kinds: [10050],
-          authors: [pubkey],
-        });
-        const latest = events.sort(
-          (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
-        )[0];
-        const relays = latest?.tags
-          .filter(
-            (tag) => tag[0] === "relay" && /^wss?:\/\//.test(tag[1] ?? ""),
-          )
-          .map((tag) => tag[1]);
-        return relays?.length ? [...new Set(relays)] : [...LIVE_RELAYS];
+        return this.pool
+          .subscription(relays, Array.isArray(filters) ? filters : [filters])
+          .pipe(takeUntil(this.#closed))
+          .subscribe(observer);
       },
     };
-    return network;
-  }
+  };
+
+  getUserInboxRelays: NostrNetworkInterface["getUserInboxRelays"] = async (
+    pubkey,
+  ) => {
+    const events = await this.request(LOOKUP_RELAYS, {
+      kinds: [10050],
+      authors: [pubkey],
+    });
+    const latest = events.sort(
+      (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
+    )[0];
+    const relays = latest?.tags
+      .filter((tag) => tag[0] === "relay" && /^wss?:\/\//.test(tag[1] ?? ""))
+      .map((tag) => tag[1]);
+    return relays?.length ? [...new Set(relays)] : [...LIVE_RELAYS];
+  };
 
   close() {
     if (this.#disposed) return;

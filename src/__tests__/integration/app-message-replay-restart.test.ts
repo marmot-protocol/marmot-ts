@@ -31,7 +31,7 @@ import type { MarmotGroupDatabase } from "../../client/storage/database/types.js
 import { testAccount } from "../helpers/test-accounts.js";
 import { TerminalWrapperLedger } from "../../client/storage/wrapper-ledger.js";
 import restartFaultFixture from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/restart-delivery-faults.v1.json" with { type: "json" };
-import { projectCanonicalConformanceSnapshot } from "../conformance/snapshot.js";
+import { projectCanonicalConformanceSnapshot } from "../../../conformance/tests/snapshot.js";
 
 const NETWORK: NostrNetworkInterface = {
   request: async () => {

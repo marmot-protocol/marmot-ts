@@ -1,4 +1,4 @@
-import manifestJson from "../../../refs/mdk/crates/cgka-conformance-simulator/vectors/manifest.v1.json" with { type: "json" };
+import manifestJson from "../../refs/mdk/crates/cgka-conformance-simulator/vectors/manifest.v1.json" with { type: "json" };
 import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   defaultCryptoProvider,
@@ -8,15 +8,15 @@ import {
 } from "ts-mls";
 import { describe, expect, it } from "vitest";
 import { vi } from "vitest";
-import { createCredential } from "../../core/credential.js";
-import { createSimpleGroup } from "../../core/group.js";
-import { generateKeyPackage } from "../../core/key-package.js";
-import { serializeClientState } from "../../core/client-state.js";
-import { memoryDatabase } from "../helpers/database.js";
-import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { GroupRegistry } from "../../client/storage/group-registry.js";
-import { MockNetwork } from "../helpers/mock-network.js";
-import { testAccount } from "../helpers/test-accounts.js";
+import { createCredential } from "../../src/core/credential.js";
+import { createSimpleGroup } from "../../src/core/group.js";
+import { generateKeyPackage } from "../../src/core/key-package.js";
+import { serializeClientState } from "../../src/core/client-state.js";
+import { memoryDatabase } from "../../src/__tests__/helpers/database.js";
+import { MarmotGroup } from "../../src/client/group/marmot-group.js";
+import { GroupRegistry } from "../../src/client/storage/group-registry.js";
+import { MockNetwork } from "../../src/__tests__/helpers/mock-network.js";
+import { testAccount } from "../../src/__tests__/helpers/test-accounts.js";
 import {
   resolveManifestArtifact,
   validateConformanceManifest,
@@ -198,7 +198,7 @@ describe("conformance adapter", () => {
       });
     const groups = new Map([["alice", makeGroup()]]);
     await groups.get("alice")!.save(true);
-    const initialDurableState = await groupDatabase.meta.get("state");
+    const initialDurableState = (await groupDatabase.group()).state;
     let durableBeforeCrash = initialDurableState;
     let now = 100;
     const subject = new MarmotConformanceSubject({
@@ -217,7 +217,7 @@ describe("conformance adapter", () => {
       },
       restart: async (_client, group) => {
         const groupId = group.id.slice();
-        durableBeforeCrash = await groupDatabase.meta.get("state");
+        durableBeforeCrash = (await groupDatabase.group()).state;
         // Sending now durably preserves the updated ratchet and delivery
         // evidence. A crash must restore that latest state, not pre-send bytes.
         expect(durableBeforeCrash).toEqual(serializeClientState(group.state));

@@ -38,7 +38,7 @@ Thank you for your interest in contributing to marmot-ts! This document provides
 - `pnpm compile` - Compile production TypeScript files
 - `pnpm test` - Run Vitest in watch mode
 - `pnpm vitest run` - Run the runtime test suite once
-- `pnpm conformance:extended` - Run the extended conformance suite
+- `pnpm conformance` - Run all conformance tests and save campaign evidence
 - `pnpm typecheck:tests` - Strictly typecheck all source, test, and helper TypeScript without emitting files
 - `pnpm format` / `pnpm lint` - Format code / check formatting with Prettier
 - `pnpm prepare` - Build the workspace MLS fork (also runs during installation)
@@ -57,12 +57,12 @@ Before opening a PR, run:
 pnpm check
 ```
 
-This checks formatting, TypeScript (including tests), the runtime tests, and the
+This checks formatting, TypeScript (including tests), runtime and conformance tests, and the
 build. Use `pnpm format` to fix formatting. Add or update tests when they protect
 meaningful behavior; retire temporary migration checks when they stop being useful.
 
-CI also runs the runtime tests on supported Node, Bun, and Deno versions, extended
-conformance tests, and packaging/release script tests. Run `pnpm conformance:extended`
+CI also runs runtime and conformance tests on supported Node, Bun, and Deno versions,
+and packaging/release script tests. Run `pnpm conformance`
 locally when changing protocol behavior, and `pnpm docs:build` when changing docs.
 The release commands verify the packed tarball before publishing; there is no
 separate consumer smoke harness to run.

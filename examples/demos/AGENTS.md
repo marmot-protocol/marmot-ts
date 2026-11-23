@@ -1,5 +1,7 @@
 # Demo Guidelines
 
+- Do not write or run automated tests for this app, its services, or individual demos. This app is intended to be a simple, readable demonstration of the public library APIs, not a test suite.
+- Keep automated behavior coverage in the library. Do not introduce abstractions, wrappers, fixtures, or infrastructure in the demo app to support testing.
 - Follow a **show, don't tell** approach: demonstrate behavior through working controls, live state, and results rather than descriptive text.
 - Keep demos focused on clean code and functionality. Avoid introductory paragraphs, tutorials, and redundant explanations in the UI.
 - Use concise labels, statuses, empty states, and actionable errors. Include explanatory text only when essential to using the demo safely or correctly.

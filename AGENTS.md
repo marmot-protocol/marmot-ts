@@ -34,6 +34,11 @@ Use `Uint8Array`, not `Buffer`; preserve Node, Bun, and Deno compatibility. Impo
 
 Vitest discovers `src/**/*.test.ts`. Colocate tests in `__tests__/`; reuse `src/__tests__/helpers` and mock networking. Run a focused test with `pnpm vitest run src/path/file.test.ts`.
 
+Do not write or run automated tests for `examples/demos/`, including its app,
+services, and individual demos. The demo app is a simple, readable demonstration
+of the public library APIs, not a test suite. Keep automated behavior coverage in
+the library; do not add demo abstractions or infrastructure to support testing.
+
 ## Protocol References
 
 At every phase start, fetch `origin` in both `refs/marmot` and `refs/mdk`; inspect `HEAD..origin/HEAD`, review relevant diffs, fast-forward, and commit pointer updates separately as `chore(refs):`.
@@ -52,7 +57,7 @@ breaking changes with migration guidance.
 
 Add new docs pages to `.vitepress/config.ts`. Use `.agents/skills/applesauce/` for Nostr work and `.agents/skills/opentui/` for terminal UIs.
 
-Use focused checks while developing and `pnpm check` before a PR. Add tests for meaningful behavior; retire temporary migration and planning checks when they no longer serve the library. Use GSD workflows when requested or when the task benefits from planning; routine changes do not require planning artifacts.
+Use focused checks while developing and `pnpm check` before a PR. Add tests for meaningful library behavior, not the demos app; retire temporary migration and planning checks when they no longer serve the library. Use GSD workflows when requested or when the task benefits from planning; routine changes do not require planning artifacts.
 
 <!-- GSD:profile-start -->
 

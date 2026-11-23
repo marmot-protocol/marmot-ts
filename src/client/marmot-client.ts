@@ -192,6 +192,18 @@ export class MarmotClient {
     });
   }
 
+  /**
+   * Releases loaded groups and their connections without deleting persisted
+   * state. Safe to call repeatedly. The injected database and network remain
+   * owned by the caller and are not closed.
+   *
+   * Do not reuse this client after disposal. Caller-owned invite listeners and
+   * watchers should still be stopped with their handles or AbortSignals.
+   */
+  dispose(): void {
+    this.groups.dispose();
+  }
+
   // ---------------------------------------------------------------------------
   // Welcome / invite flows
   //

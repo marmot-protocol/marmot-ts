@@ -30,5 +30,5 @@ Run through this list before shipping a Marmot app. Each item links to the page 
 
 ## Lifecycle
 
-- [ ] **Clean up.** Abort watchers with `signal`, `unsubscribe()` your `connectAll()` and `listen()` handles, and unload groups when switching accounts. [UI frameworks](/client/ui-frameworks#cancel-watchers-with-signal)
+- [ ] **Clean up.** Call `client.dispose()` when replacing a client or switching accounts to release its groups and group connections. Abort caller-owned watchers with `signal` and `unsubscribe()` invite `listen()` handles; close injected storage and transport separately when no longer needed. [UI frameworks](/client/ui-frameworks#cancel-watchers-with-signal)
 - [ ] **Remove legacy groups.** A group that doesn't require the `0x8009` account identity proof reports `group.profileSupport.kind === "unsupported"`. It can't send, receive or be joined, so offer to `destroy()` it. [Groups](/client/groups#load-unload-and-destroy-groups)

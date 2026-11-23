@@ -50,6 +50,13 @@ await client.groups.unload(groupId); // free memory, keep storage
 await client.groups.destroy(groupId); // delete local state and history
 ```
 
+When replacing a client or switching accounts, call `client.dispose()` to release
+all loaded groups and their `connect()` / `connectAll()` connections at once.
+Disposal is synchronous and safe to repeat; pending loads cannot repopulate the
+disposed client. Persisted state is kept, and the injected database and network
+are not closed. Create a new client rather than reusing a disposed one. Stop
+caller-owned invite listeners and watchers with their handles or abort signals.
+
 `client.groups.watch()` yields the stored group list now and after every create, join, load or destroy. Pass `{ includeStateChanges: true }` to also re-yield when a loaded group's state changes, without reading storage. See [UI Frameworks](/client/ui-frameworks) for using these in React, Svelte and others.
 
 ```typescript

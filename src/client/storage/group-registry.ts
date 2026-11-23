@@ -95,6 +95,7 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
 
   /** Group ids provisionally cached while their post-hydration activation runs. */
   #activatingGroups = new Set<string>();
+  #disposed = false;
 
   constructor(options: GroupRegistryOptions) {
     super();
@@ -113,6 +114,17 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     return Array.from(this.#groups.entries())
       .filter(([id]) => !this.#activatingGroups.has(id))
       .map(([, group]) => group);
+  }
+
+  #assertActive(): void {
+    if (this.#disposed) throw new Error("Groups manager disposed");
+  }
+
+  /** Releases cached and activating groups; pending loads cannot repopulate them. */
+  dispose(): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    for (const id of this.#groups.keys()) this.untrack(id);
   }
 
   /** Reads the cached instance for a group id, without loading from the store. */
@@ -186,7 +198,9 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     state: ClientState,
     kind: "create" | "join" = "create",
   ): Promise<GroupStorageHandle> {
+    this.#assertActive();
     await this.#reconcile();
+    this.#assertActive();
     const id = bytesToHex(state.groupContext.groupId);
     const intentId = `${kind}:${id}`;
     await this.database.account.transaction(async (tx) => {
@@ -227,6 +241,7 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
 
   /** Loads a group from the store, hydrated but not cached. */
   async load(groupId: Uint8Array | string): Promise<MarmotGroup> {
+    this.#assertActive();
     const id = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
     const idHex = bytesToHex(id);
     log("loading group %s from store", idHex);
@@ -351,6 +366,10 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
 
   /** Caches a group, attaches lifecycle forwarders, then activates its state. */
   async track(group: MarmotGroup): Promise<void> {
+    if (this.#disposed) {
+      group.dispose();
+      this.#assertActive();
+    }
     const id = bytesToHex(group.id);
     this.#activatingGroups.add(id);
     this.#groups.set(id, group);
@@ -373,6 +392,7 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
       // change canonical state (including landing on removal), so activate them
       // only after every public lifecycle forwarder is attached.
       await group.session.hydrateLifecycleEvidence();
+      this.#assertActive();
       // D-11/D-12: a group outside the current account identity proof profile
       // still loads and is fully hydrated above, but activation steps that can
       // trigger outbound work (reconvergence, resumed disband) are skipped for
@@ -395,9 +415,13 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
           group.session.removalEvidence)
       )
         await group.reconverge();
+      this.#assertActive();
       await group.realizeRemovalIfNeeded();
+      this.#assertActive();
       await group.realizeDisbandIfNeeded();
+      this.#assertActive();
       if (profileSupported) await group.resumePendingDisband();
+      this.#assertActive();
       this.#activatingGroups.delete(id);
       this.emit("updated", this.loaded);
     } catch (error) {
@@ -438,6 +462,7 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     existing.dispose();
 
     this.#groups.delete(id);
+    this.#activatingGroups.delete(id);
     this.emit("updated", this.loaded);
   }
 
@@ -471,6 +496,7 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
 
   /** Gets a group from cache or loads it from the store, caching the result. */
   async get(groupId: Uint8Array | string): Promise<MarmotGroup> {
+    this.#assertActive();
     const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
     const existingLoad = this.#groupLoadPromises.get(id);
     if (existingLoad) return existingLoad;

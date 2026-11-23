@@ -317,6 +317,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
 
   /** Owns the in-memory cache + store hydration. */
   readonly #registry: GroupRegistry;
+  readonly #closeController = new AbortController();
   readonly #adoptions = new Map<string, Promise<void>>();
   readonly #maxPendingImageMutations: number;
   readonly #imageMutations = new Map<
@@ -436,6 +437,13 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
   /** Returns the list of currently loaded group instances */
   get loaded(): MarmotGroup[] {
     return this.#registry.loaded;
+  }
+
+  /** Releases every group and connection without deleting persisted state. */
+  dispose(): void {
+    if (this.#closeController.signal.aborted) return;
+    this.#closeController.abort();
+    this.#registry.dispose();
   }
 
   /** Lists all persisted group IDs, decoded from their hex storage keys. */
@@ -897,6 +905,8 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
    * whose `.unsubscribe()` tears down every connection and stops tracking.
    */
   connectAll(options?: ConnectOptions): Unsubscribable {
+    if (this.#closeController.signal.aborted)
+      throw new Error("Groups manager disposed");
     backfillBounds(options);
     const records = new Map<
       string,
@@ -946,6 +956,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
     this.on("disbanded", disconnect);
 
     const unsubscribe = () => {
+      this.#closeController.signal.removeEventListener("abort", unsubscribe);
       options?.signal?.removeEventListener("abort", unsubscribe);
       this.off("created", connect);
       this.off("joined", connect);
@@ -963,6 +974,9 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       records.clear();
     };
     options?.signal?.addEventListener("abort", unsubscribe, { once: true });
+    this.#closeController.signal.addEventListener("abort", unsubscribe, {
+      once: true,
+    });
     if (options?.signal?.aborted) unsubscribe();
     return { unsubscribe };
   }
@@ -974,6 +988,8 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
   ): Promise<Unsubscribable> {
     const noop: Unsubscribable = { unsubscribe: () => {} };
     if (
+      this.#closeController.signal.aborted ||
+      group.closedSignal.aborted ||
       options?.signal?.aborted ||
       group.status === "removed" ||
       group.status === "disbanded"
@@ -1037,6 +1053,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       if (cancelled) return;
       cancelled = true;
       paging.abort();
+      this.#closeController.signal.removeEventListener("abort", unsubscribe);
       options?.signal?.removeEventListener("abort", unsubscribe);
       group.off("disbanded", unsubscribe);
       sub?.unsubscribe();
@@ -1044,6 +1061,9 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       cleanup();
     };
     options?.signal?.addEventListener("abort", unsubscribe, { once: true });
+    this.#closeController.signal.addEventListener("abort", unsubscribe, {
+      once: true,
+    });
     group.once("disbanded", unsubscribe);
     const seen = record.seen;
     type DrainOutcome = {

@@ -15,6 +15,8 @@
 
 ### Added
 
+- `MarmotClient.dispose()` releases loaded groups and their connections without deleting persisted state or closing caller-owned storage and transport.
+
 - Optional `NostrNetworkInterface.backfill()` lets adapters retrieve group history using negentropy or their own pagination, with per-relay completeness and safe cursor advancement; existing adapters keep the paginated fallback, and the OpenTUI example uses Applesauce's sync loader.
 
 - `indexedDBDatabase()` and `sqliteDatabase()` storage adapters in `@internet-privacy/marmot-ts/extra`, and `memoryDatabase()` for tests.

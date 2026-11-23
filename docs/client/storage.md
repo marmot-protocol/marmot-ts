@@ -71,6 +71,40 @@ const deliveries = await db.deliveries.byRumor(replies[0].id);
 
 Each `deliveries` row records how a message arrived: the epoch it decrypted at and the fork-history state it belongs to. A message stays visible while any delivery supports it; when a fork switch abandons the branch it arrived on, its delivery and (if it was the last one) the message are removed in the same transaction.
 
+## Inspecting tables
+
+Built-in adapters provide optional `all()` methods on every table and
+`database.groups.list()` to discover stored group databases, including groups
+absent from the account registry. Custom adapters may omit these diagnostic
+capabilities; check for them before calling. An unsupported enumeration is not
+an empty table.
+
+```typescript
+const database = client.database;
+if (database.groups.list) {
+  for (const id of await database.groups.list()) {
+    const group = await database.groups.open(id);
+    try {
+      if (group.wrappers.all) {
+        console.log(await group.wrappers.all());
+      }
+    } finally {
+      await group.close();
+    }
+  }
+}
+```
+
+`all()` returns independent row copies in primary-key order, unlike the
+time-ordered `messages.query()`. These reads load entire tables and can expose
+private keys and plaintext. Protect inspection output accordingly. Reads of
+different tables are not an atomic whole-database snapshot.
+
+`groups.list()` does not create databases and may omit empty ones. When it is
+unavailable, account group records and pending intents can identify known groups,
+but cannot discover unregistered storage. The demos app's **Inspect database**
+modal uses only this public API.
+
 ## Transactions
 
 Every change the client makes to a group — new MLS state, fork-history nodes, the processed transport event, new or retracted messages — commits in **one group transaction**. After a crash either all of it is durable or none of it is, so a message is never shown without the state that produced it, and an event is never applied twice.

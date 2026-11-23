@@ -495,6 +495,13 @@ function groupReader(p: string, gid: string, execute: Execute): GroupReader {
       return row ? groupRecordFromRow(row) : {};
     },
     treeNodes: {
+      all: async () =>
+        (
+          await execute(
+            `SELECT * FROM ${p}tree_nodes WHERE gid = ? ORDER BY tag`,
+            [gid],
+          )
+        ).map(treeNodeFromRow),
       get: async (tag) => {
         const row = await one(
           `SELECT * FROM ${p}tree_nodes WHERE gid = ? AND tag = ?`,
@@ -504,6 +511,17 @@ function groupReader(p: string, gid: string, execute: Execute): GroupReader {
       },
     },
     wrappers: {
+      all: async () =>
+        (
+          await execute(
+            `SELECT * FROM ${p}wrappers WHERE gid = ? ORDER BY id`,
+            [gid],
+          )
+        ).map((row): WrapperRow => ({
+          id: String(row.id),
+          epoch: Number(row.epoch),
+          outcome: String(row.outcome) as WrapperRow["outcome"],
+        })),
       get: async (id) => {
         const row = await one(
           `SELECT epoch, outcome FROM ${p}wrappers WHERE gid = ? AND id = ?`,
@@ -519,6 +537,13 @@ function groupReader(p: string, gid: string, execute: Execute): GroupReader {
       },
     },
     effects: {
+      all: async () =>
+        (
+          await execute(
+            `SELECT * FROM ${p}effects WHERE gid = ? ORDER BY digest`,
+            [gid],
+          )
+        ).map(effectFromRow),
       get: async (digest) => {
         const row = await one(
           `SELECT * FROM ${p}effects WHERE gid = ? AND digest = ?`,
@@ -535,6 +560,13 @@ function groupReader(p: string, gid: string, execute: Execute): GroupReader {
         ).map(effectFromRow),
     },
     backfill: {
+      all: async () =>
+        (
+          await execute(
+            `SELECT * FROM ${p}backfill WHERE gid = ? ORDER BY relay`,
+            [gid],
+          )
+        ).map(backfillFromRow),
       get: async (relay) => {
         const row = await one(
           `SELECT * FROM ${p}backfill WHERE gid = ? AND relay = ?`,
@@ -544,6 +576,13 @@ function groupReader(p: string, gid: string, execute: Execute): GroupReader {
       },
     },
     messages: {
+      all: async () =>
+        (
+          await execute(
+            `SELECT * FROM ${p}messages WHERE gid = ? ORDER BY id`,
+            [gid],
+          )
+        ).map(messageFromRow),
       get: async (id) => {
         const row = await one(
           `SELECT * FROM ${p}messages WHERE gid = ? AND id = ?`,
@@ -588,6 +627,13 @@ function groupReader(p: string, gid: string, execute: Execute): GroupReader {
       },
     },
     deliveries: {
+      all: async () =>
+        (
+          await execute(
+            `SELECT * FROM ${p}deliveries WHERE gid = ? ORDER BY id`,
+            [gid],
+          )
+        ).map(deliveryFromRow),
       byRumor: async (rumorId) =>
         (
           await execute(
@@ -788,18 +834,30 @@ class SQLiteGroupDatabase implements MarmotGroupDatabase {
     const read = <T>(fn: (reader: GroupReader) => Promise<T>) =>
       lane.run(false, (execute) => fn(groupReader(lane.prefix, gid, execute)));
     this.group = () => read((r) => r.group());
-    this.treeNodes = { get: (tag) => read((r) => r.treeNodes.get(tag)) };
-    this.wrappers = { get: (id) => read((r) => r.wrappers.get(id)) };
+    this.treeNodes = {
+      all: () => read((r) => r.treeNodes.all!()),
+      get: (tag) => read((r) => r.treeNodes.get(tag)),
+    };
+    this.wrappers = {
+      all: () => read((r) => r.wrappers.all!()),
+      get: (id) => read((r) => r.wrappers.get(id)),
+    };
     this.effects = {
+      all: () => read((r) => r.effects.all!()),
       get: (digest) => read((r) => r.effects.get(digest)),
       byState: (state) => read((r) => r.effects.byState(state)),
     };
-    this.backfill = { get: (relay) => read((r) => r.backfill.get(relay)) };
+    this.backfill = {
+      all: () => read((r) => r.backfill.all!()),
+      get: (relay) => read((r) => r.backfill.get(relay)),
+    };
     this.messages = {
+      all: () => read((r) => r.messages.all!()),
       get: (id) => read((r) => r.messages.get(id)),
       query: (query) => read((r) => r.messages.query(query)),
     };
     this.deliveries = {
+      all: () => read((r) => r.deliveries.all!()),
       byRumor: (id) => read((r) => r.deliveries.byRumor(id)),
       countByRumor: (id) => read((r) => r.deliveries.countByRumor(id)),
       withEvidence: () => read((r) => r.deliveries.withEvidence()),
@@ -817,6 +875,19 @@ class SQLiteGroupDatabase implements MarmotGroupDatabase {
 
 class SQLiteGroupDatabases implements MarmotGroupDatabases {
   constructor(readonly lane: Lane) {}
+
+  list(): Promise<string[]> {
+    const p = this.lane.prefix;
+    return this.lane.run(false, async (execute) =>
+      (
+        await execute(
+          GROUP_TABLES.map((table) => `SELECT gid FROM ${p}${table}`).join(
+            " UNION ",
+          ) + " ORDER BY gid",
+        )
+      ).map((row) => String(row.gid)),
+    );
+  }
 
   async open(groupId: string): Promise<MarmotGroupDatabase> {
     return new SQLiteGroupDatabase(this.lane, groupId);
@@ -895,6 +966,10 @@ function accountReader(p: string, execute: Execute): AccountReader {
         ),
     },
     invites: {
+      all: async () =>
+        (await execute(`SELECT * FROM ${p}invites ORDER BY id`)).map(
+          inviteFromRow,
+        ),
       get: async (id) => {
         const row = await one(`SELECT * FROM ${p}invites WHERE id = ?`, [id]);
         return row ? inviteFromRow(row) : undefined;
@@ -1015,6 +1090,7 @@ class SQLiteAccountDatabase implements MarmotAccountDatabase {
       all: () => read((r) => r.keyPackages.all()),
     };
     this.invites = {
+      all: () => read((r) => r.invites.all!()),
       get: (id) => read((r) => r.invites.get(id)),
       byState: (state) => read((r) => r.invites.byState(state)),
       byRumor: (id) => read((r) => r.invites.byRumor(id)),

@@ -38,4 +38,5 @@ if (sqlite)
     "sqlite",
     async () => sqliteDatabase(connect(join(dir, `db${counter++}.sqlite`))),
     async () => sqliteDatabase(connect(join(dir, `db${counter - 1}.sqlite`))),
+    { requireInspection: true },
   );

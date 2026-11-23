@@ -300,9 +300,25 @@ function groupReader(
   const reader: GroupReader = {
     group: async () =>
       (await get<GroupRecord>("group", GROUP_KEY)) ?? ({} as GroupRecord),
-    treeNodes: { get: (tag) => get<TreeNodeRow>("treeNodes", tag) },
-    wrappers: { get: (id) => get<WrapperRow>("wrappers", id) },
+    treeNodes: {
+      all: async () =>
+        (await request((await store("treeNodes")).getAll())).map((row) =>
+          clean<TreeNodeRow>(row),
+        ),
+      get: (tag) => get<TreeNodeRow>("treeNodes", tag),
+    },
+    wrappers: {
+      all: async () =>
+        (await request((await store("wrappers")).getAll())).map((row) =>
+          clean<WrapperRow>(row),
+        ),
+      get: (id) => get<WrapperRow>("wrappers", id),
+    },
     effects: {
+      all: async () =>
+        (await request((await store("effects")).getAll())).map((row) =>
+          clean<EffectRow>(row),
+        ),
       get: (digest) => get<EffectRow>("effects", digest),
       // Index order within one state is primary-key (digest) order.
       byState: async (state) =>
@@ -310,12 +326,26 @@ function groupReader(
           await request((await store("effects")).index("state").getAll(state))
         ).map((row) => clean<EffectRow>(row)),
     },
-    backfill: { get: (relay) => get<BackfillRow>("backfill", relay) },
+    backfill: {
+      all: async () =>
+        (await request((await store("backfill")).getAll())).map((row) =>
+          clean<BackfillRow>(row),
+        ),
+      get: (relay) => get<BackfillRow>("backfill", relay),
+    },
     messages: {
+      all: async () =>
+        (await request((await store("messages")).getAll())).map((row) =>
+          clean<MessageRow>(row),
+        ),
       get: (id) => get<MessageRow>("messages", id),
       query: async (query) => queryMessages(await tx(), query, keyRange),
     },
     deliveries: {
+      all: async () =>
+        (await request((await store("deliveries")).getAll())).map((row) =>
+          clean<DeliveryRow>(row),
+        ),
       byRumor: async (rumorId) =>
         (
           await request(
@@ -351,18 +381,30 @@ class IndexedDBGroupDatabase implements MarmotGroupDatabase {
         fn(groupReader(() => tx, connection.keyRange)),
       );
     this.group = () => read((r) => r.group());
-    this.treeNodes = { get: (tag) => read((r) => r.treeNodes.get(tag)) };
-    this.wrappers = { get: (id) => read((r) => r.wrappers.get(id)) };
+    this.treeNodes = {
+      all: () => read((r) => r.treeNodes.all!()),
+      get: (tag) => read((r) => r.treeNodes.get(tag)),
+    };
+    this.wrappers = {
+      all: () => read((r) => r.wrappers.all!()),
+      get: (id) => read((r) => r.wrappers.get(id)),
+    };
     this.effects = {
+      all: () => read((r) => r.effects.all!()),
       get: (digest) => read((r) => r.effects.get(digest)),
       byState: (state) => read((r) => r.effects.byState(state)),
     };
-    this.backfill = { get: (relay) => read((r) => r.backfill.get(relay)) };
+    this.backfill = {
+      all: () => read((r) => r.backfill.all!()),
+      get: (relay) => read((r) => r.backfill.get(relay)),
+    };
     this.messages = {
+      all: () => read((r) => r.messages.all!()),
       get: (id) => read((r) => r.messages.get(id)),
       query: (query) => read((r) => r.messages.query(query)),
     };
     this.deliveries = {
+      all: () => read((r) => r.deliveries.all!()),
       byRumor: (id) => read((r) => r.deliveries.byRumor(id)),
       countByRumor: (id) => read((r) => r.deliveries.countByRumor(id)),
       withEvidence: () => read((r) => r.deliveries.withEvidence()),
@@ -456,6 +498,18 @@ class IndexedDBGroupDatabases implements MarmotGroupDatabases {
     return `${this.prefix}:group:${groupId}`;
   }
 
+  async list(): Promise<string[]> {
+    if (typeof this.factory.databases !== "function") {
+      throw new Error("IndexedDB database enumeration is not available");
+    }
+    const prefix = `${this.prefix}:group:`;
+    return (await this.factory.databases())
+      .flatMap(({ name }) =>
+        name?.startsWith(prefix) ? [name.slice(prefix.length)] : [],
+      )
+      .sort();
+  }
+
   async open(groupId: string): Promise<MarmotGroupDatabase> {
     const connection = new Connection(
       this.factory,
@@ -502,6 +556,7 @@ function accountReader(tx: () => IDBTransaction): AccountReader {
       all: () => all<KeyPackageRow>("keyPackages"),
     },
     invites: {
+      all: () => all<InviteRow>("invites"),
       get: (id) => get<InviteRow>("invites", id),
       byState: async (state) =>
         (await request(store("invites").index("state").getAll(state)))
@@ -536,6 +591,7 @@ class IndexedDBAccountDatabase implements MarmotAccountDatabase {
       all: () => read((r) => r.keyPackages.all()),
     };
     this.invites = {
+      all: () => read((r) => r.invites.all!()),
       get: (id) => read((r) => r.invites.get(id)),
       byState: (state) => read((r) => r.invites.byState(state)),
       byRumor: (id) => read((r) => r.invites.byRumor(id)),

@@ -19,4 +19,5 @@ runDatabaseConformance(
       keyRange: IDBKeyRange,
       prefix: `t${counter - 1}`,
     }),
+  { requireInspection: true },
 );

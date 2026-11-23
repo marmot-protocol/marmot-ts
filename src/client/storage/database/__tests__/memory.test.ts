@@ -1,4 +1,6 @@
 import { memoryDatabase } from "../memory.js";
 import { runDatabaseConformance } from "./conformance.js";
 
-runDatabaseConformance("memory", async () => memoryDatabase());
+runDatabaseConformance("memory", async () => memoryDatabase(), undefined, {
+  requireInspection: true,
+});

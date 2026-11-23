@@ -126,7 +126,177 @@ export function runDatabaseConformance(
   name: string,
   create: () => Promise<MarmotDatabase>,
   reopen?: (database: MarmotDatabase) => Promise<MarmotDatabase>,
+  options: { requireInspection?: boolean } = {},
 ): void {
+  describe(`${name}: optional inspection`, () => {
+    it("enumerates all rows in key order, independently of indexed queries", async () => {
+      const database = await create();
+      const db = await database.groups.open("inspection");
+      const other = await database.groups.open("other");
+      await other.transaction((tx) => tx.messages.put(message("excluded", 0)));
+      await database.account.transaction(async (tx) => {
+        await tx.invites.put(invite("z", { state: "seen" }));
+        await tx.invites.put(invite("a", { state: "unread", receivedAt: 100 }));
+        await tx.invites.put(invite("m"));
+        if (options.requireInspection)
+          expect(tx.invites.all).toBeTypeOf("function");
+        if (tx.invites.all) {
+          expect((await tx.invites.all()).map((row) => row.id)).toEqual([
+            "a",
+            "m",
+            "z",
+          ]);
+        }
+      });
+      await db.transaction(async (tx) => {
+        for (const key of ["z", "a"]) {
+          await tx.treeNodes.put(treeNode(key));
+          await tx.wrappers.put({ id: key, epoch: 1, outcome: "stale" });
+          await tx.effects.put(
+            effect(key, { state: key === "a" ? "pending" : "observed" }),
+          );
+          await tx.backfill.put({ relay: key, cursor: 1 });
+          // Deliberately choose creation times opposite to primary-key order.
+          await tx.messages.put(message(key, key === "a" ? 0 : 100));
+          // No evidence, nor a corresponding rumor row.
+          await tx.deliveries.put(delivery(key, "missing"));
+        }
+        for (const table of [
+          tx.treeNodes,
+          tx.wrappers,
+          tx.effects,
+          tx.backfill,
+          tx.messages,
+          tx.deliveries,
+        ]) {
+          if (options.requireInspection)
+            expect(table.all).toBeTypeOf("function");
+          if (table.all) expect(await table.all()).toHaveLength(2);
+        }
+      });
+      if (options.requireInspection) {
+        expect(database.groups.list).toBeTypeOf("function");
+        expect(database.account.invites.all).toBeTypeOf("function");
+      }
+      for (const [table, key] of [
+        [db.treeNodes, "tag"],
+        [db.wrappers, "id"],
+        [db.effects, "digest"],
+        [db.backfill, "relay"],
+        [db.messages, "id"],
+        [db.deliveries, "id"],
+      ] as const) {
+        if (options.requireInspection) expect(table.all).toBeTypeOf("function");
+        if (!table.all) continue;
+        const rows = await table.all();
+        expect(
+          rows.map((row) => (row as unknown as Record<string, unknown>)[key]),
+        ).toEqual(["a", "z"]);
+      }
+      if (database.account.invites.all) {
+        expect(
+          (await database.account.invites.all()).map((row) => row.id),
+        ).toEqual(["a", "m", "z"]);
+      }
+      if (db.treeNodes.all) {
+        const rows = await db.treeNodes.all();
+        rows[0]!.snapshot[0] = 99;
+        expectBytes((await db.treeNodes.get("a"))!.snapshot, bytes(1, 2, 3));
+      }
+      if (db.messages.all) {
+        const rows = await db.messages.all();
+        expect(rows).toEqual([message("a", 0), message("z", 100)]);
+        rows[0]!.tags.push(["t", "mutated"]);
+        expect((await db.messages.get("a"))!.tags).toEqual([]);
+      }
+      if (database.groups.list) {
+        // Neither group has an account registry row.
+        expect(await database.groups.list()).toEqual(["inspection", "other"]);
+        await db.close();
+        await database.groups.drop("inspection");
+        expect(await database.groups.list()).toEqual(["other"]);
+      } else {
+        await db.close();
+      }
+      await other.close();
+      await database.account.close();
+    });
+
+    it("enumerates empty tables and excludes rolled-back writes", async () => {
+      const database = await create();
+      if (database.groups.list)
+        expect(await database.groups.list()).toEqual([]);
+      const db = await database.groups.open("inspection");
+      for (const table of [
+        database.account.invites,
+        db.treeNodes,
+        db.wrappers,
+        db.effects,
+        db.backfill,
+        db.messages,
+        db.deliveries,
+      ]) {
+        if (table.all) expect(await table.all()).toEqual([]);
+      }
+      await expect(
+        db.transaction(async (tx) => {
+          await tx.treeNodes.put(treeNode("rolled-back"));
+          await tx.wrappers.put({
+            id: "rolled-back",
+            epoch: 0,
+            outcome: "accepted",
+          });
+          await tx.effects.put(effect("rolled-back"));
+          await tx.backfill.put({ relay: "rolled-back" });
+          await tx.messages.put(message("rolled-back", 0));
+          await tx.deliveries.put(delivery("rolled-back", "missing"));
+          throw new Rollback();
+        }),
+      ).rejects.toThrow(Rollback);
+      await expect(
+        database.account.transaction(async (tx) => {
+          await tx.invites.put(invite("rolled-back"));
+          throw new Rollback();
+        }),
+      ).rejects.toThrow(Rollback);
+      for (const table of [
+        database.account.invites,
+        db.treeNodes,
+        db.wrappers,
+        db.effects,
+        db.backfill,
+        db.messages,
+        db.deliveries,
+      ]) {
+        if (table.all) expect(await table.all()).toEqual([]);
+      }
+      await db.close();
+      await database.account.close();
+    });
+
+    if (reopen) {
+      it("discovers unregistered groups after reopening storage", async () => {
+        const database = await create();
+        const db = await database.groups.open("orphan");
+        await db.transaction((tx) =>
+          tx.wrappers.put({ id: "wrapper", epoch: 0, outcome: "stale" }),
+        );
+        await db.close();
+        await database.account.close();
+        const opened = await reopen(database);
+        if (opened.groups.list)
+          expect(await opened.groups.list()).toEqual(["orphan"]);
+        const group = await opened.groups.open("orphan");
+        if (group.wrappers.all)
+          expect(await group.wrappers.all()).toEqual([
+            { id: "wrapper", epoch: 0, outcome: "stale" },
+          ]);
+        await group.close();
+        await opened.account.close();
+      });
+    }
+  });
+
   describe(`${name}: group record`, () => {
     it("starts empty and applies partial updates (null deletes, undefined keeps)", async () => {
       const { groups } = await create();

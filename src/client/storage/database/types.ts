@@ -333,30 +333,46 @@ export interface MessageQuery {
   limit?: number;
 }
 
-/** Read access to one group's tables. */
+/**
+ * Read access to one group's tables.
+ * Optional `all()` methods support diagnostics: they return detached rows,
+ * may read an entire table into memory, and can expose private material.
+ */
 export interface GroupReader {
   /** The group's singleton record (empty when nothing is stored). */
   group(): Promise<GroupRecord>;
   treeNodes: {
+    /** All rows, ordered by tag. */
+    all?(): Promise<TreeNodeRow[]>;
     get(tag: string): Promise<TreeNodeRow | undefined>;
   };
   wrappers: {
+    /** All rows, ordered by id. */
+    all?(): Promise<WrapperRow[]>;
     get(id: string): Promise<WrapperRow | undefined>;
   };
   effects: {
+    /** All rows, ordered by digest. */
+    all?(): Promise<EffectRow[]>;
     get(digest: string): Promise<EffectRow | undefined>;
     /** Effects in one state. Index-backed. */
     byState(state: EffectRow["state"]): Promise<EffectRow[]>;
   };
   backfill: {
+    /** All rows, ordered by relay. */
+    all?(): Promise<BackfillRow[]>;
     get(relay: string): Promise<BackfillRow | undefined>;
   };
   messages: {
+    /** All rows, ordered by id (unlike the time-ordered query). */
+    all?(): Promise<MessageRow[]>;
     get(id: string): Promise<MessageRow | undefined>;
     /** Index-backed query; see {@link MessageQuery}. */
     query(query: MessageQuery): Promise<MessageRow[]>;
   };
   deliveries: {
+    /** All rows, ordered by id, including deliveries without evidence or a rumor. */
+    all?(): Promise<DeliveryRow[]>;
     /** Every delivery of one rumor. Index-backed. */
     byRumor(rumorId: string): Promise<DeliveryRow[]>;
     /** Number of deliveries of one rumor. Index-backed. */
@@ -411,6 +427,12 @@ export interface MarmotGroupDatabase extends GroupReader {
 
 /** Opens and deletes per-group databases. */
 export interface MarmotGroupDatabases {
+  /**
+   * Stored group ids, ordered lexically, including unregistered groups.
+   * Optional diagnostic capability. Adapters may omit empty databases.
+   * Does not open or create databases.
+   */
+  list?(): Promise<string[]>;
   /** Opens (creating if needed) the database of one group. */
   open(groupId: string): Promise<MarmotGroupDatabase>;
   /** Permanently deletes one group's database. Missing groups are not an error. */
@@ -493,6 +515,8 @@ export interface AccountReader {
     all(): Promise<KeyPackageRow[]>;
   };
   invites: {
+    /** Optional diagnostic read: detached rows across every state, ordered by id. */
+    all?(): Promise<InviteRow[]>;
     get(id: string): Promise<InviteRow | undefined>;
     /** Invites in one state, oldest first. Index-backed. */
     byState(state: InviteState): Promise<InviteRow[]>;

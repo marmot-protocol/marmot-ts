@@ -105,10 +105,18 @@ function groupReader(tables: () => Tables): GroupReader {
   return {
     group: async () => get<GroupRecord>(tables(), "group", "group") ?? {},
     treeNodes: {
+      all: async () =>
+        rows<TreeNodeRow>(tables(), "treeNodes").sort(byKey((row) => row.tag)),
       get: async (tag) => get<TreeNodeRow>(tables(), "treeNodes", tag),
     },
-    wrappers: { get: async (id) => get<WrapperRow>(tables(), "wrappers", id) },
+    wrappers: {
+      all: async () =>
+        rows<WrapperRow>(tables(), "wrappers").sort(byKey((row) => row.id)),
+      get: async (id) => get<WrapperRow>(tables(), "wrappers", id),
+    },
     effects: {
+      all: async () =>
+        rows<EffectRow>(tables(), "effects").sort(byKey((row) => row.digest)),
       get: async (digest) => get<EffectRow>(tables(), "effects", digest),
       byState: async (state) =>
         rows<EffectRow>(tables(), "effects")
@@ -116,9 +124,13 @@ function groupReader(tables: () => Tables): GroupReader {
           .sort(byKey((row) => row.digest)),
     },
     backfill: {
+      all: async () =>
+        rows<BackfillRow>(tables(), "backfill").sort(byKey((row) => row.relay)),
       get: async (relay) => get<BackfillRow>(tables(), "backfill", relay),
     },
     messages: {
+      all: async () =>
+        rows<MessageRow>(tables(), "messages").sort(byKey((row) => row.id)),
       get: async (id) => get<MessageRow>(tables(), "messages", id),
       query: async (query) => {
         const found = rows<MessageRow>(tables(), "messages")
@@ -128,6 +140,7 @@ function groupReader(tables: () => Tables): GroupReader {
       },
     },
     deliveries: {
+      all: async () => deliveries().sort(byId),
       byRumor: async (rumorId) =>
         deliveries()
           .filter((row) => row.rumorId === rumorId)
@@ -254,6 +267,10 @@ export class MemoryGroupDatabases implements MarmotGroupDatabases {
   ids(): string[] {
     return [...this.#stores.keys()];
   }
+
+  async list(): Promise<string[]> {
+    return this.ids().sort();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +291,7 @@ function accountReader(tables: () => Tables): AccountReader {
         ),
     },
     invites: {
+      all: async () => invites().sort(byId),
       get: async (id) => get<InviteRow>(tables(), "invites", id),
       byState: async (state) =>
         invites()

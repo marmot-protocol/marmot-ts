@@ -1,6 +1,9 @@
 import type { EventStore } from "applesauce-core";
 import { castUser } from "applesauce-common/casts";
-import type { NostrEvent } from "applesauce-core/helpers/event";
+import { kinds, type NostrEvent } from "applesauce-core/helpers/event";
+import { mergeRelaySets } from "applesauce-core/helpers/relays";
+import { mapEventsToStore } from "applesauce-core/observable";
+import { ADDRESSABLE_KEY_PACKAGE_KIND } from "@internet-privacy/marmot-ts/core";
 import type { Filter } from "applesauce-core/helpers/filter";
 import type { NostrNetworkInterface } from "@internet-privacy/marmot-ts/client";
 import {
@@ -14,7 +17,6 @@ import {
   merge,
   of,
   switchMap,
-  tap,
 } from "rxjs";
 import { LOOKUP_RELAYS, LIVE_RELAYS } from "./relays.js";
 import { DEMO_RELAY_URL } from "./relay/demo-relay.js";
@@ -36,7 +38,7 @@ export function discoverContacts$(
     new Observable<NostrEvent>((observer) =>
       network.subscription(relays, filters).subscribe(observer),
     ).pipe(
-      tap((event) => store.add(event)),
+      mapEventsToStore(store),
       catchError((cause: unknown) => {
         report(cause);
         return EMPTY;
@@ -54,7 +56,7 @@ export function discoverContacts$(
         distinctUntilChanged((a, b) => a.join() === b.join()),
         map((keys) => keys.map((key) => castUser(key, store))),
       )
-    : account.contacts$.pipe(map((contacts) => contacts ?? []));
+    : account.contacts$;
 
   const contacts$ = candidates$.pipe(
     switchMap((users) =>
@@ -63,10 +65,9 @@ export function discoverContacts$(
         users.length
           ? combineLatest(
               users.map((user) =>
-                store
-                  .timeline({
-                    kinds: [30443],
-                    authors: [user.pubkey],
+                user
+                  .timeline$({
+                    kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
                     limit: 1,
                   })
                   .pipe(
@@ -78,17 +79,17 @@ export function discoverContacts$(
         ...users.map((user) =>
           merge(
             load$(local ? relays : LOOKUP_RELAYS, {
-              kinds: [0, 10002],
+              kinds: [kinds.Metadata, kinds.RelayList],
               authors: [user.pubkey],
             }),
             user.outboxes$.pipe(
               map((outboxes) =>
-                local ? relays : [...new Set([...(outboxes ?? []), ...relays])],
+                local ? relays : mergeRelaySets(outboxes, relays),
               ),
               distinctUntilChanged((a, b) => a.join() === b.join()),
               switchMap((relays) =>
                 load$(relays, {
-                  kinds: [30443],
+                  kinds: [ADDRESSABLE_KEY_PACKAGE_KIND],
                   authors: [user.pubkey],
                   limit: 1,
                 }),
@@ -103,12 +104,15 @@ export function discoverContacts$(
   if (local) return contacts$;
   return merge(
     contacts$,
-    load$(LOOKUP_RELAYS, { kinds: [10002], authors: [pubkey] }),
+    load$(LOOKUP_RELAYS, { kinds: [kinds.RelayList], authors: [pubkey] }),
     account.outboxes$.pipe(
       map((outboxes) => (outboxes?.length ? outboxes : relays)),
       distinctUntilChanged((a, b) => a.join() === b.join()),
       switchMap((relays) =>
-        load$(relays, { kinds: [3, 0], authors: [pubkey] }),
+        load$(relays, {
+          kinds: [kinds.Contacts, kinds.Metadata],
+          authors: [pubkey],
+        }),
       ),
     ),
   );

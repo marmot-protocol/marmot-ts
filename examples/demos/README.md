@@ -31,8 +31,9 @@ Its signed kind-0 profile is published to the local worker relay, never automati
 to public relays. Generating an identity in one tab does not change another tab's
 active account.
 
-The app does not manage a Marmot `clientId`. Each example creates and keeps
-its own and passes it to the actor helpers.
+The shared session client keeps its own Marmot `clientId` and private key packages
+in sessionStorage, separately for each account and local/live mode. Simulated
+actors can still use their own ephemeral client ids.
 
 The account switcher opens a login screen supporting a NIP-07
 extension, NIP-46 remote signers (bunker URI or `nostrconnect://` QR code), and
@@ -68,7 +69,9 @@ to the live network. NIP-46 login still contacts its explicitly selected signing
 even when the demo transport is local.
 
 `useContacts()` exposes `contacts$` (Applesauce `User[]`) and `error$`.
-`useDemoServices()` also exposes the mode and shared EventStore.
+`useDemoServices()` also exposes the mode, shared EventStore, and `session.client`.
+Use this shared Marmot client for the active account so demos can receive Welcomes
+using the private key packages managed by the sidebar.
 
 **Reset** remounts only the demo, keeping the shared transport and contacts.
 **Copy code** copies its source without opening a code panel.
@@ -119,19 +122,42 @@ Group state is in memory: reloading or resetting does not restore the chat.
 Navigating away disconnects the chat without leaving the group; create a fresh
 group for a fresh run.
 
+## Session key packages
+
+New development identities automatically publish a kind-30443 key package in
+local mode. Other accounts (and live mode) opt in with **Publish key package** in
+the sidebar. The session then maintains a current package, listens on the account's
+inbox relays, and exposes incoming invites through the shared Marmot client.
+
+**Rotate** creates fresh keys in the same addressable publication slot.
+Reloads restore the slot and private bundles, and re-publish the current signed
+package if the local worker lost it. Old bundles remain available for delayed
+Welcomes until their replacement grace period (24 hours) or signed expiry, whichever
+comes first. Renewal after joining replaces consumed packages without signing
+every clock tick. Local private material is never copied into live mode.
+
+The sessionStorage bundles contain unencrypted MLS secrets: use development accounts.
+Only key-package material survives reloads, not the demo's group state or history.
+
 ## Clock group
 
-Open **Groups → Clock group** (`#/groups/clock`), enter a group name, and click
-**Create group & start clock**. Your account creates the group and invites a
-throwaway clock participant, which posts an encrypted UTC timestamp every second.
-The received messages panel shows your latest 60 decrypted ticks; `/relay` shows
-the encrypted local relay traffic.
+Open **Groups → Clock group** (`#/groups/clock`) and choose **Host clock** or
+**Receive clock**. The choice disappears until **Reset**.
 
-**Pause clock** stops new ticks; **Resume clock** restarts them. Reset, navigating
-away, or switching accounts stops the clock and releases the group connections.
-Keep the tab open: browser background throttling can slow the one-second timer.
-The relay is shared across tabs, but each demo's group keys and membership remain
-local to its run; opening another tab does not automatically join that group.
+In the host tab, start a named feed, then **Invite** a contact. In another local
+tab, choose **Receive clock** and **Accept invite**. The host sends an encrypted UTC
+timestamp every second as the signed-in account; both views show the latest tick
+as a large clock with a bounded recent feed. Invites stay above the feed.
+
+The host discovers live contacts' key packages on their outboxes and the default
+relays. This focused demo invites the most recent compatible device slot rather
+than every device of an account. Existing accounts must publish a session package
+before they can accept an invite.
+
+**Pause** stops new ticks; **Resume** restarts them. Reset, navigating away, or
+switching accounts stops the feed and releases its connections while keeping the
+session key-package service. Keep the host tab open: background throttling can
+slow the timer. `/relay` shows the encrypted local traffic.
 
 Run the demo integration tests from the repository root:
 

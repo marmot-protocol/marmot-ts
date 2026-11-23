@@ -16,7 +16,7 @@ import { sessionDatabase$ } from "./session-database.js";
 /** The actual library client. No facade, decorated managers, or forwarded methods. */
 export const client$: Observable<MarmotClient | undefined> =
   sessionDatabase$.pipe(
-    // Rebuild only after the database invalidates or finishes opening, never
+    // Rebuild only after the database invalidates or is replaced, never
     // combine a new account or transport with the previous account's database.
     withLatestFrom(account$, transport$, clientId$),
     switchMap(([database, account, network, clientId]) => {

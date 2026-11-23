@@ -1,6 +1,5 @@
 /** @module @category Client - Group Manager */
 import { bytesToHex } from "@noble/hashes/utils.js";
-import type { MarmotRumorDatabases } from "./group-history.js";
 import { EventSigner } from "applesauce-core";
 import { hexToBytes } from "applesauce-core/helpers";
 import { EventEmitter } from "eventemitter3";
@@ -12,11 +11,12 @@ import type { IngestionPoolOptions } from "../../engine/ingestion-pool.js";
 import type { AuditContextOptions, AuditSink } from "../../audit/index.js";
 import { RetainedHistoryStore } from "../../engine/retained-store.js";
 import {
-  disbandRegistryStateKey,
-  disbandTombstoneKey,
+  DISBAND_REGISTRY_STATE_KEY,
+  DISBAND_TOMBSTONE_KEY,
 } from "../../engine/disband-tombstone.js";
 import { logger } from "../../utils/debug.js";
-import type { MarmotStorage } from "./storage.js";
+import { groupTreeStore } from "./database/group-batch.js";
+import type { MarmotDatabase, MarmotGroupDatabase } from "./database/types.js";
 import { groupKeys } from "./storage-keys.js";
 import {
   MarmotGroup,
@@ -28,8 +28,8 @@ const log = logger.extend("GroupRegistry");
 
 /** Options accepted by {@link GroupRegistry}. */
 export type GroupRegistryOptions = {
-  /** Storage scoped to the client's `group/` namespace. */
-  storage: MarmotStorage;
+  /** The account and per-group databases. */
+  database: MarmotDatabase;
   signer: EventSigner;
   network: NostrNetworkInterface;
   /** Optional forensic audit sink inherited by loaded groups. */
@@ -37,12 +37,16 @@ export type GroupRegistryOptions = {
   /** Required when `audit` is set; contains stable engine/account/session metadata. */
   auditContext?: AuditContextOptions;
   cryptoProvider?: CryptoProvider;
-  /** Per-group rumor databases for message history (in memory when omitted). */
-  rumors?: MarmotRumorDatabases;
   /** Convergence policy applied to loaded groups (rollback horizon, selection). */
   convergencePolicy?: ConvergencePolicy;
   /** Ingestion-pool tuning applied to loaded groups (size + epoch-age bounds). */
   ingestionPool?: IngestionPoolOptions;
+};
+
+/** A new group's opened database and how to delete it. */
+export type GroupStorageHandle = {
+  database: MarmotGroupDatabase;
+  dropDatabase: () => Promise<void>;
 };
 
 /** Cache-level events emitted by {@link GroupRegistry}. */
@@ -65,13 +69,12 @@ export type GroupRegistryEvents = {
  * higher-level lifecycle events (created/imported/joined/destroyed/left) on top.
  */
 export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
-  readonly storage: MarmotStorage;
+  readonly database: MarmotDatabase;
   readonly signer: EventSigner;
   readonly network: NostrNetworkInterface;
   readonly audit?: AuditSink;
   readonly auditContext?: AuditContextOptions;
   readonly cryptoProvider: CryptoProvider;
-  readonly rumors?: MarmotRumorDatabases;
   readonly convergencePolicy?: ConvergencePolicy;
   readonly ingestionPool?: IngestionPoolOptions;
 
@@ -96,13 +99,12 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
 
   constructor(options: GroupRegistryOptions) {
     super();
-    this.storage = options.storage;
+    this.database = options.database;
     this.signer = options.signer;
     this.network = options.network;
     this.audit = options.audit;
     this.auditContext = options.auditContext;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
-    this.rumors = options.rumors;
     this.convergencePolicy = options.convergencePolicy;
     this.ingestionPool = options.ingestionPool;
   }
@@ -120,14 +122,43 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     return this.#groups.get(id);
   }
 
+  /**
+   * Permanently deletes a group: its database, then its account row. Missing
+   * groups are not an error.
+   */
+  async drop(groupId: Uint8Array | string): Promise<void> {
+    const id = typeof groupId === "string" ? groupId : bytesToHex(groupId);
+    await this.database.groups.drop(id);
+    await this.database.account.transaction((tx) => tx.groups.delete(id));
+  }
+
+  /**
+   * Registers a new group and opens its database. The account row is written
+   * first, so a crash before the group's first save leaves a row without state,
+   * which {@link has} and {@link listIds} ignore.
+   */
+  async prepare(state: ClientState): Promise<GroupStorageHandle> {
+    const id = bytesToHex(state.groupContext.groupId);
+    await this.database.account.transaction((tx) =>
+      tx.groups.put({ id, status: "active", value: new Uint8Array() }),
+    );
+    return {
+      database: await this.database.groups.open(id),
+      dropDatabase: () => this.drop(id),
+    };
+  }
+
   /** Builds a group instance from a {@link ClientState} (not cached). */
   async build(
     state: ClientState,
+    database: MarmotGroupDatabase,
     retained?: RetainedHistoryStore,
     historyTree?: GroupHistoryTree,
   ): Promise<MarmotGroup> {
+    const id = bytesToHex(state.groupContext.groupId);
     return MarmotGroup.fromClientState(state, {
-      storage: this.storage,
+      database,
+      dropDatabase: () => this.drop(id),
       retained,
       historyTree,
       convergencePolicy: this.convergencePolicy,
@@ -137,7 +168,6 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
       network: this.network,
       audit: this.audit,
       auditContext: this.auditContext,
-      rumors: this.rumors,
     });
   }
 
@@ -146,21 +176,33 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     const id = typeof groupId === "string" ? hexToBytes(groupId) : groupId;
     const idHex = bytesToHex(id);
     log("loading group %s from store", idHex);
+    if (!(await this.database.account.groups.get(idHex)))
+      throw new Error(`Group ${idHex} not found`);
+    const database = await this.database.groups.open(idHex);
+    const canonicalBytes = await database.meta.get(groupKeys.state);
+    const canonical = canonicalBytes !== undefined;
     const stateBytes =
-      (await this.storage.get(groupKeys.state(idHex))) ??
-      (await this.storage.get(disbandRegistryStateKey(idHex)));
+      canonicalBytes ?? (await database.meta.get(DISBAND_REGISTRY_STATE_KEY));
 
-    if (!stateBytes) throw new Error(`Group ${idHex} not found`);
+    if (!stateBytes) {
+      await database.close();
+      throw new Error(`Group ${idHex} not found`);
+    }
 
     const state = deserializeClientState(stateBytes);
-    const historyTree = await this.#loadHistory(idHex, state);
+    const historyTree = await this.#loadHistory(
+      database,
+      idHex,
+      state,
+      canonical,
+    );
     // The bounded convergence window is derived from the tree (the single
     // persisted source), never stored separately.
     const retained = historyTree
       ? await this.#retainedFromTree(historyTree, state)
       : undefined;
 
-    const group = await this.build(state, retained, historyTree);
+    const group = await this.build(state, database, retained, historyTree);
     await group.session.hydrateRemovalEvidence();
     return group;
   }
@@ -170,20 +212,27 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
    * committed checkpoint is authority: required loss must never reseed the tip.
    */
   async #loadHistory(
+    database: MarmotGroupDatabase,
     idHex: string,
     state: ClientState,
+    canonical: boolean,
   ): Promise<GroupHistoryTree | undefined> {
-    const metadata = await this.storage.get(`${idHex}/tree/meta`);
-    if (!metadata) {
-      // Absence is optional only when no owned history was ever persisted.
-      const owned = (await this.storage.list(`${idHex}/tree/`)).length > 0;
-      if (owned)
+    // The checkpoint commits atomically with the nodes it names. A group with
+    // no persisted history has neither; a persisted tip node without its
+    // checkpoint means required history was lost. A terminal (disbanded)
+    // group may have purged its tree.
+    const store = groupTreeStore(database);
+    if (!(await store.meta())) {
+      if (
+        canonical &&
+        (await database.treeNodes.get(bytesToHex(state.confirmationTag)))
+      )
         throw new Error("GroupHistoryTree: required checkpoint missing");
       return undefined;
     }
     let tree: GroupHistoryTree | undefined;
     try {
-      tree = await GroupHistoryTree.load(this.storage, idHex);
+      tree = await GroupHistoryTree.load(store, idHex);
     } catch (error) {
       throw new Error(
         `GroupHistoryTree: failed to restore required history: ${error instanceof Error ? error.message : String(error)}`,
@@ -193,13 +242,6 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     if (!tree) throw new Error("GroupHistoryTree: checkpoint disappeared");
     const tipTag = bytesToHex(state.confirmationTag);
     if (!tree.hasNode(tipTag)) {
-      if (metadata[0] === 1) {
-        log(
-          "discarding stale legacy history tree for %s (missing tip node)",
-          idHex,
-        );
-        return undefined;
-      }
       throw new Error(
         "GroupHistoryTree: canonical tip missing from checkpoint",
       );
@@ -345,23 +387,30 @@ export class GroupRegistry extends EventEmitter<GroupRegistryEvents> {
     this.emit("updated", this.loaded);
   }
 
-  /** Lists all persisted group IDs, decoded from their hex storage keys. */
+  /** Lists the ids of every persisted group (from the account `groups` table). */
   async listIds(): Promise<Uint8Array[]> {
-    const ids = new Set<string>();
-    for (const key of await this.storage.list("")) {
-      const match = /^([0-9a-f]+)\/(state|disband\/terminal)$/.exec(key);
-      if (match) ids.add(match[1]!);
-    }
-    return [...ids].map((key) => hexToBytes(key));
+    const ids: Uint8Array[] = [];
+    for (const row of await this.database.account.groups.all())
+      if (await this.has(row.id)) ids.push(hexToBytes(row.id));
+    return ids;
   }
 
-  /** Checks if a group exists in the backend. */
+  /**
+   * Checks if a group exists: it has an account row and its database holds
+   * canonical state or a disband tombstone.
+   */
   async has(groupId: Uint8Array | string): Promise<boolean> {
     const key = typeof groupId === "string" ? groupId : bytesToHex(groupId);
-    return (
-      (await this.storage.get(groupKeys.state(key))) !== undefined ||
-      (await this.storage.get(disbandTombstoneKey(key))) !== undefined
-    );
+    if (!(await this.database.account.groups.get(key))) return false;
+    const database = await this.database.groups.open(key);
+    try {
+      return (
+        (await database.meta.get(groupKeys.state)) !== undefined ||
+        (await database.meta.get(DISBAND_TOMBSTONE_KEY)) !== undefined
+      );
+    } finally {
+      await database.close();
+    }
   }
 
   /** Gets a group from cache or loads it from the store, caching the result. */

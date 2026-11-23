@@ -21,7 +21,7 @@ import { createGroupEvent } from "../../core/group-message.js";
 import { getGroupMembers } from "../../core/group-members.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryGroupDatabase } from "../helpers/database.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://relay.test";
@@ -53,7 +53,7 @@ function marmotGroup(
   network: NostrNetworkInterface = recordingNetwork(published),
 ) {
   return new MarmotGroup(state, {
-    storage: memoryStorage(),
+    database: memoryGroupDatabase(),
     signer: {
       getPublicKey: async () => pubkey,
       signEvent: async () => {

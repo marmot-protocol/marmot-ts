@@ -33,11 +33,12 @@ import { deserializeClientState } from "../../../core/client-state.js";
 import { GroupHistoryTree } from "../../../engine/history-tree.js";
 import { contentDedupId } from "../../../engine/message-dedup.js";
 import { marmotAuthService } from "../../../core/auth-service.js";
-import {
-  memoryStorage,
-  type MemoryStorage,
-  type StorageOp,
-} from "../../../utils/storage.js";
+import { memoryGroupDatabase } from "../../../__tests__/helpers/database.js";
+import { groupTreeStore } from "../../storage/database/group-batch.js";
+import type {
+  GroupTransaction,
+  MarmotGroupDatabase,
+} from "../../storage/database/types.js";
 import {
   GroupSession,
   type GroupSessionHistory,
@@ -70,10 +71,10 @@ async function fixture(
       relays: ["wss://relay.test"],
     },
   );
-  const storage = memoryStorage();
+  const db = memoryGroupDatabase();
   let now = 0;
   const options = {
-    storage,
+    database: db,
     ciphersuite,
     convergencePolicy: {
       ...DEFAULT_CONVERGENCE_POLICY,
@@ -114,7 +115,7 @@ async function fixture(
   return {
     session,
     options,
-    storage,
+    db,
     advance,
     settle,
     runtime,
@@ -173,34 +174,95 @@ async function handOffAdmin(f: Awaited<ReturnType<typeof fixture>>) {
   return { context, peerState };
 }
 
-/**
- * Routes every `set` and `batch` on `storage` through `handle`, which receives
- * the ops being written and a callback that performs the write. Returns a
- * function restoring the original methods.
- */
-function interceptWrites(
-  storage: MemoryStorage,
-  handle: (
-    ops: readonly StorageOp[],
-    write: () => Promise<void>,
-  ) => Promise<void>,
-): () => void {
-  const set = storage.set.bind(storage);
-  const batch = storage.batch.bind(storage);
-  storage.set = (key, value) =>
-    handle([{ type: "set", key, value }], () => set(key, value));
-  storage.batch = (ops) => handle(ops, () => batch(ops));
-  return () => {
-    storage.set = set;
-    storage.batch = batch;
+/** One write a group transaction performed: meta keys by name, rows by table. */
+type WriteOp = { type: "set" | "delete"; key: string; value?: Uint8Array };
+
+/** Wraps a transaction so every write it performs is also recorded. */
+function recording(tx: GroupTransaction, ops: WriteOp[]): GroupTransaction {
+  return {
+    ...tx,
+    meta: {
+      ...tx.meta,
+      set: async (key, value) => {
+        ops.push({ type: "set", key, value });
+        return tx.meta.set(key, value);
+      },
+      delete: async (key) => {
+        ops.push({ type: "delete", key });
+        return tx.meta.delete(key);
+      },
+    },
+    treeNodes: {
+      ...tx.treeNodes,
+      put: async (row) => {
+        ops.push({ type: "set", key: `tree:${row.tag}`, value: row.value });
+        return tx.treeNodes.put(row);
+      },
+      delete: async (tag) => {
+        ops.push({ type: "delete", key: `tree:${tag}` });
+        return tx.treeNodes.delete(tag);
+      },
+    },
+    wrappers: {
+      ...tx.wrappers,
+      put: async (row) => {
+        ops.push({ type: "set", key: `wrapper:${row.id}`, value: row.value });
+        return tx.wrappers.put(row);
+      },
+      deleteBelow: async (floor, except) => {
+        ops.push({ type: "delete", key: `wrapper:<${floor}` });
+        return tx.wrappers.deleteBelow(floor, except);
+      },
+    },
   };
 }
 
-/** A tree checkpoint (`meta` version 2) and how much garbage it names. */
-function checkpointGarbage(op: StorageOp): number | undefined {
-  if (op.type !== "set" || !op.key.endsWith("/tree/meta") || op.value[0] !== 2)
+/**
+ * Routes every transaction on `db` through `handle`, which receives the
+ * writes the transaction performed and a callback that lets it commit. A
+ * handler that throws before calling `write` rolls the transaction back; one
+ * that throws after `write` commits and then fails. Returns a function
+ * restoring the original method.
+ */
+function interceptWrites(
+  db: MarmotGroupDatabase,
+  handle: (
+    ops: readonly WriteOp[],
+    write: () => Promise<void>,
+  ) => Promise<void>,
+): () => void {
+  const transaction = db.transaction.bind(db);
+  db.transaction = async <T>(fn: (tx: GroupTransaction) => Promise<T>) => {
+    let failure: { error: unknown } | undefined;
+    const result = await transaction(async (tx) => {
+      const ops: WriteOp[] = [];
+      const value = await fn(recording(tx, ops));
+      let wrote = false;
+      try {
+        await handle(ops, async () => {
+          wrote = true;
+        });
+      } catch (error) {
+        if (!wrote) throw error;
+        failure = { error };
+      }
+      if (!wrote) throw new Error("interceptWrites: write was not forwarded");
+      return value;
+    });
+    if (failure) throw failure.error;
+    return result;
+  };
+  return () => {
+    db.transaction = transaction;
+  };
+}
+
+/** A tree checkpoint (`tree` meta, version 2) and how much garbage it names. */
+function checkpointGarbage(op: WriteOp): number | undefined {
+  if (op.type !== "set" || op.key !== "tree" || op.value![0] !== 2)
     return undefined;
-  return JSON.parse(new TextDecoder().decode(op.value.slice(1))).garbage.length;
+  return JSON.parse(new TextDecoder().decode(op.value!.slice(1))).garbage
+    .length;
 }
 
 /**
@@ -211,13 +273,11 @@ function checkpointGarbage(op: StorageOp): number | undefined {
  * Other writes (e.g. a bare tree flush) are not classified.
  */
 function classifyWrite(
-  ops: readonly StorageOp[],
-  id: string,
+  ops: readonly WriteOp[],
 ): "commit" | "checkpoint" | "cleanup" | undefined {
-  if (ops.some((op) => op.key === `${id}/state`)) return "commit";
-  if (
-    ops.some((op) => op.type === "delete" && op.key.startsWith(`${id}/tree/`))
-  )
+  if (ops.some((op) => op.type === "set" && op.key === "state"))
+    return "commit";
+  if (ops.some((op) => op.type === "delete" && op.key.startsWith("tree:")))
     return "cleanup";
   if (ops.some((op) => (checkpointGarbage(op) ?? 0) > 0)) return "checkpoint";
   return undefined;
@@ -233,9 +293,16 @@ describe("settled session retention", () => {
       tags: [],
       content: "unpublished",
     };
-    const failure = vi
-      .spyOn(f.storage, "batch")
-      .mockRejectedValueOnce(new Error("send persistence failed"));
+    let failed = false;
+    const failure = {
+      mockRestore: interceptWrites(f.db, async (ops, write) => {
+        if (!failed && ops.some((op) => op.key === "state")) {
+          failed = true;
+          throw new Error("send persistence failed");
+        }
+        return write();
+      }),
+    };
     const original = NostrGroupPeeler.prototype.wrapGroupMessage;
     const identities: string[] = [];
     const wrapping = vi
@@ -616,16 +683,16 @@ describe("settled session retention", () => {
       })
     ).publish[0]!;
     const id = bytesToHex(f.session.id);
-    const key = `${id}/ingest/delivered`;
+    const key = "delivered";
     expect(
       decodeDeliveredEvidence(
-        (await f.storage.get(key))!,
+        (await f.db.meta.get(key))!,
         f.session.historyTree,
       ).entries,
     ).toHaveLength(1);
     expect(
       decodeDeliveredEvidence(
-        (await f.storage.get(key))!,
+        (await f.db.meta.get(key))!,
         f.session.historyTree,
       ).entries[0]!.payload,
     ).toEqual(rumorPayload);
@@ -637,7 +704,7 @@ describe("settled session retention", () => {
     expect(f.session.historyTree.size).toBe(2);
     expect(
       decodeDeliveredEvidence(
-        (await f.storage.get(key))!,
+        (await f.db.meta.get(key))!,
         f.session.historyTree,
       ).entries,
     ).toEqual([]);
@@ -651,8 +718,8 @@ describe("settled session retention", () => {
     f.session.dispose();
     const restarted = new GroupSession({
       ...f.options,
-      state: deserializeClientState((await f.storage.get(`${id}/state`))!),
-      historyTree: (await GroupHistoryTree.load(f.storage, id))!,
+      state: deserializeClientState((await f.db.meta.get("state"))!),
+      historyTree: (await GroupHistoryTree.load(groupTreeStore(f.db), id))!,
     });
     await restarted.save(true);
     expect(rows.get("sent-0")).toBe(payload);
@@ -751,7 +818,7 @@ describe("settled session retention", () => {
       let failures = 0;
       const restoreWrites =
         mode === "failure"
-          ? interceptWrites(f.storage, async (ops, write) => {
+          ? interceptWrites(f.db, async (ops, write) => {
               if (
                 ops.some((op) => checkpointGarbage(op) !== undefined) &&
                 failures++ === 0
@@ -915,11 +982,7 @@ describe("settled session retention", () => {
       for await (const result of f.session.ingest([work.envelope]))
         results.push(result);
       // The retired outer ID is not fast-pathed: no self-echo record is written.
-      expect(
-        await f.storage.get(
-          `${bytesToHex(f.session.id)}/ingest/wrapper/${work.envelope.id}`,
-        ),
-      ).toBeUndefined();
+      expect(await f.db.wrappers.get(work.envelope.id)).toBeUndefined();
       expect(
         results.some(
           (result) =>
@@ -1066,19 +1129,17 @@ describe("settled session retention", () => {
         payload: payload.slice(),
       });
       const id = bytesToHex(f.session.id);
-      const key = `${id}/ingest/delivered`;
+      const key = "delivered";
       const evidence = decodeDeliveredEvidence(
-        (await f.storage.get(key))!,
+        (await f.db.meta.get(key))!,
         f.session.historyTree,
       );
       expect(evidence.entries).toHaveLength(2);
-      await f.storage.set(
-        key,
-        encodeDeliveredEvidence({
-          entries: [evidence.entries[0]],
-          pending: [evidence.entries[1]],
-        }),
-      );
+      const tampered = encodeDeliveredEvidence({
+        entries: [evidence.entries[0]],
+        pending: [evidence.entries[1]],
+      });
+      await f.db.transaction((tx) => tx.meta.set(key, tampered));
       f.session.dispose();
       let failHistory = true;
       const rows = new Map([[rumor.id, payload.slice()]]);
@@ -1098,8 +1159,8 @@ describe("settled session retention", () => {
         new GroupSession({
           ...f.options,
           history,
-          state: deserializeClientState((await f.storage.get(`${id}/state`))!),
-          historyTree: (await GroupHistoryTree.load(f.storage, id))!,
+          state: deserializeClientState((await f.db.meta.get("state"))!),
+          historyTree: (await GroupHistoryTree.load(groupTreeStore(f.db), id))!,
         });
       let session = await restore();
       for (let i = 0; i < 3; i++) {
@@ -1115,7 +1176,7 @@ describe("settled session retention", () => {
           void _;
         }
         const retained = decodeDeliveredEvidence(
-          (await f.storage.get(key))!,
+          (await f.db.meta.get(key))!,
           session.historyTree,
         );
         expect(retained.pending).toHaveLength(1);
@@ -1128,7 +1189,7 @@ describe("settled session retention", () => {
       session = await restore();
       failHistory = false;
       let armed = true;
-      const restoreWrites = interceptWrites(f.storage, async (ops, write) => {
+      const restoreWrites = interceptWrites(f.db, async (ops, write) => {
         if (armed && ops.some((op) => op.key === key)) {
           armed = false;
           if (forwarding === "after") await write();
@@ -1146,7 +1207,7 @@ describe("settled session retention", () => {
       }
       await session.save(true);
       const compacted = decodeDeliveredEvidence(
-        (await f.storage.get(key))!,
+        (await f.db.meta.get(key))!,
         session.historyTree,
       );
       expect(compacted.pending).toEqual([]);
@@ -1168,7 +1229,7 @@ describe("settled session retention", () => {
       await f.settle();
       expect(f.session.historyTree.size).toBe(horizon === Infinity ? 4 : 2);
       const id = bytesToHex(f.session.id);
-      const persisted = await GroupHistoryTree.load(f.storage, id);
+      const persisted = await GroupHistoryTree.load(groupTreeStore(f.db), id);
       expect(persisted?.size).toBe(f.session.historyTree.size);
       const tip = await f.session.historyTree.stateAt(
         bytesToHex(f.session.state.confirmationTag),
@@ -1191,8 +1252,8 @@ describe("settled session retention", () => {
         const id = bytesToHex(f.session.id);
         let armed = true;
         const writes: string[] = [];
-        interceptWrites(f.storage, async (ops, write) => {
-          const kind = classifyWrite(ops, id);
+        interceptWrites(f.db, async (ops, write) => {
+          const kind = classifyWrite(ops);
           if (kind) writes.push(kind);
           const hit = armed && kind === boundary;
           if (hit && forwarding === "before") {
@@ -1211,10 +1272,8 @@ describe("settled session retention", () => {
           expect(writes.includes("cleanup")).toBe(false);
         f.session.dispose();
         for (let restart = 0; restart < 2; restart++) {
-          const tree = (await GroupHistoryTree.load(f.storage, id))!;
-          const state = deserializeClientState(
-            (await f.storage.get(`${id}/state`))!,
-          );
+          const tree = (await GroupHistoryTree.load(groupTreeStore(f.db), id))!;
+          const state = deserializeClientState((await f.db.meta.get("state"))!);
           expect(tree.hasNode(bytesToHex(state.confirmationTag))).toBe(true);
           await tree.resumeRetentionCleanup();
           const restored = new GroupSession({
@@ -1231,13 +1290,11 @@ describe("settled session retention", () => {
     const f = await fixture();
     const id = bytesToHex(f.session.id);
     const writes: string[] = [];
-    interceptWrites(f.storage, async (ops, write) => {
-      const kind = classifyWrite(ops, id);
+    interceptWrites(f.db, async (ops, write) => {
+      const kind = classifyWrite(ops);
       if (kind === "commit") {
         // Canonical state and delivered evidence are one atomic write.
-        expect(ops.some((op) => op.key === `${id}/ingest/delivered`)).toBe(
-          true,
-        );
+        expect(ops.some((op) => op.key === "delivered")).toBe(true);
       }
       if (kind) writes.push(kind);
       return write();
@@ -1258,11 +1315,9 @@ describe("settled session retention", () => {
     expect(writes.indexOf("cleanup", checkpoint)).toBeGreaterThan(checkpoint);
     expect(writes.slice(0, checkpoint)).not.toContain("cleanup");
     for (let restart = 0; restart < 2; restart++) {
-      const restored = await GroupHistoryTree.load(f.storage, id);
+      const restored = await GroupHistoryTree.load(groupTreeStore(f.db), id);
       expect(restored?.size).toBe(2);
-      const state = deserializeClientState(
-        (await f.storage.get(`${id}/state`))!,
-      );
+      const state = deserializeClientState((await f.db.meta.get("state"))!);
       expect(restored?.hasNode(bytesToHex(state.confirmationTag))).toBe(true);
     }
     f.session.dispose();

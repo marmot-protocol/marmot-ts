@@ -20,9 +20,12 @@ import {
 } from "../../core/key-package-event.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { decodeRecord, RecordStore } from "../storage/record-codec.js";
-import { memoryStorage, type MemoryStorage } from "../../utils/storage.js";
-import { KEY_PACKAGE_PREFIX } from "../storage/storage-keys.js";
+import { AccountRecordTable, decodeRecord } from "../storage/record-codec.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
+import type {
+  KeyPackageRow,
+  MarmotAccountDatabase,
+} from "../storage/database/types.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { createCredential } from "../../core/credential.js";
 import { createDefaultKeyPackageLifetime } from "../../utils/timestamp.js";
@@ -46,8 +49,19 @@ import {
 const TEST_CLIENT_ID = "ab".repeat(32);
 
 /** The stored key package records of `storage`, for inspection and injection. */
-function keyPackageRecords(storage: MemoryStorage) {
-  return new RecordStore<StoredKeyPackage>(storage, KEY_PACKAGE_PREFIX);
+function keyPackageRecords(storage: MarmotAccountDatabase) {
+  return new AccountRecordTable<StoredKeyPackage, KeyPackageRow>(
+    storage.keyPackages,
+    (fn) => storage.transaction((tx) => fn(tx.keyPackages)),
+    (ref, entry, value) => ({
+      ref,
+      identifier: entry.identifier,
+      notBefore: Number(entry.publicPackage.leafNode.lifetime?.notBefore ?? 0n),
+      used: entry.used === true,
+      value,
+    }),
+    (row) => row.ref,
+  );
 }
 
 describe("publication slots and durable routes", () => {
@@ -55,15 +69,15 @@ describe("publication slots and durable routes", () => {
     const signer = PrivateKeyAccount.generateNew().signer;
     const network = new MockNetwork();
     const source = new KeyPackageManager({
-      storage: memoryStorage(),
+      database: memoryDatabase().account,
       signer,
       network,
       clientId: "ab".repeat(32),
     });
     const pkg = await source.create({ relays: ["wss://source.test"] });
     const event = network.events[0];
-    const storage = memoryStorage();
-    const options = { storage, signer, network };
+    const storage = memoryDatabase().account;
+    const options = { database: storage, signer, network };
     const observer = new KeyPackageManager(options);
     expect(await observer.track(event, ["wss://one.test"])).toBe(true);
     expect(
@@ -88,10 +102,10 @@ describe("publication slots and durable routes", () => {
   it("preserves old route-less records on purge failure without using relay tags", async () => {
     const signer = PrivateKeyAccount.generateNew().signer;
     const network = new MockNetwork();
-    const storage = memoryStorage();
+    const storage = memoryDatabase().account;
     const store = keyPackageRecords(storage);
     const manager = new KeyPackageManager({
-      storage,
+      database: storage,
       signer,
       network,
       clientId: "ab".repeat(32),
@@ -119,10 +133,10 @@ describe("publication slots and durable routes", () => {
   it("skips malformed reusable packages before Welcome adoption or consumption", async () => {
     const signer = PrivateKeyAccount.generateNew().signer;
     const network = new MockNetwork();
-    const storage = memoryStorage();
+    const storage = memoryDatabase().account;
     const store = keyPackageRecords(storage);
     const manager = new KeyPackageManager({
-      storage,
+      database: storage,
       signer,
       network,
       clientId: "ab".repeat(32),
@@ -162,14 +176,15 @@ describe("publication slots and durable routes", () => {
     " " + "a".repeat(64),
     "",
   ])("rejects invalid clientId %s before effects", (clientId) => {
-    const storage = memoryStorage();
+    const storage = memoryDatabase().account;
     const signer = PrivateKeyAccount.generateNew().signer;
     const sign = vi.spyOn(signer, "signEvent");
-    const set = vi.spyOn(storage, "set");
+    const set = vi.spyOn(storage, "transaction");
     const network = new MockNetwork();
     const publish = vi.spyOn(network, "publish");
     expect(
-      () => new KeyPackageManager({ storage, signer, network, clientId }),
+      () =>
+        new KeyPackageManager({ database: storage, signer, network, clientId }),
     ).toThrow("32 random bytes");
     expect(sign).not.toHaveBeenCalled();
     expect(set).not.toHaveBeenCalled();
@@ -187,13 +202,17 @@ describe("publication slots and durable routes", () => {
   ])(
     "rejects explicit create and rotation slot %s before effects",
     async (identifier) => {
-      const storage = memoryStorage();
+      const storage = memoryDatabase().account;
       const signer = PrivateKeyAccount.generateNew().signer;
       const network = new MockNetwork();
-      const manager = new KeyPackageManager({ storage, signer, network });
+      const manager = new KeyPackageManager({
+        database: storage,
+        signer,
+        network,
+      });
       const sign = vi.spyOn(signer, "signEvent");
-      const set = vi.spyOn(storage, "set");
-      const get = vi.spyOn(storage, "get");
+      const set = vi.spyOn(storage, "transaction");
+      const get = vi.spyOn(storage.keyPackages, "get");
       const publish = vi.spyOn(network, "publish");
       await expect(
         manager.create({ identifier, relays: ["wss://relay.test"] }),
@@ -212,10 +231,15 @@ describe("publication slots and durable routes", () => {
   );
 
   it("rotates after restart using stored routes and retains slot and normalized routes", async () => {
-    const storage = memoryStorage();
+    const storage = memoryDatabase().account;
     const signer = PrivateKeyAccount.generateNew().signer;
     const network = new MockNetwork();
-    const options = { storage, signer, network, clientId: "ab".repeat(32) };
+    const options = {
+      database: storage,
+      signer,
+      network,
+      clientId: "ab".repeat(32),
+    };
     const first = await new KeyPackageManager(options).create({
       relays: ["wss://relay.test", "wss://relay.test/", "bad-url"],
     });
@@ -236,12 +260,12 @@ describe("publication slots and durable routes", () => {
   });
 
   it("prefers explicit rotation routes and preserves route-less records", async () => {
-    const storage = memoryStorage();
+    const storage = memoryDatabase().account;
     const store = keyPackageRecords(storage);
     const signer = PrivateKeyAccount.generateNew().signer;
     const network = new MockNetwork();
     const manager = new KeyPackageManager({
-      storage,
+      database: storage,
       signer,
       network,
       clientId: "ab".repeat(32),
@@ -264,11 +288,11 @@ describe("publication slots and durable routes", () => {
   });
 
   it("purges after restart using the union of local routes and consumption metadata", async () => {
-    const storage = memoryStorage();
+    const storage = memoryDatabase().account;
     const signer = PrivateKeyAccount.generateNew().signer;
     const network = new MockNetwork();
     const options = {
-      storage,
+      database: storage,
       signer,
       network,
       clientId: "ab".repeat(32),
@@ -304,11 +328,11 @@ describe("publication slots and durable routes", () => {
 describe("durable KeyPackage consumption receipts", () => {
   async function fixture(isLastResort = false) {
     const account = PrivateKeyAccount.generateNew();
-    const storage = memoryStorage();
+    const storage = memoryDatabase().account;
     const store = keyPackageRecords(storage);
     let adopted = false;
     const options = {
-      storage,
+      database: storage,
       signer: account.signer,
       network: new MockNetwork(),
       hasAdoptedGroup: async () => adopted,
@@ -393,18 +417,28 @@ describe("durable KeyPackage consumption receipts", () => {
       await f.manager.recordConsumption(f.groupId, f.entry.keyPackageRef);
       f.adopt();
       const before = structuredClone(await f.store.get(f.ref));
-      const write = f.storage.set.bind(f.storage);
+      const transaction = f.storage.transaction.bind(f.storage);
       const failure = vi
-        .spyOn(f.storage, "set")
-        .mockImplementation(async (key, value) => {
-          const record = decodeRecord<StoredKeyPackage>(value);
-          if (
-            record.used &&
-            (point === "retirement" || !record.consumptionReceipts)
-          )
-            throw new Error("simulated crash");
-          return write(key, value);
-        });
+        .spyOn(f.storage, "transaction")
+        .mockImplementation((fn) =>
+          transaction((tx) =>
+            fn({
+              ...tx,
+              keyPackages: {
+                ...tx.keyPackages,
+                put: async (row) => {
+                  const record = decodeRecord<StoredKeyPackage>(row.value);
+                  if (
+                    record.used &&
+                    (point === "retirement" || !record.consumptionReceipts)
+                  )
+                    throw new Error("simulated crash");
+                  return tx.keyPackages.put(row);
+                },
+              },
+            }),
+          ),
+        );
       await expect(f.manager.finalizeConsumptions()).rejects.toThrow(
         "simulated crash",
       );
@@ -430,7 +464,7 @@ function makeManager(
   clientId?: string,
 ) {
   const manager = new KeyPackageManager({
-    storage: memoryStorage(),
+    database: memoryDatabase().account,
     signer: account.signer,
     network,
     clientId,

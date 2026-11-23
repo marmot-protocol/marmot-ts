@@ -17,15 +17,12 @@ import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { serializeApplicationRumor } from "../../../core/group-message.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { memoryStorage, type StorageOp } from "../../../utils/storage.js";
+import { memoryGroupDatabase } from "../../../__tests__/helpers/database.js";
+import { instrumentedDatabase } from "./instrumented-database.js";
 import { GroupSession } from "../group-session.js";
 import type { UnreadableIngestResult } from "../group-session.js";
 import type { IngestResult as EngineIngestResult } from "../../../engine/types.js";
-import {
-  disbandTombstoneKey,
-  disbandTerminalIntentKey,
-  encodeDisbandTombstone,
-} from "../../../engine/disband-tombstone.js";
+import { encodeDisbandTombstone } from "../../../engine/disband-tombstone.js";
 import { encodeDisbandRequest } from "../../../engine/disband-request.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import { decodeDeliveredEvidence } from "../../storage/delivered-payload-store.js";
@@ -55,7 +52,7 @@ describe("expected canonical parent at preparation", () => {
     return new GroupSession({
       state: await createAdminState(ciphersuite),
       ciphersuite,
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
     });
   };
   it("rejects a stale expected parent before preparing a commit", async () => {
@@ -64,7 +61,7 @@ describe("expected canonical parent at preparation", () => {
     const session = new GroupSession({
       state,
       ciphersuite,
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
     });
     const before = session.state;
     const intent = {
@@ -220,19 +217,17 @@ describe("durable delivered evidence validation", () => {
   it("restores root evidence without inventing a digest and rejects malformed provenance", async () => {
     const ciphersuite = await getImpl();
     const state = await createAdminState(ciphersuite);
-    const storage = memoryStorage();
+    const database = memoryGroupDatabase();
     const session = new GroupSession({
       state,
       ciphersuite,
-      storage,
+      database,
     });
     await session.send({
       kind: "applicationMessage",
       payload: serializeApplicationRumor(rumorFrom(ADMIN, "root evidence")),
     });
-    const bytes = (await storage.get(
-      `${bytesToHex(session.id)}/ingest/delivered`,
-    ))!;
+    const bytes = (await database.meta.get("delivered"))!;
     const evidence = decodeDeliveredEvidence(bytes, session.historyTree);
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0].commitDigest).toBeUndefined();
@@ -385,7 +380,7 @@ function makeSession(
   return new GroupSession({
     state,
     ciphersuite: impl,
-    storage: memoryStorage(),
+    database: memoryGroupDatabase(),
     ...overrides,
   });
 }
@@ -402,23 +397,21 @@ describe("GroupSession send intent effects", () => {
   it("waits for an admitted disband write, rejects its effects, and purges lifecycle stores", async () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
-    const id = bytesToHex(state.groupContext.groupId);
-    const storage = memoryStorage();
-    const session = makeSession(state, impl, { storage });
+    const store = instrumentedDatabase();
+    const other = memoryGroupDatabase();
+    const session = makeSession(state, impl, { database: store.db });
     await session.hydrateLifecycleEvidence();
-    await storage.set("other/disband/request", new Uint8Array([1]));
+    await other.transaction((tx) =>
+      tx.meta.set("disband/request", new Uint8Array([1])),
+    );
     const entered = deferred();
     const release = deferred();
-    const write = storage.set.bind(storage);
-    vi.spyOn(storage, "set").mockImplementation(
-      async (key: string, value: Uint8Array) => {
-        if (key === `${id}/disband/request`) {
-          entered.resolve();
-          await release.promise;
-        }
-        return write(key, value);
-      },
-    );
+    store.onWrite(async (op) => {
+      if (op.key === "meta:disband/request") {
+        entered.resolve();
+        await release.promise;
+      }
+    });
     const request = session.requestDisband();
     const rejected = expect(request).rejects.toThrow("Group destroyed");
     await entered.promise;
@@ -430,8 +423,8 @@ describe("GroupSession send intent effects", () => {
     expect(destroyed).toBe(false);
     release.resolve();
     await Promise.all([destruction, rejected]);
-    expect(await storage.list(`${id}/`)).toEqual([]);
-    expect(await storage.get("other/disband/request")).toEqual(
+    expect(store.keys()).toEqual([]);
+    expect(await other.meta.get("disband/request")).toEqual(
       new Uint8Array([1]),
     );
     for (const call of [
@@ -444,7 +437,8 @@ describe("GroupSession send intent effects", () => {
       await expect(call()).rejects.toThrow("Group destroyed");
     await session.hydrateLifecycleEvidence();
     expect(await session.markDisbandNotificationDelivered()).toBeUndefined();
-    expect(await storage.list("")).toEqual(["other/disband/request"]);
+    expect(store.keys()).toEqual([]);
+    expect(await other.meta.get("disband/request")).toBeDefined();
   });
 
   it.each(["selection", "notification"] as const)(
@@ -452,8 +446,8 @@ describe("GroupSession send intent effects", () => {
     async (boundary) => {
       const impl = await getImpl();
       const state = await createAdminState(impl);
-      const storage = memoryStorage();
-      const session = makeSession(state, impl, { storage });
+      const store = instrumentedDatabase();
+      const session = makeSession(state, impl, { database: store.db });
       const evidence = {
         commitDigest: new Uint8Array(32).fill(9),
         actorPubkey: ADMIN,
@@ -475,20 +469,7 @@ describe("GroupSession send intent effects", () => {
         entered.resolve();
         await release.promise;
       };
-      const write = storage.set.bind(storage);
-      vi.spyOn(storage, "set").mockImplementation(
-        async (key: string, value: Uint8Array) => {
-          await gate();
-          return write(key, value);
-        },
-      );
-      const commit = storage.batch.bind(storage);
-      vi.spyOn(storage, "batch").mockImplementation(
-        async (ops: readonly StorageOp[]) => {
-          await gate();
-          return commit(ops);
-        },
-      );
+      store.onWrite(gate);
       const operation =
         boundary === "selection"
           ? session.persistSelectedDisband(evidence)
@@ -503,7 +484,7 @@ describe("GroupSession send intent effects", () => {
       expect(destroyed).toBe(false);
       release.resolve();
       await Promise.all([destruction, rejected]);
-      expect(await storage.list("")).toEqual([]);
+      expect(store.keys()).toEqual([]);
       await expect(session.persistSelectedDisband(evidence)).rejects.toThrow(
         "Group destroyed",
       );
@@ -513,10 +494,10 @@ describe("GroupSession send intent effects", () => {
   it("does not recreate registry state when terminal hydration finishes after closure", async () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
-    const storage = memoryStorage();
-    const key = disbandTombstoneKey(bytesToHex(state.groupContext.groupId));
-    await storage.set(
-      key,
+    const store = instrumentedDatabase();
+    const key = "meta:disband/terminal";
+    await store.seed(
+      "disband/terminal",
       encodeDisbandTombstone({
         groupId: state.groupContext.groupId,
         selectedEpoch: Number(state.groupContext.epoch),
@@ -527,66 +508,41 @@ describe("GroupSession send intent effects", () => {
     );
     const entered = deferred();
     const release = deferred();
-    const read = storage.get.bind(storage);
-    vi.spyOn(storage, "get").mockImplementation(async (itemKey: string) => {
-      const value = await read(itemKey);
+    store.onRead(async (itemKey) => {
       if (itemKey === key) {
         entered.resolve();
         await release.promise;
       }
-      return value;
     });
-    const writes = vi.spyOn(storage, "set");
-    const batches = vi.spyOn(storage, "batch");
-    const session = makeSession(state, impl, { storage });
+    const session = makeSession(state, impl, { database: store.db });
     await entered.promise;
     const destruction = session.destroyLocalState();
     release.resolve();
     await destruction;
-    expect(writes).not.toHaveBeenCalled();
-    expect(
-      batches.mock.calls
-        .flatMap(([ops]) => ops)
-        .filter((op) => op.type === "set"),
-    ).toEqual([]);
-    expect(await storage.list("")).toEqual([]);
+    expect(store.writes.filter((op) => op.type === "set")).toEqual([]);
+    expect(store.keys()).toEqual([]);
   });
 
   it("writes selected terminal evidence before clearing live and work state", async () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
-    const id = bytesToHex(state.groupContext.groupId);
     const operations: string[] = [];
-    const storage = memoryStorage();
-    await storage.set(`${id}/state`, new Uint8Array([1]));
-    await storage.set(
-      `${id}/disband/request`,
+    const store = instrumentedDatabase();
+    await store.seed("state", new Uint8Array([1]));
+    await store.seed(
+      "disband/request",
       encodeDisbandRequest({
         status: "pending",
         requestedAtMs: 1,
         lastPreparedEpoch: null,
       }),
     );
-    await storage.set(`${id}/ingest/effect/work`, new Uint8Array([1]));
-    const commit = storage.batch.bind(storage);
-    vi.spyOn(storage, "batch").mockImplementation(
-      async (ops: readonly StorageOp[]) => {
-        for (const op of ops) operations.push(`${op.type}:${op.key}`);
-        return commit(ops);
-      },
-    );
-    const write = storage.set.bind(storage);
-    vi.spyOn(storage, "set").mockImplementation(async (key, value) => {
-      operations.push(`set:${key}`);
-      return write(key, value);
-    });
-    const remove = storage.delete.bind(storage);
-    vi.spyOn(storage, "delete").mockImplementation(async (key) => {
-      operations.push(`delete:${key}`);
-      return remove(key);
+    await store.seed("effects", new Uint8Array([1]));
+    store.onWrite((op) => {
+      operations.push(`${op.type}:${op.key}`);
     });
 
-    const session = makeSession(state, impl, { storage });
+    const session = makeSession(state, impl, { database: store.db });
     await session.persistSelectedDisband({
       commitDigest: new Uint8Array(32).fill(9),
       actorPubkey: ADMIN,
@@ -595,20 +551,17 @@ describe("GroupSession send intent effects", () => {
       terminalOutcome: "disbanded",
     });
 
-    expect(operations[0]).toBe(`set:${disbandTerminalIntentKey(id)}`);
-    expect(await storage.get(`${id}/disband/request`)).toBeUndefined();
-    expect(await storage.get(`${id}/ingest/effect/work`)).toEqual(
-      new Uint8Array([1]),
-    );
-    expect(operations.indexOf(`delete:${id}/state`)).toBeGreaterThan(0);
+    expect(operations[0]).toBe("set:meta:disband/intent");
+    expect(await store.db.meta.get("disband/request")).toBeUndefined();
+    expect(await store.db.meta.get("effects")).toEqual(new Uint8Array([1]));
+    expect(operations.indexOf("delete:meta:state")).toBeGreaterThan(0);
   });
 
   it("hydrates terminal authority over stale live state and rejects corrupt evidence", async () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
-    const id = bytesToHex(state.groupContext.groupId);
-    const storage = memoryStorage();
-    const session = makeSession(state, impl, { storage });
+    const database = memoryGroupDatabase();
+    const session = makeSession(state, impl, { database });
     await session.persistSelectedDisband({
       commitDigest: new Uint8Array(32).fill(8),
       actorPubkey: ADMIN,
@@ -617,14 +570,16 @@ describe("GroupSession send intent effects", () => {
       terminalOutcome: "disbanded",
     });
 
-    const restarted = makeSession(state, impl, { storage });
+    const restarted = makeSession(state, impl, { database });
     expect((await restarted.disbandTombstone())?.actorPubkey).toBe(ADMIN);
 
-    await storage.set(
-      disbandTombstoneKey(id),
-      new TextEncoder().encode('{"version":99}'),
+    await database.transaction((tx) =>
+      tx.meta.set(
+        "disband/terminal",
+        new TextEncoder().encode('{"version":99}'),
+      ),
     );
-    const corrupt = makeSession(state, impl, { storage });
+    const corrupt = makeSession(state, impl, { database });
     await expect(corrupt.disbandTombstone()).rejects.toThrow(
       "Invalid disband tombstone",
     );
@@ -632,16 +587,14 @@ describe("GroupSession send intent effects", () => {
 
   it("persists a disband request before exposing its candidate and gates later sends", async () => {
     const impl = await getImpl();
-    const storage = memoryStorage();
+    const database = memoryGroupDatabase();
     const session = makeSession(await createAdminState(impl), impl, {
-      storage,
+      database,
     });
 
     const effects = await session.requestDisband();
     expect(effects.publish).toHaveLength(1);
-    expect(
-      (await storage.list("")).some((key) => key.endsWith("/disband/request")),
-    ).toBe(true);
+    expect(await database.meta.get("disband/request")).toBeDefined();
     await expect(
       session.send({
         kind: "applicationMessage",
@@ -901,8 +854,8 @@ describe("GroupSession save lifecycle", () => {
   it("destroy waits for ledger hydration and prevents late hydration or saves from recreating plaintext", async () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
-    const storage = memoryStorage();
-    const original = makeSession(state, impl, { storage });
+    const store = instrumentedDatabase();
+    const original = makeSession(state, impl, { database: store.db });
     await original.send({
       kind: "applicationMessage",
       payload: serializeApplicationRumor(rumorFrom(ADMIN, "private hydration")),
@@ -911,14 +864,11 @@ describe("GroupSession save lifecycle", () => {
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const get = storage.get.bind(storage);
-    vi.spyOn(storage, "get").mockImplementation(async (key: string) => {
-      const bytes = await get(key);
-      if (key.endsWith("/ingest/delivered")) await blocked;
-      return bytes;
+    store.onRead(async (key) => {
+      if (key === "meta:delivered") await blocked;
     });
     const session = makeSession(original.state, impl, {
-      storage,
+      database: store.db,
       historyTree: original.historyTree,
     });
     const destruction = session.destroyLocalState();
@@ -926,7 +876,7 @@ describe("GroupSession save lifecycle", () => {
     await destruction;
     await session.hydrateLifecycleEvidence();
     await session.save(true);
-    expect(await storage.list("")).toEqual([]);
+    expect(store.keys()).toEqual([]);
     await expect(
       session.send({
         kind: "applicationMessage",
@@ -940,26 +890,25 @@ describe("GroupSession save lifecycle", () => {
   it("only writes to the store when dirty, or when forced", async () => {
     const impl = await getImpl();
     const state = await createAdminState(impl);
-    const storage = memoryStorage();
+    const store = instrumentedDatabase();
     const onStateSaved = vi.fn();
-    const session = makeSession(state, impl, { storage, onStateSaved });
-    const key = `${bytesToHex(state.groupContext.groupId)}/state`;
+    const session = makeSession(state, impl, {
+      database: store.db,
+      onStateSaved,
+    });
+    const key = "meta:state";
 
     // The fork-history tree is always persisted now: a fresh session's seeded
     // root is unflushed, so the first save commits it with the canonical state.
     expect(session.historyTree.isDirty).toBe(true);
     await session.save();
-    expect(await storage.get(key)).toBeDefined();
+    expect(await store.db.meta.get("state")).toBeDefined();
     expect(onStateSaved).toHaveBeenCalledOnce();
 
     // Clean session: a plain save does not rewrite the canonical state (only
     // the delivered-payload evidence, which every save refreshes).
-    const batch = vi.spyOn(storage, "batch");
-    const set = vi.spyOn(storage, "set");
-    const writtenKeys = () => [
-      ...batch.mock.calls.flatMap(([ops]) => ops.map((op) => op.key)),
-      ...set.mock.calls.map(([written]) => written),
-    ];
+    const before = store.writes.length;
+    const writtenKeys = () => store.writes.slice(before).map((op) => op.key);
     await session.save();
     expect(writtenKeys()).not.toContain(key);
     expect(onStateSaved).toHaveBeenCalledOnce();

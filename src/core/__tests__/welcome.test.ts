@@ -30,7 +30,7 @@ import {
 } from "../welcome.js";
 import { encodeContent } from "../../utils/encoding.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
 
 // ---------------------------------------------------------------------------
 // spec compliance (welcome delivery)
@@ -181,7 +181,7 @@ describe("readWelcomeGroupInfo / readWelcomeMarmotGroupView", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });

@@ -11,7 +11,7 @@ import {
   serializeClientState,
 } from "../../core/client-state.js";
 import { defaultVerifyEvent, safeVerifyEvent } from "../verify.js";
-import type { MarmotStorage } from "./storage.js";
+import type { GroupMetaStore } from "./database/group-batch.js";
 import { decodeRecord, encodeRecord } from "./record-codec.js";
 import { groupKeys } from "./storage-keys.js";
 import type { PublishResponse } from "../nostr-interface.js";
@@ -21,9 +21,8 @@ type CommitWork = Extract<
   GroupPublishWork,
   { kind: "groupEvolution" | "selfUpdate" }
 >;
-export function pendingPublicationKey(groupId: string): string {
-  return groupKeys.publication(groupId);
-}
+/** Group-database meta key of the pending commit publication. */
+export const PENDING_PUBLICATION_KEY = groupKeys.publication;
 
 export interface PendingPublication {
   work: CommitWork;
@@ -35,13 +34,8 @@ export interface PendingPublication {
 
 /** Local storage is trusted to the same extent as the canonical MLS state store. */
 export class PendingPublicationStore {
-  readonly #key: string;
-  constructor(
-    readonly store: MarmotStorage,
-    groupId: string,
-  ) {
-    this.#key = pendingPublicationKey(groupId);
-  }
+  readonly #key = PENDING_PUBLICATION_KEY;
+  constructor(readonly store: GroupMetaStore) {}
   async read(): Promise<PendingPublication | undefined> {
     const bytes = await this.store.get(this.#key);
     if (!bytes) return undefined;

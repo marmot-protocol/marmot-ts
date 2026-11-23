@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { EventSigner } from "applesauce-core";
 import { GroupRegistry } from "../../storage/group-registry.js";
 import { MarmotGroup } from "../marmot-group.js";
-import { removalEvidenceKey } from "../../session/group-session.js";
+import { REMOVAL_EVIDENCE_KEY } from "../../session/group-session.js";
 import type { NostrNetworkInterface } from "../../nostr-interface.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import {
@@ -32,7 +32,22 @@ import { createCredential } from "../../../core/credential.js";
 import { createGroupEvent } from "../../../core/group-message.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { memoryStorage, type StorageOp } from "../../../utils/storage.js";
+import {
+  memoryDatabase,
+  memoryGroupDatabase,
+} from "../../../__tests__/helpers/database.js";
+import { BinaryReader, BinaryWriter } from "../../../core/binary.js";
+import {
+  groupMetaStore,
+  groupTreeStore,
+  type GroupMetaStore,
+} from "../../storage/database/group-batch.js";
+import type {
+  GroupMetaKey,
+  GroupTransaction,
+  MarmotDatabase,
+  MarmotGroupDatabase,
+} from "../../storage/database/types.js";
 import { GroupHistoryTree } from "../../../engine/history-tree.js";
 import { MarmotGroupEngine } from "../../../engine/group-engine.js";
 import { NostrGroupPeeler } from "../nostr-peeler.js";
@@ -62,9 +77,134 @@ const network: NostrNetworkInterface = {
     throw new Error("no relay lookup expected");
   },
 };
+/** One recorded write inside a group transaction. */
+type StorageOp = {
+  table: keyof GroupTransaction;
+  method: string;
+  args: unknown[];
+  /** Meta writes only: `set`/`delete`, key and value. */
+  type?: "set" | "delete";
+  key?: GroupMetaKey;
+  value?: Uint8Array;
+};
+const ROLLBACK = new Error("rollback");
+/** Proxies a transaction, recording every write before forwarding it. */
+function recording(tx: GroupTransaction, ops: StorageOp[]): GroupTransaction {
+  const proxy = {} as Record<string, Record<string, unknown>>;
+  for (const table of [
+    "meta",
+    "treeNodes",
+    "wrappers",
+    "messages",
+    "deliveries",
+  ] as const) {
+    const target = tx[table] as unknown as Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >;
+    proxy[table] = {};
+    for (const method of Object.keys(target))
+      proxy[table][method] = (...args: unknown[]) => {
+        if (
+          !["get", "query", "byRumor", "countByRumor", "withEvidence"].includes(
+            method,
+          )
+        ) {
+          const op: StorageOp = { table, method, args };
+          if (table === "meta") {
+            op.type = method === "set" ? "set" : "delete";
+            op.key = args[0] as GroupMetaKey;
+            op.value = args[1] as Uint8Array | undefined;
+          }
+          ops.push(op);
+        }
+        return target[method](...args);
+      };
+  }
+  return proxy as unknown as GroupTransaction;
+}
+/** Replays recorded writes, taking each meta value from the op itself. */
+async function replay(tx: GroupTransaction, ops: readonly StorageOp[]) {
+  for (const op of ops) {
+    const args =
+      op.table === "meta" && op.type === "set" ? [op.key, op.value] : op.args;
+    await (
+      tx[op.table] as unknown as Record<
+        string,
+        (...args: unknown[]) => Promise<unknown>
+      >
+    )[op.method](...args);
+  }
+}
+type WriteHook = (
+  ops: readonly StorageOp[],
+  write: () => Promise<void>,
+) => Promise<void>;
+/**
+ * A group database whose transactions can be intercepted: the hook sees the
+ * writes a transaction would make (a dry run that rolls back) and decides
+ * whether and how to commit them.
+ */
+class InterceptedDatabase {
+  hook: WriteHook | undefined;
+  readonly inner: MarmotGroupDatabase = memoryGroupDatabase();
+  readonly database: MarmotGroupDatabase;
+  constructor() {
+    const inner = this.inner;
+    this.database = {
+      meta: inner.meta,
+      treeNodes: inner.treeNodes,
+      wrappers: inner.wrappers,
+      messages: inner.messages,
+      deliveries: inner.deliveries,
+      close: async () => {},
+      transaction: async <T>(fn: (tx: GroupTransaction) => Promise<T>) => {
+        const hook = this.hook;
+        if (!hook) return inner.transaction(fn);
+        const ops: StorageOp[] = [];
+        try {
+          await inner.transaction(async (tx) => {
+            await fn(recording(tx, ops));
+            throw ROLLBACK;
+          });
+        } catch (error) {
+          if (error !== ROLLBACK) throw error;
+        }
+        let result!: T;
+        await hook(ops, async () => {
+          result = await inner.transaction(fn);
+        });
+        return result;
+      },
+    };
+  }
+  /** Commits recorded writes directly. */
+  apply(ops: readonly StorageOp[]): Promise<void> {
+    return this.inner.transaction((tx) => replay(tx, ops));
+  }
+}
+/** A node record's fields (see history-tree.ts node record encoding). */
+function decodeNode(bytes: Uint8Array) {
+  const r = new BinaryReader(bytes);
+  const version = r.uint8();
+  const edge = r.opaque();
+  const snapshot = r.opaque();
+  const commit = r.uint8() ? r.opaque() : undefined;
+  r.end();
+  return { version, edge, snapshot, commit };
+}
+function encodeNode(node: ReturnType<typeof decodeNode>): Uint8Array {
+  const w = new BinaryWriter()
+    .uint8(node.version)
+    .opaque(node.edge)
+    .opaque(node.snapshot);
+  if (node.commit) w.uint8(1).opaque(node.commit);
+  else w.uint8(0);
+  return w.build();
+}
 function registry(f: Awaited<ReturnType<typeof fixture>>, horizon = 5) {
   return new GroupRegistry({
-    storage: f.storage,
+    database: f.database,
     signer: { getPublicKey: async () => f.member.pubkey } as EventSigner,
     network,
     convergencePolicy: {
@@ -75,7 +215,7 @@ function registry(f: Awaited<ReturnType<typeof fixture>>, horizon = 5) {
 }
 async function realize(f: Awaited<ReturnType<typeof fixture>>) {
   const group = new MarmotGroup(copy(f.session.state), {
-    storage: f.storage,
+    database: f.db.database,
     ciphersuite: f.impl,
     signer: { getPublicKey: async () => f.member.pubkey } as EventSigner,
     network,
@@ -89,8 +229,9 @@ async function realize(f: Awaited<ReturnType<typeof fixture>>) {
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 type WriteKind = "authority" | "snapshot" | "release";
-const markerKey = (f: Fixture) => `${f.id}/removed`;
-const stateKey = (f: Fixture) => `${f.id}/state`;
+const markerKey = (_f: Fixture): GroupMetaKey => "removed";
+const stateKey = (_f: Fixture): GroupMetaKey => "state";
+const removalEvidenceKey = (_id: string): GroupMetaKey => REMOVAL_EVIDENCE_KEY;
 /** Classifies a storage write by the removal-recovery step it commits. */
 function writeKind(
   f: Fixture,
@@ -121,23 +262,10 @@ function interceptWrites(
     ops: readonly StorageOp[],
   ) => Promise<void>,
 ): () => void {
-  const storage = f.storage;
-  const set = storage.set.bind(storage),
-    remove = storage.delete.bind(storage),
-    batch = storage.batch.bind(storage);
-  storage.set = (key, value) => {
-    const ops: StorageOp[] = [{ type: "set", key, value }];
-    return onWrite(writeKind(f, ops), () => set(key, value), ops);
-  };
-  storage.delete = (key) => {
-    const ops: StorageOp[] = [{ type: "delete", key }];
-    return onWrite(writeKind(f, ops), () => remove(key), ops);
-  };
-  storage.batch = (ops) => onWrite(writeKind(f, ops), () => batch(ops), ops);
+  const previous = f.db.hook;
+  f.db.hook = (ops, write) => onWrite(writeKind(f, ops), write, ops);
   return () => {
-    storage.set = set;
-    storage.delete = remove;
-    storage.batch = batch;
+    f.db.hook = previous;
   };
 }
 /** Fails the first write of `kind`, optionally after it was forwarded. */
@@ -237,11 +365,21 @@ async function fixture(depth = 2, losing = false, highRemoval = false) {
     state: added.newState,
     ciphersuite: impl,
   });
-  const storage = memoryStorage();
+  const id = bytesToHex(parent.groupContext.groupId);
+  const db = new InterceptedDatabase();
+  const account = memoryDatabase().account;
+  await account.transaction((tx) =>
+    tx.groups.put({ id, status: "active", value: new Uint8Array() }),
+  );
+  const database: MarmotDatabase = {
+    account,
+    groups: { open: async () => db.database, drop: async () => {} },
+  };
+  const storage: GroupMetaStore = groupMetaStore(db.database);
   const session = new GroupSession({
     state: copy(parent),
     ciphersuite: impl,
-    storage,
+    database: db.database,
   });
   let adminTip = copy(added.newState),
     memberTip = copy(parent);
@@ -292,12 +430,14 @@ async function fixture(depth = 2, losing = false, highRemoval = false) {
   const removed = results.find((result) => result.kind === "removed")!;
   // Persist the actual tombstone and reload the independent retained tree.
   await session.save(true);
-  tree.bindStore(storage);
+  tree.bindStore(groupTreeStore(db.database));
   await tree.flush();
-  const id = bytesToHex(parent.groupContext.groupId);
-  const restartedTree = (await GroupHistoryTree.load(storage, id))!;
+  const restartedTree = (await GroupHistoryTree.load(
+    groupTreeStore(db.database),
+    id,
+  ))!;
   const engine = new MarmotGroupEngine({
-    state: deserializeClientState((await storage.get(`${id}/state`))!),
+    state: deserializeClientState((await storage.get("state"))!),
     ciphersuite: impl,
     peeler: new NostrGroupPeeler(impl),
     historyTree: restartedTree,
@@ -316,6 +456,8 @@ async function fixture(depth = 2, losing = false, highRemoval = false) {
     adminTip,
     tree: restartedTree,
     storage,
+    db,
+    database,
     member,
     id,
     removal,
@@ -630,7 +772,7 @@ describe("durable removal recovery activation", () => {
     restore();
     expect(loaded.session.removalBlocked).toBe(true);
     await loaded.session.save(true);
-    expect((await f.storage.get(`${f.id}/tree/meta`))![0] === 2).toBe(true);
+    expect((await f.storage.get("tree"))![0] === 2).toBe(true);
     expect(
       await loaded.session.historyTree.stateAt(
         bytesToHex(f.parent.confirmationTag),
@@ -841,7 +983,7 @@ describe("durable removal recovery activation", () => {
         .retainedStates()
         .map((state) => Number(state.groupContext.epoch)),
     ).toEqual([8, 7, 6, 5, 4, 3]);
-    expect((await f.storage.get(`${f.id}/tree/meta`))![0]).toBe(2);
+    expect((await f.storage.get("tree"))![0]).toBe(2);
     expect(
       await recovered.session.historyTree.stateAt(
         bytesToHex(f.parent.confirmationTag),
@@ -858,13 +1000,13 @@ describe("durable removal recovery activation", () => {
       const f = await fixture();
       await realize(f);
       if (fault === "wrong durable projection") {
-        const batch = f.storage.batch.bind(f.storage);
+        const batch = (ops: readonly StorageOp[]) => f.db.apply(ops);
         const corrupt = interceptWrites(f, async (kind, write, ops) => {
           if (kind !== "snapshot") return write();
           await batch(
             ops.map((op) => {
               if (op.type !== "set" || op.key !== stateKey(f)) return op;
-              const saved = deserializeClientState(op.value);
+              const saved = deserializeClientState(op.value!);
               if (saved.groupActiveState.kind === "active")
                 saved.privatePath.leafIndex =
                   0 as typeof saved.privatePath.leafIndex;
@@ -886,10 +1028,18 @@ describe("durable removal recovery activation", () => {
             removalEvidenceKey(f.id),
             new TextEncoder().encode("{invalid"),
           );
-        else
-          await f.storage.delete(
-            `${f.id}/tree/state/${bytesToHex(f.parent.confirmationTag)}`,
+        else {
+          await f.db.inner.transaction((tx) =>
+            tx.treeNodes.delete(bytesToHex(f.parent.confirmationTag)),
           );
+          // Every persisted tree carries a checkpoint, so a missing member
+          // fails the load closed instead of loading a fenced group.
+          await expect(registry(f).load(f.id)).rejects.toThrow(
+            "required edge missing",
+          );
+          expect(await f.storage.get(markerKey(f))).toEqual(Uint8Array.of(1));
+          return;
+        }
         const r = registry(f),
           loaded = await r.load(f.id);
         await r.track(loaded);
@@ -906,16 +1056,24 @@ describe("durable removal recovery activation", () => {
     const parentChild = f.tree.childrenOf(
       bytesToHex(f.parent.confirmationTag),
     )[0];
-    await f.storage.set(
-      `${f.id}/tree/commit/${parentChild}`,
-      encode(mlsMessageEncoder, f.removal.commit),
+    const node = decodeNode(
+      (await f.db.inner.treeNodes.get(parentChild))!.value,
     );
-    const r = registry(f),
-      loaded = await r.load(f.id);
-    await r.track(loaded);
-    expect(loaded.status).toBe("removed");
+    await f.db.inner.transaction((tx) =>
+      tx.treeNodes.put({
+        tag: parentChild,
+        value: encodeNode({
+          ...node,
+          commit: encode(mlsMessageEncoder, f.removal.commit),
+        }),
+      }),
+    );
+    // The checkpoint validates every retained commit on load: a descendant
+    // whose commit does not match its edge fails the load closed.
+    await expect(registry(f).load(f.id)).rejects.toThrow(
+      "invalid retained commit",
+    );
     expect(await f.storage.get(markerKey(f))).toEqual(Uint8Array.of(1));
-    loaded.dispose();
   });
   it.each([
     "snapshot before forwarding",

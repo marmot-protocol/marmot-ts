@@ -1,16 +1,16 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { describe, expect, it, vi } from "vitest";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
 import { MarmotClient } from "../marmot-client.js";
 import type { StoredKeyPackage } from "../key-package-manager.js";
 import type { UnreadInvite } from "../invite-manager.js";
 import { GroupHistory } from "../storage/group-history.js";
 
 function fixture() {
-  const storage = memoryStorage();
+  const database = memoryDatabase();
   const client = new MarmotClient({
-    storage,
+    database,
     signer: PrivateKeyAccount.generateNew().signer,
     network: new MockNetwork(),
   });
@@ -22,7 +22,7 @@ function fixture() {
         client.keyPackages.watchKeyPackages({ signal }),
       count: () => client.keyPackages.listenerCount("updated"),
       changed: () => client.keyPackages.emit("updated", {} as StoredKeyPackage),
-      block: () => vi.spyOn(storage, "list"),
+      block: () => vi.spyOn(database.account.keyPackages, "all"),
     },
     {
       name: "unread invites",
@@ -178,7 +178,7 @@ describe("public watcher cancellation", () => {
 
   it("annotated invitations refresh joinability on key package changes", async () => {
     const client = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: PrivateKeyAccount.generateNew().signer,
       network: new MockNetwork(),
     });
@@ -200,7 +200,7 @@ describe("public watcher cancellation", () => {
 
   it("annotated invitations cancel during validation", async () => {
     const client = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: PrivateKeyAccount.generateNew().signer,
       network: new MockNetwork(),
     });

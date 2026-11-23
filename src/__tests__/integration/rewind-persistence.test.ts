@@ -28,7 +28,12 @@ import { createCredential } from "../../core/credential.js";
 import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage } from "../../utils/storage.js";
+import {
+  memoryDatabase,
+  memoryGroupDatabase,
+  openGroup,
+} from "../helpers/database.js";
+import { groupTreeStore } from "../../client/storage/database/group-batch.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const NETWORK: NostrNetworkInterface = {
@@ -171,13 +176,18 @@ describe("rewind history persistence across restart", () => {
       await buildForkScenario(impl);
     const groupId = bytesToHex(memberEpoch1.groupContext.groupId);
 
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
+    const { database } = await new GroupRegistry({
+      database: storage,
+      signer: SIGNER,
+      network: NETWORK,
+    }).prepare(memberEpoch1);
 
     // Session 1: follow the losing (higher) branch onto epoch 2, persisting the
     // tip state and the full-fork history tree (which retains epoch 1 + its
     // commit — the bounded rewind window is rebuilt from the tree on load).
     const first = new MarmotGroup(memberEpoch1, {
-      storage,
+      database,
       signer: SIGNER,
       ciphersuite: impl,
       network: NETWORK,
@@ -188,13 +198,16 @@ describe("rewind history persistence across restart", () => {
     );
     first.dispose();
 
-    // Sanity: the history tree was actually persisted (per-node edge keys).
-    const persistedKeys = await storage.list(`${groupId}/tree/edge/`);
-    expect(persistedKeys.length).toBeGreaterThan(0);
+    // Sanity: the history tree was actually persisted (checkpoint + nodes).
+    const persisted = await GroupHistoryTree.load(
+      groupTreeStore(await openGroup(storage, groupId)),
+      groupId,
+    );
+    expect(persisted?.size).toBeGreaterThan(0);
 
     // "Restart": rehydrate the group through the real load path.
     const registry = new GroupRegistry({
-      storage,
+      database: storage,
       signer: SIGNER,
       network: NETWORK,
     });
@@ -227,14 +240,19 @@ describe("rewind history persistence across restart", () => {
     } = await buildForkScenario(impl);
     const groupId = bytesToHex(memberEpoch1.groupContext.groupId);
 
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
+    const { database } = await new GroupRegistry({
+      database: storage,
+      signer: SIGNER,
+      network: NETWORK,
+    }).prepare(memberEpoch1);
 
     // Session 1: follow the losing (higher) branch onto epoch 2, then record the
     // competing canonical (lower) branch into the persisted fork tree WITHOUT
     // converging onto it — simulating a client that captured the rival fork but
     // stopped before the convergence pass (tree flushed, tip still the loser).
     const first = new MarmotGroup(memberEpoch1, {
-      storage,
+      database,
       signer: SIGNER,
       ciphersuite: impl,
       network: NETWORK,
@@ -252,7 +270,7 @@ describe("rewind history persistence across restart", () => {
 
     // "Restart" through the real load path — and ingest NOTHING afterwards.
     const registry = new GroupRegistry({
-      storage,
+      database: storage,
       signer: SIGNER,
       network: NETWORK,
     });
@@ -297,7 +315,7 @@ describe("rewind history persistence across restart", () => {
     });
 
     const group = new MarmotGroup(memberEpoch1, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: SIGNER,
       ciphersuite: impl,
       network: NETWORK,

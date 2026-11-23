@@ -4,7 +4,7 @@ import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { defaultCapabilities } from "../../core/default-capabilities.js";
 import { getKeyPackage } from "../../core/key-package-event.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
 import { MarmotClient } from "../marmot-client.js";
 
 describe("MarmotClient capabilities", () => {
@@ -15,7 +15,7 @@ describe("MarmotClient capabilities", () => {
     const extraExtension = 0xf2d2;
     expect(defaults.extensions).not.toContain(extraExtension);
     const client = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: account.signer,
       network,
       clientId: "cc".repeat(32),

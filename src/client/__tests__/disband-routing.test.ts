@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryGroupDatabase } from "../../__tests__/helpers/database.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { MarmotGroup } from "../group/marmot-group.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
@@ -27,7 +27,7 @@ describe("disbanded inbound routing", () => {
       relays: ["wss://relay.test"],
     });
     const group = new MarmotGroup(clientState, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: account.signer,
       ciphersuite: impl,
       network: new MockNetwork(["wss://relay.test"]),

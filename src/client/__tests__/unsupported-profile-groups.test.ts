@@ -20,7 +20,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { MarmotClient } from "../marmot-client.js";
-import { memoryStorage, type MemoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
+import type { MarmotDatabase } from "../storage/database/types.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { dropAccountIdentityProofRequirement } from "../../__tests__/helpers/account-identity-proof-fixtures.js";
@@ -34,10 +35,9 @@ import {
 import { createGroup, createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import {
-  disbandRequestKey,
+  DISBAND_REQUEST_KEY,
   encodeDisbandRequest,
 } from "../../engine/disband-request.js";
-import { GROUP_PREFIX, groupKeys } from "../storage/storage-keys.js";
 
 const SUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
 // Legacy `marmot.account-identity-proof.v2` custom LeafNode extension
@@ -136,7 +136,7 @@ function fakeGroupEvent(groupId: Uint8Array): NostrEvent {
 
 describe("stored groups outside the account identity proof profile (D-11, D-12)", () => {
   let mockNetwork: MockNetwork;
-  let storage: MemoryStorage;
+  let storage: MarmotDatabase;
   let client: MarmotClient;
   let currentId: string;
   let neitherId: string;
@@ -144,7 +144,7 @@ describe("stored groups outside the account identity proof profile (D-11, D-12)"
 
   beforeEach(async () => {
     mockNetwork = new MockNetwork();
-    storage = memoryStorage();
+    storage = memoryDatabase();
 
     const { adminAccount, state: currentState } = await currentProfileGroup();
     const { state: neitherState } = await neitherProfileGroup();
@@ -154,21 +154,22 @@ describe("stored groups outside the account identity proof profile (D-11, D-12)"
     neitherId = bytesToHex(neitherState.groupContext.groupId);
     mixedId = bytesToHex(mixedState.groupContext.groupId);
 
-    await storage.set(
-      GROUP_PREFIX + groupKeys.state(currentId),
-      serializeClientState(currentState),
-    );
-    await storage.set(
-      GROUP_PREFIX + groupKeys.state(neitherId),
-      serializeClientState(neitherState),
-    );
-    await storage.set(
-      GROUP_PREFIX + groupKeys.state(mixedId),
-      serializeClientState(mixedState),
-    );
+    for (const [id, state] of [
+      [currentId, currentState],
+      [neitherId, neitherState],
+      [mixedId, mixedState],
+    ] as const) {
+      await storage.account.transaction((tx) =>
+        tx.groups.put({ id, status: "active", value: new Uint8Array() }),
+      );
+      const db = await storage.groups.open(id);
+      await db.transaction((tx) =>
+        tx.meta.set("state", serializeClientState(state)),
+      );
+    }
 
     client = new MarmotClient({
-      storage,
+      database: storage,
       signer: adminAccount.signer,
       network: mockNetwork,
     });
@@ -251,27 +252,31 @@ describe("stored groups outside the account identity proof profile (D-11, D-12)"
   it("destroy() removes an unsupported group's stored state, publishing/removing nothing beforehand", async () => {
     await client.groups.loadAll();
     expect(
-      await storage.get(GROUP_PREFIX + groupKeys.state(neitherId)),
+      await (await storage.groups.open(neitherId)).meta.get("state"),
     ).toBeDefined();
 
     await client.groups.destroy(neitherId);
 
+    expect(await storage.account.groups.get(neitherId)).toBeUndefined();
     expect(
-      await storage.list(GROUP_PREFIX + groupKeys.prefix(neitherId)),
-    ).toEqual([]);
+      await (await storage.groups.open(neitherId)).meta.get("state"),
+    ).toBeUndefined();
     expect(
       client.groups.loaded.some((g) => bytesToHex(g.id) === neitherId),
     ).toBe(false);
   });
 
   it("does not disband an unsupported group with a persisted pending disband request during load", async () => {
-    await storage.set(
-      GROUP_PREFIX + disbandRequestKey(neitherId),
-      encodeDisbandRequest({
-        status: "pending",
-        requestedAtMs: Date.now(),
-        lastPreparedEpoch: null,
-      }),
+    const neitherDb = await storage.groups.open(neitherId);
+    await neitherDb.transaction(async (tx) =>
+      tx.meta.set(
+        DISBAND_REQUEST_KEY,
+        encodeDisbandRequest({
+          status: "pending",
+          requestedAtMs: Date.now(),
+          lastPreparedEpoch: null,
+        }),
+      ),
     );
 
     await client.groups.loadAll();

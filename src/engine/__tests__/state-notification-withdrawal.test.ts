@@ -29,7 +29,8 @@ import {
 } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryGroupDatabase } from "../../__tests__/helpers/database.js";
+import { groupMetaStore } from "../../client/storage/database/group-batch.js";
 import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { ConvergenceEffectLedger } from "../../client/storage/wrapper-ledger.js";
@@ -167,7 +168,7 @@ function noNetwork(): NostrNetworkInterface {
 
 describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () => {
   it("persists exactly-once withdrawal and revalidation verdicts", async () => {
-    const store = memoryStorage();
+    const store = memoryGroupDatabase();
     const digest = new Uint8Array(32).fill(7);
     const notification = {
       kind: "epochAdvanced" as const,
@@ -175,12 +176,12 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
       from: 1,
       to: 2,
     };
-    const first = new ConvergenceEffectLedger(store, "group");
+    const first = new ConvergenceEffectLedger(store);
 
     expect(await first.prepareWithdrawal(digest, 1, [notification])).toBe(true);
     expect(await first.prepareWithdrawal(digest, 1, [notification])).toBe(true);
 
-    const restarted = new ConvergenceEffectLedger(store, "group");
+    const restarted = new ConvergenceEffectLedger(store);
     expect(await restarted.pending()).toEqual([
       {
         kind: "stateInvalidated",
@@ -877,9 +878,9 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
     // removal lifecycle is covered by client/group/removal-recovery.test.ts.
     const { memberEpoch1 } = await twoMemberEpoch1Group();
 
-    const storage = memoryStorage();
-    const idHex = bytesToHex(memberEpoch1.groupContext.groupId);
-    const removedMarkerKey = `${idHex}/removed`;
+    const database = memoryGroupDatabase();
+    const storage = groupMetaStore(database);
+    const removedMarkerKey = "removed";
     // Simulate a prior removal already realized (marker set) — exactly the
     // state `#realizeRemovalIfNeeded` leaves behind after a genuine removal.
     await storage.set(removedMarkerKey, Uint8Array.of(1));
@@ -889,7 +890,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
       defaultCryptoProvider,
     );
     const group = new MarmotGroup(memberEpoch1, {
-      storage,
+      database,
       signer: testAccount(11).signer,
       ciphersuite: impl,
       network: noNetwork(),
@@ -921,9 +922,9 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
   it("keeps a legacy removal marker when reconverge reports an unattributed selfRemoved withdrawal", async () => {
     const { memberEpoch1 } = await twoMemberEpoch1Group();
 
-    const storage = memoryStorage();
-    const idHex = bytesToHex(memberEpoch1.groupContext.groupId);
-    const removedMarkerKey = `${idHex}/removed`;
+    const database = memoryGroupDatabase();
+    const storage = groupMetaStore(database);
+    const removedMarkerKey = "removed";
     await storage.set(removedMarkerKey, Uint8Array.of(1));
 
     const impl = await getCiphersuiteImpl(
@@ -931,7 +932,7 @@ describe("state notification derivation + withdrawal (CONV-03, D-10/D-11)", () =
       defaultCryptoProvider,
     );
     const group = new MarmotGroup(memberEpoch1, {
-      storage,
+      database,
       signer: testAccount(11).signer,
       ciphersuite: impl,
       network: noNetwork(),

@@ -18,7 +18,10 @@ import {
   encodeMediaImetaTag,
   mediaSourceStateToken,
 } from "../../../core/media.js";
-import { memoryStorage } from "../../../utils/storage.js";
+import {
+  memoryDatabase,
+  memoryGroupDatabase,
+} from "../../../__tests__/helpers/database.js";
 import { GroupRegistry } from "../../storage/group-registry.js";
 import { MarmotGroup } from "../marmot-group.js";
 import {
@@ -45,13 +48,19 @@ async function setup() {
     ]),
   });
   const options = {
-    storage: memoryStorage(),
+    database: memoryDatabase(),
     signer: account.signer,
     ciphersuite,
     network: new MockNetwork(),
     scheduler: { setTimer: () => 1, clearTimer() {} },
   };
-  const group = new MarmotGroup(clientState, options);
+  const { database: groupDatabase } = await new GroupRegistry(options).prepare(
+    clientState,
+  );
+  const group = new MarmotGroup(clientState, {
+    ...options,
+    database: groupDatabase,
+  });
   const blobs = new Map<string, Uint8Array>();
   const transport: MediaBlobTransport = {
     async upload({ data, ciphertextSha256 }) {
@@ -250,7 +259,7 @@ describe("source-bound v2 transfer", () => {
       });
       peer = new MarmotGroup(joined, {
         ...options,
-        storage: memoryStorage(),
+        database: memoryGroupDatabase(),
         signer: member.signer,
       });
       const prepared = await prepareMediaMessage(peer, files, {

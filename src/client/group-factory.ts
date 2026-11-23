@@ -1,6 +1,5 @@
 /** @module @category Client - Group Manager */
 import { EventSigner } from "applesauce-core";
-import type { MarmotRumorDatabases } from "./storage/group-history.js";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import {
@@ -22,7 +21,8 @@ import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { createCredential } from "../core/credential.js";
 import { createSimpleGroup, SimpleGroupOptions } from "../core/group.js";
 import { generateKeyPackage } from "../core/key-package.js";
-import type { MarmotStorage } from "./storage/storage.js";
+import { groupTreeStore } from "./storage/database/group-batch.js";
+import type { GroupStorageHandle } from "./storage/group-registry.js";
 import { MarmotGroup } from "./group/marmot-group.js";
 import { createInviteIntent } from "./group/invite.js";
 import { NostrGroupPeeler } from "./group/nostr-peeler.js";
@@ -33,8 +33,8 @@ import { isValidRelayUrl } from "../utils/relay-url.js";
 
 /** Options accepted by {@link GroupFactory}. */
 export type GroupFactoryOptions = {
-  /** Storage scoped to the client's `group/` namespace. */
-  storage: MarmotStorage;
+  /** Registers a new group and opens its database (see `GroupRegistry.prepare`). */
+  prepare: (state: ClientState) => Promise<GroupStorageHandle>;
   signer: EventSigner;
   network: NostrNetworkInterface;
   /** Optional forensic audit sink inherited by new groups. */
@@ -42,8 +42,6 @@ export type GroupFactoryOptions = {
   /** Required when `audit` is set; contains stable engine/account/session metadata. */
   auditContext?: AuditContextOptions;
   cryptoProvider?: CryptoProvider;
-  /** Per-group rumor databases for message history (in memory when omitted). */
-  rumors?: MarmotRumorDatabases;
   /** Convergence policy applied to newly created/imported groups. */
   convergencePolicy?: ConvergencePolicy;
   /** Ingestion-pool tuning applied to newly created/imported groups. */
@@ -98,19 +96,18 @@ type FoundingCreateResult = {
  * persists; caching/eventing is the registry's job.
  */
 export class GroupFactory {
-  readonly #storage: MarmotStorage;
+  readonly #prepare: (state: ClientState) => Promise<GroupStorageHandle>;
   readonly #signer: EventSigner;
   readonly #network: NostrNetworkInterface;
   readonly #audit?: AuditSink;
   readonly #auditContext?: AuditContextOptions;
   readonly #cryptoProvider: CryptoProvider;
-  readonly #rumors?: MarmotRumorDatabases;
   readonly #convergencePolicy?: ConvergencePolicy;
   readonly #ingestionPool?: IngestionPoolOptions;
   readonly #verifyEvent: VerifyEventMethod;
 
   constructor(options: GroupFactoryOptions) {
-    this.#storage = options.storage;
+    this.#prepare = options.prepare;
     this.#convergencePolicy = options.convergencePolicy;
     this.#ingestionPool = options.ingestionPool;
     this.#signer = options.signer;
@@ -118,7 +115,6 @@ export class GroupFactory {
     this.#audit = options.audit;
     this.#auditContext = options.auditContext;
     this.#cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
-    this.#rumors = options.rumors;
     this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
   }
 
@@ -187,23 +183,25 @@ export class GroupFactory {
           )
         : undefined;
 
-    const group = new MarmotGroup(founding?.state ?? clientState, {
+    const state = founding?.state ?? clientState;
+    const { database, dropDatabase } = await this.#prepare(state);
+    const group = new MarmotGroup(state, {
       ciphersuite: ciphersuiteImpl,
-      storage: this.#storage,
+      database,
+      dropDatabase,
       convergencePolicy: this.#convergencePolicy,
       ingestionPool: this.#ingestionPool,
       signer: this.#signer,
       network: this.#network,
       audit: this.#audit,
       auditContext: this.#auditContext,
-      rumors: this.#rumors,
       retained: founding?.retained,
       historyTree: founding?.historyTree,
     });
     // GroupSession only binds a tree it created itself (its own fresh
     // GroupHistoryTree) — a supplied tree must be bound here before saving,
     // or save()'s history.flush() would throw.
-    if (founding) founding.historyTree.bindStore(this.#storage);
+    if (founding) founding.historyTree.bindStore(groupTreeStore(database));
     await group.save(true);
 
     // D-05/D-07/D-12: fan out directly, bypassing GroupRuntime entirely — no

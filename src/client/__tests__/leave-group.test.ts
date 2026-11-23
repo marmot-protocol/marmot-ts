@@ -9,7 +9,7 @@ import {
   GROUP_EVENT_KIND,
 } from "../../core/protocol.js";
 import { MarmotClient } from "../marmot-client.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
 
 // ============================================================================
 // Shared setup helpers
@@ -22,14 +22,14 @@ async function setupTwoMemberGroup(mockNetwork: MockNetwork) {
   const memberPubkey = await memberAccount.signer.getPublicKey();
 
   const adminClient = new MarmotClient({
-    storage: memoryStorage(),
+    database: memoryDatabase(),
     signer: adminAccount.signer,
     network: mockNetwork,
     clientId: "aa".repeat(32),
   });
 
   const memberClient = new MarmotClient({
-    storage: memoryStorage(),
+    database: memoryDatabase(),
     signer: memberAccount.signer,
     network: mockNetwork,
     clientId: "bb".repeat(32),
@@ -139,7 +139,12 @@ describe("groups.leave() proposal + destroy semantics", () => {
     // Group should be removed from store after leaving
     const groupsAfter = await memberClient.groups.listIds();
     expect(groupsAfter.some((id) => bytesToHex(id) === groupIdHex)).toBe(false);
-    expect(await memberClient.storage.list(`group/${groupIdHex}/`)).toEqual([]);
+    expect(
+      await memberClient.database.account.groups.get(groupIdHex),
+    ).toBeUndefined();
+    const dropped = await memberClient.database.groups.open(groupIdHex);
+    expect(await dropped.meta.get("state")).toBeUndefined();
+    expect(await dropped.meta.get("tree")).toBeUndefined();
   });
 
   it("emits the 'destroyed' event", async () => {

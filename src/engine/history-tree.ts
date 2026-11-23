@@ -16,10 +16,10 @@ import {
 } from "../core/client-state.js";
 import { commitDigest } from "../core/convergence.js";
 import {
-  deletePrefix,
-  StorageBatch,
-  type MarmotStorage,
-} from "../utils/storage.js";
+  emptyTreeWrite,
+  type HistoryTreeStore,
+  type HistoryTreeWrite,
+} from "./history-tree-store.js";
 import {
   decodeOwnCommitRecord,
   encodeOwnCommitRecord,
@@ -72,19 +72,42 @@ interface TreeCheckpoint {
   };
 }
 
-/** Wire-format version byte for a persisted node-edge / meta record. */
+/** Wire-format version byte for a persisted node-edge record. */
 const HISTORY_TREE_VERSION = 1;
+/** Wire-format version byte for a persisted node record (edge + heavy). */
+const NODE_RECORD_VERSION = 1;
 
 /** Default number of heavy snapshots kept rehydrated in memory at once. */
 const DEFAULT_SNAPSHOT_CACHE = 128;
 
-/** The storage backing a tree's heavy material, scoped so group ids are key prefixes. */
-type HistoryTreeStore = MarmotStorage;
+/** One persisted node: light edge record plus heavy material. */
+interface NodeRecord {
+  edge: Uint8Array;
+  snapshot: Uint8Array;
+  commit?: Uint8Array;
+}
 
-const metaKey = (gid: string) => `${gid}/tree/meta`;
-const edgeKey = (gid: string, tag: string) => `${gid}/tree/edge/${tag}`;
-const stateKey = (gid: string, tag: string) => `${gid}/tree/state/${tag}`;
-const commitKey = (gid: string, tag: string) => `${gid}/tree/commit/${tag}`;
+function encodeNodeRecord(record: NodeRecord): Uint8Array {
+  const w = new BinaryWriter()
+    .uint8(NODE_RECORD_VERSION)
+    .opaque(record.edge)
+    .opaque(record.snapshot);
+  if (record.commit) w.uint8(1).opaque(record.commit);
+  else w.uint8(0);
+  return w.build();
+}
+
+function decodeNodeRecord(bytes: Uint8Array): NodeRecord {
+  const r = new BinaryReader(bytes);
+  const version = r.uint8();
+  if (version !== NODE_RECORD_VERSION)
+    throw new Error(`GroupHistoryTree: unknown node record version ${version}`);
+  const edge = r.opaque();
+  const snapshot = r.opaque();
+  const commit = r.uint8() ? r.opaque() : undefined;
+  r.end();
+  return { edge, snapshot, commit };
+}
 
 /**
  * Protocol-level metadata for one edge — the commit that produced a node from
@@ -381,10 +404,10 @@ export class GroupHistoryTree {
       this.#putHeavy(tag, { snapshot: bytes });
       return bytes;
     }
-    const bytes = await this.#store.get(stateKey(this.#gid, tag));
-    if (!bytes) return undefined;
-    this.#putHeavy(tag, { snapshot: bytes });
-    return bytes;
+    const record = await this.#readNode(tag);
+    if (!record) return undefined;
+    this.#putHeavy(tag, { snapshot: record.snapshot });
+    return record.snapshot;
   }
 
   /**
@@ -409,7 +432,7 @@ export class GroupHistoryTree {
     if (!this.#store || !this.#gid) return undefined;
     // Fetched on demand (rare — for replay/debug); not cached, to avoid
     // displacing a hot snapshot or polluting the LRU with commit-only entries.
-    const record = await this.#store.get(commitKey(this.#gid, childTag));
+    const record = (await this.#readNode(childTag))?.commit;
     return record ? decodeOwnCommitRecord(record).wireBytes : undefined;
   }
 
@@ -420,11 +443,7 @@ export class GroupHistoryTree {
     const node = this.#nodes.get(childTag);
     if (!node || !node.edge) return undefined;
     const cached = this.#heavy.get(childTag)?.commit;
-    const record =
-      cached ??
-      (this.#store && this.#gid
-        ? await this.#store.get(commitKey(this.#gid, childTag))
-        : null);
+    const record = cached ?? (await this.#readNode(childTag))?.commit;
     if (!record) return undefined;
     const decoded = decodeOwnCommitRecord(record);
     return decoded.kind === "stamped" ? decoded.stamp : undefined;
@@ -579,7 +598,7 @@ export class GroupHistoryTree {
    * dirty so the first {@link flush} persists the whole tree. A no-op if the
    * same store is already bound (e.g. on a tree loaded via {@link load}).
    */
-  bindStore(store: MarmotStorage): void {
+  bindStore(store: HistoryTreeStore): void {
     this.#assertMutable();
     if (this.#store === store) return;
     this.#store = store;
@@ -597,9 +616,8 @@ export class GroupHistoryTree {
     this.#assertMutable();
     if (this.#flushing) return this.#flushing;
     const operation = (async () => {
-      const batch = new StorageBatch(this.#requireStore());
-      const finish = await this.#stageFlush(batch);
-      await batch.commit();
+      const { write, finish } = await this.#stageFlush();
+      await this.#requireStore().commit(write);
       finish();
     })();
     this.#flushing = operation;
@@ -611,15 +629,25 @@ export class GroupHistoryTree {
   }
 
   /**
-   * Stages every unflushed node into `batch` so it commits atomically with the
-   * caller's other writes. Call the returned function only after the batch
-   * commits; it marks the staged nodes clean.
+   * Stages every unflushed node as a {@link HistoryTreeWrite} the caller commits
+   * atomically with its other writes. Call `finish` only after that commit; it
+   * marks the staged nodes clean.
    * @internal
    */
-  async stageFlush(batch: StorageBatch): Promise<() => void> {
+  async stageFlush(): Promise<{
+    write: HistoryTreeWrite;
+    finish: () => void;
+  }> {
     this.#assertMutable();
     await this.#flushing;
-    return this.#stageFlush(batch);
+    return this.#stageFlush();
+  }
+
+  /** Reads and decodes a persisted node record. */
+  async #readNode(tag: string): Promise<NodeRecord | undefined> {
+    if (!this.#store) return undefined;
+    const bytes = await this.#store.node(tag);
+    return bytes ? decodeNodeRecord(bytes) : undefined;
   }
 
   #requireStore(): HistoryTreeStore {
@@ -628,9 +656,12 @@ export class GroupHistoryTree {
     return this.#store;
   }
 
-  async #stageFlush(batch: StorageBatch): Promise<() => void> {
+  async #stageFlush(): Promise<{
+    write: HistoryTreeWrite;
+    finish: () => void;
+  }> {
     this.#requireStore();
-    const gid = this.#gid!;
+    const write = emptyTreeWrite();
 
     const revision = this.#revision;
     const dirty = [...this.#dirty].map(([tag, generation]) => ({
@@ -639,52 +670,62 @@ export class GroupHistoryTree {
       node: this.#nodes.get(tag),
       heavy: this.#heavy.get(tag),
     }));
-    const checkpoint = this.#checkpoint
-      ? {
-          ...this.#checkpoint,
-          members: this.tags(),
-          garbage: this.#checkpoint.garbage.filter(
-            (tag) => !this.#nodes.has(tag),
-          ),
-          receivers: { ...this.#checkpoint.receivers },
-        }
-      : undefined;
+    // Every persisted tree carries a checkpoint: it names the members, so a
+    // load reads them by tag instead of listing storage.
+    const base: TreeCheckpoint = this.#checkpoint ?? {
+      version: 2,
+      rootTag: this.#rootTag ?? "",
+      members: [],
+      garbage: [],
+      receivers: {},
+      projections: {},
+    };
+    const checkpoint: TreeCheckpoint = {
+      ...base,
+      rootTag: this.#rootTag ?? base.rootTag,
+      members: this.tags(),
+      garbage: base.garbage.filter((tag) => !this.#nodes.has(tag)),
+      receivers: Object.fromEntries(
+        this.tags().map((tag) => [tag, base.receivers[tag] ?? null]),
+      ),
+      projections: { ...base.projections },
+    };
     for (const { tag, node, heavy } of dirty) {
       if (!node || !heavy)
         throw new Error("GroupHistoryTree: dirty material missing");
-      batch.set(edgeKey(gid, tag), this.#encodePhysicalEdge(node));
-      batch.set(stateKey(gid, tag), heavy.snapshot);
+      let commit: Uint8Array | undefined;
       if (node.edge) {
-        const commit = heavy.commit ?? (await batch.get(commitKey(gid, tag)));
+        commit = heavy.commit ?? (await this.#readNode(tag))?.commit;
         if (!commit)
           throw new Error("GroupHistoryTree: required commit missing");
-        batch.set(commitKey(gid, tag), commit);
       }
-      if (checkpoint) {
-        checkpoint.receivers[tag] = [
-          ...deserializeClientState(
-            heavy.snapshot,
-          ).historicalReceiverData.keys(),
-        ].map(Number);
-        checkpoint.projections = { ...checkpoint.projections };
-        delete checkpoint.projections[tag];
-      }
-    }
-    const writeRoot = !!this.#rootTag && (this.#rootDirty || !!checkpoint);
-    if (writeRoot)
-      batch.set(
-        metaKey(gid),
-        checkpoint ? encodeCheckpoint(checkpoint) : encodeMeta(this.#rootTag!),
+      write.puts.set(
+        tag,
+        encodeNodeRecord({
+          edge: this.#encodePhysicalEdge(node),
+          snapshot: heavy.snapshot,
+          commit,
+        }),
       );
-    return () => {
-      if (writeRoot) {
-        if (checkpoint) this.#checkpoint = checkpoint;
-        if (this.#revision === revision) this.#rootDirty = false;
-      }
-      for (const { tag, generation } of dirty)
-        if (this.#dirty.get(tag) === generation) this.#dirty.delete(tag);
-      // Flushed entries are now clean and may be evicted under cache pressure.
-      this.#evict();
+      checkpoint.receivers[tag] = [
+        ...deserializeClientState(heavy.snapshot).historicalReceiverData.keys(),
+      ].map(Number);
+      delete checkpoint.projections[tag];
+    }
+    const writeRoot = !!this.#rootTag && (this.#rootDirty || dirty.length > 0);
+    if (writeRoot) write.meta = encodeCheckpoint(checkpoint);
+    return {
+      write,
+      finish: () => {
+        if (writeRoot) {
+          this.#checkpoint = checkpoint;
+          if (this.#revision === revision) this.#rootDirty = false;
+        }
+        for (const { tag, generation } of dirty)
+          if (this.#dirty.get(tag) === generation) this.#dirty.delete(tag);
+        // Flushed entries are now clean and may be evicted under cache pressure.
+        this.#evict();
+      },
     };
   }
 
@@ -694,34 +735,25 @@ export class GroupHistoryTree {
    * snapshots/commit bytes are fetched on demand.
    */
   static async load(
-    store: MarmotStorage,
+    store: HistoryTreeStore,
     gid: string,
     options?: { snapshotCacheSize?: number },
   ): Promise<GroupHistoryTree | undefined> {
-    const metaBytes = await store.get(metaKey(gid));
+    const metaBytes = await store.meta();
     if (!metaBytes) return undefined;
-    const checkpoint =
-      metaBytes[0] === 2 ? decodeCheckpoint(metaBytes) : undefined;
-    const rootTag = checkpoint?.rootTag ?? decodeMeta(metaBytes);
+    const checkpoint = decodeCheckpoint(metaBytes);
 
     const tree = new GroupHistoryTree(undefined, options);
     tree.#store = store;
     tree.#gid = gid;
 
-    const prefix = `${gid}/tree/edge/`;
-    const keys = checkpoint
-      ? checkpoint.members.map((tag) => edgeKey(gid, tag))
-      : await store.list(prefix);
-    for (const key of keys) {
-      if (!key.startsWith(prefix)) continue;
-      const tag = key.slice(prefix.length);
-      const bytes = await store.get(key);
-      if (!bytes) {
-        if (checkpoint)
-          throw new Error("GroupHistoryTree: required edge missing");
-        continue;
-      }
-      const rec = decodeEdgeRecord(bytes);
+    const records = new Map<string, NodeRecord>();
+    for (const tag of checkpoint.members) {
+      const bytes = await store.node(tag);
+      if (!bytes) throw new Error("GroupHistoryTree: required edge missing");
+      const record = decodeNodeRecord(bytes);
+      records.set(tag, record);
+      const rec = decodeEdgeRecord(record.edge);
       tree.#nodes.set(tag, {
         tag,
         epoch: rec.epoch,
@@ -730,36 +762,28 @@ export class GroupHistoryTree {
         edge: rec.edge,
       });
     }
-    // Version 1 had no child-order authority; normalize adapter enumeration.
-    if (!checkpoint) {
-      const ordered = [...tree.#nodes.values()].sort(
-        (a, b) => a.epoch - b.epoch || a.tag.localeCompare(b.tag),
-      );
-      tree.#nodes.clear();
-      for (const node of ordered) tree.#nodes.set(node.tag, node);
-    }
-    for (const node of tree.#nodes.values()) {
+    tree.#rootTag = checkpoint.rootTag;
+    tree.#checkpoint = checkpoint;
+    await tree.#validateCheckpoint(checkpoint, records);
+    const root = tree.#nodes.get(checkpoint.rootTag)!;
+    root.parentTag = undefined;
+    for (const node of tree.#nodes.values())
       if (node.parentTag)
-        tree.#nodes.get(node.parentTag)?.childTags.push(node.tag);
-    }
-    tree.#rootTag = rootTag;
-    if (checkpoint) {
-      tree.#checkpoint = checkpoint;
-      await tree.#validateCheckpoint(checkpoint);
-      const root = tree.#nodes.get(rootTag!)!;
-      root.parentTag = undefined;
-      for (const node of tree.#nodes.values()) node.childTags = [];
-      for (const node of tree.#nodes.values())
-        if (node.parentTag)
-          tree.#nodes.get(node.parentTag)!.childTags.push(node.tag);
-    }
+        tree.#nodes.get(node.parentTag)!.childTags.push(node.tag);
     // Loaded nodes are already persisted — nothing dirty.
     return tree;
   }
 
-  /** Removes every persisted key for a group's tree from the store. */
-  static async purge(store: MarmotStorage, gid: string): Promise<void> {
-    await deletePrefix(store, `${gid}/tree/`);
+  /** Stages deletion of every persisted record of a tree. */
+  static async stagePurge(store: HistoryTreeStore): Promise<HistoryTreeWrite> {
+    const write = emptyTreeWrite();
+    const metaBytes = await store.meta();
+    if (!metaBytes) return write;
+    const checkpoint = decodeCheckpoint(metaBytes);
+    for (const tag of [...checkpoint.members, ...checkpoint.garbage])
+      write.deletes.add(tag);
+    write.meta = null;
+    return write;
   }
 
   /**
@@ -814,10 +838,9 @@ export class GroupHistoryTree {
     this.#retentionActive = true;
     try {
       const identity = retentionPlanIdentity(plan);
-      const batch = new StorageBatch(this.#store);
-      const flushed = await this.#stageFlush(batch);
-      await batch.commit();
-      flushed();
+      const flushed = await this.#stageFlush();
+      await this.#store.commit(flushed.write);
+      flushed.finish();
       const root = this.#nodes.get(plan.logicalRootTag)!;
       const existingBoundary =
         plan.logicalRootTag === this.#checkpoint?.rootTag
@@ -892,7 +915,7 @@ export class GroupHistoryTree {
         )
           throw new Error("GroupHistoryTree: retention parent closure broken");
         if (node.edge) {
-          const bytes = await this.#store.get(commitKey(this.#gid, tag));
+          const bytes = (await this.#readNode(tag))?.commit;
           if (
             !bytes ||
             bytesToHex(commitDigest(decodeOwnCommitRecord(bytes).wireBytes)) !==
@@ -903,9 +926,9 @@ export class GroupHistoryTree {
       }
       const authority = encodeCheckpoint(checkpoint);
       try {
-        await this.#store.set(metaKey(this.#gid), authority);
+        await this.#store.commit({ ...emptyTreeWrite(), meta: authority });
       } catch (error) {
-        const persisted = await this.#store.get(metaKey(this.#gid));
+        const persisted = await this.#store.meta();
         if (persisted && bytesToHex(persisted) === bytesToHex(authority)) {
           this.#adoptCheckpoint(checkpoint, plan.snapshots);
           this.#publishedRetention = {
@@ -1055,17 +1078,20 @@ export class GroupHistoryTree {
         Object.keys(checkpoint.projections).length
       ) {
         // Projections, garbage removal and the clean checkpoint commit together.
-        const batch = new StorageBatch(this.#store);
-        for (const [tag, snapshot] of Object.entries(checkpoint.projections))
-          batch.set(stateKey(this.#gid, tag), hexToBytes(snapshot));
-        for (const tag of checkpoint.garbage) {
-          batch.delete(edgeKey(this.#gid, tag));
-          batch.delete(stateKey(this.#gid, tag));
-          batch.delete(commitKey(this.#gid, tag));
+        const write = emptyTreeWrite();
+        for (const [tag, snapshot] of Object.entries(checkpoint.projections)) {
+          const record = await this.#readNode(tag);
+          if (!record)
+            throw new Error("GroupHistoryTree: required snapshot missing");
+          write.puts.set(
+            tag,
+            encodeNodeRecord({ ...record, snapshot: hexToBytes(snapshot) }),
+          );
         }
+        for (const tag of checkpoint.garbage) write.deletes.add(tag);
         const clean = { ...checkpoint, garbage: [], projections: {} };
-        batch.set(metaKey(this.#gid), encodeCheckpoint(clean));
-        await batch.commit();
+        write.meta = encodeCheckpoint(clean);
+        await this.#store.commit(write);
         this.#checkpoint = clean;
       }
     } finally {
@@ -1095,7 +1121,10 @@ export class GroupHistoryTree {
         this.#putHeavy(tag, { snapshot, commit: this.#heavy.get(tag)?.commit });
   }
 
-  async #validateCheckpoint(checkpoint: TreeCheckpoint): Promise<void> {
+  async #validateCheckpoint(
+    checkpoint: TreeCheckpoint,
+    records: ReadonlyMap<string, NodeRecord>,
+  ): Promise<void> {
     const root = this.#nodes.get(checkpoint.rootTag);
     if (!root) throw new Error("GroupHistoryTree: logical root absent");
     if (checkpoint.boundary) {
@@ -1127,7 +1156,7 @@ export class GroupHistoryTree {
           throw new Error("GroupHistoryTree: retained parent closure broken");
         cursor = parent;
       }
-      const primary = await this.#store!.get(stateKey(this.#gid!, node.tag));
+      const primary = records.get(node.tag)?.snapshot;
       if (!primary)
         throw new Error("GroupHistoryTree: required snapshot missing");
       const snapshot =
@@ -1158,7 +1187,7 @@ export class GroupHistoryTree {
       )
         throw new Error("GroupHistoryTree: receiver allowlist mismatch");
       if (node.edge) {
-        const record = await this.#store!.get(commitKey(this.#gid!, node.tag));
+        const record = records.get(node.tag)?.commit;
         if (!record || node.edge.commitDigest.length !== 32)
           throw new Error("GroupHistoryTree: required commit missing");
         const wire = decodeOwnCommitRecord(record).wireBytes;
@@ -1256,25 +1285,6 @@ function decodeEdgeRecord(bytes: Uint8Array): {
   }
   r.end();
   return { epoch, parentTag, edge };
-}
-
-/** Encodes the meta record (the root tag pointer). */
-function encodeMeta(rootTag: string): Uint8Array {
-  return new BinaryWriter()
-    .uint8(HISTORY_TREE_VERSION)
-    .opaque(hexToBytes(rootTag))
-    .build();
-}
-
-/** Decodes the meta record into the root tag. */
-function decodeMeta(bytes: Uint8Array): string | undefined {
-  const r = new BinaryReader(bytes);
-  const version = r.uint8();
-  if (version !== HISTORY_TREE_VERSION)
-    throw new Error(`GroupHistoryTree: unknown meta version ${version}`);
-  const rootBytes = r.opaque();
-  r.end();
-  return rootBytes.length ? bytesToHex(rootBytes) : undefined;
 }
 
 function encodeCheckpoint(checkpoint: TreeCheckpoint): Uint8Array {

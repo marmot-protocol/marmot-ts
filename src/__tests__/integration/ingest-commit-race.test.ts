@@ -33,7 +33,7 @@ import {
 } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryGroupDatabase } from "../helpers/database.js";
 import { testAccount } from "../helpers/test-accounts.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
@@ -260,15 +260,14 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     eventB.id = "b".repeat(64);
 
     // Create the new bytes-first storage
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
 
     // IMPORTANT: The receiver for this race test must NOT be the sender.
     // These are two competing commits from the admin leaf for the same epoch.
     // If the receiver is the admin itself, MLS update-path processing can fail because
     // UpdatePath secrets are encrypted to *other* members.
-    await storage.set(
-      `${bytesToHex(memberStateEpoch1.groupContext.groupId)}/state`,
-      encode(clientStateEncoder, memberStateEpoch1),
+    await storage.transaction((tx) =>
+      tx.meta.set("state", encode(clientStateEncoder, memberStateEpoch1)),
     );
 
     const network: NostrNetworkInterface = {
@@ -289,7 +288,7 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     const signer = memberAccount.signer;
 
     const group = new MarmotGroup(memberStateEpoch1, {
-      storage,
+      database: storage,
       signer,
       ciphersuite: impl,
       network,
@@ -309,9 +308,7 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     );
 
     // Store should also reflect the post-commit epoch due to ingest() persistence.
-    const reloadedBytes = await storage.get(
-      `${bytesToHex(memberStateEpoch1.groupContext.groupId)}/state`,
-    );
+    const reloadedBytes = await storage.meta.get("state");
     expect(reloadedBytes).toBeDefined();
     const reloaded = decode(clientStateDecoder, reloadedBytes!);
     expect(reloaded).not.toBeNull();
@@ -399,10 +396,9 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     });
     if (expected.kind !== "newState") throw new Error("expected newState");
 
-    const storage = memoryStorage();
-    await storage.set(
-      `${bytesToHex(memberStateEpoch1.groupContext.groupId)}/state`,
-      encode(clientStateEncoder, memberStateEpoch1),
+    const storage = memoryGroupDatabase();
+    await storage.transaction((tx) =>
+      tx.meta.set("state", encode(clientStateEncoder, memberStateEpoch1)),
     );
     const network: NostrNetworkInterface = {
       request: async () => {
@@ -419,7 +415,7 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
       },
     };
     const group = new MarmotGroup(memberStateEpoch1, {
-      storage,
+      database: storage,
       signer: memberAccount.signer,
       ciphersuite: impl,
       network,
@@ -545,10 +541,9 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     });
     if (expected.kind !== "newState") throw new Error("expected newState");
 
-    const storage = memoryStorage();
-    await storage.set(
-      `${bytesToHex(memberStateEpoch1.groupContext.groupId)}/state`,
-      encode(clientStateEncoder, memberStateEpoch1),
+    const storage = memoryGroupDatabase();
+    await storage.transaction((tx) =>
+      tx.meta.set("state", encode(clientStateEncoder, memberStateEpoch1)),
     );
     const network: NostrNetworkInterface = {
       request: async () => {
@@ -565,7 +560,7 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
       },
     };
     const group = new MarmotGroup(memberStateEpoch1, {
-      storage,
+      database: storage,
       signer: memberAccount.signer,
       ciphersuite: impl,
       network,
@@ -720,10 +715,9 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     if (memberAfterB2.kind !== "newState") throw new Error("expected newState");
     const expectedTag = memberAfterB2.newState.confirmationTag;
 
-    const storage = memoryStorage();
-    await storage.set(
-      `${bytesToHex(memberStateEpoch1.groupContext.groupId)}/state`,
-      encode(clientStateEncoder, memberStateEpoch1),
+    const storage = memoryGroupDatabase();
+    await storage.transaction((tx) =>
+      tx.meta.set("state", encode(clientStateEncoder, memberStateEpoch1)),
     );
     const network: NostrNetworkInterface = {
       request: async () => {
@@ -740,7 +734,7 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
       },
     };
     const group = new MarmotGroup(memberStateEpoch1, {
-      storage,
+      database: storage,
       signer: memberAccount.signer,
       ciphersuite: impl,
       network,
@@ -895,10 +889,9 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     });
     const expectedTag = cAfterW.newState.confirmationTag;
 
-    const storage = memoryStorage();
-    await storage.set(
-      `${bytesToHex(cEpoch1.groupContext.groupId)}/state`,
-      encode(clientStateEncoder, cEpoch1),
+    const storage = memoryGroupDatabase();
+    await storage.transaction((tx) =>
+      tx.meta.set("state", encode(clientStateEncoder, cEpoch1)),
     );
     const network: NostrNetworkInterface = {
       request: async () => {
@@ -915,7 +908,7 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
       },
     };
     const group = new MarmotGroup(cEpoch1, {
-      storage,
+      database: storage,
       signer: cAccount.signer,
       ciphersuite: impl,
       network,
@@ -987,10 +980,9 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     expect(welcome).toBeTruthy();
 
     // Create backend and store
-    const storage = memoryStorage();
-    await storage.set(
-      `${bytesToHex(adminStateEpoch1.groupContext.groupId)}/state`,
-      encode(clientStateEncoder, adminStateEpoch1),
+    const storage = memoryGroupDatabase();
+    await storage.transaction((tx) =>
+      tx.meta.set("state", encode(clientStateEncoder, adminStateEpoch1)),
     );
 
     const network: NostrNetworkInterface = {
@@ -1011,7 +1003,7 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     const signer = adminAccount.signer;
 
     const group = new MarmotGroup(adminStateEpoch1, {
-      storage,
+      database: storage,
       signer,
       ciphersuite: impl,
       network,
@@ -1069,9 +1061,7 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
 
     // CRITICAL: Verify the store persisted the state update
     // Even though epoch doesn't change, the key schedule advances for forward secrecy
-    const reloadedBytes = await storage.get(
-      `${bytesToHex(adminStateEpoch1.groupContext.groupId)}/state`,
-    );
+    const reloadedBytes = await storage.meta.get("state");
     expect(reloadedBytes).toBeDefined();
     const reloaded = decode(clientStateDecoder, reloadedBytes!);
     expect(reloaded).not.toBeNull();
@@ -1121,10 +1111,9 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     expect(welcome1).toBeTruthy();
 
     // Create backend and store
-    const storage = memoryStorage();
-    await storage.set(
-      `${bytesToHex(adminStateEpoch1.groupContext.groupId)}/state`,
-      encode(clientStateEncoder, adminStateEpoch1),
+    const storage = memoryGroupDatabase();
+    await storage.transaction((tx) =>
+      tx.meta.set("state", encode(clientStateEncoder, adminStateEpoch1)),
     );
 
     const network: NostrNetworkInterface = {
@@ -1145,7 +1134,7 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     const signer = adminAccount.signer;
 
     const group = new MarmotGroup(adminStateEpoch1, {
-      storage,
+      database: storage,
       signer,
       ciphersuite: impl,
       network,
@@ -1233,9 +1222,7 @@ describe("MarmotGroup.ingest() commit race ordering (protocol-core/group-messagi
     expect(Object.keys(group.state.unappliedProposals).length).toBe(0);
 
     // Verify persistence
-    const reloadedBytes = await storage.get(
-      `${bytesToHex(adminStateEpoch1.groupContext.groupId)}/state`,
-    );
+    const reloadedBytes = await storage.meta.get("state");
     expect(reloadedBytes).toBeDefined();
     const reloaded = decode(clientStateDecoder, reloadedBytes!);
     expect(reloaded).not.toBeNull();

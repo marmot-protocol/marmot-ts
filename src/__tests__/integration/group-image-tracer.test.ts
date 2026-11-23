@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GroupsManager } from "../../client/groups-manager.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../helpers/database.js";
 import { MockNetwork } from "../helpers/mock-network.js";
 import { testAccount } from "../helpers/test-accounts.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
@@ -21,7 +21,7 @@ import { GROUP_BLOSSOM_IMAGE_COMPONENT_ID } from "../../core/components/ids.js";
 async function setup() {
   const network = new MockNetwork();
   const manager = new GroupsManager({
-    storage: memoryStorage(),
+    database: memoryDatabase(),
     signer: testAccount(0).signer,
     network,
   });

@@ -18,13 +18,15 @@ import {
   serializeClientState,
 } from "../../core/client-state.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage, type MarmotStorage } from "../../utils/storage.js";
+import { memoryGroupDatabase } from "../../__tests__/helpers/database.js";
+import { groupMetaStore } from "../../client/storage/database/group-batch.js";
+import type { EngineRecordStore } from "../group-engine.js";
 import { DisbandingError, MarmotGroupEngine } from "../group-engine.js";
 import type { GroupPeeler } from "../types.js";
 
 import {
   decodeDisbandRequest,
-  disbandRequestKey,
+  DISBAND_REQUEST_KEY,
   encodeDisbandRequest,
   type DisbandRequest,
 } from "../disband-request.js";
@@ -39,7 +41,7 @@ describe("durable disband request codec", () => {
     expect(decodeDisbandRequest(encodeDisbandRequest(request))).toEqual(
       request,
     );
-    expect(disbandRequestKey("deadbeef")).toBe("deadbeef/disband/request");
+    expect(DISBAND_REQUEST_KEY).toBe("disband/request");
   });
 
   it("round-trips typed terminal authority failures", () => {
@@ -70,7 +72,7 @@ describe("durable disband request codec", () => {
     ).toThrow();
   });
 
-  async function engineFixture(storage: MarmotStorage) {
+  async function engineFixture(storage: EngineRecordStore) {
     const impl = await getCiphersuiteImpl(
       "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
       defaultCryptoProvider,
@@ -120,7 +122,7 @@ describe("durable disband request codec", () => {
   }
 
   it("persists before preparation, survives publish failure, and hydrates its gate", async () => {
-    const store = memoryStorage();
+    const store = groupMetaStore(memoryGroupDatabase());
     const fixture = await engineFixture(store);
     const engine = fixture.makeEngine();
     const prepared = await engine.requestDisband();
@@ -141,7 +143,7 @@ describe("durable disband request codec", () => {
   });
 
   it("regenerates at an active selected epoch and records typed authority loss", async () => {
-    const store = memoryStorage();
+    const store = groupMetaStore(memoryGroupDatabase());
     const fixture = await engineFixture(store);
     const branchBuilder = fixture.makeEngine(
       deserializeClientState(serializeClientState(fixture.state)),
@@ -160,7 +162,7 @@ describe("durable disband request codec", () => {
       kind: "groupEvolution",
     });
 
-    const memberStore = memoryStorage();
+    const memberStore = groupMetaStore(memoryGroupDatabase());
     const memberFixture = await engineFixture(memberStore);
     const removed = memberFixture.makeEngine();
     const pendingRemoval = await removed.requestDisband();
@@ -177,7 +179,7 @@ describe("durable disband request codec", () => {
       reason: "NoLongerMember",
     });
 
-    const adminStore = memoryStorage();
+    const adminStore = groupMetaStore(memoryGroupDatabase());
     const adminFixture = await engineFixture(adminStore);
     const demoted = adminFixture.makeEngine();
     const pendingAdmin = await demoted.requestDisband();

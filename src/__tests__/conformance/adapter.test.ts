@@ -12,7 +12,7 @@ import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { serializeClientState } from "../../core/client-state.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../helpers/database.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
 import { GroupRegistry } from "../../client/storage/group-registry.js";
 import { MockNetwork } from "../helpers/mock-network.js";
@@ -181,26 +181,25 @@ describe("conformance adapter", () => {
     );
     const network = new MockNetwork();
     network.autoDeliver = false;
-    const storage = memoryStorage();
+    const database = memoryDatabase();
     const signer = account.signer;
+    const registry = new GroupRegistry({
+      database,
+      signer,
+      network,
+    });
+    const { database: groupDatabase } = await registry.prepare(clientState);
     const makeGroup = (state = clientState) =>
       new MarmotGroup(state, {
-        storage,
+        database: groupDatabase,
         signer,
         ciphersuite: impl,
         network,
       });
     const groups = new Map([["alice", makeGroup()]]);
     await groups.get("alice")!.save(true);
-    const initialDurableState = await storage.get(
-      `${bytesToHex(clientState.groupContext.groupId)}/state`,
-    );
+    const initialDurableState = await groupDatabase.meta.get("state");
     let durableBeforeCrash = initialDurableState;
-    const registry = new GroupRegistry({
-      storage,
-      signer,
-      network,
-    });
     let now = 100;
     const subject = new MarmotConformanceSubject({
       scenarioId: "adapter-smoke/v1",
@@ -218,7 +217,7 @@ describe("conformance adapter", () => {
       },
       restart: async (_client, group) => {
         const groupId = group.id.slice();
-        durableBeforeCrash = await storage.get(`${bytesToHex(groupId)}/state`);
+        durableBeforeCrash = await groupDatabase.meta.get("state");
         // Sending now durably preserves the updated ratchet and delivery
         // evidence. A crash must restore that latest state, not pre-send bytes.
         expect(durableBeforeCrash).toEqual(serializeClientState(group.state));

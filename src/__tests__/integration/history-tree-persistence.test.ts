@@ -27,7 +27,16 @@ import { createCredential } from "../../core/credential.js";
 import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage, type StorageOp } from "../../utils/storage.js";
+import {
+  memoryDatabase,
+  memoryGroupDatabase,
+  openGroup,
+} from "../helpers/database.js";
+import { groupTreeStore } from "../../client/storage/database/group-batch.js";
+import type {
+  MarmotDatabase,
+  MarmotGroupDatabase,
+} from "../../client/storage/database/types.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const NETWORK: NostrNetworkInterface = {
@@ -51,6 +60,126 @@ const SIGNER = MEMBER_ACCOUNT.signer;
 
 async function drain(gen: AsyncIterable<unknown>): Promise<void> {
   for await (const _ of gen) void _;
+}
+
+/** What one group transaction wrote. */
+type TxRecord = {
+  meta: Map<string, Uint8Array | null>;
+  nodePuts: Set<string>;
+  nodeDeletes: Set<string>;
+};
+
+/** The checkpoint a transaction wrote, if any. */
+function checkpointOf(record: TxRecord) {
+  const bytes = record.meta.get("tree");
+  return bytes && bytes[0] === 2
+    ? JSON.parse(new TextDecoder().decode(bytes.subarray(1)))
+    : undefined;
+}
+
+/** A checkpoint-only write (retention authority published on its own). */
+const isCheckpointOnly = (record: TxRecord) =>
+  record.meta.has("tree") &&
+  record.nodePuts.size === 0 &&
+  record.nodeDeletes.size === 0;
+
+/**
+ * Intercepts a group database's transactions. `inside` runs inside the
+ * transaction after its writes (throwing rolls them back: "not forwarded");
+ * `after` runs once it committed (throwing reports failure after the adapter
+ * applied it: "forwarded"). Returns a restore function.
+ */
+function interceptTransactions(
+  db: MarmotGroupDatabase,
+  hooks: {
+    inside?: (record: TxRecord) => Promise<void> | void;
+    after?: (record: TxRecord) => Promise<void> | void;
+  },
+): () => void {
+  const original = db.transaction;
+  const transaction: MarmotGroupDatabase["transaction"] = original.bind(db);
+  db.transaction = async (fn) => {
+    const record: TxRecord = {
+      meta: new Map(),
+      nodePuts: new Set(),
+      nodeDeletes: new Set(),
+    };
+    const result = await transaction(async (tx) => {
+      const value = await fn({
+        ...tx,
+        meta: {
+          ...tx.meta,
+          set: (key, bytes) => {
+            record.meta.set(key, bytes);
+            return tx.meta.set(key, bytes);
+          },
+          delete: (key) => {
+            record.meta.set(key, null);
+            return tx.meta.delete(key);
+          },
+        },
+        treeNodes: {
+          ...tx.treeNodes,
+          put: (row) => {
+            record.nodePuts.add(row.tag);
+            return tx.treeNodes.put(row);
+          },
+          delete: (tag) => {
+            record.nodeDeletes.add(tag);
+            return tx.treeNodes.delete(tag);
+          },
+        },
+      });
+      await hooks.inside?.(record);
+      return value;
+    });
+    await hooks.after?.(record);
+    return result;
+  };
+  return () => {
+    db.transaction = original;
+  };
+}
+
+/** A fault that either rolls the write back or reports failure after it. */
+function faultOnce(
+  db: MarmotGroupDatabase,
+  matches: (record: TxRecord) => boolean,
+  forward: boolean,
+  message: string,
+): () => void {
+  let armed = true;
+  const hit = (record: TxRecord) => {
+    if (armed && matches(record)) {
+      armed = false;
+      throw new Error(message);
+    }
+  };
+  return interceptTransactions(db, forward ? { after: hit } : { inside: hit });
+}
+
+async function setState(db: MarmotGroupDatabase, bytes: Uint8Array) {
+  await db.transaction((tx) => tx.meta.set("state", bytes));
+}
+
+async function readCheckpoint(db: MarmotGroupDatabase) {
+  const bytes = (await db.meta.get("tree"))!;
+  return JSON.parse(new TextDecoder().decode(bytes.subarray(1)));
+}
+
+async function writeCheckpoint(db: MarmotGroupDatabase, value: unknown) {
+  const encoded = new TextEncoder().encode(JSON.stringify(value));
+  const bytes = new Uint8Array(encoded.length + 1);
+  bytes[0] = 2;
+  bytes.set(encoded, 1);
+  await db.transaction((tx) => tx.meta.set("tree", bytes));
+}
+
+/** Registers a group row so the registry can load it from a client database. */
+async function registerGroup(database: MarmotDatabase, gid: string) {
+  await database.account.transaction((tx) =>
+    tx.groups.put({ id: gid, status: "active", value: new Uint8Array() }),
+  );
 }
 
 describe("history tree persistence across restart", () => {
@@ -80,19 +209,17 @@ describe("history tree persistence across restart", () => {
         undefined,
         stamp,
       );
-      // The flush commits as one atomic batch; fail the batch carrying the
-      // tip's commit bytes (optionally after the adapter applied it).
-      const write = f.store.batch.bind(f.store);
-      f.store.batch = async (ops) => {
-        if (ops.some((op) => op.key === `${f.gid}/tree/commit/${tip}`)) {
-          if (forward) await write(ops);
-          throw new Error("commit interrupted");
-        }
-        return write(ops);
-      };
+      // The flush commits as one atomic transaction; fail the one carrying the
+      // tip's node record (optionally after the adapter applied it).
+      const restore = faultOnce(
+        f.db,
+        (record) => record.nodePuts.has(tip),
+        forward,
+        "commit interrupted",
+      );
       await expect(f.tree.flush()).rejects.toThrow("commit interrupted");
       expect(f.tree.isDirty).toBe(true);
-      f.store.batch = write;
+      restore();
       await f.tree.flush();
       expect(f.tree.isDirty).toBe(false);
       for (let restart = 0; restart < 2; restart++) {
@@ -114,7 +241,7 @@ describe("history tree persistence across restart", () => {
       const f = await linearFixture();
       const options = {
         ciphersuite: f.impl,
-        storage: f.store,
+        database: f.db,
         convergencePolicy: {
           ...DEFAULT_CONVERGENCE_POLICY,
           maxRewindCommits: 2,
@@ -128,7 +255,7 @@ describe("history tree persistence across restart", () => {
       });
       const producer = new GroupSession({
         ...options,
-        storage: memoryStorage(),
+        database: memoryGroupDatabase(),
         state: deserializeClientState(serializeClientState(f.state)),
       });
       const staged = (await producer.send({ kind: "selfUpdate" })).publish[0];
@@ -146,8 +273,6 @@ describe("history tree persistence across restart", () => {
       const blocked = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const set = f.store.set.bind(f.store);
-      const batch = f.store.batch.bind(f.store);
       let armed = true;
       const pause = async (kind: string) => {
         if (armed && kind === boundary) {
@@ -156,16 +281,12 @@ describe("history tree persistence across restart", () => {
           await blocked;
         }
       };
-      f.store.set = async (key, bytes) => {
-        if (key.endsWith("/tree/meta") && bytes[0] === 2)
-          await pause("checkpoint");
-        return set(key, bytes);
-      };
-      f.store.batch = async (ops) => {
-        if (ops.some((op) => op.type === "delete" && op.key.includes("/tree/")))
-          await pause("cleanup");
-        return batch(ops);
-      };
+      const restore = interceptTransactions(f.db, {
+        inside: async (record) => {
+          if (isCheckpointOnly(record)) await pause("checkpoint");
+          if (record.nodeDeletes.size) await pause("cleanup");
+        },
+      });
       const saving = session.save(true);
       try {
         await waiting;
@@ -208,8 +329,7 @@ describe("history tree persistence across restart", () => {
         }
       } finally {
         release();
-        f.store.set = set;
-        f.store.batch = batch;
+        restore();
         session.dispose();
         producer.dispose();
       }
@@ -255,22 +375,18 @@ describe("history tree persistence across restart", () => {
       state = committed.newState;
       tags.push(tree.recordCommit(tags.at(-1)!, committed.commit, state));
     }
-    const store = memoryStorage();
+    const gid = bytesToHex(initial.groupContext.groupId);
+    const database = memoryDatabase();
+    await registerGroup(database, gid);
+    const db = await openGroup(database, gid);
+    const store = groupTreeStore(db);
     tree.bindStore(store);
     await tree.flush();
-    return {
-      tree,
-      tags,
-      store,
-      state,
-      impl,
-      account,
-      gid: bytesToHex(initial.groupContext.groupId),
-    };
+    return { tree, tags, store, db, database, state, impl, account, gid };
   }
 
   it("publishes the inclusive default boundary and copied receiver projection before exact-key cleanup", async () => {
-    const { tree, tags, store, state, gid } = await linearFixture();
+    const { tree, tags, store, db, state, gid } = await linearFixture();
     const live = serializeClientState(state);
     const plan = await tree.prepareRetention({
       canonicalTipTag: tags.at(-1)!,
@@ -278,11 +394,9 @@ describe("history tree persistence across restart", () => {
     });
     expect(plan.retainedTags).toEqual(tags.slice(3));
     expect(plan.excludedTags).toEqual(tags.slice(0, 3));
-    await store.set(`${gid}/unrelated`, Uint8Array.of(99));
-    await store.set(`${gid}00/tree/state/${tags[0]}`, Uint8Array.of(99));
     await tree.publishRetention(plan);
-    expect((await store.get(`${gid}/tree/meta`))![0]).toBe(2);
-    expect(await store.get(`${gid}/tree/state/${tags[0]}`)).toBeDefined();
+    expect((await store.meta())![0]).toBe(2);
+    expect(await store.node(tags[0])).toBeDefined();
     expect(serializeClientState(state)).toEqual(live);
     const loaded = (await GroupHistoryTree.load(store, gid, {
       snapshotCacheSize: 1,
@@ -303,11 +417,7 @@ describe("history tree persistence across restart", () => {
     );
     await loaded.resumeRetentionCleanup();
     await loaded.resumeRetentionCleanup();
-    const clean = JSON.parse(
-      new TextDecoder().decode(
-        (await store.get(`${gid}/tree/meta`))!.subarray(1),
-      ),
-    );
+    const clean = await readCheckpoint(db);
     expect(clean.projections).toEqual({});
     expect(clean.garbage).toEqual([]);
     const materialized = (await GroupHistoryTree.load(store, gid, {
@@ -319,36 +429,27 @@ describe("history tree persistence across restart", () => {
       ))!.historicalReceiverData.keys(),
     ]).toEqual([3n, 4n, 5n, 6n, 7n]);
     for (const tag of tags.slice(0, 3))
-      for (const namespace of ["state", "edge", "commit"])
-        expect(
-          await store.get(`${gid}/tree/${namespace}/${tag}`),
-        ).toBeUndefined();
-    expect(await store.get(`${gid}/unrelated`)).toEqual(Uint8Array.of(99));
-    expect(await store.get(`${gid}00/tree/state/${tags[0]}`)).toEqual(
-      Uint8Array.of(99),
-    );
+      expect(await store.node(tag)).toBeUndefined();
   });
 
   it.each([false, true])(
     "reloads recoverable authority when metadata rejects after forwarding=%s",
     async (forward) => {
-      const { tree, tags, store, gid } = await linearFixture();
+      const { tree, tags, store, db, gid } = await linearFixture();
       const plan = await tree.prepareRetention({
         canonicalTipTag: tags.at(-1)!,
         ...DEFAULT_CONVERGENCE_POLICY,
       });
-      const original = store.set.bind(store);
-      store.set = async (key, bytes) => {
-        if (key === `${gid}/tree/meta` && bytes[0] === 2) {
-          if (forward) await original(key, bytes);
-          throw new Error("metadata fault");
-        }
-        return original(key, bytes);
-      };
+      const restore = faultOnce(
+        db,
+        isCheckpointOnly,
+        forward,
+        "metadata fault",
+      );
       await expect(tree.publishRetention(plan)).rejects.toThrow(
         "metadata fault",
       );
-      store.set = original;
+      restore();
       const loaded = (await GroupHistoryTree.load(store, gid))!;
       expect(loaded.tags()).toEqual(forward ? tags.slice(3) : tags);
       for (const tag of loaded.tags())
@@ -372,40 +473,31 @@ describe("history tree persistence across restart", () => {
   it.each([false, true])(
     "resumes an interrupted garbage-deletion batch after restart forwarding=%s",
     async (forward) => {
-      const { tree, tags, store, gid } = await linearFixture();
+      const { tree, tags, store, db, gid } = await linearFixture();
       await tree.publishRetention(
         await tree.prepareRetention({
           canonicalTipTag: tags.at(-1)!,
           ...DEFAULT_CONVERGENCE_POLICY,
         }),
       );
-      // Cleanup commits atomically: the adapter either applied the whole batch
-      // (forwarding) or none of it before reporting failure.
-      const original = store.batch.bind(store);
-      let once = true;
-      store.batch = async (ops: readonly StorageOp[]) => {
-        if (once) {
-          once = false;
-          if (forward) await original(ops);
-          throw new Error("delete fault");
-        }
-        return original(ops);
-      };
+      // Cleanup commits atomically: the adapter either applied the whole
+      // transaction (forwarding) or none of it before reporting failure.
+      const restore = faultOnce(db, () => true, forward, "delete fault");
       await expect(tree.resumeRetentionCleanup()).rejects.toThrow(
         "delete fault",
       );
-      store.batch = original;
+      restore();
       const loaded = (await GroupHistoryTree.load(store, gid))!;
       await loaded.resumeRetentionCleanup();
       expect(loaded.tags()).toEqual(tags.slice(3));
-      expect(await store.get(`${gid}/tree/state/${tags[0]}`)).toBeUndefined();
+      expect(await store.node(tags[0])).toBeUndefined();
     },
   );
 
   it.each([false, true])(
     "keeps previous projected authority recoverable on a repeated checkpoint forwarding=%s",
     async (forward) => {
-      const { tree, tags, store, gid } = await linearFixture();
+      const { tree, tags, store, db, gid } = await linearFixture();
       const canonicalTipTag = tags.at(-1)!;
       await tree.publishRetention(
         await tree.prepareRetention({
@@ -420,24 +512,18 @@ describe("history tree persistence across restart", () => {
         maxRewindCommits: 5,
         appPayloadPastEpochLimit: 0,
       });
-      const original = store.set.bind(store);
-      store.set = async (key, bytes) => {
-        if (
-          key === `${gid}/tree/meta` &&
-          bytes[0] === 2 &&
-          Object.keys(
-            JSON.parse(new TextDecoder().decode(bytes.subarray(1))).projections,
-          ).length
-        ) {
-          if (forward) await original(key, bytes);
-          throw new Error("repeat checkpoint fault");
-        }
-        return original(key, bytes);
-      };
+      const restore = faultOnce(
+        db,
+        (record) =>
+          isCheckpointOnly(record) &&
+          Object.keys(checkpointOf(record)?.projections ?? {}).length > 0,
+        forward,
+        "repeat checkpoint fault",
+      );
       await expect(tree.publishRetention(next)).rejects.toThrow(
         "repeat checkpoint fault",
       );
-      store.set = original;
+      restore();
       const loaded = (await GroupHistoryTree.load(store, gid))!;
       expect([
         ...(await loaded.stateAt(
@@ -449,34 +535,30 @@ describe("history tree persistence across restart", () => {
   );
 
   it("fails closed on missing required authoritative snapshot and malformed membership", async () => {
-    const { tree, tags, store, gid } = await linearFixture();
+    const { tree, tags, store, db, gid } = await linearFixture();
     await tree.publishRetention(
       await tree.prepareRetention({
         canonicalTipTag: tags.at(-1)!,
         ...DEFAULT_CONVERGENCE_POLICY,
       }),
     );
-    const bytes = (await store.get(`${gid}/tree/state/${tags[3]}`))!;
-    await store.delete(`${gid}/tree/state/${tags[3]}`);
+    // A node record carries its edge, snapshot and commit together.
+    const node = (await db.treeNodes.get(tags[3]))!;
+    await db.transaction((tx) => tx.treeNodes.delete(tags[3]));
     await expect(GroupHistoryTree.load(store, gid)).rejects.toThrow(
-      "required snapshot missing",
+      "required edge missing",
     );
-    await store.set(`${gid}/tree/state/${tags[3]}`, bytes);
-    const meta = (await store.get(`${gid}/tree/meta`))!;
-    const value = JSON.parse(new TextDecoder().decode(meta.subarray(1)));
+    await db.transaction((tx) => tx.treeNodes.put(node));
+    const value = await readCheckpoint(db);
     value.members.push(value.members[0]);
-    const encoded = new TextEncoder().encode(JSON.stringify(value));
-    const corrupt = new Uint8Array(encoded.length + 1);
-    corrupt[0] = 2;
-    corrupt.set(encoded, 1);
-    await store.set(`${gid}/tree/meta`, corrupt);
+    await writeCheckpoint(db, value);
     await expect(GroupHistoryTree.load(store, gid)).rejects.toThrow(
       "invalid checkpoint membership",
     );
   });
 
   it("registry rejects damaged committed history without reseeding the durable winner", async () => {
-    const { tree, tags, store, state, gid } = await linearFixture();
+    const { tree, tags, db, database, state, gid } = await linearFixture();
     await tree.publishRetention(
       await tree.prepareRetention({
         canonicalTipTag: tags.at(-1)!,
@@ -485,10 +567,10 @@ describe("history tree persistence across restart", () => {
     );
     await tree.resumeRetentionCleanup();
     const canonical = serializeClientState(state);
-    await store.set(`${gid}/state`, canonical);
-    await store.delete(`${gid}/tree/state/${tags[3]}`);
+    await setState(db, canonical);
+    await db.transaction((tx) => tx.treeNodes.delete(tags[3]));
     const registry = new GroupRegistry({
-      storage: store,
+      database,
       signer: SIGNER,
       network: NETWORK,
     });
@@ -497,86 +579,57 @@ describe("history tree persistence across restart", () => {
       const loaded = await registry.load(gid);
       loaded.dispose();
     } catch (error) {
-      rejected = String(error).includes("required snapshot missing");
+      rejected = String(error).includes("required edge missing");
     }
     expect(rejected).toBe(true);
-    expect(await store.get(`${gid}/state`)).toEqual(canonical);
+    expect(await db.meta.get("state")).toEqual(canonical);
     expect(registry.loaded).toHaveLength(0);
   });
 
   // Each save commits tree nodes, delivered evidence and canonical state in
-  // one atomic batch ("save"); retention then publishes the checkpoint
+  // one atomic transaction ("save"); retention then publishes the checkpoint
   // ("checkpoint") and commits projections, garbage deletion and the clean
-  // acknowledgement in one cleanup batch ("cleanup").
+  // acknowledgement in one cleanup transaction ("cleanup").
   for (const boundary of ["save", "checkpoint", "cleanup"])
     for (const forward of [false, true])
       it(`registry repairs before admission through two restarts at ${boundary} forwarding=${forward}`, async () => {
-        const { tree, tags, store, state, gid, impl, account } =
+        const { tree, tags, db, database, state, gid, impl, account } =
           await linearFixture();
         const canonical = serializeClientState(state);
-        await store.set(`${gid}/state`, canonical);
-        const unrelated = [
-          `${gid}/tree/state/custom`,
-          `${gid}00/tree/state/${tags[0]}`,
-          "application/row",
-        ];
-        for (const key of unrelated) await store.set(key, Uint8Array.of(99));
-        const list = store.list.bind(store);
-        store.list = async (prefix) => (await list(prefix)).reverse();
+        await setState(db, canonical);
         tree.updateSnapshot(tags.at(-1)!, state);
         const session = new GroupSession({
           state,
           historyTree: tree,
-          storage: store,
+          database: db,
           ciphersuite: impl,
         });
-        const set = store.set.bind(store),
-          batch = store.batch.bind(store);
-        let armed = true;
-        async function fault<T>(
-          kind: string,
-          write: () => Promise<T>,
-        ): Promise<T> {
-          const hit = armed && kind === boundary;
-          if (hit && !forward) {
-            armed = false;
-            throw new Error("interruption");
-          }
-          const value = await write();
-          if (hit) {
-            armed = false;
-            throw new Error("interruption");
-          }
-          return value;
-        }
-        store.set = async (key, bytes) => {
-          const kind =
-            key === `${gid}/tree/meta` &&
-            bytes[0] === 2 &&
-            JSON.parse(new TextDecoder().decode(bytes.subarray(1))).garbage
-              .length
-              ? "checkpoint"
-              : "other";
-          return fault(kind, () => set(key, bytes));
-        };
-        store.batch = async (ops) => {
-          const kind = ops.some(
-            (op) => op.type === "delete" && op.key.startsWith(`${gid}/tree/`),
-          )
+        const kindOf = (record: TxRecord) =>
+          record.nodeDeletes.size
             ? "cleanup"
-            : ops.some((op) => op.key === `${gid}/state`)
+            : record.meta.has("state")
               ? "save"
-              : "other";
-          return fault(kind, () => batch(ops));
-        };
+              : isCheckpointOnly(record) && checkpointOf(record)?.garbage.length
+                ? "checkpoint"
+                : "other";
+        let armed = true;
+        const restore = faultOnce(
+          db,
+          (record) => {
+            const hit = armed && kindOf(record) === boundary;
+            if (hit) armed = false;
+            return hit;
+          },
+          forward,
+          "interruption",
+        );
         await expect(session.save(true)).rejects.toThrow("interruption");
         expect(armed).toBe(false);
         session.dispose();
-        store.set = set;
-        store.batch = batch;
+        restore();
         for (let restart = 0; restart < 2; restart++) {
           const registry = new GroupRegistry({
-            storage: store,
+            database,
             signer: account.signer,
             network: NETWORK,
           });
@@ -585,36 +638,25 @@ describe("history tree persistence across restart", () => {
           expect(group.session.historyTree.hasNode(tags.at(-1)!)).toBe(true);
           for (const tag of group.session.historyTree.tags())
             expect(await group.session.historyTree.stateAt(tag)).toBeDefined();
-          const metadata = (await store.get(`${gid}/tree/meta`))!;
-          if (metadata[0] === 2) {
-            const value = JSON.parse(
-              new TextDecoder().decode(metadata.subarray(1)),
-            );
-            expect(value.garbage).toEqual([]);
-            expect(value.projections).toEqual({});
-            expect(group.session.historyTree.tags()).toEqual(tags.slice(3));
-            expect(group.session.historyTree.hasNode(tags[0])).toBe(false);
-          } else expect(group.session.historyTree.tags()).toEqual(tags);
-          for (const key of unrelated)
-            expect(await store.get(key)).toEqual(Uint8Array.of(99));
+          const value = await readCheckpoint(db);
+          expect(value.garbage).toEqual([]);
+          expect(value.projections).toEqual({});
+          // Every persisted tree carries a checkpoint; whether retention got
+          // to publish decides membership.
+          const pruned = !group.session.historyTree.hasNode(tags[0]);
+          expect(group.session.historyTree.tags()).toEqual(
+            pruned ? tags.slice(3) : tags,
+          );
+          expect(value.members).toEqual(group.session.historyTree.tags());
           registry.untrack(gid);
         }
       });
 
-  it.each([
-    "membership",
-    "snapshot",
-    "commit",
-    "corrupt snapshot",
-    "corrupt commit",
-    "edge",
-    "boundary",
-    "checkpoint",
-    "canonical tip",
-  ])(
+  it.each(["membership", "node", "corrupt node", "boundary", "canonical tip"])(
     "registry fails closed on required %s corruption across two restarts",
     async (kind) => {
-      const { tree, tags, store, state, gid } = await linearFixture();
+      const { tree, tags, db, database, state } = await linearFixture();
+      const gid = bytesToHex(state.groupContext.groupId);
       const excludedCanonical = serializeClientState(
         (await tree.stateAt(tags[0]))!,
       );
@@ -627,47 +669,38 @@ describe("history tree persistence across restart", () => {
       await tree.resumeRetentionCleanup();
       let canonical = serializeClientState(state);
       if (kind === "canonical tip") canonical = excludedCanonical;
-      await store.set(`${gid}/state`, canonical);
-      if (["snapshot", "commit", "edge"].includes(kind))
-        await store.delete(
-          `${gid}/tree/${kind === "snapshot" ? "state" : kind}/${tags[3]}`,
-        );
-      else if (kind === "checkpoint") await store.delete(`${gid}/tree/meta`);
-      else if (kind.startsWith("corrupt"))
-        await store.set(
-          `${gid}/tree/${kind === "corrupt snapshot" ? "state" : "commit"}/${tags[3]}`,
-          Uint8Array.of(0),
+      await setState(db, canonical);
+      if (kind === "node")
+        await db.transaction((tx) => tx.treeNodes.delete(tags[3]));
+      else if (kind === "corrupt node")
+        await db.transaction((tx) =>
+          tx.treeNodes.put({ tag: tags[3], value: Uint8Array.of(0) }),
         );
       else if (kind !== "canonical tip") {
-        const meta = (await store.get(`${gid}/tree/meta`))!;
-        const value = JSON.parse(new TextDecoder().decode(meta.subarray(1)));
+        const value = await readCheckpoint(db);
         if (kind === "membership") value.members.push(value.members[0]);
         if (kind === "boundary")
           value.boundary = { ...value.boundary, digest: "00" };
-        const encoded = new TextEncoder().encode(JSON.stringify(value));
-        const damaged = new Uint8Array(encoded.length + 1);
-        damaged[0] = 2;
-        damaged.set(encoded, 1);
-        await store.set(`${gid}/tree/meta`, damaged);
+        await writeCheckpoint(db, value);
       }
       for (let restart = 0; restart < 2; restart++) {
         const registry = new GroupRegistry({
-          storage: store,
+          database,
           signer: SIGNER,
           network: NETWORK,
         });
         await expect(registry.get(gid)).rejects.toThrow("GroupHistoryTree:");
         expect(registry.loaded).toHaveLength(0);
-        expect(await store.get(`${gid}/state`)).toEqual(canonical);
+        expect(await db.meta.get("state")).toEqual(canonical);
       }
     },
   );
 
-  it("loads genuinely absent and version-1 history, and treats below-anchor absence as stale", async () => {
-    const { tree, tags, store, state, gid } = await linearFixture();
-    await store.set(`${gid}/state`, serializeClientState(state));
+  it("loads genuinely absent and pre-retention history, and treats below-anchor absence as stale", async () => {
+    const { tree, tags, db, database, state, gid } = await linearFixture();
+    await setState(db, serializeClientState(state));
     const options = {
-      storage: store,
+      database,
       signer: SIGNER,
       network: NETWORK,
     };
@@ -685,25 +718,26 @@ describe("history tree persistence across restart", () => {
     expect(bounded.session.historyTree.path(tags[0])).toBeUndefined();
     expect(bounded.session.historyTree.tags()).toEqual(tags.slice(3));
     bounded.dispose();
-    const empty = memoryStorage();
-    await empty.set(`${gid}/state`, serializeClientState(state));
+    const empty = memoryDatabase();
+    await registerGroup(empty, gid);
+    await setState(await openGroup(empty, gid), serializeClientState(state));
     const fresh = await new GroupRegistry({
       ...options,
-      storage: empty,
+      database: empty,
     }).load(gid);
     expect(fresh.session.historyTree.tags()).toEqual([tags.at(-1)]);
     fresh.dispose();
   });
 
   it("awaits cleanup acknowledgement before constructing an admitted group", async () => {
-    const { tree, tags, store, state, gid } = await linearFixture();
+    const { tree, tags, db, database, state, gid } = await linearFixture();
     await tree.publishRetention(
       await tree.prepareRetention({
         canonicalTipTag: tags.at(-1)!,
         ...DEFAULT_CONVERGENCE_POLICY,
       }),
     );
-    await store.set(`${gid}/state`, serializeClientState(state));
+    await setState(db, serializeClientState(state));
     let enter!: () => void, release!: () => void;
     const entered = new Promise<void>((resolve) => {
       enter = resolve;
@@ -711,17 +745,19 @@ describe("history tree persistence across restart", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    // The clean acknowledgement commits inside the cleanup batch.
-    const batch = store.batch.bind(store);
-    store.batch = async (ops) => {
-      if (ops.some((op) => op.key === `${gid}/tree/meta`)) {
-        enter();
-        await gate;
-      }
-      return batch(ops);
-    };
+    // The clean acknowledgement commits inside the cleanup transaction. The
+    // registry must open the intercepted handle.
+    database.groups.open = async () => db;
+    interceptTransactions(db, {
+      inside: async (record) => {
+        if (record.meta.has("tree")) {
+          enter();
+          await gate;
+        }
+      },
+    });
     const registry = new GroupRegistry({
-      storage: store,
+      database,
       signer: SIGNER,
       network: NETWORK,
     });
@@ -745,7 +781,7 @@ describe("history tree persistence across restart", () => {
   // atomic cleanup batch, so there is a single interruption point.
   for (const forward of [false, true])
     it(`refuses registry activation until the cleanup batch succeeds forwarding=${forward}`, async () => {
-      const { tree, tags, store, state, gid } = await linearFixture();
+      const { tree, tags, db, database, state, gid } = await linearFixture();
       await tree.publishRetention(
         await tree.prepareRetention({
           canonicalTipTag: tags.at(-1)!,
@@ -753,24 +789,22 @@ describe("history tree persistence across restart", () => {
         }),
       );
       const canonical = serializeClientState(state);
-      await store.set(`${gid}/state`, canonical);
-      const batch = store.batch.bind(store);
+      await setState(db, canonical);
       let armed = true;
-      store.batch = async (ops) => {
-        if (
-          armed &&
-          ops.some(
-            (op) => op.type === "delete" && op.key.startsWith(`${gid}/tree/`),
-          )
-        ) {
-          armed = false;
-          if (forward) await batch(ops);
-          throw new Error("cleanup interruption");
-        }
-        return batch(ops);
-      };
+      // The registry must open the intercepted handle.
+      database.groups.open = async () => db;
+      const restore = faultOnce(
+        db,
+        (record) => {
+          const hit = armed && record.nodeDeletes.size > 0;
+          if (hit) armed = false;
+          return hit;
+        },
+        forward,
+        "cleanup interruption",
+      );
       const registry = new GroupRegistry({
-        storage: store,
+        database,
         signer: SIGNER,
         network: NETWORK,
       });
@@ -784,8 +818,8 @@ describe("history tree persistence across restart", () => {
       expect(armed).toBe(false);
       expect(constructed).toBe(0);
       expect(registry.loaded).toHaveLength(0);
-      expect(await store.get(`${gid}/state`)).toEqual(canonical);
-      store.batch = batch;
+      expect(await db.meta.get("state")).toEqual(canonical);
+      restore();
       for (let restart = 0; restart < 2; restart++) {
         const loaded = await registry.load(gid);
         expect(loaded.session.historyTree.tags()).toEqual(tags.slice(3));
@@ -796,7 +830,8 @@ describe("history tree persistence across restart", () => {
     });
 
   it("keeps a retained competing branch usable after registry cleanup and two restarts", async () => {
-    const { tree, tags, store, state, gid, impl } = await linearFixture();
+    const { tree, tags, db, database, state, gid, impl } =
+      await linearFixture();
     const parent = (await tree.stateAt(tags[7]))!;
     const sibling = await createCommit({
       context: {
@@ -818,10 +853,10 @@ describe("history tree persistence across restart", () => {
         ...DEFAULT_CONVERGENCE_POLICY,
       }),
     );
-    await store.set(`${gid}/state`, serializeClientState(state));
+    await setState(db, serializeClientState(state));
     for (let restart = 0; restart < 2; restart++) {
       const registry = new GroupRegistry({
-        storage: store,
+        database,
         signer: SIGNER,
         network: NETWORK,
       });
@@ -923,12 +958,14 @@ describe("history tree persistence across restart", () => {
       ciphersuite: impl,
     });
 
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
+    await registerGroup(storage, groupId);
+    const database = await openGroup(storage, groupId);
     const rootTag = bytesToHex(memberE1.confirmationTag);
 
     // Session 1: ingest both competing commits → the tree retains the fork.
     const first = new MarmotGroup(memberE1, {
-      storage,
+      database,
       signer: SIGNER,
       ciphersuite: impl,
       network: NETWORK,
@@ -939,13 +976,12 @@ describe("history tree persistence across restart", () => {
     await first.session.save();
     first.dispose();
 
-    // The tree's edge keys were written under the group prefix.
-    const keys = await storage.list(`${groupId}/tree/edge/`);
-    expect(keys.length).toBeGreaterThan(0);
+    // The tree's node records were written to the group database.
+    expect(await database.treeNodes.get(rootTag)).toBeDefined();
 
     // Restart through the real load path.
     const registry = new GroupRegistry({
-      storage,
+      database: storage,
       signer: SIGNER,
       network: NETWORK,
     });

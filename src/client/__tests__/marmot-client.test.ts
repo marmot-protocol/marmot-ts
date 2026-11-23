@@ -7,7 +7,8 @@ import { getMarmotGroupView } from "../../core/client-state.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage, type MemoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
+import type { MarmotDatabase } from "../storage/database/types.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 
@@ -113,7 +114,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: account.signer,
       network: mockNetwork,
     });
@@ -139,7 +140,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: account.signer,
       network: mockNetwork,
     });
@@ -165,7 +166,7 @@ describe("admin pubkey deduplication — MarmotClient.createGroup", () => {
     const mockNetwork = new MockNetwork();
 
     const client = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: account.signer,
       network: mockNetwork,
     });
@@ -188,22 +189,22 @@ describe("MarmotClient lifecycle persistence", () => {
   /** Writes a group-scoped record through the session and reads it at the root. */
   async function expectLifecycleWrite(
     group: Awaited<ReturnType<MarmotClient["groups"]["create"]>>,
-    storage: MemoryStorage,
+    database: MarmotDatabase,
   ) {
-    expect(await storage.get(`group/${group.idStr}/state`)).toBeDefined();
+    const stored = await database.groups.open(group.idStr);
+    expect(await stored.meta.get("state")).toBeDefined();
     const marker = new Uint8Array([1, 2, 3]);
-    await group.session.storage.set(`${group.idStr}/test/marker`, marker);
-    expect(await storage.get(`group/${group.idStr}/test/marker`)).toEqual(
-      marker,
-    );
+    await group.session.meta.set("removed", marker);
+    expect(await stored.meta.get("removed")).toEqual(marker);
+    await group.session.meta.delete("removed");
   }
 
   it("threads the client storage through create, import, and load", async () => {
     const account = PrivateKeyAccount.generateNew();
-    const storage = memoryStorage();
-    const makeClient = (backend: MemoryStorage) =>
+    const storage = memoryDatabase();
+    const makeClient = (backend: MarmotDatabase) =>
       new MarmotClient({
-        storage: backend,
+        database: backend,
         signer: account.signer,
         network: new MockNetwork(),
       });
@@ -222,7 +223,7 @@ describe("MarmotClient lifecycle persistence", () => {
     expect(loaded).toBe(concurrent);
     await expectLifecycleWrite(loaded, storage);
 
-    const importStorage = memoryStorage();
+    const importStorage = memoryDatabase();
     const imported = await makeClient(importStorage).groups.import(
       created.state,
     );

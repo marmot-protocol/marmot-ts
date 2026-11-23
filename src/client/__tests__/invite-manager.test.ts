@@ -10,7 +10,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InviteManager } from "../invite-manager.js";
 import type { ReceivedGiftWrap, UnreadInvite } from "../invite-manager.js";
 import { encodeRecord } from "../storage/record-codec.js";
-import { memoryStorage, type MarmotStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
+import type { MarmotAccountDatabase } from "../storage/database/types.js";
 import { WELCOME_EVENT_KIND } from "../../core/protocol.js";
 import { fakeVerifyEvent } from "../verify.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
@@ -51,29 +52,40 @@ function createMockWelcomeRumor(
   };
 }
 
-/** Helper to read the seen IDs from storage */
-async function getSeenIds(storage: MarmotStorage): Promise<string[]> {
-  return (await storage.list("invite/seen/")).map((key) =>
-    key.slice("invite/seen/".length),
-  );
+/** Helper to read the seen gift wrap IDs (received rows and seen tombstones) */
+async function getSeenIds(storage: MarmotAccountDatabase): Promise<string[]> {
+  return [
+    ...(await storage.invites.byState("received")),
+    ...(await storage.invites.byState("seen")),
+  ]
+    .map((row) => row.id)
+    .sort();
 }
 
 /** Helper to store an unread invite directly */
 async function putUnread(
-  storage: MarmotStorage,
+  storage: MarmotAccountDatabase,
   id: string,
   rumor: UnreadInvite,
 ): Promise<void> {
-  await storage.set(`invite/unread/${id}`, encodeRecord(rumor));
+  await storage.transaction((tx) =>
+    tx.invites.put({
+      id,
+      state: "unread",
+      rumorId: rumor.id,
+      receivedAt: rumor.created_at,
+      value: encodeRecord(rumor),
+    }),
+  );
 }
 
 describe("InviteManager", () => {
-  let storage: MarmotStorage;
+  let storage: MarmotAccountDatabase;
   let account: PrivateKeyAccount<any>;
   let inviteManager: InviteManager;
 
   beforeEach(async () => {
-    storage = memoryStorage();
+    storage = memoryDatabase().account;
     account = PrivateKeyAccount.generateNew();
 
     // This suite's mock gift wraps (`createMockGiftWrap`) carry a fake
@@ -85,7 +97,7 @@ describe("InviteManager", () => {
     // default (real) verifier against genuinely signed events.
     inviteManager = new InviteManager({
       signer: account.signer,
-      storage,
+      database: storage,
       network: new MockNetwork(),
       verifyEvent: fakeVerifyEvent,
     });
@@ -441,6 +453,9 @@ describe("InviteManager", () => {
       const seenBefore = await getSeenIds(storage);
       expect(seenBefore).toContain(giftWrap.id);
 
+      // A received row is itself the seen marker; clearing stored invites
+      // leaves only the seen tombstone, which clearSeen removes.
+      await inviteManager.clear();
       await inviteManager.clearSeen();
 
       const seenAfter = await getSeenIds(storage);
@@ -476,7 +491,7 @@ describe("InviteManager", () => {
       const localAccount = PrivateKeyAccount.generateNew();
       const manager = new InviteManager({
         signer: localAccount.signer,
-        storage: memoryStorage(),
+        database: memoryDatabase().account,
         network: new MockNetwork(),
         // default (real) verifyEvent
       });
@@ -502,7 +517,7 @@ describe("InviteManager", () => {
       const localAccount = PrivateKeyAccount.generateNew();
       const manager = new InviteManager({
         signer: localAccount.signer,
-        storage: memoryStorage(),
+        database: memoryDatabase().account,
         network: new MockNetwork(),
         verifyEvent: fakeVerifyEvent,
       });
@@ -538,7 +553,7 @@ describe("InviteManager", () => {
     function makeRealVerifierManager(): InviteManager {
       return new InviteManager({
         signer: PrivateKeyAccount.generateNew().signer,
-        storage: memoryStorage(),
+        database: memoryDatabase().account,
         network: new MockNetwork(),
         // default (real) verifyEvent
       });

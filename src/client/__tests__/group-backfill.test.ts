@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
+import type {
+  GroupMetaKey,
+  MarmotDatabase,
+} from "../storage/database/types.js";
 import {
   BACKFILL_MAX_HOLD_BACK_SECONDS,
   fetchPagedBackfill,
@@ -95,7 +99,16 @@ function fakeEvent(id: number, createdAt: number): NostrEvent {
 }
 
 function newStores() {
-  return { storage: memoryStorage() };
+  return { database: memoryDatabase() };
+}
+
+/** Reads one meta record of a group from a client database. */
+async function readMeta(
+  database: MarmotDatabase,
+  group: { idStr: string },
+  key: GroupMetaKey,
+) {
+  return (await database.groups.open(group.idStr)).meta.get(key);
 }
 
 function makeManager(
@@ -124,7 +137,7 @@ async function groupWithHistory(
   relays = [RELAY],
 ) {
   const stores = newStores();
-  const { storage } = stores;
+  const storage = stores.database;
   const manager = makeManager(network, stores, verifyEvent);
   const group = await manager.create("Backfill Group", { relays });
   for (let i = 0; i < count; i++) {
@@ -623,15 +636,13 @@ describe("nextBackfillCursor", () => {
   });
 
   it("keys a relay's records by its normalised URL", () => {
-    expect(backfillCursorKey("aa", "wss://relay.test")).toBe(
-      backfillCursorKey("aa", "wss://relay.test/"),
+    expect(backfillCursorKey("wss://relay.test")).toBe(
+      backfillCursorKey("wss://relay.test/"),
     );
-    expect(backfillProgressKey("aa", "wss://Relay.test")).toBe(
-      backfillProgressKey("aa", "wss://relay.test/"),
+    expect(backfillProgressKey("wss://Relay.test")).toBe(
+      backfillProgressKey("wss://relay.test/"),
     );
-    expect(backfillCursorKey("aa", RELAY)).not.toBe(
-      backfillCursorKey("aa", RELAY_B),
-    );
+    expect(backfillCursorKey(RELAY)).not.toBe(backfillCursorKey(RELAY_B));
   });
 
   it("round-trips the stored encoding and rejects malformed bytes", () => {
@@ -682,7 +693,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     (await manager.connect(group.id, { backfillPageSize: 3 })).unsubscribe();
     expect(
       decodeBackfillCursor(
-        await storage.get(backfillCursorKey(group.idStr, RELAY)),
+        await readMeta(storage, group, backfillCursorKey(RELAY)),
       ),
     ).toBe(newest);
 
@@ -719,7 +730,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
     expect(
       decodeBackfillCursor(
-        await storage.get(backfillCursorKey(group.idStr, RELAY)),
+        await readMeta(storage, group, backfillCursorKey(RELAY)),
       ),
     ).toBe(newest);
   });
@@ -746,7 +757,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
     expect(
       decodeBackfillCursor(
-        await storage.get(backfillCursorKey(group.idStr, RELAY)),
+        await readMeta(storage, group, backfillCursorKey(RELAY)),
       ),
     ).toBe(newest);
   });
@@ -798,7 +809,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
     expect(network.requests).toHaveLength(1);
     expect(
-      await storage.get(backfillCursorKey(group.idStr, RELAY)),
+      await readMeta(storage, group, backfillCursorKey(RELAY)),
     ).toBeUndefined();
   });
 
@@ -818,7 +829,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     ).unsubscribe();
 
     expect(
-      await storage.get(backfillCursorKey(group.idStr, RELAY)),
+      await readMeta(storage, group, backfillCursorKey(RELAY)),
     ).toBeUndefined();
   });
 
@@ -847,7 +858,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     expect(group.pendingEvents().map((e) => e.id)).toContain(foreign.id);
     expect(
       decodeBackfillCursor(
-        await storage.get(backfillCursorKey(group.idStr, RELAY)),
+        await readMeta(storage, group, backfillCursorKey(RELAY)),
       ),
     ).toBe(newest - 30);
   });
@@ -882,7 +893,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
 
     expect(group.pendingEvents().map((e) => e.id)).toContain(foreign.id);
     const progress = decodeBackfillProgress(
-      await storage.get(backfillProgressKey(group.idStr, RELAY)),
+      await readMeta(storage, group, backfillProgressKey(RELAY)),
     );
     // The held event's whole second must be re-read on the next connect, so
     // the range may not include it, even with zero slack.
@@ -906,7 +917,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     };
     const cursor = async () =>
       decodeBackfillCursor(
-        await storage.get(backfillCursorKey(group.idStr, RELAY)),
+        await readMeta(storage, group, backfillCursorKey(RELAY)),
       );
 
     let connects = 0;
@@ -925,7 +936,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     expect(backfilled).toEqual(new Set(groupEvents.map((e) => e.id)));
     // A completed relay drops its resumable progress.
     expect(
-      await storage.get(backfillProgressKey(group.idStr, RELAY)),
+      await readMeta(storage, group, backfillProgressKey(RELAY)),
     ).toBeUndefined();
   });
 
@@ -955,7 +966,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     expect(group.session.retainedEvents().map((e) => e.id)).toContain(older.id);
     expect(
       decodeBackfillCursor(
-        await storage.get(backfillCursorKey(group.idStr, RELAY)),
+        await readMeta(storage, group, backfillCursorKey(RELAY)),
       ),
     ).toBe(newest - 30);
 
@@ -1001,7 +1012,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     expect(group.session.retainedEvents().map((e) => e.id)).toContain(older.id);
     expect(
       decodeBackfillCursor(
-        await storage.get(backfillCursorKey(group.idStr, RELAY)),
+        await readMeta(storage, group, backfillCursorKey(RELAY)),
       ),
     ).toBe(old);
 
@@ -1036,7 +1047,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
       backfillMaxPages: 1,
     });
     expect(
-      await storage.get(backfillProgressKey(group.idStr, RELAY)),
+      await readMeta(storage, group, backfillProgressKey(RELAY)),
     ).toBeDefined();
 
     // The reconnect completes, so it first drops that progress record (held
@@ -1049,8 +1060,9 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     const removeGate = new Promise<void>((resolve) => {
       releaseRemove = resolve;
     });
-    const removeItem = storage.delete.bind(storage);
-    storage.delete = async (key: string) => {
+    const meta = group.session.meta;
+    const removeItem = meta.delete.bind(meta);
+    meta.delete = async (key: GroupMetaKey) => {
       reachedRemove();
       await removeGate;
       return removeItem(key);
@@ -1061,9 +1073,10 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
         (call[0] as NostrEvent[]).some((e) => e.id === foreign.id),
       );
     let liveIngestedAtCursorWrite: boolean | undefined;
-    const setItem = storage.set.bind(storage);
-    storage.set = async (key: string, value: Uint8Array) => {
-      if (key === backfillCursorKey(group.idStr, RELAY))
+    const setMeta = group.session.meta;
+    const setItem = setMeta.set.bind(setMeta);
+    setMeta.set = async (key: GroupMetaKey, value: Uint8Array) => {
+      if (key === backfillCursorKey(RELAY))
         liveIngestedAtCursorWrite = liveIngested();
       return setItem(key, value);
     };
@@ -1094,7 +1107,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     );
     const cursor = async (relay: string) =>
       decodeBackfillCursor(
-        await storage.get(backfillCursorKey(group.idStr, relay)),
+        await readMeta(storage, group, backfillCursorKey(relay)),
       );
     network.unreachable.add(RELAY_B);
 
@@ -1132,7 +1145,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     (await manager.connect(group.id, { backfillPageSize: 2 })).unsubscribe();
 
     expect(
-      await storage.get(backfillCursorKey(group.idStr, RELAY)),
+      await readMeta(storage, group, backfillCursorKey(RELAY)),
     ).toBeUndefined();
   });
 
@@ -1146,7 +1159,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     );
     const cursor = async () =>
       decodeBackfillCursor(
-        await storage.get(backfillCursorKey(group.idStr, RELAY)),
+        await readMeta(storage, group, backfillCursorKey(RELAY)),
       );
     vi.spyOn(group, "ingest").mockImplementationOnce(async function* () {
       throw new Error("ingest failed");
@@ -1239,7 +1252,7 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
       retained.id,
     );
     const progress = decodeBackfillProgress(
-      await storage.get(backfillProgressKey(group.idStr, RELAY)),
+      await readMeta(storage, group, backfillProgressKey(RELAY)),
     );
     expect(progress).toBeDefined();
     expect(progress!.to).toBe(newest);
@@ -1270,9 +1283,10 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     const removeGate = new Promise<void>((resolve) => {
       releaseRemove = resolve;
     });
-    const removeItem = storage.delete.bind(storage);
+    const meta = group.session.meta;
+    const removeItem = meta.delete.bind(meta);
     let gated = false;
-    storage.delete = async (key: string) => {
+    meta.delete = async (key: GroupMetaKey) => {
       if (!gated) {
         gated = true;
         reachedRemove();
@@ -1287,10 +1301,12 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     releaseRemove();
     await reconnect.then((sub) => sub.unsubscribe());
 
-    const records = (await storage.list("")).filter((key) =>
-      key.startsWith(`${group.idStr}/ingest/backfill-`),
+    expect(await readMeta(storage, group, backfillCursorKey(RELAY))).toBe(
+      undefined,
     );
-    expect(records).toEqual([]);
+    expect(await readMeta(storage, group, backfillProgressKey(RELAY))).toBe(
+      undefined,
+    );
   });
 
   it("removes a backfill record written as the group is destroyed", async () => {
@@ -1308,18 +1324,18 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     const writeGate = new Promise<void>((resolve) => {
       releaseWrite = resolve;
     });
-    const setItem = storage.set.bind(storage);
+    const setMeta = group.session.meta;
+    const setItem = setMeta.set.bind(setMeta);
     let gated = false;
-    storage.set = async (key: string, value: Uint8Array) => {
+    setMeta.set = async (key: GroupMetaKey, value: Uint8Array) => {
       // Gate the first backfill record's write; the destroy lands before it.
-      if (!gated && key.startsWith(`${group.idStr}/ingest/backfill-`)) {
+      if (!gated && key.startsWith("backfill-")) {
         gated = true;
         reachedWrite();
         await writeGate;
       }
       return setItem(key, value);
     };
-    const removeItem = vi.spyOn(storage, "delete");
 
     const connecting = manager.connect(group.id);
     await writing;
@@ -1327,15 +1343,14 @@ describe("GroupsManager.connect bounded, paged backfill (#106)", () => {
     releaseWrite();
     await connecting.then((sub) => sub.unsubscribe());
 
-    // The write completed after the destroy had purged the group's state, so
-    // the manager removed the record again.
+    // The destroy dropped the group's database before the write landed, so
+    // no record survives in it.
     expect(gated).toBe(true);
-    expect(removeItem).toHaveBeenCalledWith(
-      backfillCursorKey(group.idStr, RELAY),
+    expect(await readMeta(storage, group, backfillCursorKey(RELAY))).toBe(
+      undefined,
     );
-    const records = (await storage.list("")).filter((key) =>
-      key.startsWith(`${group.idStr}/ingest/backfill-`),
+    expect(await readMeta(storage, group, backfillProgressKey(RELAY))).toBe(
+      undefined,
     );
-    expect(records).toEqual([]);
   });
 });

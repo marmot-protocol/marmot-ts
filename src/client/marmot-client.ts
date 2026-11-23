@@ -1,7 +1,5 @@
 /** @module @category Client - Marmot Client */
-import type { MarmotRumorDatabases } from "./storage/group-history.js";
 import { watchCurrent } from "../utils/watch-current.js";
-import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRumor, Rumor } from "applesauce-common/helpers/gift-wrap";
 import { EventSigner } from "applesauce-core";
 import {
@@ -24,8 +22,7 @@ import {
   readWelcomeGroupInfo,
 } from "../core/welcome.js";
 import { logger } from "../utils/debug.js";
-import { scopeStorage, type MarmotStorage } from "./storage/storage.js";
-import { GROUP_PREFIX, groupKeys } from "./storage/storage-keys.js";
+import type { MarmotDatabase } from "./storage/database/types.js";
 import { MarmotGroup } from "./group/marmot-group.js";
 import { GroupsManager } from "./groups-manager.js";
 import { InviteManager, type UnreadInvite } from "./invite-manager.js";
@@ -84,12 +81,13 @@ export type MarmotClientOptions = {
   /** The capabilities to use for the client */
   capabilities?: Capabilities;
   /**
-   * Durable storage for every piece of protocol state: group state, fork
-   * history, ingest ledgers, lifecycle records, key packages (including
-   * private keys) and invites. See {@link MarmotStorage} for the adapter
-   * contract. Use {@link memoryStorage} only for tests and demos.
+   * Where the client persists everything: one database per group (protocol
+   * state, fork history, ingest ledgers, lifecycle records and decrypted
+   * messages) plus an account database (key packages including private keys,
+   * invites and the group list). See {@link MarmotDatabase} for the adapter
+   * contract. Use {@link memoryDatabase} only for tests and demos.
    */
-  storage: MarmotStorage;
+  database: MarmotDatabase;
   /**
    * Convergence policy applied to every group: branch selection and the
    * `maxRewindCommits` rollback horizon. Keep the finite profile-1 default
@@ -134,12 +132,6 @@ export type MarmotClientOptions = {
    * encoding so key packages share a stable addressable slot on relays.
    */
   clientId?: string;
-  /**
-   * Per-group rumor databases for application message history: return an
-   * applesauce `IAsyncEventDatabase<Rumor>` for a group, or `undefined` to keep
-   * that group's history in memory. Omit to keep all history in memory.
-   */
-  rumors?: MarmotRumorDatabases;
 };
 
 export class MarmotClient {
@@ -155,8 +147,8 @@ export class MarmotClient {
   readonly groups: GroupsManager;
   /** Manages invite lifecycle: ingestion, decryption, and storage */
   readonly invites: InviteManager;
-  /** The client's durable storage. */
-  readonly storage: MarmotStorage;
+  /** The client's account and per-group databases. */
+  readonly database: MarmotDatabase;
 
   /** Crypto provider for cryptographic operations */
   public cryptoProvider: CryptoProvider;
@@ -167,10 +159,9 @@ export class MarmotClient {
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     const verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
-    this.storage = options.storage;
-    const groupStorage = scopeStorage(options.storage, GROUP_PREFIX);
+    this.database = options.database;
     this.keyPackages = new KeyPackageManager({
-      storage: options.storage,
+      database: options.database.account,
       signer: options.signer,
       network: options.network,
       clientId: options.clientId,
@@ -178,13 +169,11 @@ export class MarmotClient {
       capabilities: options.capabilities,
       getSignatureKeyPair: options.getSignatureKeyPair,
       verifyEvent,
-      hasAdoptedGroup: async (groupId) =>
-        (await groupStorage.get(groupKeys.state(bytesToHex(groupId)))) !==
-        undefined,
+      hasAdoptedGroup: (groupId) => this.groups.has(groupId),
     });
 
     this.groups = new GroupsManager({
-      storage: groupStorage,
+      database: options.database,
       convergencePolicy: options.convergencePolicy,
       ingestionPool: options.ingestionPool,
       signer: this.signer,
@@ -192,13 +181,12 @@ export class MarmotClient {
       audit: options.audit,
       auditContext: options.auditContext,
       cryptoProvider: this.cryptoProvider,
-      rumors: options.rumors,
       verifyEvent,
     });
 
     this.invites = new InviteManager({
       signer: this.signer,
-      storage: options.storage,
+      database: options.database.account,
       network: this.network,
       verifyEvent,
     });

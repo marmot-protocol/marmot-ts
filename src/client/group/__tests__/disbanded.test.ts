@@ -16,19 +16,86 @@ import { describe, expect, it, vi } from "vitest";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { memoryStorage } from "../../../utils/storage.js";
+import {
+  memoryDatabase,
+  memoryGroupDatabase,
+} from "../../../__tests__/helpers/database.js";
+import type {
+  GroupTransaction,
+  MarmotDatabase,
+  MarmotGroupDatabase,
+} from "../../storage/database/types.js";
 import { GroupTerminalError, MarmotGroup } from "../marmot-group.js";
 import { MockNetwork } from "../../../__tests__/helpers/mock-network.js";
 import { GroupRegistry } from "../../storage/group-registry.js";
 import {
   decodeDisbandTombstone,
-  disbandTombstoneKey,
+  DISBAND_TOMBSTONE_KEY,
   encodeDisbandTombstone,
   type DisbandTombstone,
   encodeDisbandTerminalIntent,
   decodeDisbandTerminalIntent,
-  disbandTerminalIntentKey,
+  DISBAND_INTENT_KEY,
 } from "../../../engine/disband-tombstone.js";
+
+type MetaOp = { type: "set" | "delete"; key: string; value?: Uint8Array };
+const ROLLBACK = new Error("rollback");
+
+/**
+ * Routes every transaction of `db` through `hook`, which sees the meta writes
+ * the transaction would make (from a rolled-back dry run) and decides whether
+ * to commit them via `write`. Returns a restore.
+ */
+function interceptMeta(
+  db: MarmotGroupDatabase,
+  hook: (ops: MetaOp[], write: () => Promise<void>) => Promise<void>,
+): () => void {
+  const transaction = db.transaction.bind(db);
+  db.transaction = async <T>(fn: (tx: GroupTransaction) => Promise<T>) => {
+    const ops: MetaOp[] = [];
+    try {
+      await transaction(async (tx) => {
+        await fn({
+          ...tx,
+          meta: {
+            ...tx.meta,
+            set: async (key, value) => {
+              ops.push({ type: "set", key, value });
+              return tx.meta.set(key, value);
+            },
+            delete: async (key) => {
+              ops.push({ type: "delete", key });
+              return tx.meta.delete(key);
+            },
+          },
+        });
+        throw ROLLBACK;
+      });
+    } catch (error) {
+      if (error !== ROLLBACK) throw error;
+    }
+    let result!: T;
+    await hook(ops, async () => {
+      result = await transaction(fn);
+    });
+    return result;
+  };
+  return () => {
+    db.transaction = transaction;
+  };
+}
+
+/** A client database whose only group is `db`. */
+async function clientDatabase(
+  db: MarmotGroupDatabase,
+  id: string,
+): Promise<MarmotDatabase> {
+  const { account } = memoryDatabase();
+  await account.transaction((tx) =>
+    tx.groups.put({ id, status: "active", value: new Uint8Array() }),
+  );
+  return { account, groups: { open: async () => db, drop: async () => {} } };
+}
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import { deserializeClientState } from "../../../core/client-state.js";
 import { GROUP_PROFILE_COMPONENT_ID } from "../../../core/components/ids.js";
@@ -96,7 +163,7 @@ describe("disband tombstone", () => {
   };
 
   it("uses a namespace distinct from the pending request", () => {
-    expect(disbandTombstoneKey("010203")).toBe("010203/disband/terminal");
+    expect(DISBAND_TOMBSTONE_KEY).toBe("disband/terminal");
   });
 
   it("round-trips authenticated terminal evidence", () => {
@@ -107,7 +174,7 @@ describe("disband tombstone", () => {
 
   it("round-trips a versioned intent separately from legacy terminal evidence", () => {
     const intent = { tombstone, registryState: new Uint8Array([1, 2, 3]) };
-    expect(disbandTerminalIntentKey("010203")).toBe("010203/disband/intent/v1");
+    expect(DISBAND_INTENT_KEY).toBe("disband/intent");
     expect(
       decodeDisbandTerminalIntent(encodeDisbandTerminalIntent(intent)),
     ).toEqual(intent);
@@ -171,10 +238,10 @@ async function fixture() {
     adminPubkeys: [pubkey],
     relays: ["wss://relay.test"],
   });
-  const storage = memoryStorage();
+  const storage = memoryGroupDatabase();
   const network = new MockNetwork(["wss://relay.test"]);
   const group = new MarmotGroup(clientState, {
-    storage,
+    database: storage,
     signer: account.signer,
     ciphersuite: impl,
     network,
@@ -194,26 +261,28 @@ describe("public disband terminal contract", () => {
         sourceEpoch: 0,
         terminalOutcome: "disbanded",
       });
-      const write = storage.set.bind(storage);
       let armed = true;
-      const fault = vi
-        .spyOn(storage, "set")
-        .mockImplementation(async (key, value) => {
-          const hit =
-            armed &&
-            key.endsWith("/disband/terminal") &&
-            decodeDisbandTombstone(value).notificationState === "delivered";
-          if (hit && forwarding === "before") {
-            armed = false;
-            throw new Error("notification crash");
-          }
-          const result = await write(key, value);
-          if (hit) {
-            armed = false;
-            throw new Error("notification crash");
-          }
-          return result;
-        });
+      const restore = interceptMeta(storage, async (ops, write) => {
+        const hit =
+          armed &&
+          ops.some(
+            (op) =>
+              op.type === "set" &&
+              op.key === DISBAND_TOMBSTONE_KEY &&
+              decodeDisbandTombstone(op.value!).notificationState ===
+                "delivered",
+          );
+        if (hit && forwarding === "before") {
+          armed = false;
+          throw new Error("notification crash");
+        }
+        await write();
+        if (hit) {
+          armed = false;
+          throw new Error("notification crash");
+        }
+      });
+      const fault = { mockRestore: restore };
       const liveCallback = vi.fn();
       group.on("disbanded", liveCallback);
       await expect(group.realizeDisbandIfNeeded()).rejects.toThrow(
@@ -224,7 +293,7 @@ describe("public disband terminal contract", () => {
       group.dispose();
       for (let restart = 0; restart < 2; restart++) {
         const restored = new MarmotGroup(group.state, {
-          storage,
+          database: storage,
           network,
           signer: account.signer,
           ciphersuite: group.ciphersuite,
@@ -246,27 +315,26 @@ describe("public disband terminal contract", () => {
     const f = await peers();
     const network = new MockNetwork(["wss://relay.test"]);
     const author = new MarmotGroup(f.adminState, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: f.admin.signer,
       ciphersuite: f.impl,
       network,
     });
     const candidate = await author.session.requestDisband();
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
     let failures = 0;
-    const write = storage.batch.bind(storage);
-    vi.spyOn(storage, "batch").mockImplementation(async (ops) => {
+    interceptMeta(storage, async (ops, write) => {
       if (
-        ops.some((op) => op.key.endsWith("/disband/terminal")) &&
+        ops.some((op) => op.key === DISBAND_TOMBSTONE_KEY) &&
         failures++ === 0
       )
         throw new Error("first tombstone crash");
-      return write(ops);
+      return write();
     });
     let now = 0;
     const observedGroup = new MarmotGroup(f.memberState, {
       ciphersuite: f.impl,
-      storage,
+      database: storage,
       signer: f.member.signer,
       network,
       now: () => now,
@@ -289,13 +357,11 @@ describe("public disband terminal contract", () => {
     await observer.driveConvergence();
     expect(observer.terminalTombstone?.actorPubkey).toBe(f.admin.pubkey);
     expect(observer.lifecycle).toBe("Disbanded");
-    expect(
-      await storage.get(`${author.idStr}/disband/terminal`),
-    ).toBeUndefined();
+    expect(await storage.meta.get(DISBAND_TOMBSTONE_KEY)).toBeUndefined();
     for await (const _ of observer.ingest([])) {
       /* fully drain retry */
     }
-    expect(await storage.get(`${author.idStr}/disband/terminal`)).toBeDefined();
+    expect(await storage.meta.get(DISBAND_TOMBSTONE_KEY)).toBeDefined();
     for await (const _ of observedGroup.ingest([])) {
       /* fully drain terminal facade activation */
     }
@@ -328,7 +394,7 @@ describe("public disband terminal contract", () => {
     const observer = new GroupSession({
       state: f.memberState,
       ciphersuite: f.impl,
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
     });
     // An active admin's SelfRemove is refused before sending, so build it
     // directly: the observer must neither stage it nor commit it.
@@ -358,10 +424,10 @@ describe("public disband terminal contract", () => {
     "WR-01: peer self-removal fully drains with pending disband publish failure=%s",
     async (publishFailure) => {
       const f = await peers();
-      const storage = memoryStorage();
+      const storage = memoryGroupDatabase();
       const network = new MockNetwork(["wss://relay.test"]);
       const group = new MarmotGroup(f.adminState, {
-        storage,
+        database: storage,
         network,
         signer: f.admin.signer,
         ciphersuite: f.impl,
@@ -369,7 +435,7 @@ describe("public disband terminal contract", () => {
       const leaver = new GroupSession({
         state: f.memberState,
         ciphersuite: f.impl,
-        storage: memoryStorage(),
+        database: memoryGroupDatabase(),
       });
       if (publishFailure) {
         // An explicit rejecting OK is a definitive failure. A thrown adapter
@@ -393,7 +459,7 @@ describe("public disband terminal contract", () => {
         !publishFailure,
       );
       const durable = deserializeClientState(
-        (await storage.get(`${group.idStr}/state`))!,
+        (await storage.meta.get("state"))!,
       );
       expect(durable.groupContext.epoch).toBe(group.state.groupContext.epoch);
       if (publishFailure)
@@ -405,23 +471,20 @@ describe("public disband terminal contract", () => {
   );
   it("keeps the registry shell after a post-intent cleanup crash and survives two restarts", async () => {
     const { group, network, pubkey, account } = await fixture();
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
     let failCleanup = true;
-    const write = storage.batch.bind(storage);
-    vi.spyOn(storage, "batch").mockImplementation(async (ops) => {
+    interceptMeta(storage, async (ops, write) => {
       if (
         failCleanup &&
-        ops.some(
-          (op) => op.type === "delete" && op.key === `${group.idStr}/state`,
-        )
+        ops.some((op) => op.type === "delete" && op.key === "state")
       ) {
         failCleanup = false;
         throw new Error("injected cleanup crash");
       }
-      return write(ops);
+      return write();
     });
     const crashing = new MarmotGroup(group.state, {
-      storage,
+      database: storage,
       signer: account.signer,
       ciphersuite: group.ciphersuite,
       network,
@@ -437,12 +500,14 @@ describe("public disband terminal contract", () => {
       }),
     ).rejects.toThrow("injected cleanup crash");
     // The intent, tombstone and registry shell committed together.
-    expect(
-      await storage.get(`${group.idStr}/disband/registry-state`),
-    ).toBeDefined();
+    expect(await storage.meta.get("disband/registry-state")).toBeDefined();
     crashing.dispose();
 
-    const options = { storage, signer: account.signer, network };
+    const options = {
+      database: await clientDatabase(storage, group.idStr),
+      signer: account.signer,
+      network,
+    };
     const first = new GroupRegistry(options);
     expect((await first.get(group.id)).status).toBe("disbanded");
     first.untrack(group.id);
@@ -459,10 +524,10 @@ describe("public disband terminal contract", () => {
       sourceEpoch: 0,
       terminalOutcome: "disbanded",
     });
-    expect(await storage.get(`${group.idStr}/state`)).toBeUndefined();
+    expect(await storage.meta.get("state")).toBeUndefined();
 
     const registry = new GroupRegistry({
-      storage,
+      database: await clientDatabase(storage, group.idStr),
       signer: account.signer,
       network,
     });

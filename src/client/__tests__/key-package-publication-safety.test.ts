@@ -1,7 +1,7 @@
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { describe, expect, it, vi } from "vitest";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
 import {
   KeyPackageManager,
   MissingSlotIdentifierError,
@@ -15,9 +15,14 @@ const OPTIONS = { identifier: SLOT, relays: [TARGET] };
 
 function fixture(clientId: string | undefined = SLOT) {
   const network = new MockNetwork();
-  const storage = memoryStorage();
+  const storage = memoryDatabase().account;
   const signer = PrivateKeyAccount.generateNew().signer;
-  const manager = new KeyPackageManager({ storage, signer, network, clientId });
+  const manager = new KeyPackageManager({
+    database: storage,
+    signer,
+    network,
+    clientId,
+  });
   return { manager, network, storage, signer };
 }
 
@@ -66,7 +71,7 @@ describe("KeyPackage relay acknowledgements", () => {
           responses,
         });
         const restarted = new KeyPackageManager({
-          storage,
+          database: storage,
           signer,
           network,
           clientId: SLOT,
@@ -145,7 +150,7 @@ describe("ensurePublished slot isolation", () => {
     const { manager, storage, signer, network } = fixture();
     await manager.create(OPTIONS);
     const unconfigured = new KeyPackageManager({
-      storage,
+      database: storage,
       signer,
       network,
     });

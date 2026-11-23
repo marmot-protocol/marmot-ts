@@ -21,9 +21,8 @@ import {
 import { validateKeyPackageSlot } from "../../core/key-package-event-encode.js";
 import { isValidRelayUrl, normalizeRelayUrl } from "../../utils/relay-url.js";
 import { logger } from "../../utils/debug.js";
-import { RecordStore } from "./record-codec.js";
-import type { MarmotStorage } from "./storage.js";
-import { KEY_PACKAGE_PREFIX } from "./storage-keys.js";
+import { AccountRecordTable } from "./record-codec.js";
+import type { KeyPackageRow, MarmotAccountDatabase } from "./database/types.js";
 import { deduplicatePublishedEvents } from "../key-package-events.js";
 
 /** Local transport destinations, never derived from signed event tags. */
@@ -159,18 +158,28 @@ export type KeyPackageStoreEvents = {
  * darkmatter's `AccountSecretStore` seam.
  */
 export class KeyPackageStore extends EventEmitter<KeyPackageStoreEvents> {
-  readonly #store: RecordStore<StoredKeyPackage>;
+  readonly #store: AccountRecordTable<StoredKeyPackage, KeyPackageRow>;
   readonly #cryptoProvider: CryptoProvider;
   #log = logger.extend("KeyPackageStore");
 
   constructor(
-    storage: MarmotStorage,
+    database: MarmotAccountDatabase,
     cryptoProvider: CryptoProvider = defaultCryptoProvider,
   ) {
     super();
-    this.#store = new RecordStore<StoredKeyPackage>(
-      storage,
-      KEY_PACKAGE_PREFIX,
+    this.#store = new AccountRecordTable<StoredKeyPackage, KeyPackageRow>(
+      database.keyPackages,
+      (fn) => database.transaction((tx) => fn(tx.keyPackages)),
+      (ref, entry, value) => ({
+        ref,
+        identifier: entry.identifier,
+        notBefore: Number(
+          entry.publicPackage.leafNode.lifetime?.notBefore ?? 0n,
+        ),
+        used: entry.used === true,
+        value,
+      }),
+      (row) => row.ref,
     );
     this.#cryptoProvider = cryptoProvider;
   }

@@ -129,7 +129,12 @@ import {
   validateGroupImageProposals,
 } from "../core/components/image-validation.js";
 import { logger } from "../utils/debug.js";
-import type { MarmotStorage } from "../utils/storage.js";
+/** Durable singleton records the engine owns (disband request and convergence). */
+export interface EngineRecordStore {
+  get(key: string): Promise<Uint8Array | undefined>;
+  set(key: string, value: Uint8Array): Promise<void>;
+  delete(key: string): Promise<void>;
+}
 import {
   createAdminCommitPolicyCallback,
   findProposalSenderViolation,
@@ -200,8 +205,8 @@ import { openConvergencePass, refreshConvergencePass } from "./types.js";
 import {
   decodeDisbandConvergence,
   decodeDisbandRequest,
-  disbandConvergenceKey,
-  disbandRequestKey,
+  DISBAND_CONVERGENCE_KEY,
+  DISBAND_REQUEST_KEY,
   encodeDisbandConvergence,
   encodeDisbandRequest,
   type DisbandRequest,
@@ -367,8 +372,8 @@ export type MarmotGroupEngineOptions<TEnvelope> = {
   audit?: AuditSink;
   /** Required when `audit` is set; contains stable engine/account/session metadata. */
   auditContext?: AuditContextOptions;
-  /** Group-scoped durable storage for lifecycle (disband) records. */
-  storage?: MarmotStorage;
+  /** The group's durable store for lifecycle (disband) records. */
+  storage?: EngineRecordStore;
 };
 
 /**
@@ -487,8 +492,7 @@ export class MarmotGroupEngine<TEnvelope> {
   /** Handle of the pending settle-check timer, if any (cleared/reset per pass). */
   #settleTimer: TimerHandle | undefined;
   readonly #audit?: AuditEmitter;
-  readonly #storage?: MarmotStorage;
-  readonly #disbandRequestKey: string;
+  readonly #storage?: EngineRecordStore;
   #disbandRequest: DisbandRequest | undefined;
   readonly #disbandHydrated: Promise<void>;
   readonly #wallNow: () => number;
@@ -509,9 +513,6 @@ export class MarmotGroupEngine<TEnvelope> {
     this.#scheduler = options.scheduler ?? DEFAULT_SCHEDULER;
     this.#onSettleCheck = options.onSettleCheck;
     this.#storage = options.storage;
-    this.#disbandRequestKey = disbandRequestKey(
-      bytesToHex(options.state.groupContext.groupId),
-    );
     this.#disbandHydrated = this.#hydrateDisbandState();
 
     this.#policy = normalizeConvergencePolicy(
@@ -1092,9 +1093,7 @@ export class MarmotGroupEngine<TEnvelope> {
     try {
       await this.#disbandHydrated;
       if (!this.#storage) return;
-      const key = disbandConvergenceKey(
-        bytesToHex(this.#state.groupContext.groupId),
-      );
+      const key = DISBAND_CONVERGENCE_KEY;
       if (!this.#convergencePass || this.#disbandCandidates.size === 0) {
         await this.#storage.delete(key);
         return;
@@ -3495,11 +3494,9 @@ export class MarmotGroupEngine<TEnvelope> {
 
   async #hydrateDisbandState(): Promise<void> {
     if (!this.#storage) return;
-    const encoded = await this.#storage.get(this.#disbandRequestKey);
+    const encoded = await this.#storage.get(DISBAND_REQUEST_KEY);
     if (encoded) this.#disbandRequest = decodeDisbandRequest(encoded);
-    const convergence = await this.#storage.get(
-      disbandConvergenceKey(bytesToHex(this.#state.groupContext.groupId)),
-    );
+    const convergence = await this.#storage.get(DISBAND_CONVERGENCE_KEY);
     if (!convergence) return;
     const stored = decodeDisbandConvergence(convergence);
     const monoNow = this.#now();
@@ -3562,7 +3559,7 @@ export class MarmotGroupEngine<TEnvelope> {
   async #persistDisbandRequest(): Promise<void> {
     if (!this.#storage || !this.#disbandRequest) return;
     await this.#storage.set(
-      this.#disbandRequestKey,
+      DISBAND_REQUEST_KEY,
       encodeDisbandRequest(this.#disbandRequest),
     );
   }

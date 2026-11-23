@@ -16,7 +16,7 @@ import type { NostrNetworkInterface } from "../../client/nostr-interface.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase, memoryGroupDatabase } from "../helpers/database.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://mock-relay.test";
@@ -100,7 +100,7 @@ describe("selfUpdate commit persistence (CR-09)", () => {
   it("emits historyChanged once after each locally confirmed commit", async () => {
     const { impl, memberE1 } = await buildMemberState();
     const group = new MarmotGroup(memberE1, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: SIGNER,
       ciphersuite: impl,
       network: ackingNetwork(),
@@ -140,11 +140,16 @@ describe("selfUpdate commit persistence (CR-09)", () => {
     const groupId = bytesToHex(memberE1.groupContext.groupId);
     const parentTag = bytesToHex(memberE1.confirmationTag);
 
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
+    const { database } = await new GroupRegistry({
+      database: storage,
+      signer: SIGNER,
+      network: ackingNetwork(),
+    }).prepare(memberE1);
 
     // Session 1: join state, then selfUpdate through the real send/publish path.
     const first = new MarmotGroup(memberE1, {
-      storage,
+      database,
       signer: SIGNER,
       ciphersuite: impl,
       network: ackingNetwork(),
@@ -169,7 +174,7 @@ describe("selfUpdate commit persistence (CR-09)", () => {
 
     // Session 2: restart through the real load path.
     const registry = new GroupRegistry({
-      storage,
+      database: storage,
       signer: SIGNER,
       network: ackingNetwork(),
     });
@@ -200,7 +205,7 @@ describe("selfUpdate commit persistence (CR-09)", () => {
     const { impl, memberE1 } = await buildMemberState();
 
     const group = new MarmotGroup(memberE1, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: SIGNER,
       ciphersuite: impl,
       network: ackingNetwork(),

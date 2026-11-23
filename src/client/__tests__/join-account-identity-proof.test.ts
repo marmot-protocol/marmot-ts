@@ -22,11 +22,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { MarmotClient } from "../marmot-client.js";
-import {
-  memoryStorage,
-  type MemoryStorage,
-  type StorageOp,
-} from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
+import type {
+  GroupTransaction,
+  MarmotDatabase,
+  MarmotGroupDatabase,
+} from "../storage/database/types.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import {
@@ -60,57 +61,105 @@ import {
   type GroupBlossomImage,
 } from "../../core/components/index.js";
 import { createDefaultKeyPackageLifetime } from "../../utils/timestamp.js";
-import {
-  GROUP_PREFIX,
-  KEY_PACKAGE_PREFIX,
-  groupKeys,
-} from "../storage/storage-keys.js";
+/**
+ * A client database whose group databases report canonical-state writes to
+ * `onState` (inside the transaction, so throwing rolls the write back) and
+ * every group transaction to `groupTransactions`.
+ */
+type InstrumentedDatabase = MarmotDatabase & {
+  onState?: (value: Uint8Array) => void;
+  groupTransactions: ReturnType<typeof vi.fn>;
+};
+function instrumentedDatabase(): InstrumentedDatabase {
+  const base = memoryDatabase();
+  const database: InstrumentedDatabase = {
+    account: base.account,
+    groupTransactions: vi.fn(),
+    groups: {
+      drop: (id) => base.groups.drop(id),
+      open: async (id) => {
+        const inner = await base.groups.open(id);
+        const instrumented: MarmotGroupDatabase = {
+          ...inner,
+          meta: inner.meta,
+          treeNodes: inner.treeNodes,
+          wrappers: inner.wrappers,
+          messages: inner.messages,
+          deliveries: inner.deliveries,
+          close: () => inner.close(),
+          transaction: <T>(fn: (tx: GroupTransaction) => Promise<T>) => {
+            database.groupTransactions();
+            return inner.transaction((tx) =>
+              fn({
+                ...tx,
+                meta: {
+                  ...tx.meta,
+                  set: async (key, value) => {
+                    if (key === "state") database.onState?.(value);
+                    return tx.meta.set(key, value);
+                  },
+                },
+              }),
+            );
+          },
+        };
+        return instrumented;
+      },
+    },
+  };
+  return database;
+}
 
-/** Every key and value under `prefix`, copied. */
-async function snapshot(storage: MemoryStorage, prefix: string) {
-  return (await storage.list(prefix)).map((key) => [
-    key,
-    storage.data.get(key)?.slice(),
-  ]);
+/** A group's stored canonical state. */
+async function storedState(database: MarmotDatabase, id: string) {
+  return (await database.groups.open(id)).meta.get("state");
+}
+
+/** Every stored group (id, state, tree) or key package row, copied. */
+async function snapshot(
+  storage: MarmotDatabase,
+  table: "groups" | "keyPackages",
+) {
+  if (table === "keyPackages")
+    return (await storage.account.keyPackages.all()).map((row) => [
+      row.ref,
+      row.value.slice(),
+    ]);
+  const groups = [];
+  for (const row of await storage.account.groups.all()) {
+    const db = await storage.groups.open(row.id);
+    groups.push([
+      row.id,
+      await db.meta.get("state"),
+      await db.meta.get("tree"),
+    ]);
+  }
+  return groups;
 }
 
 /** Ids of the groups whose canonical state is stored. */
-async function storedGroupIds(storage: MemoryStorage): Promise<string[]> {
-  return (await storage.list(GROUP_PREFIX))
-    .filter((key) => key.endsWith("/state"))
-    .map((key) => key.slice(GROUP_PREFIX.length, -"/state".length));
+async function storedGroupIds(storage: MarmotDatabase): Promise<string[]> {
+  const ids = [];
+  for (const row of await storage.account.groups.all())
+    if (await storedState(storage, row.id)) ids.push(row.id);
+  return ids;
 }
 
-const isStateWrite = (ops: readonly StorageOp[]) =>
-  ops.some(
-    (op) =>
-      op.type === "set" &&
-      op.key.startsWith(GROUP_PREFIX) &&
-      op.key.endsWith("/state"),
-  );
-
-/** Records every batch that writes a group's canonical state. */
-function stateWrites(storage: MemoryStorage) {
+/** Records every transaction that writes a group's canonical state. */
+function stateWrites(storage: InstrumentedDatabase) {
   const writes = vi.fn();
-  const batch = storage.batch.bind(storage);
-  vi.spyOn(storage, "batch").mockImplementation(async (ops) => {
-    if (isStateWrite(ops)) writes(ops);
-    return batch(ops);
-  });
+  storage.onState = (value) => writes(value);
   return writes;
 }
 
-/** Makes the next canonical-state batch fail. */
-function failNextStateWrite(storage: MemoryStorage, error: Error) {
-  const batch = storage.batch.bind(storage);
+/** Makes the next canonical-state write fail (rolling its transaction back). */
+function failNextStateWrite(storage: InstrumentedDatabase, error: Error) {
   let failed = false;
-  vi.spyOn(storage, "batch").mockImplementation(async (ops) => {
-    if (!failed && isStateWrite(ops)) {
-      failed = true;
-      throw error;
-    }
-    return batch(ops);
-  });
+  storage.onState = () => {
+    if (failed) return;
+    failed = true;
+    throw error;
+  };
 }
 
 const SUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;
@@ -122,16 +171,16 @@ const LEGACY_ACCOUNT_IDENTITY_PROOF_EXTENSION_TYPE = 0xf2f1;
 describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => {
   let ciphersuiteImpl: CiphersuiteImpl;
   let mockNetwork: MockNetwork;
-  let inviteeStorage: MemoryStorage;
+  let inviteeStorage: InstrumentedDatabase;
   let inviteeClient: MarmotClient;
 
   beforeEach(async () => {
     ciphersuiteImpl = await getCiphersuiteImpl(SUITE, defaultCryptoProvider);
     mockNetwork = new MockNetwork();
-    inviteeStorage = memoryStorage();
+    inviteeStorage = instrumentedDatabase();
     const inviteeAccount = testAccount(9);
     inviteeClient = new MarmotClient({
-      storage: inviteeStorage,
+      database: inviteeStorage,
       signer: inviteeAccount.signer,
       network: mockNetwork,
     });
@@ -248,18 +297,19 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       await inviteeClient.keyPackages.add(inviteeKp);
       const ref = await calculateKeyPackageRef(inviteeKp.publicPackage);
       const beforeGroups = structuredClone(
-        await snapshot(inviteeStorage, GROUP_PREFIX),
+        await snapshot(inviteeStorage, "groups"),
       );
       const beforePackages = structuredClone(
-        await snapshot(inviteeStorage, KEY_PACKAGE_PREFIX),
+        await snapshot(inviteeStorage, "keyPackages"),
       );
       const beforePrivate = structuredClone(
         await inviteeClient.keyPackages.getPrivateKey(ref),
       );
       const beforeAdopt = vi.fn(async () => {});
       const receipt = vi.spyOn(inviteeClient.keyPackages, "recordConsumption");
-      const save = vi.spyOn(inviteeStorage, "batch");
-      const packageWrite = vi.spyOn(inviteeStorage, "set");
+      const save = inviteeStorage.groupTransactions;
+      save.mockClear();
+      const packageWrite = vi.spyOn(inviteeStorage.account, "transaction");
       const joinedEvent = vi.fn();
       const updatedEvent = vi.fn();
       const loadedEvent = vi.fn();
@@ -292,10 +342,8 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
       expect(updatedEvent).not.toHaveBeenCalled();
       expect(loadedEvent).not.toHaveBeenCalled();
       expect(inviteeClient.groups.loaded).toEqual([existing]);
-      expect(await snapshot(inviteeStorage, GROUP_PREFIX)).toEqual(
-        beforeGroups,
-      );
-      expect(await snapshot(inviteeStorage, KEY_PACKAGE_PREFIX)).toEqual(
+      expect(await snapshot(inviteeStorage, "groups")).toEqual(beforeGroups);
+      expect(await snapshot(inviteeStorage, "keyPackages")).toEqual(
         beforePackages,
       );
       expect(await inviteeClient.keyPackages.getPrivateKey(ref)).toEqual(
@@ -338,9 +386,7 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
         welcomeRumor,
       });
       expect(getMarmotGroupView(group.state)?.blossomImage).toEqual(image);
-      expect(
-        await inviteeStorage.get(GROUP_PREFIX + groupKeys.state(group.idStr)),
-      ).toBeDefined();
+      expect(await storedState(inviteeStorage, group.idStr)).toBeDefined();
       expect(inviteeClient.groups.loaded).toEqual([group]);
       expect(joinedEvent).toHaveBeenCalledExactlyOnceWith(group);
       expect(await inviteeClient.keyPackages.getPrivateKey(ref)).toBeNull();
@@ -385,9 +431,7 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
     });
     expect(await inviteeClient.keyPackages.getPrivateKey(ref)).toBeNull();
     expect((await inviteeClient.keyPackages.get(ref))?.used).toBe(true);
-    expect(
-      await inviteeStorage.get(GROUP_PREFIX + groupKeys.state(group.idStr)),
-    ).toBeDefined();
+    expect(await storedState(inviteeStorage, group.idStr)).toBeDefined();
     const { createApplicationMessage } = await import("ts-mls");
     await expect(
       createApplicationMessage({
@@ -660,14 +704,12 @@ describe("joinFromWelcome account identity proof profile (CUT-02, D-07)", () => 
     const ref = await calculateKeyPackageRef(inviteeKp.publicPackage);
     const beforeKey = structuredClone(await inviteeClient.keyPackages.get(ref));
     const beforeGroup = structuredClone(
-      await inviteeStorage.get(GROUP_PREFIX + groupKeys.state(group.idStr)),
+      await storedState(inviteeStorage, group.idStr),
     );
     await expect(joinAsInvitee(welcome, inviteeKp)).rejects.toThrow(
       "already exists",
     );
-    expect(
-      await inviteeStorage.get(GROUP_PREFIX + groupKeys.state(group.idStr)),
-    ).toEqual(beforeGroup);
+    expect(await storedState(inviteeStorage, group.idStr)).toEqual(beforeGroup);
     expect(await inviteeClient.keyPackages.get(ref)).toEqual(beforeKey);
   });
 

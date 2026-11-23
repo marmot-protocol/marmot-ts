@@ -11,9 +11,12 @@ import {
 import { EventEmitter } from "eventemitter3";
 import { WELCOME_EVENT_KIND } from "../core/protocol.js";
 import { getWelcome } from "../core/welcome.js";
-import { encodeRecord, RecordStore } from "./storage/record-codec.js";
-import { deletePrefix, type MarmotStorage } from "./storage/storage.js";
-import { invitePrefixes } from "./storage/storage-keys.js";
+import { decodeRecord, encodeRecord } from "./storage/record-codec.js";
+import type {
+  InviteRow,
+  InviteState,
+  MarmotAccountDatabase,
+} from "./storage/database/types.js";
 import { logger } from "../utils/debug.js";
 import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import type {
@@ -83,8 +86,8 @@ export interface InviteManagerOptions {
   /** Signer for decrypting gift wraps */
   signer: EventSigner;
 
-  /** Durable storage; invites live under `invite/`. */
-  storage: MarmotStorage;
+  /** The account database; invites live in its `invites` table. */
+  database: MarmotAccountDatabase;
 
   /** The nostr relay pool, used by {@link InviteManager.listen}. */
   network: NostrNetworkInterface;
@@ -117,16 +120,17 @@ export interface InviteManagerOptions {
  * 3. SEEN: Event ID tracked to prevent re-processing
  * 4. (DELETED): Read invites are removed from storage
  *
- * Storage layout:
- * - `invite/seen/<eventId>` marks a gift wrap as seen (deduplication)
- * - `invite/received/<eventId>` holds gift wraps and optional retry/transition state
- * - `invite/unread/<rumorId>` holds decrypted welcome rumors
+ * Storage layout (account `invites` table):
+ * - `received` rows (gift wrap id) hold gift wraps and retry/transition state
+ * - `unread` rows (rumor id) hold decrypted welcome rumors
+ * - `seen` rows (gift wrap id) are tombstones left once a gift wrap is done;
+ *   any row for a gift wrap id marks it seen (deduplication)
  */
 export class InviteManager extends EventEmitter<InviteManagerEvents> {
   private signer: EventSigner;
-  private storage: MarmotStorage;
-  private received: RecordStore<ReceivedInviteRecord>;
-  private unread: RecordStore<UnreadInvite>;
+  private database: MarmotAccountDatabase;
+  private received: InviteRecords<ReceivedInviteRecord>;
+  private unread: InviteRecords<UnreadInvite>;
   private network: NostrNetworkInterface;
   // Snapshot invalidation is separate from the public, non-replayed delivery event.
   private readonly unreadRecovery = new EventEmitter<{ changed: () => void }>();
@@ -142,9 +146,19 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
   constructor(options: InviteManagerOptions) {
     super();
     this.signer = options.signer;
-    this.storage = options.storage;
-    this.received = new RecordStore(options.storage, invitePrefixes.received);
-    this.unread = new RecordStore(options.storage, invitePrefixes.unread);
+    this.database = options.database;
+    this.received = new InviteRecords(
+      options.database,
+      "received",
+      (record) => ({
+        rumorId: record.rumor?.id,
+        receivedAt: record.giftwrap.created_at,
+      }),
+    );
+    this.unread = new InviteRecords(options.database, "unread", (rumor) => ({
+      rumorId: rumor.id,
+      receivedAt: rumor.created_at,
+    }));
     this.network = options.network;
     this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
   }
@@ -220,24 +234,12 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
       return false;
     }
 
-    if (await this.storage.get(invitePrefixes.seen + event.id)) return false;
+    if (await this.database.invites.get(event.id)) return false;
 
     this.#log("ingesting gift wrap %s", event.id);
 
-    // The gift wrap and its seen marker commit together.
-    const record: ReceivedInviteRecord = { giftwrap: event };
-    await this.storage.batch([
-      {
-        type: "set",
-        key: invitePrefixes.received + event.id,
-        value: encodeRecord(record),
-      },
-      {
-        type: "set",
-        key: invitePrefixes.seen + event.id,
-        value: Uint8Array.of(1),
-      },
-    ]);
+    // The received row is also the gift wrap's seen marker.
+    await this.received.set(event.id, { giftwrap: event });
 
     this.emit("received", event);
     return true;
@@ -563,8 +565,12 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    * If you need to clear seen events, use clearSeen() or create a fresh store.
    */
   async clear(): Promise<void> {
-    await deletePrefix(this.storage, invitePrefixes.received);
-    await deletePrefix(this.storage, invitePrefixes.unread);
+    const received = await this.database.invites.byState("received");
+    const unread = await this.database.invites.byState("unread");
+    await this.database.transaction(async (tx) => {
+      for (const row of received) await tx.invites.put(seenRow(row));
+      for (const row of unread) await tx.invites.delete(row.id);
+    });
   }
 
   /**
@@ -572,6 +578,61 @@ export class InviteManager extends EventEmitter<InviteManagerEvents> {
    * Warning: This will allow previously processed events to be re-ingested.
    */
   async clearSeen(): Promise<void> {
-    await deletePrefix(this.storage, invitePrefixes.seen);
+    const seen = await this.database.invites.byState("seen");
+    await this.database.transaction(async (tx) => {
+      for (const row of seen) await tx.invites.delete(row.id);
+    });
+  }
+}
+
+/** The tombstone a finished gift wrap leaves so it is never re-ingested. */
+function seenRow(row: InviteRow): InviteRow {
+  return {
+    id: row.id,
+    state: "seen",
+    receivedAt: row.receivedAt,
+    value: new Uint8Array(),
+  };
+}
+
+/**
+ * Typed records of one invite state. Deleting a `received` record leaves a
+ * `seen` tombstone; deleting an `unread` record removes it.
+ */
+class InviteRecords<T> {
+  constructor(
+    readonly database: MarmotAccountDatabase,
+    readonly state: Exclude<InviteState, "seen">,
+    readonly columns: (value: T) => Pick<InviteRow, "rumorId" | "receivedAt">,
+  ) {}
+
+  async get(id: string): Promise<T | undefined> {
+    const row = await this.database.invites.get(id);
+    return row?.state === this.state ? decodeRecord<T>(row.value) : undefined;
+  }
+
+  async set(id: string, value: T): Promise<void> {
+    const row: InviteRow = {
+      id,
+      state: this.state,
+      ...this.columns(value),
+      value: encodeRecord(value),
+    };
+    await this.database.transaction((tx) => tx.invites.put(row));
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.database.transaction(async (tx) => {
+      const row = await tx.invites.get(id);
+      if (row?.state !== this.state) return;
+      if (this.state === "received") await tx.invites.put(seenRow(row));
+      else await tx.invites.delete(id);
+    });
+  }
+
+  async ids(): Promise<string[]> {
+    return (await this.database.invites.byState(this.state))
+      .map((row) => row.id)
+      .sort();
   }
 }

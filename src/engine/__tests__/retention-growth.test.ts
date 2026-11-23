@@ -42,8 +42,20 @@ import { GroupRuntime } from "../../client/runtime/group-runtime.js";
 import { linkPublicationRetention } from "../../client/runtime/publication-retention.js";
 import { NostrWelcomeDelivery } from "../../client/transport/nostr/welcome-delivery.js";
 import { NostrGroupPeeler } from "../../client/group/nostr-peeler.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryGroupDatabase } from "../../__tests__/helpers/database.js";
+import { groupTreeStore } from "../../client/storage/database/group-batch.js";
+import type { MarmotGroupDatabase } from "../../client/storage/database/types.js";
+import { decodeRecord } from "../../client/storage/record-codec.js";
 import { groupKeys } from "../../client/storage/storage-keys.js";
+
+/** Physical row count of one in-memory table (test-only introspection). */
+function tableSize(database: MarmotGroupDatabase, table: string): number {
+  return (
+    database as unknown as {
+      store: { committed: Record<string, Map<string, unknown>> };
+    }
+  ).store.committed[table].size;
+}
 import { DEFAULT_CONVERGENCE_POLICY } from "../../core/convergence.js";
 import { GroupHistoryTree } from "../history-tree.js";
 import { contentDedupId } from "../message-dedup.js";
@@ -133,11 +145,11 @@ async function fixture(
     privateKeys: packages[1].privatePackage,
     ratchetTree: undefined,
   });
-  const storage = memoryStorage();
+  const database = memoryGroupDatabase();
   let now = 0;
   const options = {
     ciphersuite: impl,
-    storage,
+    database,
     history,
     convergencePolicy: {
       ...DEFAULT_CONVERGENCE_POLICY,
@@ -149,7 +161,7 @@ async function fixture(
     scheduler: { setTimer: () => 0, clearTimer: () => {} },
   };
   const tree = new GroupHistoryTree(initial, { snapshotCacheSize: 2 });
-  tree.bindStore(storage);
+  tree.bindStore(groupTreeStore(database));
   const session = new GroupSession({
     ...options,
     state: copy(initial),
@@ -181,9 +193,13 @@ async function fixture(
     await session.save(true);
   };
   const reload = async () =>
-    (await GroupHistoryTree.load(storage, bytesToHex(session.id), {
-      snapshotCacheSize: 2,
-    }))!;
+    (await GroupHistoryTree.load(
+      groupTreeStore(database),
+      bytesToHex(session.id),
+      {
+        snapshotCacheSize: 2,
+      },
+    ))!;
   return {
     impl,
     context,
@@ -199,7 +215,7 @@ async function fixture(
       now += 100;
     },
     reload,
-    storage,
+    database,
   };
 }
 
@@ -459,9 +475,7 @@ describe("sustained recovery-safe retention", () => {
             bytesToHex(f.session.state.confirmationTag),
           );
           await f.settle();
-          const keys = await f.storage.list(
-            `${bytesToHex(f.session.id)}/tree/`,
-          );
+          const nodeRows = tableSize(f.database, "treeNodes");
           const loaded = await f.reload();
           expect(loaded.tags()).toEqual(f.tree.tags());
           let receivers = 0;
@@ -470,28 +484,27 @@ describe("sustained recovery-safe retention", () => {
               .size;
           const canonical = f.session.retainedStates();
           const evidence = decodeDeliveredEvidence(
-            (await f.storage.get(
-              groupKeys.delivered(bytesToHex(f.session.id)),
-            ))!,
+            (await f.database.meta.get(groupKeys.delivered))!,
             loaded,
           );
-          const ingestKeys = await f.storage.list(
-            `${bytesToHex(f.session.id)}/ingest/`,
-          );
+          const effects = await f.database.meta.get(groupKeys.effects);
+          const effectCount = effects
+            ? Object.keys(decodeRecord<object>(effects)).length
+            : 0;
           samples.push([
             f.tree.size,
             heavyOwner.size,
-            ...["edge", "state", "commit"].map(
-              (namespace) =>
-                keys.filter((key) => key.includes(`/${namespace}/`)).length,
-            ),
+            // One node row now holds what were edge, state and commit keys.
+            nodeRows,
+            nodeRows,
+            nodeRows,
             canonical.length,
             sentOwner.size,
             seenOwner.size,
             outerOwner.size,
             evidence.entries.length,
-            ingestKeys.filter((key) => key.includes("/ingest/wrapper/")).length,
-            ingestKeys.filter((key) => key.includes("/ingest/effect/")).length,
+            tableSize(f.database, "wrappers"),
+            effectCount,
             receivers,
             canonical.reduce(
               (sum, state) => sum + state.historicalReceiverData.size,
@@ -749,24 +762,24 @@ describe("sustained recovery-safe retention", () => {
         await f.runtime.publishApplication(next.envelope);
         await f.settle();
       }
-      const id = bytesToHex(session.id);
-      const key = groupKeys.delivered(id);
+      const key = groupKeys.delivered;
       expect(
-        decodeDeliveredEvidence((await f.storage.get(key))!, f.tree).pending,
+        decodeDeliveredEvidence((await f.database.meta.get(key))!, f.tree)
+          .pending,
       ).toHaveLength(1);
       session.dispose();
       for (let restart = 0; restart < 2; restart++) {
         session = new GroupSession({
           ...f.options,
           state: deserializeClientState(
-            (await f.storage.get(groupKeys.state(id)))!,
+            (await f.database.meta.get(groupKeys.state))!,
           ),
           historyTree: await f.reload(),
         });
         await drain(session, []);
         await session.save(true);
         const evidence = decodeDeliveredEvidence(
-          (await f.storage.get(key))!,
+          (await f.database.meta.get(key))!,
           session.historyTree,
         );
         expect(evidence.pending).toHaveLength(1);
@@ -787,7 +800,7 @@ describe("sustained recovery-safe retention", () => {
       expect(removed).toHaveLength(1);
       expect(
         decodeDeliveredEvidence(
-          (await f.storage.get(key))!,
+          (await f.database.meta.get(key))!,
           session.historyTree,
         ).pending,
       ).toEqual([]);

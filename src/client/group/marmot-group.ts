@@ -40,7 +40,7 @@ import type {
 import type { DisbandTombstone } from "../../engine/disband-tombstone.js";
 import { buildForkTreeView, type ForkTreeView } from "./fork-tree-view.js";
 import { logger } from "../../utils/debug.js";
-import type { MarmotStorage } from "../storage/storage.js";
+import type { MarmotGroupDatabase } from "../storage/database/types.js";
 import { groupKeys } from "../storage/storage-keys.js";
 import {
   getMarmotGroupInfo,
@@ -76,10 +76,7 @@ import {
   type DecryptedMedia,
   type EncryptMediaMetadata,
 } from "./group-media-service.js";
-import {
-  GroupHistory,
-  type MarmotRumorDatabases,
-} from "../storage/group-history.js";
+import { GroupHistory } from "../storage/group-history.js";
 
 export { createAdminCommitPolicyCallback } from "../../engine/admin-policy.js";
 export type { ProposalAction, ProposalContext } from "../../engine/types.js";
@@ -220,11 +217,10 @@ export function selectFairQueuedStateIntent(
 }
 
 export type MarmotGroupOptions = {
-  /**
-   * Durable storage scoped to the client's `group/` namespace. Every record of
-   * this group lives under `<gid>/` (see `src/client/storage-keys.ts`).
-   */
-  storage: MarmotStorage;
+  /** This group's own database: protocol state, fork history and messages. */
+  database: MarmotGroupDatabase;
+  /** Permanently deletes this group's database when the group is destroyed. */
+  dropDatabase?: () => Promise<void>;
   /** The signer used for the clients identity */
   signer: EventSigner;
   /** The ciphersuite implementation to use for the group */
@@ -246,11 +242,6 @@ export type MarmotGroupOptions = {
    * undecryptable events held for retry). Defaults bound it.
    */
   ingestionPool?: IngestionPoolOptions;
-  /**
-   * Per-group rumor databases for application message history. When omitted,
-   * or when it returns `undefined` for this group, history is kept in memory.
-   */
-  rumors?: MarmotRumorDatabases;
   /**
    * Injectable wall-clock (ms) for the convergence quiescence window (B5).
    * Defaults to `Date.now`; tests inject a fake clock for determinism.
@@ -435,7 +426,8 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
   }
 
   /** The key-value backend where serialized group state bytes are persisted */
-  readonly storage: MarmotStorage;
+  /** This group's database. */
+  readonly database: MarmotGroupDatabase;
 
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
@@ -637,8 +629,8 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
   }
 
   /** Group-scoped durable key for removal realization state. */
-  get #removedMarkerKey(): string {
-    return groupKeys.removed(this.idStr);
+  get #removedMarkerKey() {
+    return groupKeys.removed;
   }
 
   /**
@@ -925,20 +917,18 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
 
   constructor(state: ClientState, options: MarmotGroupOptions) {
     super();
-    this.storage = options.storage;
+    this.database = options.database;
     this.signer = options.signer;
     this.ciphersuite = options.ciphersuite;
     this.network = options.network;
 
-    this.history = GroupHistory.forGroup(
-      bytesToHex(state.groupContext.groupId),
-      options.rumors,
-    );
+    this.history = GroupHistory.forDatabase(options.database);
 
     this.session = new GroupSession({
       state,
       ciphersuite: this.ciphersuite,
-      storage: this.storage,
+      database: this.database,
+      dropDatabase: options.dropDatabase,
       retained: options.retained,
       historyTree: options.historyTree,
       convergencePolicy: options.convergencePolicy,
@@ -969,25 +959,19 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
 
     this.idStr = bytesToHex(this.id);
     this.log = logger.extend(`group:${this.idStr.slice(0, 8)}`);
-    const storage = this.storage;
+    const meta = this.session.meta;
     this.runtime = new GroupRuntime({
       welcomeDelivery: new NostrWelcomeDelivery({
         signer: this.signer,
         network: this.network,
       }),
-      pendingPublications: new PendingPublicationStore(
-        {
-          get: (key) => storage.get(key),
-          list: (prefix) => storage.list(prefix),
-          set: (key, value) =>
-            this.session.persistPublication(() => storage.set(key, value)),
-          delete: (key) =>
-            this.session.persistPublication(() => storage.delete(key)),
-          batch: (ops) =>
-            this.session.persistPublication(() => storage.batch(ops)),
-        },
-        this.idStr,
-      ),
+      pendingPublications: new PendingPublicationStore({
+        get: (key) => meta.get(key),
+        set: (key, value) =>
+          this.session.persistPublication(() => meta.set(key, value)),
+        delete: (key) =>
+          this.session.persistPublication(() => meta.delete(key)),
+      }),
       restorePending: (pending) =>
         this.session.restorePendingPublication(pending),
       isApplied: (pending) =>
@@ -1512,9 +1496,9 @@ export class MarmotGroup extends EventEmitter<MarmotGroupEvents> {
     if (this.session.terminalTombstone) return;
     if (this.state.groupActiveState.kind !== "removedFromGroup") return;
 
-    const alreadyRealized = await this.storage.get(this.#removedMarkerKey);
+    const alreadyRealized = await this.session.meta.get(this.#removedMarkerKey);
     if (alreadyRealized?.[0] === 1) return;
-    await this.storage.set(this.#removedMarkerKey, Uint8Array.of(1));
+    await this.session.meta.set(this.#removedMarkerKey, Uint8Array.of(1));
     await this.session.markRemovalNotificationDelivered();
 
     this.#rejectQueuedOutbound("Removed from group; outbound cancelled.");

@@ -36,60 +36,49 @@ import {
 } from "../../core/group-message.js";
 import { commitDigest } from "../../core/convergence.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import {
-  EventMemory,
-  type IAsyncEventDatabase,
-} from "applesauce-core/event-store";
-import type { Filter } from "applesauce-core/helpers/filter";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import {
-  memoryStorage,
-  scopeStorage,
-  type MemoryStorage,
-} from "../../utils/storage.js";
-import { GROUP_PREFIX, groupKeys } from "../../client/storage/storage-keys.js";
+import { groupMeta, memoryDatabase, openGroup } from "../helpers/database.js";
+import type {
+  MarmotDatabase,
+  MarmotGroupDatabase,
+} from "../../client/storage/database/types.js";
 
 const RELAYS = ["wss://mock-relay.test"];
 
-/** An app-style async rumor database, kept in memory so it survives client restarts. */
-class TestRumorDatabase implements IAsyncEventDatabase<Rumor> {
-  readonly memory = new EventMemory<Rumor>();
-  async hasEvent(id: string) {
-    return this.memory.hasEvent(id);
-  }
-  async getEvent(id: string) {
-    return this.memory.getEvent(id);
-  }
-  async hasReplaceable(kind: number, pubkey: string, identifier?: string) {
-    return this.memory.hasReplaceable(kind, pubkey, identifier);
-  }
-  async getReplaceable(kind: number, pubkey: string, identifier?: string) {
-    return this.memory.getReplaceable(kind, pubkey, identifier);
-  }
-  async getReplaceableHistory(
-    kind: number,
-    pubkey: string,
-    identifier?: string,
-  ) {
-    return this.memory.getReplaceableHistory(kind, pubkey, identifier);
-  }
-  async getByFilters(filters: Filter | Filter[]) {
-    return this.memory.getByFilters(filters);
-  }
-  async getTimeline(filters: Filter | Filter[]) {
-    return this.memory.getTimeline(filters);
-  }
-  async add(event: Rumor) {
-    return this.memory.add(event);
-  }
-  async remove(event: string | Rumor) {
-    return this.memory.remove(event);
-  }
-  async removeByFilters(filters: Filter | Filter[]) {
-    return this.memory.removeByFilters(filters);
-  }
+type MessageHooks = {
+  put?: (rumorId: string, write: () => Promise<void>) => Promise<void>;
+  delete?: (rumorId: string, write: () => Promise<void>) => Promise<void>;
+};
+
+/** Intercepts writes to a group database's `messages` table; returns a restore function. */
+function interceptMessages(
+  db: MarmotGroupDatabase,
+  hooks: MessageHooks,
+): () => void {
+  const original = db.transaction;
+  const transaction: MarmotGroupDatabase["transaction"] = original.bind(db);
+  db.transaction = (fn) =>
+    transaction((tx) =>
+      fn({
+        ...tx,
+        messages: {
+          ...tx.messages,
+          put: (row) =>
+            hooks.put
+              ? hooks.put(row.id, () => tx.messages.put(row))
+              : tx.messages.put(row),
+          delete: (id) =>
+            hooks.delete
+              ? hooks.delete(id, () => tx.messages.delete(id))
+              : tx.messages.delete(id),
+        },
+      }),
+    );
+  return () => {
+    db.transaction = original;
+  };
 }
 
 function deferred<T = void>() {
@@ -115,7 +104,7 @@ describe("connection admission", () => {
       },
     }));
     const manager = new GroupsManager({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: PrivateKeyAccount.generateNew().signer,
       network,
       verifyEvent: fakeVerifyEvent,
@@ -125,7 +114,7 @@ describe("connection admission", () => {
     if (withPeer) {
       const account = PrivateKeyAccount.generateNew();
       const peer = new MarmotClient({
-        storage: memoryStorage(),
+        database: memoryDatabase(),
         signer: account.signer,
         network,
         clientId: "ab".repeat(32),
@@ -327,7 +316,7 @@ describe("connection admission", () => {
       const timedGroup = new MarmotGroup(
         deserializeClientState(serializeClientState(group.state)),
         {
-          storage: manager.storage,
+          database: await openGroup(manager.database, group.id),
           signer: manager.signer,
           network,
           ciphersuite: group.ciphersuite,
@@ -427,21 +416,27 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
   let mockNetwork: MockNetwork;
   let adminClient: MarmotClient;
   let inviteeClient: MarmotClient;
-  /** The invitee's root storage, shared across restarts. */
-  let memberStorage: MemoryStorage;
-  let historyStore: TestRumorDatabase;
-  const rumorDatabases = () => historyStore;
-  /** The invitee's group-scoped view, as MarmotClient passes to groups. */
-  const groupStorage = () => scopeStorage(memberStorage, GROUP_PREFIX);
+  /** The invitee's databases, shared across restarts. */
+  let memberStorage: MarmotDatabase;
   /** Reads a group's delivered-payload evidence. */
   const deliveredEvidence = async (groupId: Uint8Array) =>
     JSON.parse(
       new TextDecoder().decode(
-        (await memberStorage.get(
-          GROUP_PREFIX + groupKeys.delivered(bytesToHex(groupId)),
-        ))!,
+        (await (await groupMeta(memberStorage, groupId)).get("delivered"))!,
       ),
     );
+  /** Whether a group left nothing behind: no account row and an empty database. */
+  const groupIsGone = async (groupId: Uint8Array) => {
+    const id = bytesToHex(groupId);
+    const db = await openGroup(memberStorage, id);
+    return (
+      (await memberStorage.account.groups.get(id)) === undefined &&
+      (await db.meta.get("state")) === undefined &&
+      (await db.meta.get("delivered")) === undefined &&
+      (await db.meta.get("tree")) === undefined &&
+      (await db.messages.query({})).length === 0
+    );
+  };
 
   beforeEach(async () => {
     adminAccount = PrivateKeyAccount.generateNew();
@@ -454,16 +449,14 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
-    memberStorage = memoryStorage();
-    historyStore = new TestRumorDatabase();
+    memberStorage = memoryDatabase();
     inviteeClient = new MarmotClient({
-      storage: memberStorage,
-      rumors: rumorDatabases,
+      database: memberStorage,
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "cd".repeat(32),
@@ -487,8 +480,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
           ? new MarmotGroup(
               deserializeClientState(serializeClientState(inviteeGroup.state)),
               {
-                storage: groupStorage(),
-                rumors: rumorDatabases,
+                database: await openGroup(memberStorage, inviteeGroup.id),
                 signer: inviteeAccount.signer,
                 network: mockNetwork,
                 ciphersuite: inviteeGroup.ciphersuite,
@@ -565,8 +557,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       if (restart) inviteeClient.groups.unload(inviteeGroup.id);
       const restarted = restart
         ? new MarmotClient({
-            storage: memberStorage,
-            rumors: rumorDatabases,
+            database: memberStorage,
             signer: inviteeAccount.signer,
             network: mockNetwork,
           })
@@ -584,9 +575,11 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       const errors: Error[] = [];
       restored.on("historyError", (error) => errors.push(error));
       const failure = new Error("removal offline");
-      const removal =
+      const restoreRemoval =
         path === "failure"
-          ? vi.spyOn(historyStore, "remove").mockRejectedValue(failure)
+          ? interceptMessages(restored.database, {
+              delete: () => Promise.reject(failure),
+            })
           : undefined;
       const results: DispositionedIngestResult[] = [];
       const invalidated = deferred();
@@ -659,11 +652,10 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
             commitDigest(encode(mlsMessageEncoder, losing.commit)),
           ),
         });
-        removal!.mockRestore();
+        restoreRemoval!();
         restarted.groups.unload(restored.id);
         const retried = new MarmotClient({
-          storage: memberStorage,
-          rumors: rumorDatabases,
+          database: memberStorage,
           signer: inviteeAccount.signer,
           network: mockNetwork,
         });
@@ -674,7 +666,11 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
         expect(await retryGroup.history.queryRumors({})).toEqual([]);
       } else {
         expect((await subscribedTimeline.next()).value).toEqual([]);
-        expect(await historyStore.getTimeline({})).toEqual([]);
+        expect(
+          await (
+            await openGroup(memberStorage, restored.id)
+          ).messages.query({}),
+        ).toEqual([]);
       }
       await subscribedTimeline.return(undefined);
       await current.reconverge();
@@ -762,8 +758,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
     const restart = async () => {
       inviteeClient.groups.unload(receiver.id);
       const client = new MarmotClient({
-        storage: memberStorage,
-        rumors: rumorDatabases,
+        database: memberStorage,
         signer: inviteeAccount.signer,
         network: mockNetwork,
       });
@@ -796,20 +791,19 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       const { receiver, winningEvent, rumors, snapshot, restart } =
         await losingDeliveries(["one", "two", "three"]);
       expect((await snapshot()).entries).toHaveLength(3);
-      const remove = historyStore.remove.bind(historyStore);
       let calls = 0;
       let pendingBeforeRemoval = 0;
-      const failure = vi
-        .spyOn(historyStore, "remove")
-        .mockImplementation(async (key) => {
+      const restoreRemoval = interceptMessages(receiver.database, {
+        delete: async (_id, remove) => {
           calls++;
           if (calls > (boundary === "first invalidation" ? 1 : 2))
             throw new Error("interrupted cleanup");
           // Every obligation must already be durable before the first history removal.
           if (calls === 1)
             pendingBeforeRemoval = (await snapshot()).pending.length;
-          return remove(key);
-        });
+          return remove();
+        },
+      });
       const iterator = receiver.ingest([winningEvent]);
       while (true) {
         const result = await iterator.next();
@@ -831,7 +825,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
           rumors.some((rumor) => rumor.id === entry.rumorId),
         ),
       ).toBe(true);
-      failure.mockRestore();
+      restoreRemoval();
       const restored = await restart();
       await restored.reconverge();
       expect(await restored.history.queryRumors({})).toEqual([]);
@@ -905,23 +899,23 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       for await (const result of receiver.ingest([winningEvent])) void result;
       expect((await snapshot()).pending).toHaveLength(1);
       removal.mockRestore();
-      const unrelated = `${GROUP_PREFIX}${"ff".repeat(32)}/ingest/delivered`;
-      await memberStorage.set(unrelated, new Uint8Array([42]));
-      const id = bytesToHex(receiver.id);
+      const unrelated = await openGroup(memberStorage, "ff".repeat(32));
+      await unrelated.transaction((tx) =>
+        tx.meta.set("delivered", new Uint8Array([42])),
+      );
       if (path === "leave") await inviteeClient.groups.leave(receiver.id);
       else if (path === "manager destroy")
         await inviteeClient.groups.destroy(receiver.id);
       else await receiver.destroy();
       await receiver.destroy(); // Repeat cleanup is safe.
       await receiver.save(true); // Stale references must not recreate the group.
-      expect(
-        await memberStorage.list(GROUP_PREFIX + groupKeys.prefix(id)),
-      ).toEqual([]);
-      expect(await memberStorage.get(unrelated)).toEqual(new Uint8Array([42]));
+      expect(await groupIsGone(receiver.id)).toBe(true);
+      expect(await unrelated.meta.get("delivered")).toEqual(
+        new Uint8Array([42]),
+      );
       expect(await receiver.history.queryRumors({})).toEqual([]);
       const restarted = new MarmotClient({
-        storage: memberStorage,
-        rumors: rumorDatabases,
+        database: memberStorage,
         signer: inviteeAccount.signer,
         network: mockNetwork,
       });
@@ -937,32 +931,33 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       for await (const result of receiver.ingest([winningEvent])) void result;
       const entered = deferred();
       const release = deferred();
+      const gate = async () => {
+        entered.resolve();
+        await release.promise;
+      };
       if (boundary === "history") {
-        const add = historyStore.add.bind(historyStore);
-        vi.spyOn(historyStore, "add").mockImplementation(async (rumor) => {
-          entered.resolve();
-          await release.promise;
-          return add(rumor);
+        interceptMessages(receiver.database, {
+          put: async (_id, write) => {
+            await gate();
+            return write();
+          },
         });
       } else {
-        const delivered =
-          GROUP_PREFIX + groupKeys.delivered(bytesToHex(receiver.id));
-        const gate = async () => {
-          entered.resolve();
-          await release.promise;
-        };
-        const set = memberStorage.set.bind(memberStorage);
-        vi.spyOn(memberStorage, "set").mockImplementation(
-          async (key, value) => {
-            if (key === delivered) await gate();
-            return set(key, value);
-          },
-        );
-        const batch = memberStorage.batch.bind(memberStorage);
-        vi.spyOn(memberStorage, "batch").mockImplementation(async (ops) => {
-          if (ops.some((op) => op.key === delivered)) await gate();
-          return batch(ops);
-        });
+        const transaction: MarmotGroupDatabase["transaction"] =
+          receiver.database.transaction.bind(receiver.database);
+        receiver.database.transaction = (fn) =>
+          transaction((tx) =>
+            fn({
+              ...tx,
+              meta: {
+                ...tx.meta,
+                set: async (key, value) => {
+                  if (key === "delivered") await gate();
+                  return tx.meta.set(key, value);
+                },
+              },
+            }),
+          );
       }
       const work = winningDelivery(rumors[0]);
       await entered.promise;
@@ -970,19 +965,11 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       release.resolve();
       await work;
       await destruction;
-      expect(
-        await memberStorage.list(
-          GROUP_PREFIX + groupKeys.prefix(bytesToHex(receiver.id)),
-        ),
-      ).toEqual([]);
+      expect(await groupIsGone(receiver.id)).toBe(true);
       expect(await receiver.history.queryRumors({})).toEqual([]);
       for await (const result of receiver.ingest([])) void result;
       await receiver.reconverge();
-      expect(
-        await memberStorage.list(
-          GROUP_PREFIX + groupKeys.prefix(bytesToHex(receiver.id)),
-        ),
-      ).toEqual([]);
+      expect(await groupIsGone(receiver.id)).toBe(true);
     },
   );
 

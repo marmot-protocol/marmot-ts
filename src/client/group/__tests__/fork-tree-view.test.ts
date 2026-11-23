@@ -14,7 +14,7 @@ import { createCredential } from "../../../core/credential.js";
 import { createGroupEvent } from "../../../core/group-message.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { memoryStorage } from "../../../utils/storage.js";
+import { memoryGroupDatabase } from "../../../__tests__/helpers/database.js";
 import { MarmotGroup } from "../marmot-group.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 
@@ -117,7 +117,7 @@ describe("MarmotGroup fork-tree customer API", () => {
       signer: SIGNER,
       ciphersuite: impl,
       network: NETWORK,
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
     });
 
     let changes = 0;

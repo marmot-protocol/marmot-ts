@@ -23,7 +23,7 @@ import { createCredential } from "../../core/credential.js";
 import { createGroupEvent } from "../../core/group-message.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryGroupDatabase } from "../helpers/database.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://relay.test";
@@ -91,7 +91,7 @@ function marmotGroup(
   },
 ) {
   return new MarmotGroup(state, {
-    storage: memoryStorage(),
+    database: memoryGroupDatabase(),
     signer,
     ciphersuite: impl,
     network: recordingNetwork(published),

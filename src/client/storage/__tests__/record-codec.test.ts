@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { decodeRecord, encodeRecord, RecordStore } from "../record-codec.js";
-import { memoryStorage } from "../storage.js";
+import { memoryDatabase } from "../database/memory.js";
+import type { KeyPackageRow } from "../database/types.js";
+import {
+  AccountRecordTable,
+  decodeRecord,
+  encodeRecord,
+} from "../record-codec.js";
 
 const bytes = (...values: number[]) => Uint8Array.from(values);
 
@@ -21,13 +26,24 @@ describe("record codec", () => {
     expect(decoded.nested.slice(1)).toEqual(["text", 5, null]);
   });
 
-  it("stores typed records under a prefix", async () => {
-    const storage = memoryStorage();
-    const records = new RecordStore<{ n: bigint }>(storage, "thing/");
+  it("stores typed records in an account table with derived columns", async () => {
+    const { account } = memoryDatabase();
+    const records = new AccountRecordTable<{ n: bigint }, KeyPackageRow>(
+      account.keyPackages,
+      (fn) => account.transaction((tx) => fn(tx.keyPackages)),
+      (ref, value, encoded) => ({
+        ref,
+        notBefore: Number(value.n),
+        used: false,
+        value: encoded,
+      }),
+      (row) => row.ref,
+    );
     await records.set("b", { n: 2n });
     await records.set("a", { n: 1n });
     expect(await records.ids()).toEqual(["a", "b"]);
     expect(await records.get("b")).toEqual({ n: 2n });
+    expect((await account.keyPackages.get("b"))?.notBefore).toBe(2);
     await records.delete("a");
     expect(await records.ids()).toEqual(["b"]);
     expect(await records.get("missing")).toBeUndefined();

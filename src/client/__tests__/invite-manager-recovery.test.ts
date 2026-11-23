@@ -4,7 +4,13 @@ import type { NostrEvent } from "applesauce-core/helpers/event";
 import { describe, expect, it, vi } from "vitest";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { decodeRecord } from "../storage/record-codec.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
+import type {
+  AccountTransaction,
+  InviteRow,
+  MarmotAccountDatabase,
+  MarmotDatabase,
+} from "../storage/database/types.js";
 import {
   InviteManager,
   type ReceivedInviteRecord,
@@ -23,22 +29,143 @@ const receivedRecord = (key: string, value: Uint8Array) =>
     ? decodeRecord<ReceivedInviteRecord>(value)
     : undefined;
 
+/**
+ * A key-addressed view of the account `invites` table: every single-row
+ * invite transaction is routed through `set(key, value)` / `delete(key)`
+ * (`invite/received/<id>`, `invite/unread/<id>`), so tests can fault one
+ * write the way the invite manager issues it. Deleting a received record
+ * leaves a seen tombstone, as the invite manager does.
+ */
+function inviteStore() {
+  const base = memoryDatabase();
+  const inner = base.account;
+  const row = (state: "received" | "unread", id: string, value: Uint8Array) => {
+    if (state === "received") {
+      const record = decodeRecord<ReceivedInviteRecord>(value);
+      return {
+        id,
+        state,
+        rumorId: record.rumor?.id,
+        receivedAt: record.giftwrap.created_at,
+        value,
+      } satisfies InviteRow;
+    }
+    const rumor = decodeRecord<UnreadInvite>(value);
+    return {
+      id,
+      state,
+      rumorId: rumor.id,
+      receivedAt: rumor.created_at,
+      value,
+    } satisfies InviteRow;
+  };
+  const parse = (key: string) => {
+    const state = key.startsWith(RECEIVED) ? "received" : "unread";
+    return {
+      state,
+      id: key.slice((state === "received" ? RECEIVED : UNREAD).length),
+    } as const;
+  };
+  const store = {
+    async set(key: string, value: Uint8Array): Promise<void> {
+      const { state, id } = parse(key);
+      await inner.transaction((tx) => tx.invites.put(row(state, id, value)));
+    },
+    async delete(key: string): Promise<void> {
+      const { state, id } = parse(key);
+      await inner.transaction(async (tx) => {
+        const existing = await tx.invites.get(id);
+        if (existing?.state !== state) return;
+        if (state === "unread") return tx.invites.delete(id);
+        await tx.invites.put({
+          id,
+          state: "seen",
+          receivedAt: existing.receivedAt,
+          value: new Uint8Array(),
+        });
+      });
+    },
+  };
+  const ROLLBACK = new Error("rollback");
+  const account: MarmotAccountDatabase = {
+    ...inner,
+    meta: inner.meta,
+    keyPackages: inner.keyPackages,
+    invites: inner.invites,
+    groups: inner.groups,
+    intents: inner.intents,
+    close: () => inner.close(),
+    transaction: async <T>(fn: (tx: AccountTransaction) => Promise<T>) => {
+      // Dry run: find the single invite write this transaction makes.
+      const writes: InviteRow[] = [];
+      const deletes: string[] = [];
+      let other = false;
+      try {
+        await inner.transaction(async (tx) => {
+          const recording = new Proxy(tx, {
+            get: (target, table: keyof AccountTransaction) =>
+              table === "invites"
+                ? {
+                    ...target.invites,
+                    put: async (r: InviteRow) => {
+                      writes.push(r);
+                      return target.invites.put(r);
+                    },
+                    delete: async (id: string) => {
+                      deletes.push(id);
+                      return target.invites.delete(id);
+                    },
+                  }
+                : new Proxy(target[table], {
+                    get: (t, method: string) => {
+                      const value = (t as Record<string, unknown>)[method];
+                      if (
+                        !["get", "all", "byState", "byRumor"].includes(method)
+                      )
+                        other = true;
+                      return value;
+                    },
+                  }),
+          });
+          await fn(recording);
+          throw ROLLBACK;
+        });
+      } catch (error) {
+        if (error !== ROLLBACK) throw error;
+      }
+      if (other || writes.length + deletes.length !== 1)
+        return inner.transaction(fn);
+      const [write] = writes;
+      if (write?.state === "received" || write?.state === "unread")
+        await store.set(
+          (write.state === "received" ? RECEIVED : UNREAD) + write.id,
+          write.value,
+        );
+      else if (write?.state === "seen") await store.delete(RECEIVED + write.id);
+      else await store.delete(UNREAD + deletes[0]);
+      return undefined as T;
+    },
+  };
+  const database: MarmotDatabase = { account, groups: base.groups };
+  return { store, database };
+}
+
 async function fixture() {
   const network = new MockNetwork();
   const aliceAccount = PrivateKeyAccount.generateNew();
   const bobAccount = PrivateKeyAccount.generateNew();
   // Byte storage also prevents Applesauce's same-object caches hiding prompts.
-  const store = memoryStorage();
+  const { store, database } = inviteStore();
   const alice = new MarmotClient({
     signer: aliceAccount.signer,
     network,
-    storage: memoryStorage(),
+    database: memoryDatabase(),
   });
   const bob = new MarmotClient({
     signer: bobAccount.signer,
     network,
     clientId: "ab".repeat(32),
-    storage: store,
+    database,
   });
   await bob.keyPackages.create({ relays: network.relayUrls });
   const keyPackage = network.events.find((event) => event.kind === 30443)!;
@@ -50,7 +177,11 @@ async function fixture() {
   const wrap = wire(network.events.find((event) => event.kind === 1059)!);
   group.dispose();
   const restart = () =>
-    new InviteManager({ signer: bobAccount.signer, storage: store, network });
+    new InviteManager({
+      signer: bobAccount.signer,
+      database: database.account,
+      network,
+    });
   const manager = restart();
   await manager.ingestEvent(wrap);
   return { manager, restart, store, wrap, bobAccount, aliceAccount, network };

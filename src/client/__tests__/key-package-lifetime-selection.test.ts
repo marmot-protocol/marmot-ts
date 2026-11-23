@@ -2,7 +2,7 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Lifetime } from "ts-mls";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
 import { KeyPackageManager } from "../key-package-manager.js";
 
 const SLOT = "ab".repeat(32);
@@ -13,9 +13,9 @@ async function fixture() {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(Number(NOW) * 1000);
   const network = new MockNetwork();
-  const storage = memoryStorage();
+  const storage = memoryDatabase().account;
   const manager = new KeyPackageManager({
-    storage,
+    database: storage,
     signer: PrivateKeyAccount.generateNew().signer,
     network,
     clientId: SLOT,

@@ -17,9 +17,8 @@ export type DisbandRequest =
 
 type StoredDisbandRequest = DisbandRequest & { version: 1 };
 
-export function disbandRequestKey(groupIdHex: string): string {
-  return `${groupIdHex}/disband/request`;
-}
+/** Group-database meta key of the local disband request. */
+export const DISBAND_REQUEST_KEY = "disband/request";
 
 export interface StoredDisbandConvergence {
   readonly generation: number;
@@ -38,9 +37,8 @@ export interface StoredDisbandConvergence {
   }[];
 }
 
-export function disbandConvergenceKey(groupIdHex: string): string {
-  return `${groupIdHex}/disband/convergence`;
-}
+/** Group-database meta key of persisted disband convergence evidence. */
+export const DISBAND_CONVERGENCE_KEY = "disband/convergence";
 
 export function encodeDisbandConvergence(
   record: StoredDisbandConvergence,

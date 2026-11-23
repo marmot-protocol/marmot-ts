@@ -10,8 +10,11 @@ import { BoundedIdCache, GroupsManager } from "../client/groups-manager.js";
 import { MarmotGroup } from "../client/group/marmot-group.js";
 import type { NostrNetworkInterface } from "../client/nostr-interface.js";
 import { fakeVerifyEvent, type VerifyEventMethod } from "../client/verify.js";
-import { memoryStorage } from "../utils/storage.js";
-import { groupKeys } from "../client/storage/storage-keys.js";
+import { groupMeta, memoryDatabase, openGroup } from "./helpers/database.js";
+import type {
+  GroupMetaKey,
+  MarmotDatabase,
+} from "../client/storage/database/types.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import type { GroupImageTransportRequest } from "../client/group/group-image-transport.js";
@@ -34,9 +37,29 @@ import { createCredential } from "../core/credential.js";
 import { MockNetwork } from "./helpers/mock-network.js";
 import { testAccount } from "./helpers/test-accounts.js";
 import {
-  disbandTombstoneKey,
+  DISBAND_TOMBSTONE_KEY,
   encodeDisbandTombstone,
 } from "../engine/disband-tombstone.js";
+
+/**
+ * Routes a group's `meta` reads through `read` for every database handle the
+ * client opens from now on.
+ */
+function interceptMetaReads(
+  database: MarmotDatabase,
+  read: (
+    key: GroupMetaKey,
+    get: () => Promise<Uint8Array | undefined>,
+  ) => Promise<Uint8Array | undefined>,
+): void {
+  const open = database.groups.open.bind(database.groups);
+  database.groups.open = async (id) => {
+    const db = await open(id);
+    const get = db.meta.get.bind(db.meta);
+    db.meta.get = (key) => read(key, () => get(key));
+    return db;
+  };
+}
 
 // A real signer is required (not a getPublicKey-only stub): D-01 has every
 // client-built leaf/KeyPackage proven with the client's identity signer, so
@@ -61,7 +84,7 @@ async function imageManager(
   } = {},
 ) {
   const manager = new GroupsManager({
-    storage: memoryStorage(),
+    database: memoryDatabase(),
     signer: ADMIN_ACCOUNT.signer,
     network: new MockNetwork(),
     ...options,
@@ -201,7 +224,7 @@ describe("group image mutation queue", () => {
       expect(
         () =>
           new GroupsManager({
-            storage: memoryStorage(),
+            database: memoryDatabase(),
             signer: ADMIN_ACCOUNT.signer,
             network: new MockNetwork(),
             maxPendingImageMutations: capacity,
@@ -672,9 +695,24 @@ describe("deferred group image authority", () => {
     const { manager, group } = await imageManager();
     const upload = deferredImageUpload();
     upload.gate.resolve();
-    vi.spyOn(manager.storage, "batch").mockRejectedValue(
-      new Error("disk full"),
-    );
+    // Saves (the transactions that write canonical state) fail and roll back.
+    const transaction = group.database.transaction.bind(group.database);
+    group.database.transaction = (fn) =>
+      transaction(async (tx) => {
+        let saving = false;
+        const result = await fn({
+          ...tx,
+          meta: {
+            ...tx.meta,
+            set: (key, value) => {
+              if (key === "state") saving = true;
+              return tx.meta.set(key, value);
+            },
+          },
+        });
+        if (saving) throw new Error("disk full");
+        return result;
+      });
     const publish = vi.spyOn(manager.network, "publish");
     const result = await manager.replaceGroupImage(
       group.id,
@@ -790,7 +828,7 @@ describe("deferred group image authority", () => {
 describe("GroupsManager", () => {
   function watchManager() {
     return new GroupsManager({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: ADMIN_ACCOUNT.signer,
       network: new MockNetwork(),
     });
@@ -903,7 +941,7 @@ describe("GroupsManager", () => {
 
   it("watch emits a new array instance for every update", async () => {
     const manager = new GroupsManager({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: ADMIN_ACCOUNT.signer,
       network: new MockNetwork(),
     });
@@ -928,19 +966,20 @@ describe("GroupsManager", () => {
 describe("GroupsManager session/runtime helpers", () => {
   it("hydrates terminal evidence before a stale persisted group becomes visible", async () => {
     const network = new MockNetwork(["wss://relay.test"]);
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
     const manager = new GroupsManager({
-      storage,
+      database: storage,
       signer: ADMIN_ACCOUNT.signer,
       network,
     });
     const group = await manager.create("Terminal", {
       relays: ["wss://relay.test"],
     });
-    const stale = await storage.get(groupKeys.state(group.idStr));
+    const meta = await groupMeta(storage, group.idStr);
+    const stale = await meta.get("state");
     manager.unload(group.id);
-    await storage.set(
-      disbandTombstoneKey(group.idStr),
+    await meta.set(
+      DISBAND_TOMBSTONE_KEY,
       encodeDisbandTombstone({
         groupId: group.id,
         selectedEpoch: Number(group.state.groupContext.epoch),
@@ -949,16 +988,15 @@ describe("GroupsManager session/runtime helpers", () => {
         notificationState: "pending",
       }),
     );
-    await storage.set(groupKeys.state(group.idStr), stale!);
+    await meta.set("state", stale!);
 
-    const get = storage.get.bind(storage);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    vi.spyOn(storage, "get").mockImplementation(async (key) => {
-      if (key.startsWith(`${group.idStr}/disband/`)) await gate;
-      return get(key);
+    interceptMetaReads(storage, async (key, get) => {
+      if (key.startsWith("disband/")) await gate;
+      return get();
     });
     let loaded = false;
     manager.on("loaded", () => {
@@ -970,14 +1008,14 @@ describe("GroupsManager session/runtime helpers", () => {
     release();
     const restarted = await loading;
     expect(await restarted.session.disbandTombstone()).toBeDefined();
-    expect(await storage.get(groupKeys.state(group.idStr))).toBeUndefined();
+    expect(await meta.get("state")).toBeUndefined();
   });
 
-  it("destroys only the destroyed group's namespaced keys on a shared backend", async () => {
+  it("destroys only the destroyed group's database", async () => {
     const network = new MockNetwork(["wss://relay.test"]);
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
     const manager = new GroupsManager({
-      storage,
+      database: storage,
       signer: ADMIN_ACCOUNT.signer,
       network,
     });
@@ -987,22 +1025,29 @@ describe("GroupsManager session/runtime helpers", () => {
     const other = await manager.create("Other Group", {
       relays: ["wss://relay.test"],
     });
-    await storage.set(groupKeys.removed(group.idStr), Uint8Array.of(1));
-    await storage.set(groupKeys.removed(other.idStr), Uint8Array.of(1));
-    const otherKeys = await storage.list(groupKeys.prefix(other.idStr));
-    expect(otherKeys).toContain(groupKeys.state(other.idStr));
+    await (
+      await groupMeta(storage, group.idStr)
+    ).set("removed", Uint8Array.of(1));
+    const otherMeta = await groupMeta(storage, other.idStr);
+    await otherMeta.set("removed", Uint8Array.of(1));
+    const otherState = await otherMeta.get("state");
+    expect(otherState).toBeDefined();
 
     await group.session.destroyLocalState();
 
-    expect(await storage.list(groupKeys.prefix(group.idStr))).toEqual([]);
-    expect(await storage.list(groupKeys.prefix(other.idStr))).toEqual(
-      otherKeys,
-    );
+    const destroyed = await openGroup(storage, group.idStr);
+    expect(await destroyed.meta.get("state")).toBeUndefined();
+    expect(await destroyed.meta.get("removed")).toBeUndefined();
+    expect(await destroyed.meta.get("tree")).toBeUndefined();
+    expect(await storage.account.groups.get(group.idStr)).toBeUndefined();
+    expect(await otherMeta.get("state")).toEqual(otherState);
+    expect(await otherMeta.get("removed")).toEqual(Uint8Array.of(1));
+    expect(await storage.account.groups.get(other.idStr)).toBeDefined();
   });
   function makeManager(network: NostrNetworkInterface) {
     const signer = ADMIN_ACCOUNT.signer;
     return new GroupsManager({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer,
       network,
     });
@@ -1078,10 +1123,10 @@ describe("GroupsManager session/runtime helpers", () => {
 
   it("emits one public removal after concurrently loading a persisted tombstone", async () => {
     const network = new MockNetwork(["wss://relay.test"]);
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
     const signer = ADMIN_ACCOUNT.signer;
     const options = {
-      storage,
+      database: storage,
       signer,
       network,
     };
@@ -1108,9 +1153,9 @@ describe("GroupsManager session/runtime helpers", () => {
     expect(first).toBe(second);
     expect(removed).toHaveLength(1);
     expect(removed[0]).toEqual(created.id);
-    expect(await storage.get(groupKeys.removed(created.idStr))).toEqual(
-      Uint8Array.of(1),
-    );
+    expect(
+      await (await groupMeta(storage, created.idStr)).get("removed"),
+    ).toEqual(Uint8Array.of(1));
 
     const restarted = new GroupsManager(options);
     const restartRemoved = vi.fn();
@@ -1129,10 +1174,10 @@ describe("GroupsManager session/runtime helpers", () => {
 
   it("disposes a failed reconvergence activation and retries with a fresh group", async () => {
     const network = new MockNetwork(["wss://relay.test"]);
-    const stateStore = memoryStorage();
+    const stateStore = memoryDatabase();
     const signer = ADMIN_ACCOUNT.signer;
     const writer = new GroupsManager({
-      storage: stateStore,
+      database: stateStore,
       signer,
       network,
     });
@@ -1151,7 +1196,7 @@ describe("GroupsManager session/runtime helpers", () => {
       .mockResolvedValue(undefined);
     const dispose = vi.spyOn(MarmotGroup.prototype, "dispose");
     const reader = new GroupsManager({
-      storage: stateStore,
+      database: stateStore,
       signer,
       network,
     });
@@ -1172,12 +1217,12 @@ describe("GroupsManager session/runtime helpers", () => {
 
   it("disposes a failed removal-marker activation and retries with a fresh group", async () => {
     const network = new MockNetwork(["wss://relay.test"]);
-    const stateStore = memoryStorage();
+    const stateStore = memoryDatabase();
     const markerError = new Error("marker unavailable");
     const markerReads = vi.fn();
     const signer = ADMIN_ACCOUNT.signer;
     const writer = new GroupsManager({
-      storage: stateStore,
+      database: stateStore,
       signer,
       network,
     });
@@ -1190,16 +1235,15 @@ describe("GroupsManager session/runtime helpers", () => {
     };
     await created.save(true);
 
-    const get = stateStore.get.bind(stateStore);
-    vi.spyOn(stateStore, "get").mockImplementation(async (key) => {
-      if (key !== groupKeys.removed(created.idStr)) return get(key);
+    interceptMetaReads(stateStore, async (key, get) => {
+      if (key !== "removed") return get();
       markerReads(key);
       if (markerReads.mock.calls.length === 1) throw markerError;
       return undefined;
     });
     const dispose = vi.spyOn(MarmotGroup.prototype, "dispose");
     const reader = new GroupsManager({
-      storage: stateStore,
+      database: stateStore,
       signer,
       network,
     });
@@ -1220,10 +1264,10 @@ describe("GroupsManager session/runtime helpers", () => {
     "keeps a late cache hit pending until %s activation rejects",
     async (activationStep) => {
       const network = new MockNetwork(["wss://relay.test"]);
-      const stateStore = memoryStorage();
+      const stateStore = memoryDatabase();
       const signer = ADMIN_ACCOUNT.signer;
       const writer = new GroupsManager({
-        storage: stateStore,
+        database: stateStore,
         signer,
         network,
       });
@@ -1255,7 +1299,7 @@ describe("GroupsManager session/runtime helpers", () => {
         .mockResolvedValue(undefined);
       const dispose = vi.spyOn(MarmotGroup.prototype, "dispose");
       const reader = new GroupsManager({
-        storage: stateStore,
+        database: stateStore,
         signer,
         network,
       });
@@ -1342,7 +1386,7 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
   ) {
     const signer = ADMIN_ACCOUNT.signer;
     return new GroupsManager({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer,
       network,
       verifyEvent,
@@ -1638,5 +1682,24 @@ describe("GroupsManager #connectGroup drain — trust boundary (SEC-01/WIRE-02)"
     await network.publish(["wss://relay.test"], genuine);
 
     expect(ingestSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("group history checkpoint", () => {
+  it("refuses to load a group whose tree nodes outlived their checkpoint", async () => {
+    const database = memoryDatabase();
+    const options = {
+      database,
+      signer: ADMIN_ACCOUNT.signer,
+      network: new MockNetwork(),
+    };
+    const group = await new GroupsManager(options).create("Checkpoint");
+    const db = await openGroup(database, group.id);
+    expect(await db.meta.get("tree")).toBeDefined();
+    await db.transaction((tx) => tx.meta.delete("tree"));
+
+    await expect(new GroupsManager(options).get(group.id)).rejects.toThrow(
+      "required checkpoint missing",
+    );
   });
 });

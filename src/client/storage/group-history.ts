@@ -1,32 +1,13 @@
 /** @module @category Client - Group History */
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-import {
-  AsyncRumorStore,
-  RumorStore,
-  type IAsyncEventDatabase,
-} from "applesauce-core/event-store";
+import { AsyncRumorStore, RumorStore } from "applesauce-core/event-store";
 import type { Filter } from "applesauce-core/helpers/filter";
 import { compileFilters } from "applesauce-core/helpers/filter";
 import { EventEmitter } from "eventemitter3";
 import { deserializeApplicationData } from "../../core/group-message.js";
 import { watchCurrent } from "../../utils/watch-current.js";
-
-/**
- * Per-group rumor databases supplied by the app.
- *
- * Return an applesauce `IAsyncEventDatabase<Rumor>` scoped to exactly one
- * group, or `undefined` to keep that group's history in memory. The library
- * wraps each database in its own `AsyncRumorStore`. Writes must resolve only
- * once committed. The library never closes the database.
- *
- * MLS forward secrecy means processed messages cannot be fetched and decrypted
- * again: history kept in memory is lost on restart.
- */
-export interface MarmotRumorDatabases {
-  (groupId: string): IAsyncEventDatabase<Rumor> | undefined;
-  /** Deletes a group's persisted rumors after the group is destroyed. */
-  drop?(groupId: string): Promise<void>;
-}
+import { GroupMessageDatabase } from "./database/message-database.js";
+import type { MarmotGroupDatabase } from "./database/types.js";
 
 /** The rumor store behind a {@link GroupHistory}. */
 export type GroupRumorStore = RumorStore | AsyncRumorStore;
@@ -60,16 +41,10 @@ export class GroupHistory extends EventEmitter<GroupHistoryEvents> {
     this.#drop = drop;
   }
 
-  /** Builds the history for one group from the app's database factory. */
-  static forGroup(
-    groupId: string,
-    databases?: MarmotRumorDatabases,
-  ): GroupHistory {
-    const database = databases?.(groupId);
-    if (!database) return new GroupHistory();
+  /** Builds the history backed by a group database's `messages` table. */
+  static forDatabase(db: MarmotGroupDatabase): GroupHistory {
     return new GroupHistory(
-      new AsyncRumorStore({ database }),
-      databases?.drop ? () => databases.drop!(groupId) : undefined,
+      new AsyncRumorStore({ database: new GroupMessageDatabase(db) }),
     );
   }
 

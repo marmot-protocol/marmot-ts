@@ -22,9 +22,8 @@ type StoredDisbandTombstone = {
   notificationState: DisbandNotificationState;
 };
 
-export function disbandTombstoneKey(groupIdHex: string): string {
-  return `${groupIdHex}/disband/terminal`;
-}
+/** Group-database meta key of the disband tombstone. */
+export const DISBAND_TOMBSTONE_KEY = "disband/terminal";
 
 /** First durable terminal authority; includes the non-secret repair projection. */
 export interface DisbandTerminalIntent {
@@ -32,9 +31,8 @@ export interface DisbandTerminalIntent {
   readonly registryState: Uint8Array;
 }
 
-export function disbandTerminalIntentKey(groupIdHex: string): string {
-  return `${groupIdHex}/disband/intent/v1`;
-}
+/** Group-database meta key of the terminal disband intent. */
+export const DISBAND_INTENT_KEY = "disband/intent";
 
 export function encodeDisbandTerminalIntent(
   intent: DisbandTerminalIntent,
@@ -69,9 +67,8 @@ export function decodeDisbandTerminalIntent(
 }
 
 /** Non-secret, scrubbed MLS shell used only to construct the terminal facade. */
-export function disbandRegistryStateKey(groupIdHex: string): string {
-  return `${groupIdHex}/disband/registry-state`;
-}
+/** Group-database meta key of the scrubbed terminal registry state. */
+export const DISBAND_REGISTRY_STATE_KEY = "disband/registry-state";
 
 export function encodeDisbandTombstone(
   tombstone: DisbandTombstone,

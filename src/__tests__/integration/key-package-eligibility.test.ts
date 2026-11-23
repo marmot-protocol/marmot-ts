@@ -11,7 +11,7 @@ import { MarmotClient } from "../../client/marmot-client.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../helpers/database.js";
 
 describe("KeyPackage eligibility (group.evaluateKeyPackage)", () => {
   let adminAccount: ReturnType<typeof PrivateKeyAccount.generateNew>;
@@ -32,13 +32,13 @@ describe("KeyPackage eligibility (group.evaluateKeyPackage)", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "cd".repeat(32),

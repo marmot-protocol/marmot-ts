@@ -23,7 +23,7 @@ import {
   KEY_PACKAGE_MLS_VERSION_TAG,
 } from "../core/protocol.js";
 import { logger } from "../utils/debug.js";
-import type { MarmotStorage } from "./storage/storage.js";
+import type { MarmotAccountDatabase } from "./storage/database/types.js";
 import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import {
   isLifetimeCurrentWithGrace,
@@ -146,8 +146,8 @@ export type KeyPackageManagerEvents = {
 
 /** Options for creating a new KeyPackageManager */
 export type KeyPackageManagerOptions = {
-  /** Durable storage; key packages (with private keys) live under `keypackage/`. */
-  storage: MarmotStorage;
+  /** The account database; key packages (with private keys) live in `keyPackages`. */
+  database: MarmotAccountDatabase;
   /** Confirms durable adoption when recovering consumption receipts on startup/retry. */
   hasAdoptedGroup?: (groupId: Uint8Array) => Promise<boolean>;
   /** Default `d` tag value for {@link KeyPackageManager.create} and {@link KeyPackageManager.rotate}. Falls back to this when no explicit `d` is passed. */
@@ -204,7 +204,7 @@ export class KeyPackageManager extends EventEmitter<KeyPackageManagerEvents> {
     if (options.clientId !== undefined)
       validateKeyPackageSlot(options.clientId);
     this.clientId = options.clientId;
-    this.#store = new KeyPackageStore(options.storage, options.cryptoProvider);
+    this.#store = new KeyPackageStore(options.database, options.cryptoProvider);
     this.#publisher = new KeyPackagePublisher({
       signer: options.signer,
       network: options.network,

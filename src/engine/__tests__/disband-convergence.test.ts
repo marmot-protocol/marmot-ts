@@ -14,7 +14,12 @@ import { testAccount } from "../../__tests__/helpers/test-accounts.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryGroupDatabase } from "../../__tests__/helpers/database.js";
+import {
+  groupMetaStore,
+  groupTreeStore,
+} from "../../client/storage/database/group-batch.js";
+import type { GroupTransaction } from "../../client/storage/database/types.js";
 import { MarmotGroupEngine } from "../group-engine.js";
 import { GroupHistoryTree } from "../history-tree.js";
 import { MarmotGroup } from "../../client/group/marmot-group.js";
@@ -65,7 +70,7 @@ describe("bounded disband convergence", () => {
       peeler,
       now: () => nowMs,
       settlementQuiescenceMs: 1_000,
-      storage: memoryStorage(),
+      storage: groupMetaStore(memoryGroupDatabase()),
     });
     const pending = await engine.requestDisband();
     if (pending?.kind !== "groupEvolution") throw new Error("expected commit");
@@ -111,7 +116,9 @@ describe("bounded disband convergence", () => {
       },
       idOf: (envelope) => envelope.id,
     };
-    const storage = memoryStorage();
+    const database = memoryGroupDatabase();
+    const storage = groupMetaStore(database);
+    const treeStore = groupTreeStore(database);
     let nowMs = 50;
     const first = new MarmotGroupEngine({
       state: clientState,
@@ -121,7 +128,7 @@ describe("bounded disband convergence", () => {
       settlementQuiescenceMs: 1_000,
       storage,
     });
-    first.history.bindStore(storage);
+    first.history.bindStore(treeStore);
     const staged = await first.requestDisband();
     if (staged?.kind !== "groupEvolution") throw new Error("expected commit");
     first.confirmPublished(staged.pending);
@@ -130,7 +137,7 @@ describe("bounded disband convergence", () => {
     await first.persistDisbandConvergence();
 
     const tree = await GroupHistoryTree.load(
-      storage,
+      treeStore,
       bytesToHex(clientState.groupContext.groupId),
     );
     if (!tree) throw new Error("expected history");
@@ -172,18 +179,31 @@ describe("bounded disband convergence", () => {
       "Write ahead",
       { adminPubkeys: [admin], relays: ["wss://relay.test"] },
     );
-    const storage = memoryStorage();
+    const database = memoryGroupDatabase();
     let failHistory = true;
-    const batch = storage.batch.bind(storage);
-    storage.batch = async (ops) => {
-      if (failHistory && ops.some((op) => op.key.includes("/tree/"))) {
-        failHistory = false;
-        throw new Error("injected history crash");
-      }
-      return batch(ops);
-    };
+    const transaction = database.transaction.bind(database);
+    // Fail the first transaction that writes history nodes, after its writes.
+    database.transaction = <T>(fn: (tx: GroupTransaction) => Promise<T>) =>
+      transaction(async (tx) => {
+        let wroteTree = false;
+        const result = await fn({
+          ...tx,
+          treeNodes: {
+            ...tx.treeNodes,
+            put: (row) => {
+              wroteTree = true;
+              return tx.treeNodes.put(row);
+            },
+          },
+        });
+        if (failHistory && wroteTree) {
+          failHistory = false;
+          throw new Error("injected history crash");
+        }
+        return result;
+      });
     const options = {
-      storage,
+      database,
       signer: adminAccount.signer,
       ciphersuite,
       network: new MockNetwork(["wss://relay.test"]),
@@ -203,9 +223,12 @@ describe("bounded disband convergence", () => {
       Number(clientState.groupContext.epoch),
     );
     await restored.save(true);
-    expect(
-      (await storage.list("")).some((key) => key.includes("/tree/commit/")),
-    ).toBe(true);
+    const persisted = await GroupHistoryTree.load(
+      groupTreeStore(database),
+      bytesToHex(clientState.groupContext.groupId),
+    );
+    // A committed (non-root) node was persisted.
+    expect(persisted!.size).toBeGreaterThan(1);
   });
   it("holds a valid linear disband until cutoff and terminalizes only its selected branch", async () => {
     const adminAccount = testAccount(6);
@@ -289,7 +312,7 @@ describe("bounded disband convergence", () => {
       state: add.newState,
       ciphersuite,
       peeler,
-      storage: memoryStorage(),
+      storage: groupMetaStore(memoryGroupDatabase()),
     });
     const candidate = await author.requestDisband();
     if (candidate?.kind !== "groupEvolution")

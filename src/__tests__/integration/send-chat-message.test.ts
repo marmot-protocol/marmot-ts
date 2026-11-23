@@ -17,7 +17,7 @@ import {
   GROUP_EVENT_KIND,
 } from "../../core/protocol.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../helpers/database.js";
 
 /**
  * Helper: build a kind-9 chat rumor and drive it through the group's
@@ -118,13 +118,13 @@ describe("chat messages via session/runtime", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "cd".repeat(32),
@@ -345,10 +345,10 @@ describe("chat messages via session/runtime", () => {
   });
 
   it("restart path: ingesting own relay echo does not break flow", async () => {
-    const inviteeStorage = memoryStorage();
+    const inviteeStorage = memoryDatabase();
 
     const inviteeClientBeforeRestart = new MarmotClient({
-      storage: inviteeStorage,
+      database: inviteeStorage,
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "cd".repeat(32),
@@ -368,7 +368,7 @@ describe("chat messages via session/runtime", () => {
 
     // Simulate a restart: new client instance, same persisted group backend
     const inviteeClientAfterRestart = new MarmotClient({
-      storage: inviteeStorage,
+      database: inviteeStorage,
       signer: inviteeAccount.signer,
       network: mockNetwork,
     });

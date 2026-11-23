@@ -10,7 +10,6 @@
     "src/core/index.ts",
     "src/engine/index.ts",
     "src/audit/index.ts",
-    "src/extra/index.ts",
     "src/extra/audit/node.ts",
     "src/extra/audit/browser.ts",
     "src/utils/index.ts"

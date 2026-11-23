@@ -38,7 +38,7 @@ import {
 } from "../../core/protocol.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../helpers/database.js";
 
 const RELAYS = ["wss://mock-relay.test"];
 
@@ -59,7 +59,7 @@ describe("FOUND-05: founding group creation, joining, and first message (positiv
     mockNetwork = new MockNetwork(RELAYS);
 
     adminClient = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
@@ -67,7 +67,7 @@ describe("FOUND-05: founding group creation, joining, and first message (positiv
     inviteeClients = inviteeAccounts.map(
       (account, index) =>
         new MarmotClient({
-          storage: memoryStorage(),
+          database: memoryDatabase(),
           signer: account.signer,
           network: mockNetwork,
           clientId: index.toString(16).padStart(64, "0"),

@@ -16,7 +16,7 @@ import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { serializeApplicationRumor } from "../../../core/group-message.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { memoryStorage } from "../../../utils/storage.js";
+import { memoryGroupDatabase } from "../../../__tests__/helpers/database.js";
 import { GroupSession } from "../group-session.js";
 
 // Receiver-side MLS secret retention. Both rows were seen live against an MDK
@@ -91,7 +91,7 @@ async function setup() {
     new GroupSession({
       state,
       ciphersuite: impl,
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
     });
   return { admin: session(adminState), member: session(memberState) };
 }

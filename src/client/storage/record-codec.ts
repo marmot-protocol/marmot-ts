@@ -1,12 +1,11 @@
 /** @module @category Storage */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import type { MarmotStorage } from "./storage.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
 /**
- * Encodes a structured record as bytes for {@link MarmotStorage}.
+ * Encodes a structured record as bytes for a database row value.
  *
  * JSON, with `Uint8Array` tagged as `{ "$bytes": hex }` and `bigint` as
  * `{ "$bigint": decimal }`. `undefined` object members are dropped.
@@ -36,32 +35,41 @@ export function decodeRecord<T>(bytes: Uint8Array): T {
 }
 
 /**
- * Typed records under one key prefix of a {@link MarmotStorage}, encoded with
- * {@link encodeRecord}. Ids are the key suffix after the prefix.
+ * A typed, record-encoded view of one account table, keyed by primary key.
+ * `row` derives a stored record's index columns.
  */
-export class RecordStore<T> {
+export class AccountRecordTable<T, R extends { value: Uint8Array }> {
   constructor(
-    readonly storage: MarmotStorage,
-    readonly prefix: string,
+    readonly table: {
+      get(id: string): Promise<R | undefined>;
+      all(): Promise<R[]>;
+    },
+    readonly write: <X>(
+      fn: (table: {
+        put(row: R): Promise<void>;
+        delete(id: string): Promise<void>;
+      }) => Promise<X>,
+    ) => Promise<X>,
+    readonly row: (id: string, value: T, bytes: Uint8Array) => R,
+    readonly idOf: (row: R) => string,
   ) {}
 
   async get(id: string): Promise<T | undefined> {
-    const bytes = await this.storage.get(this.prefix + id);
-    return bytes && decodeRecord<T>(bytes);
+    const row = await this.table.get(id);
+    return row && decodeRecord<T>(row.value);
   }
 
   async set(id: string, value: T): Promise<void> {
-    await this.storage.set(this.prefix + id, encodeRecord(value));
+    const row = this.row(id, value, encodeRecord(value));
+    await this.write((table) => table.put(row));
   }
 
   async delete(id: string): Promise<void> {
-    await this.storage.delete(this.prefix + id);
+    await this.write((table) => table.delete(id));
   }
 
   /** Every stored id, sorted. */
   async ids(): Promise<string[]> {
-    return (await this.storage.list(this.prefix)).map((key) =>
-      key.slice(this.prefix.length),
-    );
+    return (await this.table.all()).map(this.idOf).sort();
   }
 }

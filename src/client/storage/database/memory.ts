@@ -223,6 +223,11 @@ class MemoryGroupDatabase implements MarmotGroupDatabase {
   async close(): Promise<void> {}
 }
 
+/** A standalone in-memory {@link MarmotGroupDatabase} (tests and demos). */
+export function memoryGroupDatabase(): MarmotGroupDatabase {
+  return new MemoryGroupDatabase(new MemoryStore(GROUP_TABLES));
+}
+
 /** In-memory {@link MarmotGroupDatabases}. Not durable. */
 export class MemoryGroupDatabases implements MarmotGroupDatabases {
   readonly #stores = new Map<string, MemoryStore>();
@@ -238,7 +243,13 @@ export class MemoryGroupDatabases implements MarmotGroupDatabases {
 
   async drop(groupId: string): Promise<void> {
     const store = this.#stores.get(groupId);
-    if (store) store.closed = true;
+    if (store) {
+      // Handles still open on a dropped database see it empty and read-only.
+      store.closed = true;
+      store.committed = Object.fromEntries(
+        GROUP_TABLES.map((name) => [name, new Map()]),
+      );
+    }
     this.#stores.delete(groupId);
   }
 

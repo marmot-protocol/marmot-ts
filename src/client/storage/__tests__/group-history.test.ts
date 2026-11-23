@@ -1,9 +1,10 @@
 import type { Rumor } from "applesauce-common/helpers/gift-wrap";
-import { RumorStore } from "applesauce-core/event-store";
+import { AsyncRumorStore, RumorStore } from "applesauce-core/event-store";
 import { getEventHash } from "applesauce-core/helpers/event";
 import { describe, expect, it, vi } from "vitest";
 import { serializeApplicationRumor } from "../../../core/application-rumor.js";
-import { GroupHistory, type MarmotRumorDatabases } from "../group-history.js";
+import { memoryGroupDatabase } from "../database/memory.js";
+import { GroupHistory } from "../group-history.js";
 
 const PUBKEY = "a".repeat(64);
 let counter = 0;
@@ -112,24 +113,18 @@ describe("GroupHistory", () => {
     expect(new Set(ids)).toEqual(new Set(rumors.map((r) => r.id)));
   });
 
-  it("uses the app database and drops it on purge", async () => {
-    const backing = new RumorStore();
-    const drop = vi.fn(async () => {});
-    const databases = Object.assign(
-      vi.fn(() => backing.database as never),
-      { drop },
-    ) as unknown as MarmotRumorDatabases;
-    const history = GroupHistory.forGroup("ab", databases);
-    expect(databases).toHaveBeenCalledWith("ab");
+  it("stores rumors in the group database messages table and purges them", async () => {
+    const db = memoryGroupDatabase();
+    const history = GroupHistory.forDatabase(db);
+    expect(history.store).toBeInstanceOf(AsyncRumorStore);
     const a = rumor(5);
     await history.store.add(a);
-    expect(backing.database.hasEvent(a.id)).toBe(true);
+    expect((await db.messages.get(a.id))?.createdAt).toBe(5);
     await history.purgeMessages();
-    expect(drop).toHaveBeenCalledWith("ab");
+    expect(await db.messages.get(a.id)).toBeUndefined();
   });
 
-  it("keeps history in memory when the factory returns undefined", () => {
-    const history = GroupHistory.forGroup("ab", () => undefined);
-    expect(history.store).toBeInstanceOf(RumorStore);
+  it("keeps history in memory by default", () => {
+    expect(new GroupHistory().store).toBeInstanceOf(RumorStore);
   });
 });

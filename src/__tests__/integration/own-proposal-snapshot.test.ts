@@ -17,7 +17,7 @@ import { getPubkeyLeafNodeIndexes } from "../../core/group-members.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { framedCommitProposals } from "../../engine/wire-format.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../helpers/database.js";
 import { testAccount } from "../helpers/test-accounts.js";
 
 const RELAY = "wss://mock-relay.test";
@@ -116,10 +116,15 @@ describe("own staged proposals in the history-tree snapshot (CR-08)", () => {
     const { impl, adminE1 } = await buildAdminState();
     const groupId = bytesToHex(adminE1.groupContext.groupId);
 
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
+    const { database } = await new GroupRegistry({
+      database: storage,
+      signer: SIGNER,
+      network: ackingNetwork(),
+    }).prepare(adminE1);
 
     const group = new MarmotGroup(adminE1, {
-      storage,
+      database,
       signer: SIGNER,
       ciphersuite: impl,
       network: ackingNetwork(),
@@ -158,7 +163,7 @@ describe("own staged proposals in the history-tree snapshot (CR-08)", () => {
 
     // 4. Restart through the real load path.
     const registry = new GroupRegistry({
-      storage,
+      database: storage,
       signer: SIGNER,
       network: ackingNetwork(),
     });

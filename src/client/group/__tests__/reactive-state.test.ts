@@ -8,7 +8,10 @@ import {
 } from "ts-mls";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import { MockNetwork } from "../../../__tests__/helpers/mock-network.js";
-import { memoryStorage } from "../../../utils/storage.js";
+import {
+  memoryDatabase,
+  memoryGroupDatabase,
+} from "../../../__tests__/helpers/database.js";
 import { GroupsManager } from "../../groups-manager.js";
 import { MarmotGroup, type MarmotGroupSnapshot } from "../marmot-group.js";
 import { proposeUpdateMetadata } from "../proposals/update-metadata.js";
@@ -23,7 +26,7 @@ const account = testAccount(6);
 async function owner() {
   const network = new MockNetwork();
   const manager = new GroupsManager({
-    storage: memoryStorage(),
+    database: memoryDatabase(),
     signer: account.signer,
     network,
   });
@@ -119,7 +122,7 @@ describe("reactive group state", () => {
     const target = new MarmotGroup(
       deserializeClientState(serializeClientState(group.state)),
       {
-        storage: memoryStorage(),
+        database: memoryGroupDatabase(),
         signer: account.signer,
         ciphersuite: group.ciphersuite,
         network: new MockNetwork(),
@@ -193,7 +196,7 @@ describe("reactive group state", () => {
     });
     await group.session.confirmPublished(work.pending);
     const target = new MarmotGroup(state, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: member.signer,
       ciphersuite: group.ciphersuite,
       network: new MockNetwork(),

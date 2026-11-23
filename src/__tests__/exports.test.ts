@@ -24,7 +24,6 @@ import * as mlsExports from "../mls.js";
 import * as clientExports from "../client/index.js";
 import * as coreExports from "../core/index.js";
 import * as engineExports from "../engine/index.js";
-import * as extraExports from "../extra/index.js";
 import * as utilsExports from "../utils/index.js";
 import * as auditExports from "../audit/index.js";
 import * as extraAuditNodeExports from "../extra/audit/node.js";
@@ -289,7 +288,6 @@ const PUBLIC_NAMESPACES: Record<string, Record<string, unknown>> = {
   "./core": coreExports,
   "./engine": engineExports,
   "./audit": auditExports,
-  "./extra": extraExports,
   "./extra/audit/node": extraAuditNodeExports,
   "./extra/audit/browser": extraAuditBrowserExports,
   "./utils": utilsExports,
@@ -302,7 +300,6 @@ const REPRESENTATIVE_EXPORTS: Record<string, string> = {
   "./core": "createSimpleGroup",
   "./engine": "MarmotGroupEngine",
   "./audit": "noopAuditSink",
-  "./extra": "EncryptedStorage",
   "./extra/audit/node": "NodeJsonlAuditRecorder",
   "./extra/audit/browser": "AutoBrowserAuditWriter",
   "./utils": "normalizeRelayUrl",
@@ -364,7 +361,6 @@ describe("exports", () => {
       "./core",
       "./engine",
       "./audit",
-      "./extra",
       "./extra/audit/node",
       "./extra/audit/browser",
       "./utils",
@@ -439,7 +435,7 @@ describe("exports", () => {
       for (const name of internals)
         expect(namespace, `${entrypoint}: ${name}`).not.toHaveProperty(name);
   });
-  it("keeps private type-only contracts absent from all ten compiler export surfaces", () => {
+  it("keeps private type-only contracts absent from all nine compiler export surfaces", () => {
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const config = ts.readConfigFile(
       `${root}tsconfig.build.json`,
@@ -667,6 +663,7 @@ describe("exports", () => {
         "GROUP_NAME_MAX_BYTES",
         "GROUP_PROFILE_COMPONENT",
         "GROUP_PROFILE_COMPONENT_ID",
+        "GroupBatch",
         "GroupHistory",
         "GroupHistoryTree",
         "GroupImageIntegrityError",
@@ -702,7 +699,6 @@ describe("exports", () => {
         "MediaAttachmentRejection",
         "MemoryAccountDatabase",
         "MemoryGroupDatabases",
-        "MemoryStorage",
         "MissingRelayError",
         "MissingSlotIdentifierError",
         "NIP65_RELAY_LIST_KIND",
@@ -720,12 +716,12 @@ describe("exports", () => {
         "SUPPORTED_APP_COMPONENT_IDS",
         "SUPPORTED_LOCATOR_KINDS",
         "StaleMediaPreparationError",
-        "StorageBatch",
         "WELCOME_EVENT_KIND",
         "accountIdentityProofTemplate",
         "adminPolicyEntry",
         "agentTextStreamEntry",
         "appComponentsEntry",
+        "applyTreeWrite",
         "assertCurrentGroupAccountIdentityProofProfile",
         "assertNoAccountIdentityProofComponent",
         "authorizationProofEventId",
@@ -798,7 +794,6 @@ describe("exports", () => {
         "defaultCapabilities",
         "defaultMarmotClientConfig",
         "deferredReasons",
-        "deletePrefix",
         "deriveMediaEncryptionKey",
         "deriveMediaEncryptionKeyV1",
         "deriveMediaEncryptionKeyV2",
@@ -896,8 +891,10 @@ describe("exports", () => {
         "groupAvatarUrlEntry",
         "groupLifecycleEntry",
         "groupLifecycleStates",
+        "groupMetaStore",
         "groupProfileEntry",
         "groupProtocolLifecycleValues",
+        "groupTreeStore",
         "groupWithdrawnNotificationsByCommit",
         "hasAccountIdentityProofMaterial",
         "hasAck",
@@ -930,7 +927,7 @@ describe("exports", () => {
         "mayRunForkDetection",
         "mediaSourceStateToken",
         "memoryDatabase",
-        "memoryStorage",
+        "memoryGroupDatabase",
         "messageRetentionEntry",
         "messageRow",
         "missingGroupRequirements",
@@ -956,7 +953,6 @@ describe("exports", () => {
         "resolveMediaFetchUrls",
         "resolveMediaFetchUrlsV1",
         "rumorOfRow",
-        "scopeStorage",
         "scoreBranch",
         "selectCanonicalBranch",
         "selectFairQueuedStateIntent",
@@ -993,6 +989,7 @@ describe("./client exports", () => {
     expect(Object.keys(clientExports).sort()).toMatchInlineSnapshot(`
       [
         "BoundedIdCache",
+        "GroupBatch",
         "GroupHistory",
         "GroupImageService",
         "GroupMediaService",
@@ -1012,7 +1009,6 @@ describe("./client exports", () => {
         "MarmotGroup",
         "MemoryAccountDatabase",
         "MemoryGroupDatabases",
-        "MemoryStorage",
         "MissingRelayError",
         "MissingSlotIdentifierError",
         "NoGroupRelaysError",
@@ -1020,24 +1016,24 @@ describe("./client exports", () => {
         "NostrWelcomeDelivery",
         "Proposals",
         "PublicationUncertainError",
-        "StorageBatch",
+        "applyTreeWrite",
         "buildForkTreeView",
         "createAdminCommitPolicyCallback",
         "createApplicationMessageIntent",
         "createBlossomMediaTransport",
         "createChatRumor",
         "createInviteIntent",
-        "deletePrefix",
         "downloadMediaAttachment",
         "downloadMessageMedia",
         "fetchGroupImageTransport",
+        "groupMetaStore",
+        "groupTreeStore",
         "ingestResultDisposition",
         "memoryDatabase",
-        "memoryStorage",
+        "memoryGroupDatabase",
         "messageRow",
         "prepareMediaMessage",
         "rumorOfRow",
-        "scopeStorage",
         "selectFairQueuedStateIntent",
       ]
     `);
@@ -1362,6 +1358,8 @@ describe("./engine exports", () => {
       [
         "AdminDepletionError",
         "CommitLegalityError",
+        "DISBAND_CONVERGENCE_KEY",
+        "DISBAND_REQUEST_KEY",
         "DisbandingError",
         "ForkRecovery",
         "GroupHistoryTree",
@@ -1377,8 +1375,6 @@ describe("./engine exports", () => {
         "decodeDisbandRequest",
         "decodeOwnCommitRecord",
         "deriveStateNotifications",
-        "disbandConvergenceKey",
-        "disbandRequestKey",
         "encodeDisbandConvergence",
         "encodeDisbandRequest",
         "encodeOwnCommitRecord",
@@ -1398,27 +1394,14 @@ describe("./engine exports", () => {
   });
 });
 
-describe("./extra exports", () => {
-  it("should export the expected members", () => {
-    expect(Object.keys(extraExports).sort()).toMatchInlineSnapshot(`
-      [
-        "EncryptedStorage",
-      ]
-    `);
-  });
-});
-
 describe("./utils exports", () => {
   it("should export the expected members", () => {
     expect(Object.keys(utilsExports).sort()).toMatchInlineSnapshot(`
       [
-        "MemoryStorage",
-        "StorageBatch",
         "createDefaultKeyPackageLifetime",
         "createGiftWrap",
         "createThreeMonthLifetime",
         "decodeContent",
-        "deletePrefix",
         "detectEncoding",
         "encodeContent",
         "formatMlsTimestamp",
@@ -1429,9 +1412,7 @@ describe("./utils exports", () => {
         "isLifetimeValid",
         "isLifetimeWithinCap",
         "isValidRelayUrl",
-        "memoryStorage",
         "normalizeRelayUrl",
-        "scopeStorage",
         "unixNow",
       ]
     `);
@@ -1794,7 +1775,7 @@ describe("legacy 0xf2f1 account-identity-proof export guard (D-02)", () => {
 
     // Negative control: current, legitimate `0x8009` names and values must not trip the
     // guard. The five erased historical proof types are checked separately in the
-    // compiler-symbol denylist across all ten manifest code entrypoints.
+    // compiler-symbol denylist across all nine manifest code entrypoints.
     expect(
       findLegacyExportViolations({
         ACCOUNT_IDENTITY_PROOF_COMPONENT_ID: 0x8009,

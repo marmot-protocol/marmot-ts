@@ -13,7 +13,7 @@ import {
 } from "../../core/protocol.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../helpers/database.js";
 
 // NOTE: we use the shared test helper MockNetwork, not an inline version.
 
@@ -37,13 +37,13 @@ describe("End-to-end: invite, join, first message", () => {
     mockNetwork = new MockNetwork();
 
     adminClient = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: adminAccount.signer,
       network: mockNetwork,
     });
 
     inviteeClient = new MarmotClient({
-      storage: memoryStorage(),
+      database: memoryDatabase(),
       signer: inviteeAccount.signer,
       network: mockNetwork,
       clientId: "cd".repeat(32),

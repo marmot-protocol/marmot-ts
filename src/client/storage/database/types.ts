@@ -27,14 +27,29 @@ export interface Row {
 
 /** Singleton records of one group, addressed by name. */
 export type GroupMetaKey =
+  /** Canonical `ClientState` (TLS). */
   | "state"
+  /** Fork-history checkpoint. */
   | "tree"
+  /** Removal-realized marker. */
   | "removed"
+  /** Removal attribution evidence. */
   | "removal"
-  | "disband"
+  /** Pending commit publication. */
   | "publication"
+  /** Convergence effects ledger. */
   | "effects"
-  | "backfill";
+  /** Delivered application payload evidence. */
+  | "delivered"
+  | "disband/request"
+  | "disband/convergence"
+  | "disband/terminal"
+  | "disband/intent"
+  | "disband/registry-state"
+  /** Per-relay backfill cursor (relay hash suffix). */
+  | `backfill-cursor/${string}`
+  /** Per-relay backfill paging progress (relay hash suffix). */
+  | `backfill-progress/${string}`;
 
 /** A heavy fork-history node: the snapshot and commit for one state tag. */
 export interface TreeNodeRow extends Row {

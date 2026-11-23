@@ -4,7 +4,7 @@ import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { describe, expect, it } from "vitest";
 
 import { MarmotGroup } from "../../client/group/marmot-group.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryGroupDatabase } from "../../__tests__/helpers/database.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import {
   encryptedMediaBlossomDefault,
@@ -625,7 +625,7 @@ describe("MarmotGroup.decryptMedia", () => {
   it("deduplicates concurrent decrypts for the same attachment", async () => {
     const { clientState, ciphersuite } = await makeClientState();
     const group = new MarmotGroup(clientState, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: testAccount(6).signer,
       ciphersuite,
       network: new MockNetwork(),

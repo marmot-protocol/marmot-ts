@@ -37,7 +37,11 @@ import { serializeApplicationRumor } from "../../core/application-rumor.js";
 import { createCredential } from "../../core/credential.js";
 import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
-import { MemoryStorage, type StorageOp } from "../../utils/storage.js";
+import { memoryTreeStore } from "../../__tests__/helpers/database.js";
+import type {
+  HistoryTreeStore,
+  HistoryTreeWrite,
+} from "../history-tree-store.js";
 import {
   MarmotGroupEngine,
   type MarmotGroupEngineOptions,
@@ -56,20 +60,22 @@ function deferred() {
   return { promise, resolve };
 }
 
-/** Memory storage with hooks around every durable write (`set` and `batch`). */
-class MemoryStore extends MemoryStorage {
+/** Memory tree store with hooks around every durable write (`commit`). */
+class MemoryStore implements HistoryTreeStore {
+  readonly #inner = memoryTreeStore();
   beforeWrite?: () => Promise<void>;
   afterWrite?: (value: Uint8Array) => Promise<void>;
-  override async set(key: string, value: Uint8Array) {
-    await this.beforeWrite?.();
-    await super.set(key, value);
-    await this.afterWrite?.(value);
+  meta() {
+    return this.#inner.meta();
   }
-  override async batch(ops: readonly StorageOp[]) {
+  node(tag: string) {
+    return this.#inner.node(tag);
+  }
+  async commit(write: HistoryTreeWrite) {
     await this.beforeWrite?.();
-    await super.batch(ops);
-    for (const op of ops)
-      if (op.type === "set") await this.afterWrite?.(op.value);
+    await this.#inner.commit(write);
+    for (const value of write.puts.values()) await this.afterWrite?.(value);
+    if (write.meta) await this.afterWrite?.(write.meta);
   }
 }
 

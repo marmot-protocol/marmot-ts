@@ -4,7 +4,8 @@ import { seamGroup } from "../../../__tests__/helpers/engine-seam-fixtures.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
 import { MockNetwork } from "../../../__tests__/helpers/mock-network.js";
 import { deserializeClientState } from "../../../core/client-state.js";
-import { memoryStorage } from "../storage.js";
+import { memoryGroupDatabase } from "../database/memory.js";
+import type { GroupTransaction } from "../database/types.js";
 import { MarmotGroup } from "../../group/marmot-group.js";
 import { proposeUpdateMetadata } from "../../group/proposals/update-metadata.js";
 import {
@@ -20,13 +21,13 @@ async function setup() {
     ciphersuite: fixture.impl,
     network,
     signer: testAccount(6).signer,
-    storage: memoryStorage(),
+    database: memoryGroupDatabase(),
   };
   const sender = new MarmotGroup(fixture.adminEpoch1, options);
   const peer = new MarmotGroup(fixture.admin2Epoch1, {
     ...options,
     signer: testAccount(0).signer,
-    storage: memoryStorage(),
+    database: memoryGroupDatabase(),
   });
   await sender.save(true);
   const proposals = await proposeUpdateMetadata({
@@ -120,7 +121,7 @@ describe("exact pending publication recovery", () => {
       });
       sender.session.dispose();
       const prior = deserializeClientState(
-        (await options.storage.get(`${sender.idStr}/state`))!,
+        (await options.database.meta.get("state"))!,
       );
       restarted = await MarmotGroup.fromClientState(prior, options);
       expect(restarted.lifecycle).toBe("PendingPublish");
@@ -136,11 +137,7 @@ describe("exact pending publication recovery", () => {
       expect(bytesToHex(restarted.state.confirmationTag)).not.toBe(
         bytesToHex(prior.confirmationTag),
       );
-      expect(
-        (await options.storage.list("")).some((k) =>
-          k.endsWith("/publication"),
-        ),
-      ).toBe(false);
+      expect(await options.database.meta.get("publication")).toBeUndefined();
     } finally {
       sender.session.dispose();
       restarted?.session.dispose();
@@ -163,9 +160,7 @@ describe("exact pending publication recovery", () => {
       expect(Number(sender.state.groupContext.epoch)).toBe(1);
       sender.session.dispose();
       restarted = await MarmotGroup.fromClientState(
-        deserializeClientState(
-          (await options.storage.get(`${sender.idStr}/state`))!,
-        ),
+        deserializeClientState((await options.database.meta.get("state"))!),
         options,
       );
       expect(restarted.lifecycle).toBe("PendingPublish");
@@ -221,19 +216,14 @@ describe("exact pending publication recovery", () => {
       await expect(sender.submitIntent(intent)).rejects.toMatchObject({
         name: "PublicationUncertainError",
       });
-      const key = (await options.storage.list("")).find((k) =>
-        k.endsWith("/publication"),
-      )!;
-      await options.storage.set(
-        key,
-        new TextEncoder().encode('{"version":999}'),
+      expect(await options.database.meta.get("publication")).toBeDefined();
+      await options.database.transaction((tx) =>
+        tx.meta.set("publication", new TextEncoder().encode('{"version":999}')),
       );
       sender.session.dispose();
       await expect(
         MarmotGroup.fromClientState(
-          deserializeClientState(
-            (await options.storage.get(`${sender.idStr}/state`))!,
-          ),
+          deserializeClientState((await options.database.meta.get("state"))!),
           options,
         ),
       ).rejects.toThrow("Invalid pending publication record");
@@ -272,11 +262,21 @@ describe("exact pending publication recovery", () => {
 
   it("does not contact a relay if pending-state persistence fails", async () => {
     const { sender, peer, options, intent, network } = await setup();
-    const set = options.storage.set.bind(options.storage);
-    options.storage.set = async (key, value) => {
-      if (key.endsWith("/publication")) throw new Error("disk full");
-      return set(key, value);
-    };
+    const db = options.database;
+    const transaction = db.transaction.bind(db);
+    db.transaction = <T>(fn: (tx: GroupTransaction) => Promise<T>) =>
+      transaction((tx) =>
+        fn({
+          ...tx,
+          meta: {
+            ...tx.meta,
+            set: async (key, value) => {
+              if (key === "publication") throw new Error("disk full");
+              return tx.meta.set(key, value);
+            },
+          },
+        }),
+      );
     const publish = vi.spyOn(network, "publish");
     try {
       await expect(sender.submitIntent(intent)).rejects.toThrow("disk full");

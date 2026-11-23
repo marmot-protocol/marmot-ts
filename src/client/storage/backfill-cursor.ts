@@ -2,7 +2,8 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { logger } from "../../utils/debug.js";
 import { normalizeRelayUrl } from "../../utils/relay-url.js";
-import type { MarmotStorage } from "./storage.js";
+import type { GroupMetaStore } from "./database/group-batch.js";
+import type { GroupMetaKey } from "./database/types.js";
 
 import { groupKeys } from "./storage-keys.js";
 
@@ -31,13 +32,11 @@ function relayKey(relay: string): string {
 }
 
 /**
- * Key of a relay's backfill cursor for a group in the ingest-state store
- * (one record per group relay). It lives under the `${groupIdHex}/` prefix so
- * group-scoped ingest-state cleanup (disband) removes it with the rest of the
- * group's ingest state.
+ * Group-database meta key of a relay's backfill cursor (one record per group
+ * relay), removed with the rest of the group's database.
  */
-export function backfillCursorKey(groupIdHex: string, relay: string): string {
-  return groupKeys.backfillCursor(groupIdHex, relayKey(relay));
+export function backfillCursorKey(relay: string): GroupMetaKey {
+  return groupKeys.backfillCursor(relayKey(relay));
 }
 
 /** Encodes a cursor (unix seconds) as a version byte + big-endian uint32. */
@@ -67,17 +66,16 @@ export function decodeBackfillCursor(
  * a full (paged) backfill of that relay rather than skipping history.
  */
 export async function readBackfillCursor(
-  store: MarmotStorage,
-  groupIdHex: string,
+  store: GroupMetaStore,
   relay: string,
   nowSeconds: number,
 ): Promise<number | undefined> {
   const cursor = decodeBackfillCursor(
-    await store.get(backfillCursorKey(groupIdHex, relay)),
+    await store.get(backfillCursorKey(relay)),
   );
   if (cursor === undefined) return undefined;
   if (cursor > nowSeconds + BACKFILL_FUTURE_SKEW_SECONDS) {
-    log("ignoring future-dated cursor %d for group %s", cursor, groupIdHex);
+    log("ignoring future-dated cursor %d for relay %s", cursor, relay);
     return undefined;
   }
   return cursor;
@@ -88,8 +86,8 @@ export async function readBackfillCursor(
  * per group relay). Lives under the group's ingest-state prefix, like the
  * cursor.
  */
-export function backfillProgressKey(groupIdHex: string, relay: string): string {
-  return groupKeys.backfillProgress(groupIdHex, relayKey(relay));
+export function backfillProgressKey(relay: string): GroupMetaKey {
+  return groupKeys.backfillProgress(relayKey(relay));
 }
 
 /**
@@ -130,13 +128,12 @@ export function decodeBackfillProgress(
  * paged from its newest event as usual).
  */
 export async function readBackfillProgress(
-  store: MarmotStorage,
-  groupIdHex: string,
+  store: GroupMetaStore,
   relay: string,
   nowSeconds: number,
 ): Promise<BackfillProgress | undefined> {
   const progress = decodeBackfillProgress(
-    await store.get(backfillProgressKey(groupIdHex, relay)),
+    await store.get(backfillProgressKey(relay)),
   );
   if (!progress || progress.to > nowSeconds + BACKFILL_FUTURE_SKEW_SECONDS)
     return undefined;

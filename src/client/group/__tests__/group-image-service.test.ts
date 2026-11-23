@@ -24,7 +24,10 @@ import { createCredential } from "../../../core/credential.js";
 import { marmotAuthService } from "../../../core/auth-service.js";
 import { createSimpleGroup } from "../../../core/group.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
-import { memoryStorage } from "../../../utils/storage.js";
+import {
+  memoryGroupDatabase,
+  memoryTreeStore,
+} from "../../../__tests__/helpers/database.js";
 import { deserializeClientState } from "../../../core/client-state.js";
 import { DEFAULT_CONVERGENCE_POLICY } from "../../../core/convergence.js";
 import { GroupHistoryTree } from "../../../engine/history-tree.js";
@@ -130,9 +133,9 @@ async function retentionFixture(horizon = 1) {
     adminPubkeys: [account.pubkey],
     relays: ["wss://relay.test"],
   });
-  const storage = memoryStorage();
+  const storage = memoryGroupDatabase();
   const options = {
-    storage,
+    database: storage,
     signer: account.signer,
     ciphersuite,
     network: new MockNetwork(["wss://relay.test"]),
@@ -204,10 +207,13 @@ describe("settled image retention", () => {
     const id = bytesToHex(group.id);
     group.dispose();
     const restarted = new MarmotGroup(
-      deserializeClientState((await storage.get(`${id}/state`))!),
+      deserializeClientState((await storage.meta.get("state"))!),
       {
         ...options,
-        historyTree: (await GroupHistoryTree.load(storage, id))!,
+        historyTree: (await GroupHistoryTree.load(
+          memoryTreeStore(storage),
+          id,
+        ))!,
       },
     );
     await expect(
@@ -272,10 +278,13 @@ describe("settled image retention", () => {
     const id = bytesToHex(group.id);
     group.dispose();
     const restarted = new MarmotGroup(
-      deserializeClientState((await storage.get(`${id}/state`))!),
+      deserializeClientState((await storage.meta.get("state"))!),
       {
         ...options,
-        historyTree: (await GroupHistoryTree.load(storage, id))!,
+        historyTree: (await GroupHistoryTree.load(
+          memoryTreeStore(storage),
+          id,
+        ))!,
       },
     );
     const afterRestart = await restarted.image.read(profile);
@@ -307,7 +316,7 @@ describe("settled image retention", () => {
     await setImage(null);
     await advance();
     const write = vi
-      .spyOn(storage, "batch")
+      .spyOn(storage, "transaction")
       .mockRejectedValueOnce(new Error("required save failed"));
     await expect(group.save(true)).rejects.toThrow("required save failed");
     expect(imageCache(group.image).cache.get(identity)!.bytes).toBe(owned);

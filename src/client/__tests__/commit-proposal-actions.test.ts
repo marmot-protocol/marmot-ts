@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { getGroupMemberPubkeys } from "../../core/group-members.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
 import { Proposals } from "../group/index.js";
 import { MarmotClient } from "../marmot-client.js";
 
@@ -17,13 +17,13 @@ async function setupTwoMemberGroup(network: MockNetwork) {
   const memberPubkey = await memberAccount.signer.getPublicKey();
 
   const adminClient = new MarmotClient({
-    storage: memoryStorage(),
+    database: memoryDatabase(),
     signer: adminAccount.signer,
     network,
     clientId: "aa".repeat(32),
   });
   const memberClient = new MarmotClient({
-    storage: memoryStorage(),
+    database: memoryDatabase(),
     signer: memberAccount.signer,
     network,
     clientId: "bb".repeat(32),

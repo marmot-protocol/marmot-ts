@@ -31,7 +31,18 @@ import { createSimpleGroup } from "../../core/group.js";
 import { generateKeyPackage } from "../../core/key-package.js";
 import { testAccount } from "../helpers/test-accounts.js";
 import { GroupHistoryTree } from "../../engine/history-tree.js";
-import { memoryStorage, type MarmotStorage } from "../../utils/storage.js";
+import {
+  groupMeta,
+  memoryDatabase,
+  memoryGroupDatabase,
+  memoryTreeStore,
+  openGroup,
+} from "../helpers/database.js";
+import type {
+  GroupMetaKey,
+  MarmotDatabase,
+  MarmotGroupDatabase,
+} from "../../client/storage/database/types.js";
 import type { DispositionedIngestResult } from "../../client/session/group-session.js";
 
 const RELAY = "wss://relay.test";
@@ -60,10 +71,10 @@ function marmotGroup(
   pubkey: string,
   impl: CiphersuiteImpl,
   published: NostrEvent[],
-  storage: MarmotStorage = memoryStorage(),
+  storage: MarmotGroupDatabase = memoryGroupDatabase(),
 ) {
   return new MarmotGroup(state, {
-    storage,
+    database: storage,
     signer: {
       getPublicKey: async () => pubkey,
       signEvent: async () => {
@@ -76,7 +87,47 @@ function marmotGroup(
 }
 
 const MARKER = Uint8Array.of(1);
-const isMarkerKey = (key: string) => key.endsWith("/removed");
+const isMarkerKey = (key: string) => key === "removed";
+
+/** Records every meta key a group database writes (and lets a test intercept). */
+function spyMetaWrites(
+  db: MarmotGroupDatabase,
+  before?: (key: GroupMetaKey) => Promise<void>,
+): GroupMetaKey[] {
+  const writes: GroupMetaKey[] = [];
+  const transaction = db.transaction.bind(db);
+  db.transaction = (fn) =>
+    transaction((tx) =>
+      fn({
+        ...tx,
+        meta: {
+          ...tx.meta,
+          set: async (key, value) => {
+            writes.push(key);
+            await before?.(key);
+            return tx.meta.set(key, value);
+          },
+        },
+      }),
+    );
+  return writes;
+}
+
+/** Registers a group in a client database and seeds its canonical state. */
+async function seedGroup(
+  database: MarmotDatabase,
+  groupId: string,
+  state: ClientState,
+): Promise<MarmotGroupDatabase> {
+  await database.account.transaction((tx) =>
+    tx.groups.put({ id: groupId, status: "active", value: new Uint8Array() }),
+  );
+  const db = await openGroup(database, groupId);
+  await db.transaction((tx) =>
+    tx.meta.set("state", serializeClientState(state)),
+  );
+  return db;
+}
 
 /**
  * Builds a 3-member group (admin "a", "d", "e"), then has the admin commit a
@@ -255,37 +306,34 @@ describe("involuntary removal signal", () => {
       await buildRemovalFixture();
     // State and marker deliberately share one backend: namespace isolation is
     // the behavior under test.
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
     const group = marmotGroup(eEpoch1, ePubkey, impl, [], storage);
     await group.save(true);
 
     for await (const _ of group.ingest([removeCommitEvent])) void _;
 
-    const persisted = await storage.get(`${group.idStr}/state`);
+    const persisted = await storage.meta.get("state");
     expect(persisted).toBeDefined();
     expect(deserializeClientState(persisted!).groupActiveState.kind).toBe(
       "removedFromGroup",
     );
-    expect(await storage.get(`${group.idStr}/removed`)).toEqual(MARKER);
+    expect(await storage.meta.get("removed")).toEqual(MARKER);
   });
 
   it("forwards persisted multi-tip removal before the public loaded event (CR-01)", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
     const groupId = bytesToHex(fixture.eEpoch1.groupContext.groupId);
     const rootTag = bytesToHex(fixture.eEpoch1.confirmationTag);
     const tree = new GroupHistoryTree(fixture.eEpoch1);
     tree.recordCommit(rootTag, fixture.canonicalCommit, fixture.removedState);
     tree.recordCommit(rootTag, fixture.competingCommit, fixture.competingState);
-    tree.bindStore(storage);
+    const db = await seedGroup(storage, groupId, fixture.removedState);
+    tree.bindStore(memoryTreeStore(db));
     await tree.flush();
-    await storage.set(
-      `${groupId}/state`,
-      serializeClientState(fixture.removedState),
-    );
 
     const manager = new GroupsManager({
-      storage,
+      database: storage,
       signer: testAccount(11).signer,
       network: recordingNetwork([]),
       cryptoProvider: defaultCryptoProvider,
@@ -299,7 +347,7 @@ describe("involuntary removal signal", () => {
 
     expect(loaded.state.groupActiveState.kind).toBe("removedFromGroup");
     expect(removed).toHaveBeenCalledOnce();
-    expect(await storage.get(`${groupId}/removed`)).toEqual(MARKER);
+    expect(await db.meta.get("removed")).toEqual(MARKER);
     expect(events).toEqual(["removed", "loaded"]);
   });
 
@@ -309,11 +357,11 @@ describe("involuntary removal signal", () => {
     const read = new Promise<Uint8Array | undefined>(
       (resolve) => (releaseRead = resolve),
     );
-    const storage = memoryStorage();
-    const get = storage.get.bind(storage);
+    const storage = memoryGroupDatabase();
+    const get = storage.meta.get.bind(storage.meta);
     const markerReads = vi.fn(async () => read);
-    storage.get = (key) => (isMarkerKey(key) ? markerReads() : get(key));
-    const set = vi.spyOn(storage, "set");
+    storage.meta.get = (key) => (isMarkerKey(key) ? markerReads() : get(key));
+    const writes = spyMetaWrites(storage);
     const group = marmotGroup(
       fixture.removedState,
       fixture.ePubkey,
@@ -331,20 +379,20 @@ describe("involuntary removal signal", () => {
     releaseRead(undefined);
     await Promise.all([first, second]);
 
-    expect(set.mock.calls.filter(([key]) => isMarkerKey(key))).toHaveLength(1);
+    expect(writes.filter(isMarkerKey)).toHaveLength(1);
     expect(removed).toHaveBeenCalledOnce();
   });
 
   it("retries removal realization after an in-flight marker failure (WR-01)", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
-    const storage = memoryStorage();
-    const get = storage.get.bind(storage);
+    const storage = memoryGroupDatabase();
+    const get = storage.meta.get.bind(storage.meta);
     const markerReads = vi
       .fn<() => Promise<Uint8Array | undefined>>()
       .mockRejectedValueOnce(new Error("marker unavailable"))
       .mockResolvedValueOnce(undefined);
-    storage.get = (key) => (isMarkerKey(key) ? markerReads() : get(key));
-    const set = vi.spyOn(storage, "set");
+    storage.meta.get = (key) => (isMarkerKey(key) ? markerReads() : get(key));
+    const writes = spyMetaWrites(storage);
     const group = marmotGroup(
       fixture.removedState,
       fixture.ePubkey,
@@ -361,16 +409,15 @@ describe("involuntary removal signal", () => {
     await group.realizeRemovalIfNeeded();
 
     expect(markerReads).toHaveBeenCalledTimes(2);
-    expect(set.mock.calls.filter(([key]) => isMarkerKey(key))).toHaveLength(1);
+    expect(writes.filter(isMarkerKey)).toHaveLength(1);
     expect(removed).toHaveBeenCalledOnce();
   });
 
   it("completes durable removal when an application listener throws", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
-    const storage = memoryStorage();
-    const set = vi.spyOn(storage, "set");
-    const markerWrites = () =>
-      set.mock.calls.filter(([key]) => isMarkerKey(key));
+    const storage = memoryGroupDatabase();
+    const writes = spyMetaWrites(storage);
+    const markerWrites = () => writes.filter(isMarkerKey);
     const group = marmotGroup(
       fixture.removedState,
       fixture.ePubkey,
@@ -401,7 +448,7 @@ describe("involuntary removal signal", () => {
     const queuedError = await queuedRejection;
     expect(queuedError).toBeInstanceOf(Error);
     expect((queuedError as Error).message).toMatch(/removed/i);
-    expect(await storage.get(`${group.idStr}/removed`)).toEqual(MARKER);
+    expect(await storage.meta.get("removed")).toEqual(MARKER);
     expect(throwing).toHaveBeenCalledOnce();
     expect(observer).toHaveBeenCalledOnce();
 
@@ -413,7 +460,7 @@ describe("involuntary removal signal", () => {
 
   it("preserves removed listener context, order, and once semantics", async () => {
     const fixture = await buildPersistedRemovalForkFixture();
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
     const group = marmotGroup(
       fixture.removedState,
       fixture.ePubkey,
@@ -453,7 +500,7 @@ describe("involuntary removal signal", () => {
 
     await expect(group.realizeRemovalIfNeeded()).resolves.toBeUndefined();
 
-    expect(await storage.get(`${group.idStr}/removed`)).toEqual(MARKER);
+    expect(await storage.meta.get("removed")).toEqual(MARKER);
     expect(order).toEqual(["on", "once", "observer"]);
 
     group.off("removed", throwing, onContext);
@@ -467,7 +514,7 @@ describe("involuntary removal signal", () => {
 
     // "e" ingests the commit that removes it.
     const ePublished: NostrEvent[] = [];
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
     const eGroup = marmotGroup(eEpoch1, ePubkey, impl, ePublished, storage);
     await eGroup.save(true); // persist initial state so we can assert it survives
 
@@ -485,7 +532,7 @@ describe("involuntary removal signal", () => {
     // State is the tombstone, and it was NOT auto-destroyed: the store still
     // holds the (now removed) group state.
     expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    expect(await storage.get(`${eGroup.idStr}/state`)).toBeDefined();
+    expect(await storage.meta.get("state")).toBeDefined();
   });
 
   /**
@@ -504,28 +551,24 @@ describe("involuntary removal signal", () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();
 
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
 
     // Snapshots whatever the storage holds as canonical state at the exact
     // moment the marker is written.
     let persistedAtMarkerWrite: Uint8Array | undefined;
-    let idHex = "";
-    const set = storage.set.bind(storage);
-    storage.set = async (key, value) => {
+    spyMetaWrites(storage, async (key) => {
       if (isMarkerKey(key))
-        persistedAtMarkerWrite = await storage.get(`${idHex}/state`);
-      return set(key, value);
-    };
+        persistedAtMarkerWrite = await storage.meta.get("state");
+    });
 
     const eGroup = marmotGroup(eEpoch1, ePubkey, impl, [], storage);
-    idHex = eGroup.idStr;
     await eGroup.save(true);
 
     for await (const _ of eGroup.ingest([removeCommitEvent])) void _;
 
     for await (const _ of eGroup.ingest([removeCommitEvent])) void _;
 
-    expect(await storage.get(`${idHex}/removed`)).toEqual(MARKER);
+    expect(await storage.meta.get("removed")).toEqual(MARKER);
     expect(persistedAtMarkerWrite).toBeTruthy();
     expect(
       deserializeClientState(persistedAtMarkerWrite!).groupActiveState.kind,
@@ -563,7 +606,7 @@ describe("involuntary removal signal", () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();
 
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
 
     // A live group applies the removing commit; realization durably marks it.
     const liveGroup = marmotGroup(eEpoch1, ePubkey, impl, [], storage);
@@ -571,20 +614,20 @@ describe("involuntary removal signal", () => {
     for await (const _ of liveGroup.ingest([removeCommitEvent])) void _;
     await liveGroup.save(true);
     expect(liveGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    const markerKey = `${liveGroup.idStr}/removed`;
-    expect(await storage.get(markerKey)).toEqual(MARKER);
+    const markerKey = "removed";
+    expect(await storage.meta.get(markerKey)).toEqual(MARKER);
     liveGroup.dispose();
 
     // Simulate a process that persisted the tombstone and then exited before
     // the marker write (a crash between commit-apply and notification —
     // D-12's motivating scenario; the tombstone always precedes the marker).
-    await storage.delete(markerKey);
+    await storage.transaction((tx) => tx.meta.delete(markerKey));
 
     // Construction is deliberately side-effect free. The owning registry
     // attaches its forwarding listener first, then invokes this explicit
     // realization boundary so the consumer can observe the event.
     const firstLoad = await MarmotGroup.fromClientState(liveGroup.state, {
-      storage,
+      database: storage,
       signer: testAccount(11).signer,
       network: recordingNetwork([]),
     });
@@ -593,12 +636,12 @@ describe("involuntary removal signal", () => {
     await firstLoad.realizeRemovalIfNeeded();
 
     expect(firstRemoved).toHaveBeenCalledOnce();
-    expect(await storage.get(markerKey)).toEqual(MARKER);
+    expect(await storage.meta.get(markerKey)).toEqual(MARKER);
 
     // Second load, same marker store: marker is already set, so explicit
     // realization is a no-op — zero `removed` emissions.
     const secondLoad = await MarmotGroup.fromClientState(liveGroup.state, {
-      storage,
+      database: storage,
       signer: testAccount(11).signer,
       network: recordingNetwork([]),
     });
@@ -626,10 +669,9 @@ describe("involuntary removal signal", () => {
     const { impl, ePubkey, eEpoch1, removeCommitEvent } =
       await buildRemovalFixture();
 
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
 
     const eGroup = marmotGroup(eEpoch1, ePubkey, impl, [], storage);
-    const idHex = eGroup.idStr;
     await eGroup.save(true);
 
     let removedEmissions = 0;
@@ -638,7 +680,7 @@ describe("involuntary removal signal", () => {
     // A genuine removal: tombstone persisted, marker written, `removed` once.
     for await (const _ of eGroup.ingest([removeCommitEvent])) void _;
     expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    expect(await storage.get(`${idHex}/removed`)).toEqual(MARKER);
+    expect(await storage.meta.get("removed")).toEqual(MARKER);
     expect(removedEmissions).toBe(1);
 
     // Now a rewind that withdraws that removal's `selfRemoved` notification
@@ -659,7 +701,7 @@ describe("involuntary removal signal", () => {
 
     // Membership was never restored, so the marker must survive...
     expect(eGroup.state.groupActiveState.kind).toBe("removedFromGroup");
-    expect(await storage.get(`${idHex}/removed`)).toEqual(MARKER);
+    expect(await storage.meta.get("removed")).toEqual(MARKER);
     // ...and no duplicate `removed` is emitted for what is one removal.
     expect(removedEmissions).toBe(1);
   });
@@ -676,11 +718,11 @@ describe("involuntary removal signal", () => {
     const { eEpoch1, removeCommitEvent } = await buildRemovalFixture();
 
     // Backing stores shared across the simulated restart.
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
     const signer = testAccount(11).signer;
 
     const managerOptions = {
-      storage,
+      database: storage,
       signer,
       network: recordingNetwork([]),
       cryptoProvider: defaultCryptoProvider,
@@ -692,7 +734,8 @@ describe("involuntary removal signal", () => {
     const idHex = group.idStr;
 
     // Sanity: the group is live and unmarked before the removing commit.
-    expect(await storage.get(`${idHex}/removed`)).toBeUndefined();
+    const meta = await groupMeta(storage, idHex);
+    expect(await meta.get("removed")).toBeUndefined();
 
     const kinds: string[] = [];
     for await (const r of manager1.ingest(group.id, [removeCommitEvent]))
@@ -702,7 +745,7 @@ describe("involuntary removal signal", () => {
 
     // The marker reached the durable store through the manager — this is the
     // durability CR-10 was about.
-    expect(await storage.get(`${idHex}/removed`)).toEqual(MARKER);
+    expect(await meta.get("removed")).toEqual(MARKER);
 
     // --- process 2: a fresh manager over the same stores (a "restart").
     // `MarmotGroup.fromClientState` realizes internally before returning, so

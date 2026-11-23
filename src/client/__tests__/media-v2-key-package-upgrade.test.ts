@@ -16,7 +16,7 @@ import {
   getAppComponents,
 } from "../../core/components/index.js";
 import { KeyPackageManager } from "../key-package-manager.js";
-import { memoryStorage } from "../../utils/storage.js";
+import { memoryDatabase } from "../../__tests__/helpers/database.js";
 
 it("replaces the signed pre-media capability publication while retaining pending-Welcome secrets and installation identity", async () => {
   const account = testAccount(6);
@@ -50,7 +50,7 @@ it("replaces the signed pre-media capability publication while retaining pending
     ],
   });
   const manager = new KeyPackageManager({
-    storage: memoryStorage(),
+    database: memoryDatabase().account,
     signer: account.signer,
     network: new MockNetwork(),
     clientId: "ab".repeat(32),

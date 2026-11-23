@@ -57,11 +57,14 @@ import {
   GROUP_EVENT_KIND,
 } from "../../core/protocol.js";
 import {
-  MemoryStorage,
-  memoryStorage,
-  scopeStorage,
-  type StorageOp,
-} from "../../utils/storage.js";
+  memoryDatabase,
+  memoryGroupDatabase,
+} from "../../__tests__/helpers/database.js";
+import type {
+  GroupTransaction,
+  MarmotDatabase,
+  MarmotGroupDatabase,
+} from "../storage/database/types.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { MarmotGroupEngine } from "../../engine/group-engine.js";
 import type { ProposalContext } from "../../engine/types.js";
@@ -70,31 +73,43 @@ import { defaultProposalTypes, type Proposal } from "ts-mls";
 const RELAYS = ["wss://mock-relay.test"];
 
 /**
- * A {@link MemoryStorage} that records every canonical group-state value
- * written (`<gid>/state`, by `set` or inside a `batch`) before applying it —
- * used by Tests 4-5 to attribute the write count to `GroupFactory` alone,
- * independent of registry tracking.
+ * A group database that records every canonical group-state value written
+ * (meta `state`) before applying it — used by Tests 4-5 to attribute the
+ * write count to `GroupFactory` alone, independent of registry tracking.
  */
-class RecordingStorage extends MemoryStorage {
+class RecordingStorage {
   readonly writes: SerializedClientState[] = [];
 
-  override async set(key: string, value: Uint8Array): Promise<void> {
-    if (key.endsWith("/state")) this.writes.push(value.slice());
-    return super.set(key, value);
-  }
+  /** `GroupFactoryOptions.prepare` over a recording group database. */
+  readonly prepare = async () => {
+    const database: MarmotGroupDatabase = memoryGroupDatabase();
+    const transaction = database.transaction.bind(database);
+    database.transaction = <T>(fn: (tx: GroupTransaction) => Promise<T>) =>
+      transaction((tx) =>
+        fn({
+          ...tx,
+          meta: {
+            ...tx.meta,
+            set: async (key, value) => {
+              if (key === "state") this.writes.push(value.slice());
+              return tx.meta.set(key, value);
+            },
+          },
+        }),
+      );
+    return { database, dropDatabase: async () => {} };
+  };
+}
 
-  override async batch(ops: readonly StorageOp[]): Promise<void> {
-    for (const op of ops)
-      if (op.type === "set" && op.key.endsWith("/state"))
-        this.writes.push(op.value.slice());
-    return super.batch(ops);
-  }
+/** Every group the account database lists, with or without state. */
+async function storedGroups(database: MarmotDatabase) {
+  return database.account.groups.all();
 }
 
 describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08/D-09/D-10/D-12/D-13; R-01/R-04/R-05; CR-01)", () => {
   let mockNetwork: MockNetwork;
   let adminAccount: PrivateKeyAccount<any>;
-  let adminStorage: MemoryStorage;
+  let adminStorage: MarmotDatabase;
   let adminClient: MarmotClient;
   let inviteeAccounts: PrivateKeyAccount<any>[];
   let inviteeClients: MarmotClient[];
@@ -102,9 +117,9 @@ describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08
   beforeEach(() => {
     mockNetwork = new MockNetwork(RELAYS);
     adminAccount = PrivateKeyAccount.generateNew();
-    adminStorage = memoryStorage();
+    adminStorage = memoryDatabase();
     adminClient = new MarmotClient({
-      storage: adminStorage,
+      database: adminStorage,
       signer: adminAccount.signer,
       network: mockNetwork,
     });
@@ -116,7 +131,7 @@ describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08
     inviteeClients = inviteeAccounts.map(
       (account, index) =>
         new MarmotClient({
-          storage: memoryStorage(),
+          database: memoryDatabase(),
           signer: account.signer,
           network: mockNetwork,
           clientId: index.toString(16).padStart(64, "0"),
@@ -198,7 +213,7 @@ describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08
           await expect(creation).rejects.toThrow(
             shape === "empty" ? /empty proposal/i : /may only carry Add/,
           );
-          expect(await adminStorage.list("group/")).toHaveLength(0);
+          expect(await storedGroups(adminStorage)).toHaveLength(0);
           expect(adminClient.groups.loaded).toHaveLength(0);
           expect(
             mockNetwork.events.filter((e) => e.kind === 1059),
@@ -311,7 +326,7 @@ describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08
     // count is attributable to the factory alone.
     const store = new RecordingStorage();
     const factory = new GroupFactory({
-      storage: store,
+      prepare: store.prepare,
       signer: adminAccount.signer,
       network: mockNetwork,
     });
@@ -334,7 +349,7 @@ describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08
 
     const store = new RecordingStorage();
     const factory = new GroupFactory({
-      storage: store,
+      prepare: store.prepare,
       signer: adminAccount.signer,
       network: mockNetwork,
     });
@@ -427,7 +442,7 @@ describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08
 
     // A refused founding create leaves no local group: the store holds no
     // keys at all.
-    expect(await adminStorage.list("group/")).toHaveLength(0);
+    expect(await storedGroups(adminStorage)).toHaveLength(0);
   });
 
   /**
@@ -540,7 +555,7 @@ describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08
     // unreachable member with a fresh KeyPackage against the now-canonical
     // group (refs/marmot/protocol-core/publish-lifecycle.md lines 66-78).
     const reloadedManager = new GroupsManager({
-      storage: scopeStorage(adminStorage, "group/"),
+      database: adminStorage,
       signer: adminAccount.signer,
       network: mockNetwork,
     });
@@ -598,7 +613,7 @@ describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08
     // 0x8009 account-identity proof it carries is signed via signEvent — so
     // nothing MLS-related was ever built, let alone persisted or published.
     expect(signEventSpy).not.toHaveBeenCalled();
-    expect(await adminStorage.list("group/")).toHaveLength(0);
+    expect(await storedGroups(adminStorage)).toHaveLength(0);
     expect(adminClient.groups.loaded).toHaveLength(0);
     expect(await adminClient.groups.listIds()).toHaveLength(0);
     expect(createdSpy).not.toHaveBeenCalled();
@@ -616,9 +631,9 @@ describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08
     const invitee1Event = await publishKeyPackage(inviteeClients[0]!);
     const invitee2Event = await publishKeyPackage(inviteeClients[1]!);
 
-    const storage = memoryStorage();
+    const storage = memoryDatabase();
     const manager = new GroupsManager({
-      storage,
+      database: storage,
       signer: adminAccount.signer,
       network: mockNetwork,
     });
@@ -635,9 +650,9 @@ describe("Founding group creation via Welcome (FOUND-01..05; D-01/D-03/D-04/D-08
     ).resolves.toBeDefined();
 
     const group = manager.loaded[0]!;
-    expect((await storage.list(`${group.idStr}/tree/`)).length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      await (await storage.groups.open(group.idStr)).meta.get("tree"),
+    ).toBeDefined();
   });
 
   it("Test 15 (CR-01 scope): a solo create without relays — invitees omitted or empty — is still allowed and stays at epoch 0", async () => {

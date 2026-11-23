@@ -1,5 +1,5 @@
 /** @module @category Client - Session */
-import { pendingPublicationKey } from "../storage/pending-publication.js";
+import { PENDING_PUBLICATION_KEY } from "../storage/pending-publication.js";
 import {
   mediaSourceStateToken,
   StaleMediaPreparationError,
@@ -63,17 +63,17 @@ import type {
 } from "../../engine/fork-recovery.js";
 import type { DisbandRequest } from "../../engine/disband-request.js";
 import {
-  disbandConvergenceKey,
-  disbandRequestKey,
+  DISBAND_CONVERGENCE_KEY,
+  DISBAND_REQUEST_KEY,
 } from "../../engine/disband-request.js";
 import {
   decodeDisbandTombstone,
   decodeDisbandTerminalIntent,
   encodeDisbandTerminalIntent,
-  disbandTerminalIntentKey,
+  DISBAND_INTENT_KEY,
   type DisbandTerminalIntent,
-  disbandRegistryStateKey,
-  disbandTombstoneKey,
+  DISBAND_REGISTRY_STATE_KEY,
+  DISBAND_TOMBSTONE_KEY,
   encodeDisbandTombstone,
   type DisbandTombstone,
 } from "../../engine/disband-tombstone.js";
@@ -88,10 +88,15 @@ import type {
 } from "../../engine/types.js";
 import type { StateNotification } from "../../engine/state-notifications.js";
 import {
-  deletePrefix,
-  StorageBatch,
-  type MarmotStorage,
-} from "../storage/storage.js";
+  GroupBatch,
+  groupMetaStore,
+  groupTreeStore,
+  type GroupMetaStore,
+} from "../storage/database/group-batch.js";
+import type {
+  GroupMetaKey,
+  MarmotGroupDatabase,
+} from "../storage/database/types.js";
 import { groupKeys } from "../storage/storage-keys.js";
 import { NostrGroupPeeler } from "../group/nostr-peeler.js";
 import {
@@ -169,9 +174,8 @@ export interface RemovalEvidence extends RemovalAttribution {
   recoveryPending?: RemovalRecovery;
 }
 
-export function removalEvidenceKey(groupId: string): string {
-  return groupKeys.removalAttribution(groupId);
-}
+/** Group-database meta key of the removal evidence record. */
+export const REMOVAL_EVIDENCE_KEY = groupKeys.removalAttribution;
 
 type StagedWrapper = { outcome: TerminalWrapperOutcome; epoch: number };
 
@@ -191,10 +195,15 @@ export type GroupSessionOptions = {
   state: ClientState;
   ciphersuite: CiphersuiteImpl;
   /**
-   * Durable storage scoped to the client's `group/` namespace: canonical state,
-   * history tree, ingest ledgers and lifecycle records live under `<gid>/`.
+   * This group's database: canonical state, history tree, ingest ledgers,
+   * lifecycle records and messages.
    */
-  storage: MarmotStorage;
+  database: MarmotGroupDatabase;
+  /**
+   * Permanently deletes this group's database on {@link GroupSession.destroyLocalState}.
+   * When omitted the session clears the records it knows about instead.
+   */
+  dropDatabase?: () => Promise<void>;
   /**
    * The bounded convergence window, derived from the history tree on load (never
    * persisted separately). Set by the internal loader (`GroupRegistry`); fresh
@@ -275,8 +284,12 @@ function mapEngineIngestResult(
 
 export class GroupSession {
   readonly ciphersuite: CiphersuiteImpl;
-  readonly storage: MarmotStorage;
+  /** This group's database. */
+  readonly database: MarmotGroupDatabase;
+  /** Single-record access to the database's `meta` table. */
+  readonly meta: GroupMetaStore;
   readonly history?: GroupSessionHistory;
+  readonly #dropDatabase?: () => Promise<void>;
 
   readonly #engine: MarmotGroupEngine<NostrEvent>;
   readonly #peeler: NostrGroupPeeler;
@@ -341,7 +354,9 @@ export class GroupSession {
 
   constructor(options: GroupSessionOptions) {
     this.ciphersuite = options.ciphersuite;
-    this.storage = options.storage;
+    this.database = options.database;
+    this.meta = groupMetaStore(options.database);
+    this.#dropDatabase = options.dropDatabase;
     this.history = options.history;
     this.#onStateChanged = options.onStateChanged;
     this.#onChanged = options.onChanged;
@@ -382,9 +397,8 @@ export class GroupSession {
       }
       return envelope;
     };
-    const groupId = bytesToHex(options.state.groupContext.groupId);
-    this.#wrapperLedger = new TerminalWrapperLedger(this.storage, groupId);
-    this.#effectLedger = new ConvergenceEffectLedger(this.storage, groupId);
+    this.#wrapperLedger = new TerminalWrapperLedger(this.database);
+    this.#effectLedger = new ConvergenceEffectLedger(this.database);
     this.#engine = new MarmotGroupEngine({
       state: options.state,
       ciphersuite: this.ciphersuite,
@@ -411,16 +425,12 @@ export class GroupSession {
       // example when a confirmed epoch refreshes a pending request). Route
       // every such write through the same destruction barrier.
       storage: {
-        get: (key) => this.storage.get(key),
-        list: (prefix) => this.storage.list(prefix),
+        get: (key) => this.meta.get(key as GroupMetaKey),
         set: async (key, value) => {
-          await this.#write(() => this.storage.set(key, value));
+          await this.#write(() => this.meta.set(key as GroupMetaKey, value));
         },
         delete: async (key) => {
-          await this.#write(() => this.storage.delete(key));
-        },
-        batch: async (ops) => {
-          await this.#write(() => this.storage.batch(ops));
+          await this.#write(() => this.meta.delete(key as GroupMetaKey));
         },
       },
       onChanged: () => {
@@ -442,7 +452,8 @@ export class GroupSession {
     // Persist the full-fork history tree to the rewind store. A rehydrated tree
     // (loaded form) is already bound; a fresh one is bound here so its nodes
     // flush on the next save.
-    if (!options.historyTree) this.#engine.history.bindStore(this.storage);
+    if (!options.historyTree)
+      this.#engine.history.bindStore(groupTreeStore(this.database));
     this.#terminalHydrated = this.#hydrateDisbandTombstone();
     this.#deliveredHydrated = this.#hydrateDelivered();
     this.#removalHydrated = this.#hydrateRemovalEvidence();
@@ -480,13 +491,11 @@ export class GroupSession {
   }
 
   async #hydrateRemovalEvidence(): Promise<void> {
-    const bytes = await this.storage.get(
-      removalEvidenceKey(bytesToHex(this.id)),
-    );
+    const bytes = await this.meta.get(REMOVAL_EVIDENCE_KEY);
     const marker =
       this.state.groupActiveState.kind === "removedFromGroup"
         ? undefined
-        : await this.storage.get(groupKeys.removed(bytesToHex(this.id)));
+        : await this.meta.get(groupKeys.removed);
     this.#removalFenced = !!bytes || marker?.[0] === 1;
     this.#onChanged?.();
     if (!bytes) return;
@@ -535,8 +544,8 @@ export class GroupSession {
     this.#removalFenced = true;
     this.#onChanged?.();
     await this.#write(() =>
-      this.storage.set(
-        removalEvidenceKey(bytesToHex(this.id)),
+      this.meta.set(
+        REMOVAL_EVIDENCE_KEY,
         new TextEncoder().encode(JSON.stringify(evidence)),
       ),
     );
@@ -751,16 +760,14 @@ export class GroupSession {
     // After a crash either all of it is durable or none of it is.
     const writtenVersion = this.#stateVersion;
     const committed = await this.#write(async () => {
-      const batch = new StorageBatch(this.storage);
-      const finishTree = await this.#engine.history.stageFlush(batch);
+      const batch = new GroupBatch(this.database);
+      const tree = await this.#engine.history.stageFlush();
+      batch.tree(tree.write);
       const invalidated = this.#stageDelivered(batch);
-      batch.set(
-        groupKeys.state(bytesToHex(this.id)),
-        serializeClientState(this.state),
-      );
+      batch.setMeta(groupKeys.state, serializeClientState(this.state));
       const wrappers = this.#stageWrappers(batch);
       await batch.commit();
-      finishTree();
+      tree.finish();
       this.#engine.acknowledgeInvalidatedPayloads(invalidated);
       this.#unstageWrappers(wrappers);
       return true;
@@ -772,7 +779,7 @@ export class GroupSession {
 
   /** Stages delivered-payload evidence; returns invalidations to acknowledge after commit. */
   #stageDelivered(
-    batch: StorageBatch,
+    batch: GroupBatch,
   ): import("../../engine/delivered-payloads.js").DeliveredAppPayload<NostrEvent>[] {
     // Rewinds remove the entire batch before yielding individual results. Move
     // every obligation to the durable outbox before any canonical state save
@@ -781,8 +788,8 @@ export class GroupSession {
     for (const entry of invalidated)
       if (entry.rumorId && entry.transportId)
         this.#pendingRetractions.set(entry.transportId, entry);
-    batch.set(
-      this.#deliveredKey(),
+    batch.setMeta(
+      groupKeys.delivered,
       encodeDeliveredEvidence({
         entries: this.#engine
           .exportDeliveredPayloads()
@@ -793,7 +800,7 @@ export class GroupSession {
     return invalidated;
   }
 
-  #stageWrappers(batch: StorageBatch): Map<string, StagedWrapper> {
+  #stageWrappers(batch: GroupBatch): Map<string, StagedWrapper> {
     const staged = new Map(this.#stagedWrappers);
     for (const [eventId, record] of staged)
       this.#wrapperLedger.stage(batch, eventId, record.outcome, record.epoch);
@@ -918,12 +925,13 @@ export class GroupSession {
         // Tree nodes, the projected state, evidence, staged wrappers and
         // ledger compaction commit together.
         await this.#write(async () => {
-          const batch = new StorageBatch(this.storage);
-          const finishTree = await this.historyTree.stageFlush(batch);
-          batch.set(groupKeys.state(bytesToHex(this.id)), stateBytes);
-          batch.set(this.#deliveredKey(), evidence);
+          const batch = new GroupBatch(this.database);
+          const tree = await this.historyTree.stageFlush();
+          batch.tree(tree.write);
+          batch.setMeta(groupKeys.state, stateBytes);
+          batch.setMeta(groupKeys.delivered, evidence);
           const wrappers = this.#stageWrappers(batch);
-          await this.#wrapperLedger.stageCompaction(
+          this.#wrapperLedger.stageCompaction(
             batch,
             plan.floorEpoch,
             new Set([
@@ -932,9 +940,9 @@ export class GroupSession {
               ...wrappers.keys(),
             ]),
           );
-          await this.#effectLedger.stageCompaction(batch, digests);
+          this.#effectLedger.stageCompaction(batch, digests);
           await batch.commit();
-          finishTree();
+          tree.finish();
           this.#unstageWrappers(wrappers);
         });
         if (this.#destroyed || this.#disposed)
@@ -1021,7 +1029,7 @@ export class GroupSession {
       !(await this.#engine.validateRemovalRecovery(evidence, authority))
     )
       return;
-    const bytes = await this.storage.get(groupKeys.state(bytesToHex(this.id)));
+    const bytes = await this.meta.get(groupKeys.state);
     if (!bytes) return;
     let durable: ClientState;
     try {
@@ -1039,10 +1047,10 @@ export class GroupSession {
       return;
     // Keep notification identity and selection authority until the marker write settles.
     await this.#write(() =>
-      this.storage.batch([
-        { type: "delete", key: groupKeys.removed(bytesToHex(this.id)) },
-        { type: "delete", key: removalEvidenceKey(bytesToHex(this.id)) },
-      ]),
+      this.database.transaction(async (tx) => {
+        await tx.meta.delete(groupKeys.removed);
+        await tx.meta.delete(REMOVAL_EVIDENCE_KEY);
+      }),
     );
     this.#removalEvidence = undefined;
     this.#removalFenced = false;
@@ -1152,9 +1160,41 @@ export class GroupSession {
     await Promise.allSettled([...this.#localWrites]);
     this.#engine.destroyDeliveredPayloads();
     this.#pendingRetractions.clear();
+    // Purge through the history so its in-memory rumor cache and live
+    // subscribers see the removal, then delete the database itself.
     await this.history?.purgeMessages();
-    // Every group record lives under one prefix: nothing can be left behind.
-    await deletePrefix(this.storage, groupKeys.prefix(bytesToHex(this.id)));
+    if (this.#dropDatabase) {
+      // Every group record lives in this database: nothing can be left behind.
+      await this.#dropDatabase();
+      return;
+    }
+    await this.#clearDatabase();
+  }
+
+  /** Deletes every record this session knows about (no database drop available). */
+  async #clearDatabase(): Promise<void> {
+    const tree = await GroupHistoryTree.stagePurge(
+      groupTreeStore(this.database),
+    );
+    await this.database.transaction(async (tx) => {
+      for (const tag of tree.deletes) await tx.treeNodes.delete(tag);
+      await tx.wrappers.deleteBelow(Number.MAX_SAFE_INTEGER);
+      for (const key of [
+        groupKeys.state,
+        groupKeys.removed,
+        groupKeys.removalAttribution,
+        groupKeys.publication,
+        groupKeys.effects,
+        groupKeys.delivered,
+        "tree",
+        DISBAND_REQUEST_KEY,
+        DISBAND_CONVERGENCE_KEY,
+        DISBAND_TOMBSTONE_KEY,
+        DISBAND_INTENT_KEY,
+        DISBAND_REGISTRY_STATE_KEY,
+      ] as const)
+        await tx.meta.delete(key);
+    });
   }
 
   /** Returns authoritative terminal evidence, failing closed on corrupt bytes. */
@@ -1202,8 +1242,8 @@ export class GroupSession {
       ...current,
       notificationState: "delivered",
     };
-    await this.storage.set(
-      disbandTombstoneKey(bytesToHex(current.groupId)),
+    await this.meta.set(
+      DISBAND_TOMBSTONE_KEY,
       encodeDisbandTombstone(delivered),
     );
     this.assertOpen();
@@ -1313,35 +1353,24 @@ export class GroupSession {
 
   async #writeDisbandProjection(): Promise<void> {
     if (!this.#terminalIntent) return;
-    const idHex = bytesToHex(this.id);
     const intent = this.#terminalIntent;
+    const intentBytes = encodeDisbandTerminalIntent(intent);
+    const tombstoneBytes = encodeDisbandTombstone(this.#terminalTombstone!);
     // Terminal authority commits atomically; cleanup below is repeatable.
-    await this.storage.batch([
-      {
-        type: "set",
-        key: disbandTerminalIntentKey(idHex),
-        value: encodeDisbandTerminalIntent(intent),
-      },
-      {
-        type: "set",
-        key: disbandTombstoneKey(idHex),
-        value: encodeDisbandTombstone(this.#terminalTombstone!),
-      },
-      {
-        type: "set",
-        key: disbandRegistryStateKey(idHex),
-        value: intent.registryState,
-      },
-    ]);
+    await this.database.transaction(async (tx) => {
+      await tx.meta.set(DISBAND_INTENT_KEY, intentBytes);
+      await tx.meta.set(DISBAND_TOMBSTONE_KEY, tombstoneBytes);
+      await tx.meta.set(DISBAND_REGISTRY_STATE_KEY, intent.registryState);
+    });
     this.assertOpen();
-    await this.#cleanupAfterDisband(idHex);
+    await this.#cleanupAfterDisband();
     this.#terminalProjectionComplete = true;
   }
 
   async #hydrateDisbandTombstone(): Promise<void> {
     const idHex = bytesToHex(this.id);
-    const intentBytes = await this.storage.get(disbandTerminalIntentKey(idHex));
-    const bytes = await this.storage.get(disbandTombstoneKey(idHex));
+    const intentBytes = await this.meta.get(DISBAND_INTENT_KEY);
+    const bytes = await this.meta.get(DISBAND_TOMBSTONE_KEY);
     if ((!bytes && !intentBytes) || this.#destroyed || this.#disposed) return;
     const intent = intentBytes
       ? decodeDisbandTerminalIntent(intentBytes)
@@ -1374,24 +1403,24 @@ export class GroupSession {
     await this.#write(() => this.#finishDisbandProjection());
   }
 
-  async #cleanupAfterDisband(idHex: string): Promise<void> {
+  async #cleanupAfterDisband(): Promise<void> {
     this.#engine.dispose();
     await this.#deliveredHydrated;
     // Retraction decoding still depends on the abandoned branch's nodes.
     await this.#engine.history.flush();
     await this.#persistDelivered();
-    await this.storage.batch([
-      { type: "delete", key: disbandRequestKey(idHex) },
-      { type: "delete", key: disbandConvergenceKey(idHex) },
-      { type: "delete", key: groupKeys.removed(idHex) },
-      { type: "delete", key: groupKeys.state(idHex) },
-    ]);
+    await this.database.transaction(async (tx) => {
+      await tx.meta.delete(DISBAND_REQUEST_KEY);
+      await tx.meta.delete(DISBAND_CONVERGENCE_KEY);
+      await tx.meta.delete(groupKeys.removed);
+      await tx.meta.delete(groupKeys.state);
+    });
     await this.#wrapperLedger.clear();
-    await this.#cleanupCompletedRetractions(idHex);
+    await this.#cleanupCompletedRetractions();
     this.#dirty = false;
   }
 
-  async #cleanupCompletedRetractions(idHex: string): Promise<void> {
+  async #cleanupCompletedRetractions(): Promise<void> {
     // Ordinary admission is already closed. An adapter save may have started
     // before selection and still forward after its await; purge only after it
     // settles. Waiting on #localWrites would include this terminal projection
@@ -1400,9 +1429,10 @@ export class GroupSession {
     if (this.#pendingRetractions.size) return;
     await this.history?.purgeMessages();
     // The decoder requires the tree; retire evidence before its provenance.
-    await this.storage.delete(this.#deliveredKey());
-    await GroupHistoryTree.purge(this.storage, idHex);
-    await this.storage.delete(pendingPublicationKey(idHex));
+    await this.meta.delete(groupKeys.delivered);
+    const treeStore = groupTreeStore(this.database);
+    await treeStore.commit(await GroupHistoryTree.stagePurge(treeStore));
+    await this.meta.delete(PENDING_PUBLICATION_KEY);
   }
 
   async #resumeTerminalWork(): Promise<DispositionedIngestResult[]> {
@@ -1415,9 +1445,7 @@ export class GroupSession {
     }
     await this.#retryRetractions();
     if (this.#terminalProjectionComplete)
-      await this.#write(() =>
-        this.#cleanupCompletedRetractions(bytesToHex(this.id)),
-      );
+      await this.#write(() => this.#cleanupCompletedRetractions());
     return (await this.#effectLedger.pending()).map((pending) => ({
       ...pending,
       disposition: ingestResultDisposition(pending),
@@ -2104,10 +2132,6 @@ export class GroupSession {
     this.#markRetentionPending();
   }
 
-  #deliveredKey(): string {
-    return groupKeys.delivered(bytesToHex(this.id));
-  }
-
   /** The source epoch of a wrapper's message, else the epoch it completed at. */
   #wrapperEpoch(message?: import("ts-mls").MlsMessage): number {
     const epoch = message && framedEpoch(message);
@@ -2121,7 +2145,7 @@ export class GroupSession {
   }
 
   async #hydrateDelivered(): Promise<void> {
-    const bytes = await this.storage.get(this.#deliveredKey());
+    const bytes = await this.meta.get(groupKeys.delivered);
     if (this.#destroyed || this.#disposed) return;
     if (!bytes) return; // Older clients have no attributable pre-migration deliveries.
     const evidence = decodeDeliveredEvidence(bytes, this.#engine.history);
@@ -2173,7 +2197,7 @@ export class GroupSession {
     await this.#retentionInFlight;
     if (this.#destroyed) return;
     await this.#write(async () => {
-      const batch = new StorageBatch(this.storage);
+      const batch = new GroupBatch(this.database);
       const invalidated = this.#stageDelivered(batch);
       await batch.commit();
       this.#engine.acknowledgeInvalidatedPayloads(invalidated);

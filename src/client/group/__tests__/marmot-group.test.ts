@@ -64,10 +64,62 @@ import { encodeGroupProfileV1 } from "../../../core/components/group-profile.js"
 import { createGroupEvent } from "../../../core/group-message.js";
 import { generateKeyPackage } from "../../../core/key-package.js";
 import {
-  memoryStorage,
-  type MarmotStorage,
-  type StorageOp,
-} from "../../../utils/storage.js";
+  memoryDatabase,
+  memoryGroupDatabase,
+} from "../../../__tests__/helpers/database.js";
+import type {
+  GroupTransaction,
+  MarmotGroupDatabase,
+} from "../../storage/database/types.js";
+import type { MemoryGroupDatabases } from "../../storage/database/memory.js";
+
+/** Rows held by an in-memory group database, across every table. */
+function rowCount(db: MarmotGroupDatabase): number {
+  const { committed } = (
+    db as unknown as {
+      store: { committed: Record<string, Map<string, unknown>> };
+    }
+  ).store;
+  return Object.values(committed).reduce((sum, table) => sum + table.size, 0);
+}
+
+/** Account group rows plus rows still held by any group database. */
+async function storedRows(database: {
+  account: { groups: { all(): Promise<unknown[]> } };
+  groups: MemoryGroupDatabases;
+}): Promise<number> {
+  let rows = (await database.account.groups.all()).length;
+  for (const id of database.groups.ids())
+    rows += rowCount(await database.groups.open(id));
+  return rows;
+}
+
+/**
+ * Routes `db`'s transactions through `onState`, which runs inside the
+ * transaction whenever it writes canonical state.
+ */
+function onStateWrite(
+  db: MarmotGroupDatabase,
+  onState: () => Promise<void> | void,
+): () => void {
+  const transaction = db.transaction.bind(db);
+  db.transaction = <T>(fn: (tx: GroupTransaction) => Promise<T>) =>
+    transaction((tx) =>
+      fn({
+        ...tx,
+        meta: {
+          ...tx.meta,
+          set: async (key, value) => {
+            if (key === "state") await onState();
+            return tx.meta.set(key, value);
+          },
+        },
+      }),
+    );
+  return () => {
+    db.transaction = transaction;
+  };
+}
 import type {
   NostrNetworkInterface,
   PublishResponse,
@@ -130,10 +182,10 @@ function proofPolicyLeaf(
 }
 
 async function imageOwner(maxPendingImageMutations?: number) {
-  const storage = memoryStorage();
+  const storage = memoryDatabase();
   const network = new MockNetwork();
   const manager = new GroupsManager({
-    storage,
+    database: storage,
     network,
     signer: testAccount(6).signer,
     maxPendingImageMutations,
@@ -142,7 +194,8 @@ async function imageOwner(maxPendingImageMutations?: number) {
     relays: network.relayUrls,
   });
   /** The group's canonical state record, if persisted. */
-  const savedState = () => storage.get(`${group.idStr}/state`);
+  const savedState = async () =>
+    (await storage.groups.open(group.idStr)).meta.get("state");
   return { manager, group, storage, savedState, network };
 }
 
@@ -353,7 +406,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
       expect(group.session.parentToken).toBe(parent);
       expect(confirm).toHaveBeenCalledOnce();
       if (mode === "unload") expect(await savedState()).toBeDefined();
-      else expect(await storage.list("")).toEqual([]);
+      else expect(await storedRows(storage)).toBe(0);
       group.dispose();
     },
   );
@@ -421,7 +474,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
         expect(group.session.parentToken).toBe(before);
         expect(group.lifecycle).toBe("Stable");
         expect(network.events).toHaveLength(0);
-        expect(await storage.list("")).toEqual([]);
+        expect(await storedRows(storage)).toBe(0);
       } finally {
         gate.resolve();
         spy?.mockRestore();
@@ -480,8 +533,6 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
       const before = group.session.parentToken;
       const gate = deferred<void>();
       let entered = false;
-      const commit = storage.batch.bind(storage);
-      const stateKey = `${group.idStr}/state`;
       let gated = false;
       const publish = network.publish.bind(network);
       const spy =
@@ -494,17 +545,15 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
                 await gate.promise;
                 return response;
               })
-          : vi
-              .spyOn(storage, "batch")
-              .mockImplementation(async (ops: readonly StorageOp[]) => {
-                // Gate the first save: the atomic batch carrying the state.
-                if (!gated && ops.some((op) => op.key === stateKey)) {
-                  gated = true;
-                  entered = true;
-                  await gate.promise;
-                }
-                return commit(ops);
-              });
+          : {
+              // Gate the first save: the atomic transaction carrying the state.
+              mockRestore: onStateWrite(group.database, async () => {
+                if (gated) return;
+                gated = true;
+                entered = true;
+                await gate.promise;
+              }),
+            };
       const confirm = vi.spyOn(group.session, "confirmPublished");
       const saved = vi.fn();
       group.on("stateSaved", saved);
@@ -526,7 +575,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
       if (stage === "save") expect(destroyed).toBe(false);
       gate.resolve();
       await Promise.all([rejected, destruction]);
-      expect(await storage.list("")).toEqual([]);
+      expect(await storedRows(storage)).toBe(0);
       expect(saved).not.toHaveBeenCalled();
       expect(confirm).toHaveBeenCalledTimes(stage === "publish" ? 0 : 1);
       if (stage === "publish") expect(group.session.parentToken).toBe(before);
@@ -540,36 +589,38 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     const state = initial.state;
     initial.dispose();
     const hydration = deferred<Uint8Array | undefined>();
-    // Every read of the old group's (shared) storage waits on hydration.
-    const deferredReads: MarmotStorage = {
-      get: () => hydration.promise,
-      set: (key, value) => storage.set(key, value),
-      delete: (key) => storage.delete(key),
-      list: (prefix) => storage.list(prefix),
-      batch: (ops) => storage.batch(ops),
+    const shared = await storage.groups.open(initial.idStr);
+    // Every meta read of the old group's (shared) database waits on hydration.
+    const deferredReads: MarmotGroupDatabase = {
+      meta: { get: () => hydration.promise },
+      treeNodes: shared.treeNodes,
+      wrappers: shared.wrappers,
+      messages: shared.messages,
+      deliveries: shared.deliveries,
+      transaction: (fn) => shared.transaction(fn),
+      close: () => shared.close(),
     };
     const old = new MarmotGroup(state, {
-      storage: deferredReads,
+      database: deferredReads,
       ciphersuite: impl,
       network: new MockNetwork(),
       signer: testAccount(6).signer,
     });
     const saved = vi.fn();
     old.on("stateSaved", saved);
-    const writes = vi.spyOn(storage, "set");
-    const batches = vi.spyOn(storage, "batch");
-    const stateKey = `${initial.idStr}/state`;
-    const stateWrites = () =>
-      batches.mock.calls.filter(([ops]) =>
-        ops.some((op) => op.key === stateKey),
-      ).length;
+    const writes = vi.spyOn(shared, "transaction");
+    let stateWriteCount = 0;
+    onStateWrite(shared, () => {
+      stateWriteCount++;
+    });
+    const stateWrites = () => stateWriteCount;
     const pending = old.save(true);
     old.dispose();
     hydration.resolve(undefined);
     await pending;
-    const oldWrites = writes.mock.calls.length + batches.mock.calls.length;
+    const oldWrites = writes.mock.calls.length;
     const newer = new MarmotGroup(state, {
-      storage,
+      database: shared,
       ciphersuite: impl,
       network: new MockNetwork(),
       signer: testAccount(6).signer,
@@ -759,7 +810,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
       const { clientState } = await createTestGroupState(account, impl);
       const network = new MockNetwork();
       const group = new MarmotGroup(clientState, {
-        storage: memoryStorage(),
+        database: memoryGroupDatabase(),
         signer: account.signer,
         ciphersuite: impl,
         network,
@@ -813,7 +864,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     );
     const { clientState } = await createTestGroupState(account, impl);
     const group = new MarmotGroup(clientState, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: account.signer,
       ciphersuite: impl,
       network: new MockNetwork(),
@@ -865,7 +916,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     let scheduled: (() => void) | undefined;
     const network = new MockNetwork(["wss://relay.test"]);
     const group = new MarmotGroup(added.newState, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: account.signer,
       ciphersuite: impl,
       network,
@@ -944,9 +995,9 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     );
     const { clientState } = await createTestGroupState(account, impl);
     const network = new MockNetwork(["wss://relay.test"]);
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
     const group = new MarmotGroup(clientState, {
-      storage,
+      database: storage,
       ciphersuite: impl,
       signer: account.signer,
       network,
@@ -969,7 +1020,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     group.session.publishFailed(work.pending);
     expect(group.state.groupContext.epoch).toBe(epoch);
     expect(publish).not.toHaveBeenCalled();
-    expect(await storage.list("")).toEqual([]);
+    expect(rowCount(storage)).toBe(0);
   });
 
   it("automatically regenerates disband after real convergence selects a deeper active branch", async () => {
@@ -998,7 +1049,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     };
     const targetNetwork = new MockNetwork(["wss://relay.test"]);
     const target = new MarmotGroup(cloneState(), {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: adminAccount.signer,
       ciphersuite: impl,
       network: targetNetwork,
@@ -1013,7 +1064,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     expect(targetNetwork.events).toHaveLength(1);
 
     const competitor = new MarmotGroup(cloneState(), {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: adminAccount.signer,
       ciphersuite: impl,
       network: new MockNetwork(["wss://relay.test"]),
@@ -1149,7 +1200,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
 
     const network = new MockNetwork(["wss://relay.test"]);
     const group = new MarmotGroup(legacy, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: adminAccount.signer,
       ciphersuite: impl,
       network,
@@ -1168,10 +1219,10 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
       defaultCryptoProvider,
     );
     const { clientState } = await createTestGroupState(adminAccount, impl);
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
     const network = new MockNetwork(["wss://relay.test"]);
     const group = new MarmotGroup(clientState, {
-      storage,
+      database: storage,
       signer: adminAccount.signer,
       ciphersuite: impl,
       network,
@@ -1180,7 +1231,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     const result = await group.disband();
     expect(result).toMatchObject({ kind: "acknowledged" });
     expect(network.events).toHaveLength(1);
-    expect(await storage.get(`${group.idStr}/disband/request`)).toBeDefined();
+    expect(await storage.meta.get("disband/request")).toBeDefined();
 
     const repeated = await group.disband();
     expect(repeated.kind).toBe("pending");
@@ -1194,13 +1245,13 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
       defaultCryptoProvider,
     );
     const { clientState } = await createTestGroupState(adminAccount, impl);
-    const storage = memoryStorage();
+    const storage = memoryGroupDatabase();
     const network = new MockNetwork(["wss://relay.test"]);
     vi.spyOn(network, "publish").mockResolvedValue({
       "wss://relay.test": { from: "wss://relay.test", ok: false },
     });
     const group = new MarmotGroup(clientState, {
-      storage,
+      database: storage,
       signer: adminAccount.signer,
       ciphersuite: impl,
       network,
@@ -1210,7 +1261,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
 
     expect(result.kind).toBe("publishFailed");
     expect(group.lifecycle).toBe("Stable");
-    expect(await storage.get(`${group.idStr}/disband/request`)).toBeDefined();
+    expect(await storage.meta.get("disband/request")).toBeDefined();
   });
 
   it("reports lifecycle enablement idempotently through the public facade", async () => {
@@ -1221,7 +1272,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     );
     const { clientState } = await createTestGroupState(adminAccount, impl);
     const group = new MarmotGroup(clientState, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: adminAccount.signer,
       ciphersuite: impl,
       network: new MockNetwork(["wss://relay.test"]),
@@ -1270,7 +1321,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     const signer = adminAccount.signer;
 
     const group = new MarmotGroup(clientState, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer,
       ciphersuite: impl,
       network,
@@ -1355,7 +1406,7 @@ describe("MarmotGroup lifecycle (group-state.md)", () => {
     };
     const signer = adminAccount.signer;
     const group = new MarmotGroup(clientState, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer,
       ciphersuite: impl,
       network,
@@ -1462,10 +1513,9 @@ describe("MarmotGroup admin verification (protocol-core/group-messaging.md)", ()
     });
 
     // Set up MarmotGroup with admin state
-    const storage = memoryStorage();
-    await storage.set(
-      `${bytesToHex(adminStateEpoch1.groupContext.groupId)}/state`,
-      serializeClientState(adminStateEpoch1),
+    const storage = memoryGroupDatabase();
+    await storage.transaction((tx) =>
+      tx.meta.set("state", serializeClientState(adminStateEpoch1)),
     );
 
     const network: NostrNetworkInterface = {
@@ -1486,7 +1536,7 @@ describe("MarmotGroup admin verification (protocol-core/group-messaging.md)", ()
     const signer = adminAccount.signer;
 
     const group = new MarmotGroup(adminStateEpoch1, {
-      storage,
+      database: storage,
       signer,
       ciphersuite: impl,
       network,
@@ -1731,10 +1781,9 @@ describe("MarmotGroup admin verification (protocol-core/group-messaging.md)", ()
     });
 
     // Set up MarmotGroup with admin state and verify the admin will ACCEPT this commit
-    const storage = memoryStorage();
-    await storage.set(
-      `${bytesToHex(adminStateEpoch1.groupContext.groupId)}/state`,
-      serializeClientState(adminStateEpoch1),
+    const storage = memoryGroupDatabase();
+    await storage.transaction((tx) =>
+      tx.meta.set("state", serializeClientState(adminStateEpoch1)),
     );
 
     const network: NostrNetworkInterface = {
@@ -1755,7 +1804,7 @@ describe("MarmotGroup admin verification (protocol-core/group-messaging.md)", ()
     const signer = adminAccount.signer;
 
     const group = new MarmotGroup(adminStateEpoch1, {
-      storage,
+      database: storage,
       signer,
       ciphersuite: impl,
       network,
@@ -1855,10 +1904,9 @@ describe("MarmotGroup admin verification (protocol-core/group-messaging.md)", ()
     });
 
     // Set up MarmotGroup with the receiver state
-    const storage = memoryStorage();
-    await storage.set(
-      `${bytesToHex(memberStateEpoch1.groupContext.groupId)}/state`,
-      serializeClientState(memberStateEpoch1),
+    const storage = memoryGroupDatabase();
+    await storage.transaction((tx) =>
+      tx.meta.set("state", serializeClientState(memberStateEpoch1)),
     );
 
     const network: NostrNetworkInterface = {
@@ -1879,7 +1927,7 @@ describe("MarmotGroup admin verification (protocol-core/group-messaging.md)", ()
     const signer = memberAccount.signer;
 
     const group = new MarmotGroup(memberStateEpoch1, {
-      storage,
+      database: storage,
       signer,
       ciphersuite: impl,
       network,
@@ -1940,7 +1988,7 @@ describe("MarmotGroup founding Welcome delivery report (D-04/D-10/D-12/R-04, FOU
     );
     const { clientState } = await createTestGroupState(adminAccount, impl);
     const group = new MarmotGroup(clientState, {
-      storage: memoryStorage(),
+      database: memoryGroupDatabase(),
       signer: adminAccount.signer,
       ciphersuite: impl,
       network,

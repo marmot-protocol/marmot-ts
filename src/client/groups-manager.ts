@@ -1,4 +1,3 @@
-import type { MarmotRumorDatabases } from "./storage/group-history.js";
 import { watchCurrent } from "../utils/watch-current.js";
 import type { MarmotGroupSnapshot } from "./group/marmot-group.js";
 import { isReusableKeyPackage } from "../core/key-package.js";
@@ -27,7 +26,8 @@ import type { IngestionPoolOptions } from "../engine/ingestion-pool.js";
 import type { AuditContextOptions, AuditSink } from "../audit/index.js";
 import { logger } from "../utils/debug.js";
 import { hasAck } from "../utils/index.js";
-import type { MarmotStorage } from "./storage/storage.js";
+import type { MarmotDatabase } from "./storage/database/types.js";
+import type { GroupMetaKey } from "./storage/database/types.js";
 import { getSingletonTagValue } from "../utils/tag-cardinality.js";
 import {
   MarmotGroup,
@@ -211,11 +211,8 @@ function backfillBounds(options: ConnectOptions | undefined) {
 
 /** Options for creating a new GroupsManager */
 export type GroupsManagerOptions = {
-  /**
-   * Durable storage scoped to the client's `group/` namespace: every group's
-   * state, fork history, ingest ledgers and lifecycle records.
-   */
-  storage: MarmotStorage;
+  /** The account database and per-group databases. */
+  database: MarmotDatabase;
   /** The signer used for the clients identity */
   signer: EventSigner;
   /** The nostr relay pool to use for the client */
@@ -226,8 +223,6 @@ export type GroupsManagerOptions = {
   auditContext?: AuditContextOptions;
   /** The crypto provider to use for cryptographic operations */
   cryptoProvider?: CryptoProvider;
-  /** Per-group rumor databases for message history (in memory when omitted). */
-  rumors?: MarmotRumorDatabases;
   /**
    * Convergence policy applied to every group (branch selection + the
    * `maxRewindCommits` rollback horizon). Keep the finite profile-1 default
@@ -313,8 +308,8 @@ export type GroupsManagerEvents = {
  */
 export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
   /** The backend storing serialized group state bytes */
-  /** Storage scoped to the client's `group/` namespace. */
-  readonly storage: MarmotStorage;
+  /** The account database and per-group databases. */
+  readonly database: MarmotDatabase;
   /** The signer used for the clients identity */
   readonly signer: EventSigner;
   /** The nostr relay pool to use for the client */
@@ -400,14 +395,14 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
         "Image mutation capacity must be a finite positive integer",
       );
     this.#maxPendingImageMutations = capacity;
-    this.storage = options.storage;
+    this.database = options.database;
     this.signer = options.signer;
     this.network = options.network;
     this.cryptoProvider = options.cryptoProvider ?? defaultCryptoProvider;
     this.#verifyEvent = options.verifyEvent ?? defaultVerifyEvent;
 
     this.#registry = new GroupRegistry({
-      storage: options.storage,
+      database: options.database,
       convergencePolicy: options.convergencePolicy,
       ingestionPool: options.ingestionPool,
       signer: options.signer,
@@ -415,11 +410,10 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       audit: options.audit,
       auditContext: options.auditContext,
       cryptoProvider: this.cryptoProvider,
-      rumors: options.rumors,
     });
 
     this.#factory = new GroupFactory({
-      storage: options.storage,
+      prepare: (state) => this.#registry.prepare(state),
       convergencePolicy: options.convergencePolicy,
       ingestionPool: options.ingestionPool,
       signer: options.signer,
@@ -427,7 +421,6 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       audit: options.audit,
       auditContext: options.auditContext,
       cryptoProvider: this.cryptoProvider,
-      rumors: options.rumors,
       verifyEvent: this.#verifyEvent,
     });
 
@@ -1174,8 +1167,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       const resume = new Map<string, BackfillProgress>();
       for (const relay of relays) {
         const cursor = await readBackfillCursor(
-          this.storage,
-          group.idStr,
+          group.session.meta,
           relay,
           nowSeconds(),
         );
@@ -1184,8 +1176,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
           since.set(relay, Math.max(0, Math.floor(cursor - slack)));
         }
         const progress = await readBackfillProgress(
-          this.storage,
-          group.idStr,
+          group.session.meta,
           relay,
           nowSeconds(),
         );
@@ -1273,15 +1264,16 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
    */
   async #writeBackfillRecord(
     group: MarmotGroup,
-    key: string,
+    key: GroupMetaKey,
     value?: Uint8Array,
   ): Promise<void> {
     const closed = () =>
       group.session.destroyed || group.session.terminalTombstone !== undefined;
     if (closed()) return;
-    if (value === undefined) return this.storage.delete(key);
-    await this.storage.set(key, value);
-    if (closed()) await this.storage.delete(key);
+    const store = group.session.meta;
+    if (value === undefined) return store.delete(key);
+    await store.set(key, value);
+    if (closed()) await store.delete(key);
   }
 
   /**
@@ -1316,7 +1308,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       try {
         await this.#writeBackfillRecord(
           group,
-          backfillCursorKey(group.idStr, outcome.relay),
+          backfillCursorKey(outcome.relay),
           encodeBackfillCursor(next),
         );
       } catch (err) {
@@ -1341,7 +1333,7 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
     walkStart: number,
   ): Promise<void> {
     for (const outcome of backfill.relays) {
-      const key = backfillProgressKey(group.idStr, outcome.relay);
+      const key = backfillProgressKey(outcome.relay);
       try {
         if (outcome.status === "complete") {
           if (recorded.has(outcome.relay))
@@ -1405,7 +1397,8 @@ export class GroupsManager extends EventEmitter<GroupsManagerEvents> {
       }
       await options?.beforeAdopt?.();
 
-      const group = await this.#registry.build(state);
+      const { database } = await this.#registry.prepare(state);
+      const group = await this.#registry.build(state, database);
 
       // Persist initial state via the group's own save() path.
       // MarmotGroup.save() is the single writer into the group state store.

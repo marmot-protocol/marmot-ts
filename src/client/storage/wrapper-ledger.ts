@@ -1,13 +1,11 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import type { StateNotification } from "../../engine/state-notifications.js";
 import { decodeRecord, encodeRecord } from "./record-codec.js";
-import type { MarmotStorage, StorageBatch } from "./storage.js";
+import type { GroupBatch } from "./database/group-batch.js";
+import type { MarmotGroupDatabase, WrapperRow } from "./database/types.js";
 import { groupKeys } from "./storage-keys.js";
 
 export type TerminalWrapperOutcome = "accepted" | "stale" | "invalidated";
-
-/** One processed transport wrapper. `epoch` drives retention compaction. */
-type StoredWrapper = { outcome: TerminalWrapperOutcome; epoch: number };
 
 const safeEpoch = (epoch: unknown): epoch is number =>
   Number.isSafeInteger(epoch) && (epoch as number) >= 0;
@@ -17,23 +15,17 @@ const HEX_ID = /^[a-f0-9]{64}$/;
 
 /**
  * Durable, group-scoped record of verified transport wrappers handled
- * terminally. Records are staged into the same atomic batch as the state they
- * produced, so a durable record always means the wrapper's effect is durable.
+ * terminally. Records are staged into the same atomic transaction as the state
+ * they produced, so a durable record always means the wrapper's effect is
+ * durable.
  */
 export class TerminalWrapperLedger {
-  readonly #prefix: string;
+  constructor(readonly db: MarmotGroupDatabase) {}
 
-  constructor(
-    readonly storage: MarmotStorage,
-    readonly groupId: string,
-  ) {
-    this.#prefix = groupKeys.wrapperPrefix(groupId);
-  }
-
-  #decode(bytes: Uint8Array): StoredWrapper | undefined {
+  #decode(bytes: Uint8Array): TerminalWrapperOutcome | undefined {
     try {
-      const value = decodeRecord<StoredWrapper>(bytes);
-      if (outcomeValid(value.outcome) && safeEpoch(value.epoch)) return value;
+      const outcome = decodeRecord<unknown>(bytes);
+      if (outcomeValid(outcome)) return outcome;
     } catch {
       // Corrupt evidence is ignored; the verified wrapper remains processable.
     }
@@ -41,24 +33,28 @@ export class TerminalWrapperLedger {
   }
 
   async get(eventId: string): Promise<TerminalWrapperOutcome | undefined> {
-    const bytes = await this.storage.get(this.#prefix + eventId);
-    return bytes && this.#decode(bytes)?.outcome;
+    const row = await this.db.wrappers.get(eventId);
+    return row && safeEpoch(row.epoch) ? this.#decode(row.value) : undefined;
   }
 
-  #encode(outcome: TerminalWrapperOutcome, epoch: number): Uint8Array {
+  #row(
+    eventId: string,
+    outcome: TerminalWrapperOutcome,
+    epoch: number,
+  ): WrapperRow {
     if (!outcomeValid(outcome) || !safeEpoch(epoch))
       throw new Error("Invalid wrapper record");
-    return encodeRecord({ outcome, epoch } satisfies StoredWrapper);
+    return { id: eventId, epoch, value: encodeRecord(outcome) };
   }
 
   /** Stages a terminal record into a caller-owned atomic batch. */
   stage(
-    batch: StorageBatch,
+    batch: GroupBatch,
     eventId: string,
     outcome: TerminalWrapperOutcome,
     epoch: number,
   ): void {
-    batch.set(this.#prefix + eventId, this.#encode(outcome, epoch));
+    batch.putWrapper(this.#row(eventId, outcome, epoch));
   }
 
   /** Records a terminal outcome that changes no other state (e.g. self-echo). */
@@ -67,34 +63,26 @@ export class TerminalWrapperLedger {
     outcome: TerminalWrapperOutcome,
     epoch: number,
   ): Promise<void> {
-    await this.storage.set(
-      this.#prefix + eventId,
-      this.#encode(outcome, epoch),
-    );
+    const row = this.#row(eventId, outcome, epoch);
+    await this.db.transaction((tx) => tx.wrappers.put(row));
   }
 
   /** Stages deletion of records strictly below the retention floor. */
-  async stageCompaction(
-    batch: StorageBatch,
+  stageCompaction(
+    batch: GroupBatch,
     floorEpoch: number,
     pinnedIds: ReadonlySet<string> = new Set(),
-  ): Promise<void> {
+  ): void {
     if (!safeEpoch(floorEpoch))
       throw new Error("Invalid wrapper retention epoch");
-    for (const key of await this.storage.list(this.#prefix)) {
-      const id = key.slice(this.#prefix.length);
-      if (!HEX_ID.test(id) || pinnedIds.has(id)) continue;
-      const bytes = await this.storage.get(key);
-      const value = bytes && this.#decode(bytes);
-      if (value && value.epoch < floorEpoch) batch.delete(key);
-    }
+    batch.deleteWrappersBelow(floorEpoch, [...pinnedIds]);
   }
 
   /** Removes every record (terminal group cleanup). */
   async clear(): Promise<void> {
-    const keys = await this.storage.list(this.#prefix);
-    if (keys.length)
-      await this.storage.batch(keys.map((key) => ({ type: "delete", key })));
+    await this.db.transaction((tx) =>
+      tx.wrappers.deleteBelow(Number.MAX_SAFE_INTEGER),
+    );
   }
 }
 
@@ -122,47 +110,76 @@ export type PendingConvergenceEffect =
       notifications: StateNotification[];
     };
 
-/** Durable observation verdicts for branch-selection withdrawal/re-adoption. */
+type EffectMap = Record<string, unknown>;
+
+function validEffect(value: unknown): value is StoredEffect {
+  const effect = value as StoredEffect;
+  return (
+    !!effect &&
+    typeof effect === "object" &&
+    (effect.state === "pending" || effect.state === "observed") &&
+    (effect.direction === "withdrawal" || effect.direction === "adoption") &&
+    Array.isArray(effect.notifications) &&
+    (effect.forkEpoch === undefined || safeEpoch(effect.forkEpoch)) &&
+    (effect.direction !== "withdrawal" || safeEpoch(effect.forkEpoch)) &&
+    (effect.producingEpoch === undefined || safeEpoch(effect.producingEpoch)) &&
+    effect.notifications.every((notification) =>
+      HEX_ID.test(notification.commitDigest),
+    )
+  );
+}
+
+/**
+ * Durable observation verdicts for branch-selection withdrawal/re-adoption,
+ * kept as one `effects` map keyed by commit digest. Every change is a
+ * read-modify-write inside one group transaction.
+ */
 export class ConvergenceEffectLedger {
-  readonly #prefix: string;
+  constructor(readonly db: MarmotGroupDatabase) {}
 
-  constructor(
-    readonly storage: MarmotStorage,
-    readonly groupId: string,
-  ) {
-    this.#prefix = groupKeys.effectPrefix(groupId);
-  }
-
-  #key(digest: Uint8Array): string {
-    return this.#prefix + bytesToHex(digest);
-  }
-
-  async #readKey(key: string): Promise<StoredEffect | undefined> {
-    const bytes = await this.storage.get(key);
-    if (!bytes) return undefined;
+  /** Decodes the map; `undefined` when the record itself is corrupt. */
+  static #decode(bytes: Uint8Array | undefined): EffectMap | undefined {
+    if (!bytes) return {};
     try {
-      const value = decodeRecord<StoredEffect>(bytes);
-      if (
-        (value.state === "pending" || value.state === "observed") &&
-        (value.direction === "withdrawal" || value.direction === "adoption") &&
-        Array.isArray(value.notifications) &&
-        (value.forkEpoch === undefined || safeEpoch(value.forkEpoch)) &&
-        (value.direction !== "withdrawal" || safeEpoch(value.forkEpoch)) &&
-        (value.producingEpoch === undefined ||
-          safeEpoch(value.producingEpoch)) &&
-        value.notifications.every((notification) =>
-          HEX_ID.test(notification.commitDigest),
-        )
-      )
-        return value;
+      const value = decodeRecord<unknown>(bytes);
+      if (value && typeof value === "object" && !Array.isArray(value))
+        return value as EffectMap;
     } catch {
       // Corrupt local evidence cannot establish an observation boundary.
     }
     return undefined;
   }
 
-  async #write(digest: Uint8Array, value: StoredEffect) {
-    await this.storage.set(this.#key(digest), encodeRecord(value));
+  async #read(): Promise<EffectMap | undefined> {
+    return ConvergenceEffectLedger.#decode(
+      await this.db.meta.get(groupKeys.effects),
+    );
+  }
+
+  /** Atomically updates one digest's entry. */
+  async #update(
+    digest: Uint8Array,
+    change: (existing: StoredEffect | undefined) => StoredEffect | undefined,
+  ): Promise<void> {
+    const hex = bytesToHex(digest);
+    await this.db.transaction(async (tx) => {
+      const map = ConvergenceEffectLedger.#decode(
+        await tx.meta.get(groupKeys.effects),
+      );
+      if (!map) throw new Error("Corrupt convergence effect ledger");
+      const existing = validEffect(map[hex]) ? map[hex] : undefined;
+      const next = change(existing);
+      if (!next) return;
+      await tx.meta.set(
+        groupKeys.effects,
+        encodeRecord({ ...map, [hex]: next }),
+      );
+    });
+  }
+
+  async #get(digest: Uint8Array): Promise<StoredEffect | undefined> {
+    const entry = (await this.#read())?.[bytesToHex(digest)];
+    return validEffect(entry) ? entry : undefined;
   }
 
   #encodeNotifications(notifications: readonly StateNotification[]) {
@@ -177,7 +194,7 @@ export class ConvergenceEffectLedger {
     forkEpoch: number,
     notifications: readonly StateNotification[],
   ): Promise<boolean> {
-    const existing = await this.#readKey(this.#key(digest));
+    const existing = await this.#get(digest);
     if (existing?.direction === "withdrawal")
       return existing.state === "pending";
     const producing = notifications.find(
@@ -185,13 +202,13 @@ export class ConvergenceEffectLedger {
         notification.kind === "epochAdvanced" &&
         bytesToHex(notification.commitDigest) === bytesToHex(digest),
     ) as Extract<StateNotification, { kind: "epochAdvanced" }> | undefined;
-    await this.#write(digest, {
+    await this.#update(digest, () => ({
       producingEpoch: producing?.to,
       state: "pending",
       direction: "withdrawal",
       forkEpoch,
       notifications: this.#encodeNotifications(notifications),
-    });
+    }));
     return true;
   }
 
@@ -199,16 +216,16 @@ export class ConvergenceEffectLedger {
     digest: Uint8Array,
     notifications: readonly StateNotification[],
   ): Promise<boolean> {
-    const existing = await this.#readKey(this.#key(digest));
+    const existing = await this.#get(digest);
     if (!existing) return false;
     if (existing.direction === "adoption") return existing.state === "pending";
     if (existing.state !== "observed") return false;
-    await this.#write(digest, {
+    await this.#update(digest, () => ({
       producingEpoch: existing.producingEpoch,
       state: "pending",
       direction: "adoption",
       notifications: this.#encodeNotifications(notifications),
-    });
+    }));
     return true;
   }
 
@@ -216,23 +233,20 @@ export class ConvergenceEffectLedger {
     digest: Uint8Array,
     direction: StoredEffect["direction"],
   ): Promise<void> {
-    const existing = await this.#readKey(this.#key(digest));
-    if (
-      !existing ||
-      existing.direction !== direction ||
-      existing.state !== "pending"
-    )
-      return;
-    await this.#write(digest, { ...existing, state: "observed" });
+    await this.#update(digest, (existing) =>
+      existing &&
+      existing.direction === direction &&
+      existing.state === "pending"
+        ? { ...existing, state: "observed" }
+        : undefined,
+    );
   }
 
   async pending(): Promise<PendingConvergenceEffect[]> {
     const pending: PendingConvergenceEffect[] = [];
-    for (const key of await this.storage.list(this.#prefix)) {
-      const hex = key.slice(this.#prefix.length);
-      if (!HEX_ID.test(hex)) continue;
-      const value = await this.#readKey(key);
-      if (!value || value.state !== "pending") continue;
+    for (const [hex, value] of Object.entries((await this.#read()) ?? {})) {
+      if (!HEX_ID.test(hex) || !validEffect(value) || value.state !== "pending")
+        continue;
       const digest = hexToBytes(hex);
       const notifications = value.notifications.map((notification) => ({
         ...notification,
@@ -258,27 +272,32 @@ export class ConvergenceEffectLedger {
   }
 
   /** Stages retirement of observed effects no retained member names. */
-  async stageCompaction(
-    batch: StorageBatch,
-    digests: ReadonlySet<string>,
-  ): Promise<void> {
-    for (const key of await this.storage.list(this.#prefix)) {
-      const hex = key.slice(this.#prefix.length);
-      if (!HEX_ID.test(hex)) continue;
-      const value = await this.#readKey(key);
-      if (!value || value.state === "pending") continue;
-      if (!digests.has(hex)) batch.delete(key);
-    }
+  stageCompaction(batch: GroupBatch, digests: ReadonlySet<string>): void {
+    batch.then(async (tx) => {
+      const map = ConvergenceEffectLedger.#decode(
+        await tx.meta.get(groupKeys.effects),
+      );
+      if (!map) return;
+      const kept = Object.fromEntries(
+        Object.entries(map).filter(
+          ([hex, value]) =>
+            !HEX_ID.test(hex) ||
+            !validEffect(value) ||
+            value.state === "pending" ||
+            digests.has(hex),
+        ),
+      );
+      if (Object.keys(kept).length !== Object.keys(map).length)
+        await tx.meta.set(groupKeys.effects, encodeRecord(kept));
+    });
   }
 
   /** A corrupt record blocks provenance release. */
   async hasOpaqueDependency(): Promise<boolean> {
-    for (const key of await this.storage.list(this.#prefix))
-      if (
-        HEX_ID.test(key.slice(this.#prefix.length)) &&
-        !(await this.#readKey(key))
-      )
-        return true;
-    return false;
+    const map = await this.#read();
+    if (!map) return true;
+    return Object.entries(map).some(
+      ([hex, value]) => HEX_ID.test(hex) && !validEffect(value),
+    );
   }
 }

@@ -1,9 +1,4 @@
-import {
-  createCommit,
-  defaultCryptoProvider,
-  getCiphersuiteImpl,
-  unsafeTestingAuthenticationService,
-} from "ts-mls";
+import { defaultCryptoProvider, getCiphersuiteImpl } from "ts-mls";
 import { describe, expect, it, vi } from "vitest";
 import { createCredential } from "../../../core/credential.js";
 import { createSimpleGroup } from "../../../core/group.js";
@@ -21,18 +16,9 @@ import {
 } from "../../storage/wrapper-ledger.js";
 import { GroupSession } from "../group-session.js";
 import { GroupHistoryTree } from "../../../engine/history-tree.js";
-import {
-  deserializeClientState,
-  serializeClientState,
-} from "../../../core/client-state.js";
-import { bytesToHex } from "@noble/hashes/utils.js";
-import { DEFAULT_CONVERGENCE_POLICY } from "../../../core/convergence.js";
 import { getEventHash } from "applesauce-core/helpers/event";
 import { serializeApplicationRumor } from "../../../core/group-message.js";
-import {
-  encodeDeliveredEvidence,
-  decodeDeliveredEvidence,
-} from "../../storage/delivered-payload-store.js";
+import { GroupHistory } from "../../storage/group-history.js";
 
 async function fixture() {
   const account = testAccount(6);
@@ -138,40 +124,28 @@ describe("terminal persistence interruption", () => {
 
 describe("terminal work ownership", () => {
   it.each([false, true])(
-    "settles an admitted history save before terminal purge (throws after forwarding: %s)",
-    async (throwAfterForwarding) => {
-      const { group, options, store, evidence } = await fixture();
+    "a live history notification paused across terminal purge cannot resurrect plaintext (notification fails: %s)",
+    async (notificationFails) => {
+      const { group, options, evidence } = await fixture();
       let enter!: () => void;
       let release!: () => void;
-      let reachCleanup!: () => void;
       const entered = new Promise<void>((resolve) => {
         enter = resolve;
       });
       const paused = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const cleanupReached = new Promise<void>((resolve) => {
-        reachCleanup = resolve;
-      });
-      const rows: Uint8Array[] = [];
-      const history = {
-        saveMessage: vi.fn(async (payload: Uint8Array) => {
+      // The real history: notifications go through its rumor store.
+      const history = GroupHistory.forDatabase(options.database);
+      const notify = history.saveMessage.bind(history);
+      const saveMessage = vi
+        .spyOn(history, "saveMessage")
+        .mockImplementation(async (payload) => {
           enter();
           await paused;
-          rows.push(payload.slice());
-          if (throwAfterForwarding)
-            throw new Error("save forwarded before failure");
-        }),
-        purgeMessages: vi.fn(async () => {
-          rows.length = 0;
-        }),
-        removeMessage: vi.fn(async () => {}),
-      };
-      store.onCommit((ops) => {
-        if (ops.some((op) => op.type === "delete" && op.key === "meta:state"))
-          reachCleanup();
-      });
-      const cleanup = { mockRestore: () => store.onCommit(undefined) };
+          await notify(payload);
+          if (notificationFails) throw new Error("notification failed");
+        });
       const historyError = vi.fn();
       const session = new GroupSession({
         state: group.state,
@@ -189,48 +163,44 @@ describe("terminal work ownership", () => {
         content: "admitted plaintext",
       };
       rumor.id = getEventHash(rumor);
+      // The message row commits with the send's save; only the live
+      // notification afterwards is paused.
       const sending = session.send({
         kind: "applicationMessage",
         payload: serializeApplicationRumor(rumor),
       });
+      // Terminal selection lands before the send hands off its publication.
       const rejected = expect(sending).rejects.toThrow("Group disbanded");
       await entered;
-      let terminalComplete = false;
-      const terminal = session.persistSelectedDisband(evidence).then(() => {
-        terminalComplete = true;
-      });
-      try {
-        await cleanupReached;
-        // Give every unblocked continuation a turn; cleanup must remain behind
-        // the paused adapter, rather than purging first and accepting its row later.
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        expect(session.terminalTombstone).toBeDefined();
-        expect(terminalComplete).toBe(false);
-        expect(history.purgeMessages).not.toHaveBeenCalled();
-        await expect(
-          session.send({
-            kind: "applicationMessage",
-            payload: serializeApplicationRumor(rumor),
-          }),
-        ).rejects.toThrow("Group disbanded");
-        expect(history.saveMessage).toHaveBeenCalledOnce();
-      } finally {
-        release();
-        await terminal;
-        await rejected;
-        cleanup.mockRestore();
-        session.dispose();
-        group.dispose();
-      }
-      expect(terminalComplete).toBe(true);
-      expect(history.purgeMessages).toHaveBeenCalledOnce();
-      expect(rows).toEqual([]);
-      expect(historyError).toHaveBeenCalledTimes(throwAfterForwarding ? 1 : 0);
+      expect((await options.database.messages.get(rumor.id))?.id).toBe(
+        rumor.id,
+      );
+      const terminal = session.persistSelectedDisband(evidence);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      // Terminal selection fences synchronously, before its cleanup runs.
+      expect(session.terminalTombstone).toBeDefined();
+      const late = expect(
+        session.send({
+          kind: "applicationMessage",
+          payload: serializeApplicationRumor(rumor),
+        }),
+      ).rejects.toThrow("Group disbanded");
+      release();
+      await terminal;
+      await late;
+      await rejected;
+      // The late notification must not write the purged rumor back.
+      expect(await options.database.messages.query({})).toEqual([]);
+      expect(await options.database.deliveries.withEvidence()).toEqual([]);
+      expect(saveMessage).toHaveBeenCalledOnce();
+      expect(historyError).toHaveBeenCalledTimes(notificationFails ? 1 : 0);
+      session.dispose();
+      group.dispose();
     },
   );
 
   it.each(["before", "after"] as const)(
-    "keeps pending retraction provenance across two restarts and an acknowledgement crash %s forwarding",
+    "purges plaintext evidence, messages and the tree after a terminal cleanup crash %s forwarding",
     async (forwarding) => {
       const { group, options, store, evidence } = await fixture();
       const shared = options.database;
@@ -241,13 +211,11 @@ describe("terminal work ownership", () => {
       });
       const rumor = {
         id: "",
-        pubkey: options.signer
-          ? await options.signer.getPublicKey()
-          : evidence.actorPubkey,
+        pubkey: evidence.actorPubkey,
         created_at: 1000,
         kind: 9,
         tags: [],
-        content: "terminal retraction",
+        content: "terminal plaintext",
       };
       rumor.id = getEventHash(rumor);
       await source.send({
@@ -255,161 +223,63 @@ describe("terminal work ownership", () => {
         payload: serializeApplicationRumor(rumor),
       });
       await source.save(true);
-      const deliveredKey = "delivered";
-      const delivered = decodeDeliveredEvidence(
-        (await shared.meta.get(deliveredKey))!,
-        source.historyTree,
-      );
-      expect(delivered.entries).toHaveLength(1);
-      const pendingEvidence = encodeDeliveredEvidence({
-        entries: [],
-        pending: delivered.entries,
-      });
-      await shared.transaction((tx) =>
-        tx.meta.set(deliveredKey, pendingEvidence),
-      );
-      // Age the genuine producing state outside a finite horizon before
-      // terminal selection. Pending withdrawal owns the old snapshot/edge,
-      // independently of the absorbing terminal authority.
-      let retainedTip = source.state;
-      const retainedTree = source.historyTree;
+      const tip = source.state;
+      const [row] = await shared.deliveries.withEvidence();
+      expect(row?.rumorId).toBe(rumor.id);
+      expect((await shared.messages.get(rumor.id))?.id).toBe(rumor.id);
       source.dispose();
-      for (let epoch = 0; epoch < 3; epoch++) {
-        const next = await createCommit({
-          context: {
-            cipherSuite: options.ciphersuite,
-            authService: unsafeTestingAuthenticationService,
-          },
-          state: deserializeClientState(serializeClientState(retainedTip)),
-          extraProposals: [],
-          wireAsPublicMessage: true,
-        });
-        retainedTree.recordCommit(
-          bytesToHex(retainedTip.confirmationTag),
-          next.commit,
-          next.newState,
-        );
-        retainedTip = next.newState;
-      }
-      await retainedTree.publishRetention(
-        await retainedTree.prepareRetention({
-          canonicalTipTag: bytesToHex(retainedTip.confirmationTag),
-          maxRewindCommits: 1,
-          appPayloadPastEpochLimit: 1,
-          pins: delivered.entries.map((entry) => ({
-            stateTag: entry.stateTag,
-            reason: "retraction" as const,
-          })),
-        }),
-      );
-      await retainedTree.resumeRetentionCleanup();
-      const tipBytes = serializeClientState(retainedTip);
-      await shared.transaction((tx) => tx.meta.set("state", tipBytes));
-      let historyFails = true;
-      const rows = new Set([rumor.id]);
-      const history = {
-        saveMessage: vi.fn(async () => {}),
-        purgeMessages: vi.fn(async () => {
-          rows.clear();
-        }),
-        removeMessage: vi.fn(async (id: string) => {
-          if (historyFails) throw new Error("history unavailable");
-          rows.delete(id);
-        }),
-      };
       async function restart() {
         const tree = await GroupHistoryTree.load(
           groupTreeStore(shared),
           group.idStr,
         );
-        expect(tree).toBeDefined();
         return new GroupSession({
-          state: retainedTip,
+          state: tip,
           ciphersuite: options.ciphersuite,
           database: shared,
           historyTree: tree,
-          convergencePolicy: {
-            ...DEFAULT_CONVERGENCE_POLICY,
-            maxRewindCommits: 1,
-            appPayloadPastEpochLimit: 1,
-          },
-          history,
+          history: GroupHistory.forDatabase(shared),
         });
       }
-      const first = await restart();
-      await first.persistSelectedDisband(evidence);
-      expect(
-        decodeDeliveredEvidence(
-          (await shared.meta.get(deliveredKey))!,
-          first.historyTree,
-        ).pending,
-      ).toHaveLength(1);
-      first.dispose();
-      for (let i = 0; i < 2; i++) {
-        const restored = await restart();
-        await restored.hydrateLifecycleEvidence();
-        expect(restored.terminalTombstone).toBeDefined();
-        expect(
-          decodeDeliveredEvidence(
-            (await shared.meta.get(deliveredKey))!,
-            restored.historyTree,
-          ).pending,
-        ).toHaveLength(1);
-        expect(await shared.meta.get("tree")).toBeDefined();
-        expect(
-          restored.historyTree.epochOf(delivered.entries[0].stateTag),
-        ).toBe(0);
-        expect(
-          await restored.historyTree.stateAt(delivered.entries[0].stateTag),
-        ).toBeDefined();
-        expect(restored.historyTree.size).toBe(4);
-        expect(history.purgeMessages).not.toHaveBeenCalled();
-        restored.dispose();
-      }
-      const acknowledging = await restart();
-      await acknowledging.hydrateLifecycleEvidence();
-      historyFails = false;
       let armed = true;
-      const hit = (op: WriteOp) => op.key === `meta:${deliveredKey}`;
+      const hit = (op: WriteOp) =>
+        op.type === "delete" && op.key === `delivery:${row!.id}`;
       store.onWrite((op) => {
         if (armed && forwarding === "before" && hit(op)) {
           armed = false;
-          throw new Error("ack crash");
+          throw new Error("cleanup crash");
         }
       });
       store.onCommit((ops) => {
         if (armed && forwarding === "after" && ops.some(hit)) {
           armed = false;
-          throw new Error("ack crash");
+          throw new Error("cleanup crash");
         }
       });
-      const fault = {
-        mockRestore: () => {
-          store.onWrite(undefined);
-          store.onCommit(undefined);
-        },
-      };
-      for await (const _ of acknowledging.ingest([])) {
-        /* fully drain acknowledgement attempt */
+      const first = await restart();
+      await expect(first.persistSelectedDisband(evidence)).rejects.toThrow(
+        "cleanup crash",
+      );
+      expect(armed).toBe(false);
+      store.onWrite(undefined);
+      store.onCommit(undefined);
+      expect(first.terminalTombstone).toBeDefined();
+      // A crash before forwarding leaves the evidence for the next attempt.
+      expect(await shared.deliveries.withEvidence()).toHaveLength(
+        forwarding === "before" ? 1 : 0,
+      );
+      first.dispose();
+      for (let i = 0; i < 2; i++) {
+        const restored = await restart();
+        await restored.hydrateLifecycleEvidence();
+        expect(restored.terminalTombstone).toBeDefined();
+        for await (const _ of restored.ingest([])) void _;
+        restored.dispose();
       }
-      fault.mockRestore();
-      expect(rows.has(rumor.id)).toBe(false);
-      expect(
-        decodeDeliveredEvidence(
-          (await shared.meta.get(deliveredKey))!,
-          acknowledging.historyTree,
-        ).pending,
-      ).toHaveLength(forwarding === "before" ? 1 : 0);
-      acknowledging.dispose();
-      const final = await restart();
-      await final.hydrateLifecycleEvidence();
-      for await (const _ of final.ingest([])) {
-        /* retry any surviving acknowledgement */
-      }
-      expect(await shared.meta.get(deliveredKey)).toBeUndefined();
+      expect(await shared.deliveries.withEvidence()).toEqual([]);
+      expect(await shared.messages.query({})).toEqual([]);
       expect(await shared.meta.get("tree")).toBeUndefined();
       expect(await shared.meta.get("disband/terminal")).toBeDefined();
-      final.dispose();
       group.dispose();
     },
   );

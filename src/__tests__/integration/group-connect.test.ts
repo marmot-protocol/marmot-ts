@@ -39,7 +39,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { ADDRESSABLE_KEY_PACKAGE_KIND } from "../../core/protocol.js";
 import { unixNow } from "../../utils/nostr.js";
 import { MockNetwork } from "../helpers/mock-network.js";
-import { groupMeta, memoryDatabase, openGroup } from "../helpers/database.js";
+import { memoryDatabase, openGroup } from "../helpers/database.js";
 import type {
   MarmotDatabase,
   MarmotGroupDatabase,
@@ -418,13 +418,15 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
   let inviteeClient: MarmotClient;
   /** The invitee's databases, shared across restarts. */
   let memberStorage: MarmotDatabase;
-  /** Reads a group's delivered-payload evidence. */
-  const deliveredEvidence = async (groupId: Uint8Array) =>
-    JSON.parse(
-      new TextDecoder().decode(
-        (await (await groupMeta(memberStorage, groupId)).get("delivered"))!,
-      ),
-    );
+  /** Reads a group's persisted delivery rows: evidence rows and support counts. */
+  const deliveredEvidence = async (groupId: Uint8Array) => {
+    const db = await openGroup(memberStorage, groupId);
+    return {
+      evidence: await db.deliveries.withEvidence(),
+      support: (rumorId: string) => db.deliveries.countByRumor(rumorId),
+      messages: (await db.messages.query({})).map((row) => row.id),
+    };
+  };
   /** Whether a group left nothing behind: no account row and an empty database. */
   const groupIsGone = async (groupId: Uint8Array) => {
     const id = bytesToHex(groupId);
@@ -432,7 +434,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
     return (
       (await memberStorage.account.groups.get(id)) === undefined &&
       (await db.meta.get("state")) === undefined &&
-      (await db.meta.get("delivered")) === undefined &&
+      (await db.deliveries.withEvidence()).length === 0 &&
       (await db.meta.get("tree")) === undefined &&
       (await db.messages.query({})).length === 0
     );
@@ -581,6 +583,20 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
               delete: () => Promise.reject(failure),
             })
           : undefined;
+      // The retraction commits with the branch switch, so a failed removal
+      // fails (and rolls back) the whole save.
+      const saveFailed = deferred<unknown>();
+      if (path === "failure") {
+        const save = restored.session.save.bind(restored.session);
+        vi.spyOn(restored.session, "save").mockImplementation(async (force) => {
+          try {
+            return await save(force);
+          } catch (error) {
+            saveFailed.resolve(error);
+            throw error;
+          }
+        });
+      }
       const results: DispositionedIngestResult[] = [];
       const invalidated = deferred();
       restarted.groups.on("ingestResult", (_id, r) => {
@@ -627,31 +643,41 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
           fire();
         }
       }
-      await invalidated.promise;
-      expect(results).toHaveLength(1);
-      expect(results[0]).toMatchObject({
-        kind: "invalidated",
-        event,
-        transportId: event.id,
-        rumorId: rumor.id,
-        payload,
-        tag: bytesToHex(losing.newState.confirmationTag),
-        epoch: Number(losing.newState.groupContext.epoch),
-        commitDigest: commitDigest(encode(mlsMessageEncoder, losing.commit)),
-      });
+      if (path === "failure") {
+        expect(await saveFailed.promise).toBe(failure);
+        // Whatever was announced live, the failed switch left no durable trace.
+        expect(results.length).toBeLessThanOrEqual(1);
+      } else {
+        await invalidated.promise;
+        expect(results).toHaveLength(1);
+      }
+      if (results.length)
+        expect(results[0]).toMatchObject({
+          kind: "invalidated",
+          event,
+          transportId: event.id,
+          rumorId: rumor.id,
+          payload,
+          tag: bytesToHex(losing.newState.confirmationTag),
+          epoch: Number(losing.newState.groupContext.epoch),
+          commitDigest: commitDigest(encode(mlsMessageEncoder, losing.commit)),
+        });
       handle.unsubscribe();
       let current = restored;
       if (path === "failure") {
-        expect(errors).toContain(failure);
-        expect(await restored.history.queryRumors({})).toEqual([rumor]);
+        // The retraction shares the save transaction: its failure rolls the
+        // whole switch back, so the durable history still shows the rumor
+        // with its losing delivery evidence intact.
+        void errors;
         const saved = await deliveredEvidence(restored.id);
-        expect(saved.pending[0]).toMatchObject({
-          rumorId: rumor.id,
-          transportId: event.id,
-          commitDigest: bytesToHex(
-            commitDigest(encode(mlsMessageEncoder, losing.commit)),
-          ),
-        });
+        expect(saved.messages).toEqual([rumor.id]);
+        expect(await saved.support(rumor.id)).toBe(1);
+        expect(saved.evidence).toEqual([
+          expect.objectContaining({
+            id: `${bytesToHex(losing.newState.confirmationTag)}:${event.id}`,
+            rumorId: rumor.id,
+          }),
+        ]);
         restoreRemoval!();
         restarted.groups.unload(restored.id);
         const retried = new MarmotClient({
@@ -662,8 +688,25 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
         const retryGroup = await retried.groups.get(restored.id);
         current = retryGroup;
         await expect(restored.reconverge()).rejects.toThrow("Group unloaded");
+        // Whichever save last committed, branch and history agree: the losing
+        // branch still shows the rumor, the winning branch never does.
+        const onWinning =
+          bytesToHex(retryGroup.state.confirmationTag) ===
+          bytesToHex(winning.newState.confirmationTag);
+        const durable = await deliveredEvidence(restored.id);
+        expect(durable.messages).toEqual(onWinning ? [] : [rumor.id]);
+        expect(await durable.support(rumor.id)).toBe(onWinning ? 0 : 1);
+        // Re-delivering the winning commit after restart completes the switch
+        // exactly once.
+        const retriedResults: DispositionedIngestResult[] = [];
+        for await (const r of retryGroup.ingest([winningEvent]))
+          if (r.kind === "invalidated") retriedResults.push(r);
+        expect(retriedResults).toHaveLength(onWinning ? 0 : 1);
         await retryGroup.reconverge();
         expect(await retryGroup.history.queryRumors({})).toEqual([]);
+        const retriedRows = await deliveredEvidence(restored.id);
+        expect(retriedRows.messages).toEqual([]);
+        expect(await retriedRows.support(rumor.id)).toBe(0);
       } else {
         expect((await subscribedTimeline.next()).value).toEqual([]);
         expect(
@@ -674,7 +717,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       }
       await subscribedTimeline.return(undefined);
       await current.reconverge();
-      expect(results).toHaveLength(1);
+      if (path !== "failure") expect(results).toHaveLength(1);
     },
   );
 
@@ -790,46 +833,38 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
     async (boundary) => {
       const { receiver, winningEvent, rumors, snapshot, restart } =
         await losingDeliveries(["one", "two", "three"]);
-      expect((await snapshot()).entries).toHaveLength(3);
+      expect((await snapshot()).evidence).toHaveLength(3);
       let calls = 0;
-      let pendingBeforeRemoval = 0;
       const restoreRemoval = interceptMessages(receiver.database, {
         delete: async (_id, remove) => {
           calls++;
-          if (calls > (boundary === "first invalidation" ? 1 : 2))
+          if (calls >= (boundary === "first invalidation" ? 1 : 3))
             throw new Error("interrupted cleanup");
-          // Every obligation must already be durable before the first history removal.
-          if (calls === 1)
-            pendingBeforeRemoval = (await snapshot()).pending.length;
           return remove();
         },
       });
-      const iterator = receiver.ingest([winningEvent]);
-      while (true) {
-        const result = await iterator.next();
-        if (result.done) throw new Error("expected invalidation");
-        if (result.value.kind === "invalidated") break;
-      }
-      await iterator.return(undefined);
-      expect(pendingBeforeRemoval).toBe(3);
+      // Every retraction shares the branch switch's transaction, so an
+      // interruption at any removal rolls the whole batch back.
+      await expect(
+        (async () => {
+          for await (const result of receiver.ingest([winningEvent]))
+            void result;
+        })(),
+      ).rejects.toThrow("interrupted cleanup");
       const saved = await snapshot();
-      expect(saved.entries).toHaveLength(0);
-      expect(saved.pending).toHaveLength(
-        boundary === "first invalidation" ? 2 : 1,
+      expect(saved.evidence).toHaveLength(3);
+      expect([...saved.messages].sort()).toEqual(
+        rumors.map((rumor) => rumor.id).sort(),
       );
-      expect(await receiver.history.queryRumors({})).toHaveLength(
-        saved.pending.length,
-      );
-      expect(
-        saved.pending.every((entry: { rumorId: string }) =>
-          rumors.some((rumor) => rumor.id === entry.rumorId),
-        ),
-      ).toBe(true);
+      for (const rumor of rumors) expect(await saved.support(rumor.id)).toBe(1);
       restoreRemoval();
       const restored = await restart();
+      for await (const result of restored.ingest([winningEvent])) void result;
       await restored.reconverge();
       expect(await restored.history.queryRumors({})).toEqual([]);
-      expect((await snapshot()).pending).toEqual([]);
+      const cleaned = await snapshot();
+      expect(cleaned.evidence).toEqual([]);
+      expect(cleaned.messages).toEqual([]);
     },
   );
 
@@ -869,40 +904,39 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
         transportId: expect.any(String),
       });
       if (path === "restored winning") await winningDelivery(rumors[0]);
-      if (path.startsWith("restored"))
-        expect((await snapshot()).pending).toHaveLength(1);
-      expect(
-        (await snapshot()).entries.some(
-          (entry: { rumorId: string }) => entry.rumorId === rumors[0].id,
-        ),
-      ).toBe(true);
+      // Canonical support keeps the rumor's row; a failed live notification
+      // leaves nothing pending in storage.
+      expect(await (await snapshot()).support(rumors[0].id)).toBeGreaterThan(0);
+      expect((await snapshot()).messages).toEqual([rumors[0].id]);
       removal?.mockRestore();
       restoration?.mockRestore();
       const restored = await restart();
       await restored.reconverge();
       expect(await restored.history.queryRumors({})).toEqual([rumors[0]]);
-      expect((await snapshot()).pending).toEqual([]);
+      expect((await snapshot()).messages).toEqual([rumors[0].id]);
       expect(await receiver.history.queryRumors({})).toEqual([rumors[0]]);
       expect(removed).not.toHaveBeenCalled();
     },
   );
 
   it.each(["destroy", "manager destroy", "leave"])(
-    "%s purges plaintext delivery and pending evidence without touching another group",
+    "%s purges plaintext delivery evidence and messages without touching another group",
     async (path) => {
-      const { receiver, winningEvent, snapshot } = await losingDeliveries([
+      const { receiver, snapshot } = await losingDeliveries([
         "private ledger content",
       ]);
-      const removal = vi
-        .spyOn(receiver.history, "removeMessage")
-        .mockRejectedValue(new Error("offline"));
-      for await (const result of receiver.ingest([winningEvent])) void result;
-      expect((await snapshot()).pending).toHaveLength(1);
-      removal.mockRestore();
+      expect((await snapshot()).evidence).toHaveLength(1);
+      expect((await snapshot()).messages).toHaveLength(1);
       const unrelated = await openGroup(memberStorage, "ff".repeat(32));
-      await unrelated.transaction((tx) =>
-        tx.meta.set("delivered", new Uint8Array([42])),
-      );
+      const foreign = {
+        id: "foreign",
+        rumorId: "r",
+        epoch: 0,
+        createdAt: 0,
+        value: new Uint8Array(),
+        evidence: new Uint8Array([42]),
+      };
+      await unrelated.transaction((tx) => tx.deliveries.put(foreign));
       if (path === "leave") await inviteeClient.groups.leave(receiver.id);
       else if (path === "manager destroy")
         await inviteeClient.groups.destroy(receiver.id);
@@ -910,9 +944,7 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
       await receiver.destroy(); // Repeat cleanup is safe.
       await receiver.save(true); // Stale references must not recreate the group.
       expect(await groupIsGone(receiver.id)).toBe(true);
-      expect(await unrelated.meta.get("delivered")).toEqual(
-        new Uint8Array([42]),
-      );
+      expect(await unrelated.deliveries.withEvidence()).toEqual([foreign]);
       expect(await receiver.history.queryRumors({})).toEqual([]);
       const restarted = new MarmotClient({
         database: memberStorage,
@@ -949,11 +981,11 @@ describe("GroupsManager.connect / connectAll (inbound transport)", () => {
           transaction((tx) =>
             fn({
               ...tx,
-              meta: {
-                ...tx.meta,
-                set: async (key, value) => {
-                  if (key === "delivered") await gate();
-                  return tx.meta.set(key, value);
+              deliveries: {
+                ...tx.deliveries,
+                put: async (row) => {
+                  await gate();
+                  return tx.deliveries.put(row);
                 },
               },
             }),

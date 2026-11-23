@@ -2,10 +2,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { getEventHash } from "applesauce-core/helpers/event";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { serializeApplicationRumor } from "../../../core/group-message.js";
-import {
-  decodeDeliveredEvidence,
-  encodeDeliveredEvidence,
-} from "../../storage/delivered-payload-store.js";
+import { decodeDeliveryEvidence } from "../../storage/delivered-payload-store.js";
 import {
   appDataUpdateProposalType,
   defaultCryptoProvider,
@@ -683,38 +680,35 @@ describe("settled session retention", () => {
       })
     ).publish[0]!;
     const id = bytesToHex(f.session.id);
-    const key = "delivered";
+    // Only the decodable rumor gets a message row and delivery evidence.
+    const evidence = await f.db.deliveries.withEvidence();
+    expect(evidence).toHaveLength(1);
     expect(
-      decodeDeliveredEvidence(
-        (await f.db.meta.get(key))!,
-        f.session.historyTree,
-      ).entries,
-    ).toHaveLength(1);
-    expect(
-      decodeDeliveredEvidence(
-        (await f.db.meta.get(key))!,
-        f.session.historyTree,
-      ).entries[0]!.payload,
+      decodeDeliveryEvidence(evidence[0]!.evidence!, f.session.historyTree)
+        .payload,
     ).toEqual(rumorPayload);
-    expect(rows.get("sent-0")).toBe(payload);
-    expect(rows.get("sent-1")).toBe(rumorPayload);
+    expect((await f.db.messages.query({})).map((row) => row.id)).toEqual([
+      rumor.id,
+    ]);
+    expect(rows.get("sent-0")).toBe(rumorPayload);
     await f.runtime.publishApplication(work.envelope);
     await f.runtime.publishApplication(rumorWork.envelope);
     for (let epoch = 0; epoch < 8; epoch++) await f.advance();
     expect(f.session.historyTree.size).toBe(2);
-    expect(
-      decodeDeliveredEvidence(
-        (await f.db.meta.get(key))!,
-        f.session.historyTree,
-      ).entries,
-    ).toEqual([]);
+    // Retention clears the evidence but keeps the delivery's support row and
+    // the application history.
+    expect(await f.db.deliveries.withEvidence()).toEqual([]);
+    expect(await f.db.deliveries.countByRumor(rumor.id)).toBe(1);
+    expect((await f.db.messages.query({})).map((row) => row.id)).toEqual([
+      rumor.id,
+    ]);
     expect(payload).toEqual(original);
     expect(rumorPayload).toEqual(originalRumor);
     expect(opaqueHistory).toEqual(Uint8Array.of(255, 0, 128, 195, 40));
-    expect(history.saveMessage).toHaveBeenCalledTimes(2);
+    expect(history.saveMessage).toHaveBeenCalledTimes(1);
     expect(history.removeMessage).not.toHaveBeenCalled();
     expect(history.purgeMessages).not.toHaveBeenCalled();
-    expect(rows.size).toBe(3);
+    expect(rows.size).toBe(2);
     f.session.dispose();
     const restarted = new GroupSession({
       ...f.options,
@@ -722,10 +716,13 @@ describe("settled session retention", () => {
       historyTree: (await GroupHistoryTree.load(groupTreeStore(f.db), id))!,
     });
     await restarted.save(true);
-    expect(rows.get("sent-0")).toBe(payload);
-    expect(rows.get("sent-1")).toBe(rumorPayload);
+    expect(rows.get("sent-0")).toBe(rumorPayload);
     expect(payload).toEqual(original);
     expect(rumorPayload).toEqual(originalRumor);
+    expect(await f.db.deliveries.countByRumor(rumor.id)).toBe(1);
+    expect((await f.db.messages.query({})).map((row) => row.id)).toEqual([
+      rumor.id,
+    ]);
     expect(history.removeMessage).not.toHaveBeenCalled();
     expect(history.purgeMessages).not.toHaveBeenCalled();
     restarted.dispose();
@@ -1111,7 +1108,7 @@ describe("settled session retention", () => {
     f.session.dispose();
   });
   for (const forwarding of ["before", "after"] as const)
-    it(`pins pending retraction and same-rumor support through ${forwarding} acknowledgement and two restarts`, async () => {
+    it(`keeps same-rumor support across two restarts and a retention crash ${forwarding} commit`, async () => {
       const f = await fixture();
       const rumor = {
         id: "",
@@ -1129,27 +1126,14 @@ describe("settled session retention", () => {
         payload: payload.slice(),
       });
       const id = bytesToHex(f.session.id);
-      const key = "delivered";
-      const evidence = decodeDeliveredEvidence(
-        (await f.db.meta.get(key))!,
-        f.session.historyTree,
-      );
-      expect(evidence.entries).toHaveLength(2);
-      const tampered = encodeDeliveredEvidence({
-        entries: [evidence.entries[0]],
-        pending: [evidence.entries[1]],
-      });
-      await f.db.transaction((tx) => tx.meta.set(key, tampered));
+      // Two transports of one rumor: two deliveries, one message row.
+      expect(await f.db.deliveries.withEvidence()).toHaveLength(2);
+      expect(await f.db.deliveries.countByRumor(rumor.id)).toBe(2);
       f.session.dispose();
-      let failHistory = true;
-      const rows = new Map([[rumor.id, payload.slice()]]);
       const history = {
-        async saveMessage(bytes: Uint8Array) {
-          if (failHistory) throw new Error("history failure");
-          rows.set(rumor.id, bytes.slice());
-        },
-        async removeMessage(id: string) {
-          rows.delete(id);
+        async saveMessage() {},
+        async removeMessage() {
+          throw new Error("application history must survive");
         },
         async purgeMessages() {
           throw new Error("application history must survive");
@@ -1162,62 +1146,44 @@ describe("settled session retention", () => {
           state: deserializeClientState((await f.db.meta.get("state"))!),
           historyTree: (await GroupHistoryTree.load(groupTreeStore(f.db), id))!,
         });
-      let session = await restore();
-      for (let i = 0; i < 3; i++) {
+      for (let restart = 0; restart < 2; restart++) {
+        const session = await restore();
+        for await (const _ of session.ingest([])) void _;
+        // Evidence round-trips through hydration unchanged.
+        const evidence = await f.db.deliveries.withEvidence();
+        expect(evidence).toHaveLength(2);
+        for (const row of evidence)
+          expect(
+            decodeDeliveryEvidence(row.evidence!, session.historyTree).payload,
+          ).toEqual(payload);
+        session.dispose();
+      }
+      const session = await restore();
+      let armed = true;
+      const restoreWrites = interceptWrites(f.db, async (ops, write) => {
+        if (armed && classifyWrite(ops) === "commit") {
+          armed = false;
+          if (forwarding === "after") await write();
+          throw new Error("retention crash");
+        }
+        return write();
+      });
+      const advance = async () => {
         const effect = (await session.send({ kind: "selfUpdate" })).publish[0];
         if (effect.kind !== "selfUpdate") throw new Error("expected update");
         session.confirmPublished(effect.pending);
         await session.save(true);
-      }
-      session.dispose();
-      for (let restart = 0; restart < 2; restart++) {
-        session = await restore();
-        for await (const _ of session.ingest([])) {
-          void _;
-        }
-        const retained = decodeDeliveredEvidence(
-          (await f.db.meta.get(key))!,
-          session.historyTree,
-        );
-        expect(retained.pending).toHaveLength(1);
-        expect(retained.entries).toHaveLength(1);
-        expect(session.historyTree.epochOf(retained.pending[0].stateTag)).toBe(
-          0,
-        );
-        session.dispose();
-      }
-      session = await restore();
-      failHistory = false;
-      let armed = true;
-      const restoreWrites = interceptWrites(f.db, async (ops, write) => {
-        if (armed && ops.some((op) => op.key === key)) {
-          armed = false;
-          if (forwarding === "after") await write();
-          throw new Error("ack crash");
-        }
-        return write();
-      });
-      for await (const _ of session.ingest([])) {
-        void _;
-      }
+      };
+      await expect(advance()).rejects.toThrow("retention crash");
       expect(armed).toBe(false);
       restoreWrites();
-      for await (const _ of session.ingest([])) {
-        void _;
-      }
-      await session.save(true);
-      const compacted = decodeDeliveredEvidence(
-        (await f.db.meta.get(key))!,
-        session.historyTree,
-      );
-      expect(compacted.pending).toEqual([]);
-      expect(compacted.entries).toEqual([]);
-      expect(
-        session.historyTree
-          .tags()
-          .map((tag) => session.historyTree.epochOf(tag)),
-      ).toEqual([2, 3]);
-      expect(rows.get(rumor.id)).toEqual(payload);
+      for (let i = 0; i < 3; i++) await advance();
+      // Retention dropped the evidence; support rows and the message remain.
+      expect(await f.db.deliveries.withEvidence()).toEqual([]);
+      expect(await f.db.deliveries.countByRumor(rumor.id)).toBe(2);
+      expect((await f.db.messages.query({})).map((row) => row.id)).toEqual([
+        rumor.id,
+      ]);
       session.dispose();
     });
   for (const horizon of [1, Infinity])
@@ -1293,8 +1259,8 @@ describe("settled session retention", () => {
     interceptWrites(f.db, async (ops, write) => {
       const kind = classifyWrite(ops);
       if (kind === "commit") {
-        // Canonical state and delivered evidence are one atomic write.
-        expect(ops.some((op) => op.key === "delivered")).toBe(true);
+        // Canonical state and the tree checkpoint are one atomic write.
+        expect(ops.some((op) => op.key === "tree")).toBe(true);
       }
       if (kind) writes.push(kind);
       return write();

@@ -39,8 +39,6 @@ export type GroupMetaKey =
   | "publication"
   /** Convergence effects ledger. */
   | "effects"
-  /** Delivered application payload evidence. */
-  | "delivered"
   | "disband/request"
   | "disband/convergence"
   | "disband/terminal"

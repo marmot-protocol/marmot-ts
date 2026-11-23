@@ -25,7 +25,7 @@ import type { IngestResult as EngineIngestResult } from "../../../engine/types.j
 import { encodeDisbandTombstone } from "../../../engine/disband-tombstone.js";
 import { encodeDisbandRequest } from "../../../engine/disband-request.js";
 import { testAccount } from "../../../__tests__/helpers/test-accounts.js";
-import { decodeDeliveredEvidence } from "../../storage/delivered-payload-store.js";
+import { decodeDeliveryEvidence } from "../../storage/delivered-payload-store.js";
 import { GROUP_BLOSSOM_IMAGE_COMPONENT_ID } from "../../../core/components/ids.js";
 import { NostrGroupPeeler } from "../../group/nostr-peeler.js";
 import { serializeClientState } from "../../../core/client-state.js";
@@ -227,13 +227,19 @@ describe("durable delivered evidence validation", () => {
       kind: "applicationMessage",
       payload: serializeApplicationRumor(rumorFrom(ADMIN, "root evidence")),
     });
-    const bytes = (await database.meta.get("delivered"))!;
-    const evidence = decodeDeliveredEvidence(bytes, session.historyTree);
-    expect(evidence.entries).toHaveLength(1);
-    expect(evidence.entries[0].commitDigest).toBeUndefined();
+    const rows = await database.deliveries.withEvidence();
+    expect(rows).toHaveLength(1);
+    const bytes = rows[0].evidence!;
+    const entry = decodeDeliveryEvidence(bytes, session.historyTree);
+    expect(rows[0]).toMatchObject({
+      id: `${entry.stateTag}:${entry.transportId}`,
+      rumorId: entry.rumorId,
+      epoch: entry.epoch,
+    });
+    expect(entry.commitDigest).toBeUndefined();
     const mutate = (change: (entry: any) => void) => {
       const value = JSON.parse(new TextDecoder().decode(bytes));
-      change(value.entries[0]);
+      change(value);
       return new TextEncoder().encode(JSON.stringify(value));
     };
     for (const change of [
@@ -272,7 +278,7 @@ describe("durable delivered evidence validation", () => {
       },
     ])
       expect(() =>
-        decodeDeliveredEvidence(mutate(change), session.historyTree),
+        decodeDeliveryEvidence(mutate(change), session.historyTree),
       ).toThrow();
     session.dispose();
   });
@@ -723,15 +729,20 @@ describe("GroupSession history persistence", () => {
       removeMessage: vi.fn(async (_rumorId: string) => {}),
     };
     const onHistoryError = vi.fn();
+    const database = memoryGroupDatabase();
     const session = makeSession(await createAdminState(impl), impl, {
+      database,
       history,
       onHistoryError,
     });
 
-    const payload = new TextEncoder().encode("stored");
-    // Send resolves even though history persistence fails (best-effort).
+    const rumor = rumorFrom(ADMIN, "stored");
+    const payload = serializeApplicationRumor(rumor);
+    // The message row commits with the send's save; the live history
+    // notification afterwards is best-effort.
     await session.send({ kind: "applicationMessage", payload });
 
+    expect((await database.messages.get(rumor.id))?.id).toBe(rumor.id);
     expect(history.saveMessage).toHaveBeenCalledWith(payload);
     expect(onHistoryError).toHaveBeenCalledWith(error);
   });
@@ -864,9 +875,16 @@ describe("GroupSession save lifecycle", () => {
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
     });
-    store.onRead(async (key) => {
-      if (key === "meta:delivered") await blocked;
-    });
+    // Hold delivery hydration open while destruction starts.
+    const withEvidence = store.db.deliveries.withEvidence;
+    store.db.deliveries = {
+      ...store.db.deliveries,
+      withEvidence: async () => {
+        const rows = await withEvidence();
+        await blocked;
+        return rows;
+      },
+    };
     const session = makeSession(original.state, impl, {
       database: store.db,
       historyTree: original.historyTree,

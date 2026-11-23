@@ -37,7 +37,7 @@ import {
   GroupSession,
   type GroupSessionHistory,
 } from "../../client/session/group-session.js";
-import { decodeDeliveredEvidence } from "../../client/storage/delivered-payload-store.js";
+import { deserializeApplicationData } from "../../core/application-rumor.js";
 import { GroupRuntime } from "../../client/runtime/group-runtime.js";
 import { linkPublicationRetention } from "../../client/runtime/publication-retention.js";
 import { NostrWelcomeDelivery } from "../../client/transport/nostr/welcome-delivery.js";
@@ -483,10 +483,8 @@ describe("sustained recovery-safe retention", () => {
             receivers += (await loaded.stateAt(tag))!.historicalReceiverData
               .size;
           const canonical = f.session.retainedStates();
-          const evidence = decodeDeliveredEvidence(
-            (await f.database.meta.get(groupKeys.delivered))!,
-            loaded,
-          );
+          // Delivery rows that still hold re-adoption evidence.
+          const evidence = await f.database.deliveries.withEvidence();
           const effects = await f.database.meta.get(groupKeys.effects);
           const effectCount = effects
             ? Object.keys(decodeRecord<object>(effects)).length
@@ -502,7 +500,7 @@ describe("sustained recovery-safe retention", () => {
             sentOwner.size,
             seenOwner.size,
             outerOwner.size,
-            evidence.entries.length,
+            evidence.length,
             tableSize(f.database, "wrappers"),
             effectCount,
             receivers,
@@ -696,13 +694,11 @@ describe("sustained recovery-safe retention", () => {
     }
   });
 
-  it("pins an actual fork-invalidated delivery across two session restarts until its real history retraction succeeds", async () => {
-    let fail = true;
+  it("retracts an actual fork-invalidated delivery atomically so retention can prune its source across restarts", async () => {
     const removed: string[] = [];
     const history = {
       saveMessage: async () => {},
       removeMessage: async (id: string) => {
-        if (fail) throw new Error("retraction unavailable");
         removed.push(id);
       },
       purgeMessages: async () => {
@@ -717,9 +713,11 @@ describe("sustained recovery-safe retention", () => {
       session.confirmPublished(update.pending);
       await f.runtime.publishApplication(update.envelope);
       const payload = rumor(member.pubkey, 301);
+      const rumorId = deserializeApplicationData(payload).id;
       const work = (await session.send({ kind: "applicationMessage", payload }))
         .publish[0];
       await f.runtime.publishApplication(work.envelope);
+      expect(await f.database.deliveries.countByRumor(rumorId)).toBe(1);
       const source = bytesToHex(session.state.confirmationTag);
       const alternate = await createCommit({
         context: f.context,
@@ -749,6 +747,12 @@ describe("sustained recovery-safe retention", () => {
       expect(results.some((result) => result.kind === "invalidated")).toBe(
         true,
       );
+      // The retraction committed with the switch: no support, no message,
+      // no evidence, and live readers were told.
+      expect(await f.database.deliveries.countByRumor(rumorId)).toBe(0);
+      expect(await f.database.messages.get(rumorId)).toBeUndefined();
+      expect(await f.database.deliveries.withEvidence()).toEqual([]);
+      expect(removed).toEqual([rumorId]);
       for (const result of results)
         if (
           result.kind === "stateInvalidated" ||
@@ -762,11 +766,9 @@ describe("sustained recovery-safe retention", () => {
         await f.runtime.publishApplication(next.envelope);
         await f.settle();
       }
-      const key = groupKeys.delivered;
-      expect(
-        decodeDeliveredEvidence((await f.database.meta.get(key))!, f.tree)
-          .pending,
-      ).toHaveLength(1);
+      // Nothing pins the abandoned source any more.
+      expect(session.historyTree.hasNode(source)).toBe(false);
+      expect(session.historyTree.size).toBe(2);
       session.dispose();
       for (let restart = 0; restart < 2; restart++) {
         session = new GroupSession({
@@ -778,34 +780,12 @@ describe("sustained recovery-safe retention", () => {
         });
         await drain(session, []);
         await session.save(true);
-        const evidence = decodeDeliveredEvidence(
-          (await f.database.meta.get(key))!,
-          session.historyTree,
-        );
-        expect(evidence.pending).toHaveLength(1);
-        expect(evidence.pending[0].payload).toEqual(payload);
-        expect(session.historyTree.hasNode(source)).toBe(true);
+        expect(session.historyTree.hasNode(source)).toBe(false);
+        expect(await f.database.messages.get(rumorId)).toBeUndefined();
+        expect(await f.database.deliveries.countByRumor(rumorId)).toBe(0);
         if (restart === 0) session.dispose();
       }
-      fail = false;
-      await drain(session, []);
-      f.tick();
-      for (const result of await session.driveConvergence())
-        if (
-          result.kind === "stateInvalidated" ||
-          result.kind === "stateRevalidated"
-        )
-          await session.acknowledgeConvergenceEffect(result);
-      await session.save(true);
-      expect(removed).toHaveLength(1);
-      expect(
-        decodeDeliveredEvidence(
-          (await f.database.meta.get(key))!,
-          session.historyTree,
-        ).pending,
-      ).toEqual([]);
-      expect(session.historyTree.hasNode(source)).toBe(false);
-      expect(session.historyTree.size).toBe(2);
+      expect(removed).toEqual([rumorId]);
     } finally {
       session.dispose();
       f.session.dispose();

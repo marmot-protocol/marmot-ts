@@ -7,9 +7,12 @@ import {
 
 import { deserializeApplicationData } from "../../core/application-rumor.js";
 import {
-  encodeDeliveredEvidence,
-  decodeDeliveredEvidence,
+  decodeDeliveryEvidence,
+  deliveryId,
+  encodeDeliveryEvidence,
 } from "../storage/delivered-payload-store.js";
+import { messageRow } from "../storage/database/message-database.js";
+import type { DeliveredAppPayload } from "../../engine/delivered-payloads.js";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import {
   getCredentialFromLeafIndex,
@@ -88,6 +91,7 @@ import type {
 } from "../../engine/types.js";
 import type { StateNotification } from "../../engine/state-notifications.js";
 import {
+  applyTreeWrite,
   GroupBatch,
   groupMetaStore,
   groupTreeStore,
@@ -323,8 +327,6 @@ export class GroupSession {
   #destroyed = false;
   #disposed = false;
   readonly #localWrites = new Set<Promise<unknown>>();
-  /** Adapter history mutations only: terminal operations never wait on themselves. */
-  readonly #historyWrites = new Set<Promise<unknown>>();
   #saveInFlight: Promise<void> | undefined;
   #retentionInFlight: Promise<boolean> | undefined;
   #retentionPending = false;
@@ -340,10 +342,15 @@ export class GroupSession {
   #disbandNotificationInFlight:
     Promise<DisbandTombstone | undefined> | undefined;
   readonly #deliveredHydrated: Promise<void>;
-  readonly #pendingRetractions = new Map<
+  /** Persisted `deliveries` rows this session knows about, by row id. */
+  readonly #deliveries = new Map<string, PersistedDelivery>();
+  /** Invalidations reported by ingest, applied by the next save. */
+  readonly #pendingInvalidations = new Map<
     string,
-    import("../../engine/delivered-payloads.js").DeliveredAppPayload<NostrEvent>
+    DeliveredAppPayload<NostrEvent>
   >();
+  /** Locally sent application payloads, written by the next save. */
+  readonly #pendingMessages: Uint8Array[] = [];
 
   readonly #onStateChanged?: (state: ClientState) => void;
   readonly #onChanged?: () => void;
@@ -755,20 +762,20 @@ export class GroupSession {
       return;
     }
 
-    // One atomic commit: fork-history nodes, delivered evidence, canonical
-    // state and the terminal wrapper records of the events that produced it.
-    // After a crash either all of it is durable or none of it is.
+    // One atomic commit: fork-history nodes, deliveries and messages,
+    // canonical state and the terminal wrapper records of the events that
+    // produced it. After a crash either all of it is durable or none of it is.
     const writtenVersion = this.#stateVersion;
     const committed = await this.#write(async () => {
       const batch = new GroupBatch(this.database);
       const tree = await this.#engine.history.stageFlush();
       batch.tree(tree.write);
-      const invalidated = this.#stageDelivered(batch);
+      const deliveries = this.#stageDeliveries(batch);
       batch.setMeta(groupKeys.state, serializeClientState(this.state));
       const wrappers = this.#stageWrappers(batch);
       await batch.commit();
       tree.finish();
-      this.#engine.acknowledgeInvalidatedPayloads(invalidated);
+      await deliveries.finish();
       this.#unstageWrappers(wrappers);
       return true;
     });
@@ -777,27 +784,139 @@ export class GroupSession {
     this.#onStateSaved?.();
   }
 
-  /** Stages delivered-payload evidence; returns invalidations to acknowledge after commit. */
-  #stageDelivered(
+  /**
+   * Stages delivery and message rows: new deliveries (with re-adoption
+   * evidence unless `keep` excludes their state), locally sent messages, and
+   * invalidated deliveries. A rumor's message row is removed in the same
+   * transaction once no delivery supports it. Call `finish` after the commit.
+   */
+  #stageDeliveries(
     batch: GroupBatch,
-  ): import("../../engine/delivered-payloads.js").DeliveredAppPayload<NostrEvent>[] {
-    // Rewinds remove the entire batch before yielding individual results. Move
-    // every obligation to the durable outbox before any canonical state save
-    // or history removal can discard the abandoned delivery evidence.
-    const invalidated = this.#engine.exportInvalidatedPayloads();
-    for (const entry of invalidated)
-      if (entry.rumorId && entry.transportId)
-        this.#pendingRetractions.set(entry.transportId, entry);
-    batch.setMeta(
-      groupKeys.delivered,
-      encodeDeliveredEvidence({
-        entries: this.#engine
-          .exportDeliveredPayloads()
-          .filter((entry) => !!entry.rumorId),
-        pending: [...this.#pendingRetractions.values()],
-      }),
-    );
-    return invalidated;
+    keep?: ReadonlySet<string>,
+  ): {
+    invalidated: DeliveredAppPayload<NostrEvent>[];
+    finish: (options?: {
+      acknowledge?: boolean;
+      notify?: boolean;
+    }) => Promise<void>;
+    notify: () => Promise<void>;
+  } {
+    const engineInvalidated = this.#engine.exportInvalidatedPayloads();
+    const reported = [...this.#pendingInvalidations];
+    const locals = [...this.#pendingMessages];
+    const current = this.#engine.exportDeliveredPayloads();
+    const now = Math.floor(Date.now() / 1000);
+    const changed = new Map<string, PersistedDelivery>();
+    const deleted = new Set<string>();
+    const saved: Uint8Array[] = [];
+    const removed: string[] = [];
+
+    const stageMessage = (payload: Uint8Array) => {
+      let row: ReturnType<typeof messageRow>;
+      try {
+        row = messageRow(deserializeApplicationData(payload));
+      } catch {
+        return; // Invalid payloads have no rumor.
+      }
+      batch.then(async (tx) => {
+        if (await tx.messages.get(row.id)) return;
+        await tx.messages.put(row);
+        saved.push(payload);
+      });
+    };
+
+    for (const payload of locals) stageMessage(payload);
+    const live = new Set<string>();
+    for (const entry of current) {
+      const id = deliveryId(entry);
+      if (!id) continue;
+      live.add(id);
+      const evidence = !keep || keep.has(entry.stateTag);
+      const known = this.#deliveries.get(id);
+      if (known && known.evidence === evidence) continue;
+      const record: PersistedDelivery = {
+        rumorId: entry.rumorId!,
+        stateTag: entry.stateTag,
+        epoch: entry.epoch,
+        createdAt: known?.createdAt ?? now,
+        evidence,
+      };
+      batch.putDelivery({
+        id,
+        rumorId: record.rumorId,
+        epoch: record.epoch,
+        createdAt: record.createdAt,
+        value: new Uint8Array(),
+        evidence: evidence ? encodeDeliveryEvidence(entry) : undefined,
+      });
+      changed.set(id, record);
+      if (!known) stageMessage(entry.payload);
+    }
+    // Retention: evidence leaves the window even when the engine no longer
+    // holds the entry; the row itself stays to count the rumor's support.
+    if (keep)
+      for (const [id, known] of this.#deliveries)
+        if (known.evidence && !keep.has(known.stateTag) && !changed.has(id)) {
+          const record = { ...known, evidence: false };
+          batch.putDelivery({
+            id,
+            rumorId: record.rumorId,
+            epoch: record.epoch,
+            createdAt: record.createdAt,
+            value: new Uint8Array(),
+          });
+          changed.set(id, record);
+        }
+    for (const entry of [
+      ...engineInvalidated,
+      ...reported.map(([, entry]) => entry),
+    ]) {
+      const id = deliveryId(entry);
+      if (!id) continue;
+      const rumorId = entry.rumorId!;
+      batch.deleteDelivery(id);
+      deleted.add(id);
+      batch.then(async (tx) => {
+        if ((await tx.deliveries.countByRumor(rumorId)) > 0) return;
+        if (!(await tx.messages.get(rumorId))) return;
+        await tx.messages.delete(rumorId);
+        removed.push(rumorId);
+      });
+    }
+
+    const notify = async () => {
+      if (!this.history || (!saved.length && !removed.length)) return;
+      // The rows are durable; announce them to live history readers.
+      try {
+        for (const payload of saved) await this.history.saveMessage(payload);
+        for (const rumorId of removed)
+          await this.history.removeMessage(rumorId);
+      } catch (error) {
+        this.#onHistoryError?.(error as Error);
+      }
+      this.#onHistoryChanged?.();
+    };
+
+    return {
+      invalidated: engineInvalidated,
+      notify,
+      // Retention defers acknowledgement and notification until the engine
+      // lease is released.
+      finish: async ({ acknowledge = true, notify: announce = true } = {}) => {
+        for (const [id, record] of changed) this.#deliveries.set(id, record);
+        for (const id of deleted) this.#deliveries.delete(id);
+        // Settled rows the engine has pruned need no further bookkeeping.
+        for (const [id, record] of this.#deliveries)
+          if (!record.evidence && !live.has(id)) this.#deliveries.delete(id);
+        for (const [id, entry] of reported)
+          if (this.#pendingInvalidations.get(id) === entry)
+            this.#pendingInvalidations.delete(id);
+        this.#pendingMessages.splice(0, locals.length);
+        if (acknowledge)
+          this.#engine.acknowledgeInvalidatedPayloads(engineInvalidated);
+        if (announce) await notify();
+      },
+    };
   }
 
   #stageWrappers(batch: GroupBatch): Map<string, StagedWrapper> {
@@ -826,9 +945,6 @@ export class GroupSession {
   }
 
   async #retainSettled(): Promise<boolean> {
-    // Await only adapter history writes, never the enclosing local operation:
-    // a send/recovery can itself be waiting for this save.
-    await Promise.all([...this.#historyWrites]);
     if (this.#destroyed || this.#disposed) return false;
     const pins: HistoryRetentionPin[] = [];
     // Removal authority owns the exact pristine parent and every selected
@@ -856,17 +972,8 @@ export class GroupSession {
     const publications = [...this.#pendingPublications.values()];
     for (const publication of publications)
       pins.push({ stateTag: publication.stateTag, reason: "publication" });
-    const invalidated = this.#engine.exportInvalidatedPayloads();
-    for (const entry of invalidated)
-      if (entry.rumorId && entry.transportId)
-        this.#pendingRetractions.set(entry.transportId, entry);
-    const deliveries = this.#engine.exportDeliveredPayloads();
-    for (const entry of this.#pendingRetractions.values()) {
-      pins.push({ stateTag: entry.stateTag, reason: "retraction" });
-      for (const support of deliveries)
-        if (support.rumorId === entry.rumorId)
-          pins.push({ stateTag: support.stateTag, reason: "retraction" });
-    }
+    let retentionInvalidated: DeliveredAppPayload<NostrEvent>[] = [];
+    let retentionNotify: (() => Promise<void>) | undefined;
     const effects = await this.#effectLedger.pending();
     let unresolvedEffect = await this.#effectLedger.hasOpaqueDependency();
     for (const effect of effects) {
@@ -910,12 +1017,6 @@ export class GroupSession {
         ).snapshot;
         const plan = await this.historyTree.prepareRetention(capture);
         const keep = new Set(plan.retainedTags);
-        const evidence = encodeDeliveredEvidence({
-          entries: deliveries.filter(
-            (entry) => !!entry.rumorId && keep.has(entry.stateTag),
-          ),
-          pending: [...this.#pendingRetractions.values()],
-        });
         const digests = new Set(
           plan.retainedTags.flatMap((tag) => {
             const digest = this.historyTree.node(tag)?.edge?.commitDigest;
@@ -929,20 +1030,19 @@ export class GroupSession {
           const tree = await this.historyTree.stageFlush();
           batch.tree(tree.write);
           batch.setMeta(groupKeys.state, stateBytes);
-          batch.setMeta(groupKeys.delivered, evidence);
+          const deliveries = this.#stageDeliveries(batch, keep);
           const wrappers = this.#stageWrappers(batch);
           this.#wrapperLedger.stageCompaction(
             batch,
             plan.floorEpoch,
-            new Set([
-              ...this.#pendingRetractions.keys(),
-              ...this.#pendingPublications.keys(),
-              ...wrappers.keys(),
-            ]),
+            new Set([...this.#pendingPublications.keys(), ...wrappers.keys()]),
           );
           this.#effectLedger.stageCompaction(batch, digests);
           await batch.commit();
           tree.finish();
+          await deliveries.finish({ acknowledge: false, notify: false });
+          retentionInvalidated = deliveries.invalidated;
+          retentionNotify = deliveries.notify;
           this.#unstageWrappers(wrappers);
         });
         if (this.#destroyed || this.#disposed)
@@ -958,12 +1058,12 @@ export class GroupSession {
       },
     );
     if (result.kind === "committed") {
-      this.#engine.acknowledgeInvalidatedPayloads(invalidated);
+      this.#engine.acknowledgeInvalidatedPayloads(retentionInvalidated);
+      await retentionNotify?.();
       for (const [id, record] of this.#sentEventIds)
         if (
           record.sourceEpoch < result.floorEpoch &&
-          !this.#pendingPublications.has(id) &&
-          !this.#pendingRetractions.has(id)
+          !this.#pendingPublications.has(id)
         )
           this.#sentEventIds.delete(id);
     }
@@ -992,7 +1092,6 @@ export class GroupSession {
       await this.finishRemovalRecovery();
       return [];
     }
-    await this.#retryRetractions();
     const results: DispositionedIngestResult[] = [];
     for (const result of await this.#engine.reconvergeFromHistory())
       results.push(...(await this.#reconcile(mapEngineIngestResult(result))));
@@ -1093,7 +1192,6 @@ export class GroupSession {
     await this.#deliveredHydrated;
     if (this.#destroyed) return [];
     if (this.#terminalTombstone) return this.#resumeTerminalWork();
-    await this.#retryRetractions();
     const results: DispositionedIngestResult[] = [];
     for (const result of await this.#engine.driveConvergence())
       results.push(...(await this.#reconcile(mapEngineIngestResult(result))));
@@ -1112,7 +1210,8 @@ export class GroupSession {
     // A captured retention revision owns engine mutation until its adapter
     // finishes. Destruction fences admission now and wipes after that barrier.
     if (!this.#retentionInFlight) this.#engine.destroyDeliveredPayloads();
-    this.#pendingRetractions.clear();
+    this.#pendingInvalidations.clear();
+    this.#pendingMessages.length = 0;
   }
 
   /** Track local writes so destruction waits for any already admitted I/O. */
@@ -1130,27 +1229,6 @@ export class GroupSession {
     }
   }
 
-  async #writeHistory<T>(
-    operation: () => Promise<T> | T,
-    ordinary = true,
-  ): Promise<T | undefined> {
-    await this.#retentionInFlight;
-    // The tombstone is installed synchronously by selection/hydration. Check
-    // again inside the queued write so admitted work that has not started
-    // cannot open an adapter save after terminal selection.
-    if (ordinary && this.#terminalTombstone) return undefined;
-    const write = this.#write(() => {
-      if (ordinary && this.#terminalTombstone) return undefined;
-      return operation();
-    });
-    this.#historyWrites.add(write);
-    try {
-      return await write;
-    } finally {
-      this.#historyWrites.delete(write);
-    }
-  }
-
   async destroyLocalState(): Promise<void> {
     this.beginDestroy();
     // Hydration may already be reading the plaintext ledger. Let reads finish
@@ -1159,7 +1237,6 @@ export class GroupSession {
     await Promise.allSettled([this.#retentionInFlight, this.#saveInFlight]);
     await Promise.allSettled([...this.#localWrites]);
     this.#engine.destroyDeliveredPayloads();
-    this.#pendingRetractions.clear();
     // Purge through the history so its in-memory rumor cache and live
     // subscribers see the removal, then delete the database itself.
     await this.history?.purgeMessages();
@@ -1179,13 +1256,16 @@ export class GroupSession {
     await this.database.transaction(async (tx) => {
       for (const tag of tree.deletes) await tx.treeNodes.delete(tag);
       await tx.wrappers.deleteBelow(Number.MAX_SAFE_INTEGER);
+      for (const row of await tx.deliveries.withEvidence())
+        await tx.deliveries.delete(row.id);
+      for (const row of await tx.messages.query({}))
+        await tx.messages.delete(row.id);
       for (const key of [
         groupKeys.state,
         groupKeys.removed,
         groupKeys.removalAttribution,
         groupKeys.publication,
         groupKeys.effects,
-        groupKeys.delivered,
         "tree",
         DISBAND_REQUEST_KEY,
         DISBAND_CONVERGENCE_KEY,
@@ -1257,8 +1337,6 @@ export class GroupSession {
       await this.#terminalHydrated;
       await this.#removalHydrated;
       await this.#deliveredHydrated;
-      if (this.#destroyed) return;
-      await this.#retryRetractions();
       if (this.#destroyed) return;
       await this.#engine.disbandRequest();
     });
@@ -1416,23 +1494,25 @@ export class GroupSession {
       await tx.meta.delete(groupKeys.state);
     });
     await this.#wrapperLedger.clear();
-    await this.#cleanupCompletedRetractions();
+    await this.#cleanupTerminalHistory();
     this.#dirty = false;
   }
 
-  async #cleanupCompletedRetractions(): Promise<void> {
-    // Ordinary admission is already closed. An adapter save may have started
-    // before selection and still forward after its await; purge only after it
-    // settles. Waiting on #localWrites would include this terminal projection
-    // (and a send waiting on lifecycle hydration), causing a deadlock.
-    await Promise.allSettled([...this.#historyWrites]);
-    if (this.#pendingRetractions.size) return;
+  async #cleanupTerminalHistory(): Promise<void> {
     await this.history?.purgeMessages();
-    // The decoder requires the tree; retire evidence before its provenance.
-    await this.meta.delete(groupKeys.delivered);
+    // Plaintext delivery evidence goes before the tree it is attributed to.
+    const evidence = await this.database.deliveries.withEvidence();
     const treeStore = groupTreeStore(this.database);
-    await treeStore.commit(await GroupHistoryTree.stagePurge(treeStore));
-    await this.meta.delete(PENDING_PUBLICATION_KEY);
+    const tree = await GroupHistoryTree.stagePurge(treeStore);
+    await this.database.transaction(async (tx) => {
+      for (const row of evidence) await tx.deliveries.delete(row.id);
+      // Plaintext goes even when no history object is attached.
+      for (const row of await tx.messages.query({}))
+        await tx.messages.delete(row.id);
+      await applyTreeWrite(tx, tree);
+      await tx.meta.delete(PENDING_PUBLICATION_KEY);
+    });
+    this.#deliveries.clear();
   }
 
   async #resumeTerminalWork(): Promise<DispositionedIngestResult[]> {
@@ -1443,9 +1523,8 @@ export class GroupSession {
         this.#onHistoryError?.(error as Error);
       }
     }
-    await this.#retryRetractions();
     if (this.#terminalProjectionComplete)
-      await this.#write(() => this.#cleanupCompletedRetractions());
+      await this.#write(() => this.#cleanupTerminalHistory());
     return (await this.#effectLedger.pending()).map((pending) => ({
       ...pending,
       disposition: ingestResultDisposition(pending),
@@ -1626,7 +1705,7 @@ export class GroupSession {
             "Expected applicationMessage result from applicationMessage send",
           );
         }
-        await this.#saveHistory(intent.payload);
+        this.#pendingMessages.push(intent.payload);
         await this.save(true);
         this.assertOpen();
         return {
@@ -1929,7 +2008,6 @@ export class GroupSession {
       }
       return;
     }
-    await this.#retryRetractions();
     for (const pending of await this.#effectLedger.pending())
       yield { ...pending, disposition: ingestResultDisposition(pending) };
     const selfEcho: Array<{ event: NostrEvent; stateTag: string }> = [];
@@ -1988,12 +2066,6 @@ export class GroupSession {
       if (mapped.kind === "processed")
         await this.#persistSelectedDisbandIfPossible(mapped.selectedTerminal);
 
-      if (
-        mapped.kind === "processed" &&
-        mapped.result.kind === "applicationMessage"
-      ) {
-        await this.#saveHistory(mapped.result.message);
-      }
       if (this.#destroyed) return;
 
       const reconciledResults = await this.#reconcile(mapped);
@@ -2067,9 +2139,8 @@ export class GroupSession {
           transportId: result.event.id,
           commitDigest: result.commitDigest,
         };
-        this.#pendingRetractions.set(result.event.id, entry);
+        this.#pendingInvalidations.set(result.event.id, entry);
         await this.#persistDelivered();
-        await this.#retryRetractions();
       } catch (error) {
         this.#onHistoryError?.(error as Error);
       }
@@ -2145,74 +2216,45 @@ export class GroupSession {
   }
 
   async #hydrateDelivered(): Promise<void> {
-    const bytes = await this.meta.get(groupKeys.delivered);
+    const rows = await this.database.deliveries.withEvidence();
     if (this.#destroyed || this.#disposed) return;
-    if (!bytes) return; // Older clients have no attributable pre-migration deliveries.
-    const evidence = decodeDeliveredEvidence(bytes, this.#engine.history);
-    this.#engine.importDeliveredPayloads(evidence.entries);
-    for (const entry of evidence.pending)
-      this.#pendingRetractions.set(entry.transportId!, entry);
+    const entries = rows.map((row) =>
+      decodeDeliveryEvidence(row.evidence!, this.#engine.history),
+    );
+    this.#engine.importDeliveredPayloads(entries);
+    rows.forEach((row, index) =>
+      this.#deliveries.set(row.id, {
+        rumorId: row.rumorId,
+        stateTag: entries[index]!.stateTag,
+        epoch: row.epoch,
+        createdAt: row.createdAt,
+        evidence: true,
+      }),
+    );
   }
 
-  async #retryRetractions(): Promise<void> {
-    await this.#retentionInFlight;
-    if (this.#destroyed) return;
-    // Restoring a failed acknowledgement must wait for the next retry pass;
-    // a live Map iterator would revisit reinserted entries indefinitely.
-    for (const [id, entry] of [...this.#pendingRetractions]) {
-      try {
-        // Transport deliveries can share one inner rumor. A losing envelope
-        // withdraws only its own support; retain (or restore) the history row
-        // while any surviving delivery still supports that canonical identity.
-        const surviving = this.#engine
-          .exportDeliveredPayloads()
-          .find((delivery) => delivery.rumorId === entry.rumorId);
-        if (surviving)
-          await this.#writeHistory(
-            () => this.history?.saveMessage(surviving.payload),
-            false,
-          );
-        else
-          await this.#writeHistory(
-            () => this.history?.removeMessage(entry.rumorId!),
-            false,
-          );
-        if (this.#destroyed) return;
-        this.#pendingRetractions.delete(id);
-        this.#markRetentionPending();
-        try {
-          await this.#persistDelivered();
-        } catch (error) {
-          if (!this.#destroyed) this.#pendingRetractions.set(id, entry);
-          throw error;
-        }
-        this.#onHistoryChanged?.();
-      } catch (error) {
-        this.#onHistoryError?.(error as Error);
-      }
-    }
-  }
-
+  /** Commits delivery bookkeeping that changed without a state save. */
   async #persistDelivered(): Promise<void> {
     await this.#retentionInFlight;
     if (this.#destroyed) return;
     await this.#write(async () => {
       const batch = new GroupBatch(this.database);
-      const invalidated = this.#stageDelivered(batch);
+      const deliveries = this.#stageDeliveries(batch);
       await batch.commit();
-      this.#engine.acknowledgeInvalidatedPayloads(invalidated);
+      await deliveries.finish();
     });
   }
-
-  async #saveHistory(message: Uint8Array): Promise<void> {
-    if (!this.history || this.#destroyed) return;
-    try {
-      await this.#writeHistory(() => this.history!.saveMessage(message));
-    } catch (err) {
-      this.#onHistoryError?.(err as Error);
-    }
-  }
 }
+
+/** What the session remembers about a persisted `deliveries` row. */
+type PersistedDelivery = {
+  rumorId: string;
+  stateTag: string;
+  epoch: number;
+  createdAt: number;
+  /** Whether the row still holds re-adoption evidence. */
+  evidence: boolean;
+};
 
 function scrubTerminalRegistryState(state: ClientState): ClientState {
   const copy = structuredClone(state);

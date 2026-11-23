@@ -12,7 +12,6 @@
  * removal                    removal attribution evidence
  * publication                pending commit publication
  * effects                    convergence effects ledger
- * delivered                  delivered-payload evidence
  * disband/{request,convergence,terminal,intent,registry-state}
  * backfill-cursor/<relay>    backfill cursor (relay hash)
  * backfill-progress/<relay>  backfill paging progress (relay hash)
@@ -29,7 +28,6 @@ export const groupKeys = {
   removalAttribution: "removal",
   publication: "publication",
   effects: "effects",
-  delivered: "delivered",
   backfillCursor: (relayHash: string): GroupMetaKey =>
     `backfill-cursor/${relayHash}`,
   backfillProgress: (relayHash: string): GroupMetaKey =>

@@ -32,16 +32,16 @@ to public relays. Generating an identity in one tab does not change another tab'
 active account.
 
 `src/services/client-id.ts` generates one Marmot `clientId` and saves it in
-localStorage, shared by all accounts and tabs. Private key packages stay in
-sessionStorage, separated by client ID, account, and local/live mode. Simulated
-actors can still use their own ephemeral client ids.
+localStorage, shared by all accounts and tabs. Each client uses the package's
+`indexedDBDatabase` adapter to persist key packages, invites, group state, and
+message history, separated by client ID, account, and local/live mode.
 
 The service's `rotateClientId()` action rotates this ID, rebuilds active clients across
-open tabs, and remounts their demos. Every account then uses a fresh key-package
+open tabs, and remounts their demos. Every account then uses a fresh database
 namespace, without automatically publishing. Saved logins and relay events are
-unchanged. Old private bundles remain in their previous sessionStorage namespaces,
-but are no longer loaded; storage from the earlier per-account client IDs is also
-left unused.
+unchanged. Old databases remain in their previous IndexedDB namespaces, but are
+no longer loaded. Key packages from the earlier sessionStorage implementation
+are not migrated; publish a new key package after upgrading.
 
 The account switcher opens a login screen supporting a NIP-07
 extension, NIP-46 remote signers (bunker URI or `nostrconnect://` QR code), and
@@ -199,9 +199,10 @@ The creator can invite more contacts into the same group. Invites look up key
 packages on the selected transport's relays, so participants should use the same
 transport mode. Live mode publishes to real relays.
 
-Group state is in memory: reloading or resetting does not restore the chat.
-Navigating away disconnects the chat without leaving the group; create a fresh
-group for a fresh run.
+Group state and message history persist in IndexedDB. Reloading or resetting
+remounts the demo without deleting its stored groups. Navigating away disconnects
+the chat without leaving the group. The demo does not automatically reopen the
+previously selected chat; create a fresh group for a fresh run.
 
 ## Session key packages
 
@@ -218,8 +219,9 @@ comes first. Publishing and rotating after a package is consumed or expires are
 explicit sidebar actions, not timer or demo side effects. Local private material
 is never copied into live mode.
 
-The sessionStorage bundles contain unencrypted MLS secrets: use development accounts.
-Only key-package material survives reloads, not the demo's group state or history.
+The IndexedDB databases contain unencrypted MLS secrets and decrypted messages:
+use development accounts. Account and group data survive reloads and browser
+restarts; clear the demo site's browser storage to delete them.
 
 ## Clock group
 

@@ -15,7 +15,7 @@ import {
 import { MarmotClient } from "../marmot-client.js";
 
 describe("member removal and re-invitation end to end", () => {
-  it("lets B accept a fresh invitation after A bans B and exchange messages again", async () => {
+  it("lets B rejoin after several banned epochs, preserving earlier history but excluding ban-period messages", async () => {
     const network = new MockNetwork();
     const relays = ["wss://mock-relay.test"];
     const accountA = testAccount(1);
@@ -108,6 +108,9 @@ describe("member removal and re-invitation end to end", () => {
       await sendAndReceive(a, b, "A: welcome B");
       await sendAndReceive(b, a, "B: hello A");
       await sendAndReceive(a, b, "A: before removal");
+      const earlierHistory = await groupB.history.queryRumors({});
+      expect(earlierHistory.length).toBeGreaterThanOrEqual(2);
+      const joinedEpoch = groupB.state.groupContext.epoch;
 
       // The demo's Ban action is an admin Remove proposal.
       // See refs/marmot/protocol-core/member-departure.md.
@@ -137,6 +140,26 @@ describe("member removal and re-invitation end to end", () => {
         ),
       ).rejects.toThrow(/removed/i);
 
+      // A keeps using the group for several epochs while B is absent.
+      const beforeBanMessages = network.events.length;
+      const bannedRumors = [];
+      for (let epoch = 0; epoch < 3; epoch++) {
+        await a.groups.commit(groupA.id);
+        const rumor = createChatRumor({
+          pubkey: accountA.pubkey,
+          content: `A: private message during ban, epoch ${epoch}`,
+        });
+        bannedRumors.push(rumor);
+        await a.groups.send(groupA.id, createApplicationMessageIntent(rumor));
+        expect(getGroupMemberPubkeys(groupA.state)).toEqual([accountA.pubkey]);
+      }
+      expect(groupA.state.groupContext.epoch).toBe(joinedEpoch + 4n);
+      expect(groupB.status).toBe("removed");
+      const banEvents = network.events
+        .slice(beforeBanMessages)
+        .filter((event) => event.kind === GROUP_EVENT_KIND);
+      expect(banEvents).toHaveLength(6);
+
       // Keep B's client and database, including the removed group. Accepting
       // a new Welcome should restore membership without manually deleting it.
       const rejoined = await inviteAndAccept();
@@ -144,6 +167,25 @@ describe("member removal and re-invitation end to end", () => {
       expect(await b.groups.listIds()).toEqual([groupA.id]);
       expect(getGroupMemberPubkeys(groupA.state).sort()).toEqual(
         [accountA.pubkey, accountB.pubkey].sort(),
+      );
+      expect(rejoined.state.groupContext.epoch).toBe(joinedEpoch + 5n);
+      expect(
+        await rejoined.history.queryRumors({
+          ids: earlierHistory.map((rumor) => rumor.id),
+        }),
+      ).toEqual(earlierHistory);
+
+      // Relay backfill may deliver every commit and message from the ban.
+      // A new Welcome must not grant B access to these intervening epochs.
+      for await (const _ of b.groups.ingest(groupA.id, banEvents)) void _;
+      expect(
+        await rejoined.history.queryRumors({
+          ids: bannedRumors.map((rumor) => rumor.id),
+        }),
+      ).toEqual([]);
+      expect(rejoined.status).toBe("active");
+      expect(rejoined.state.confirmationTag).toEqual(
+        groupA.state.confirmationTag,
       );
       await sendAndReceive(a, b, "A: welcome back B");
       await sendAndReceive(b, a, "B: I am back");

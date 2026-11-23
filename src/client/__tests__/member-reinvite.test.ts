@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { memoryDatabase } from "../../__tests__/helpers/database.js";
 import { MockNetwork } from "../../__tests__/helpers/mock-network.js";
 import { testAccount } from "../../__tests__/helpers/test-accounts.js";
@@ -32,6 +32,7 @@ describe("member removal and re-invitation end to end", () => {
       network,
       clientId: "bb".repeat(32),
     });
+    const watching = new AbortController();
 
     try {
       const groupA = await a.groups.create("Re-invitation", {
@@ -105,6 +106,11 @@ describe("member removal and re-invitation end to end", () => {
       }
 
       const groupB = await inviteAndAccept();
+      const historyB = groupB.history;
+      const disposed = vi.fn();
+      groupB.on("disposed", disposed);
+      const snapshots = groupB.watch({ signal: watching.signal });
+      expect((await snapshots.next()).value?.status).toBe("active");
       await sendAndReceive(a, b, "A: welcome B");
       await sendAndReceive(b, a, "B: hello A");
       await sendAndReceive(a, b, "A: before removal");
@@ -127,6 +133,7 @@ describe("member removal and re-invitation end to end", () => {
         removalResults.push(result);
       expect(removalResults.map((result) => result.kind)).toContain("removed");
       expect(groupB.status).toBe("removed");
+      expect((await snapshots.next()).value?.status).toBe("removed");
       expect(getGroupMemberPubkeys(groupA.state)).toEqual([accountA.pubkey]);
       await expect(
         b.groups.send(
@@ -163,6 +170,13 @@ describe("member removal and re-invitation end to end", () => {
       // Keep B's client and database, including the removed group. Accepting
       // a new Welcome should restore membership without manually deleting it.
       const rejoined = await inviteAndAccept();
+      expect(rejoined).toBe(groupB);
+      expect(rejoined.history).toBe(historyB);
+      expect(disposed).not.toHaveBeenCalled();
+      const resumed = await snapshots.next();
+      expect(resumed.done).toBe(false);
+      expect(resumed.value?.status).toBe("active");
+      expect(resumed.value?.epoch).toBe(groupA.state.groupContext.epoch);
       expect(await b.groups.get(groupA.id)).toBe(rejoined);
       expect(await b.groups.listIds()).toEqual([groupA.id]);
       expect(getGroupMemberPubkeys(groupA.state).sort()).toEqual(
@@ -189,7 +203,9 @@ describe("member removal and re-invitation end to end", () => {
       );
       await sendAndReceive(a, b, "A: welcome back B");
       await sendAndReceive(b, a, "B: I am back");
+      expect(groupB.status).toBe("active");
     } finally {
+      watching.abort();
       a.dispose();
       b.dispose();
     }

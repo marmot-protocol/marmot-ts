@@ -8,8 +8,11 @@ import {
   Observable,
   Subscription,
   catchError,
+  combineLatest,
   distinctUntilChanged,
   map,
+  merge,
+  of,
   switchMap,
   tap,
 } from "rxjs";
@@ -24,29 +27,7 @@ export class ContactsService {
   readonly #subscriptions = new Subscription();
 
   constructor(pubkey: string, transport: DemoTransport, store: EventStore) {
-    if (transport instanceof DemoRelay) {
-      this.#subscriptions.add(
-        transport
-          .network("contacts")
-          .subscription(transport.relays, {
-            kinds: [0],
-          })
-          .subscribe({ next: (event) => store.add(event) }),
-      );
-      const update = () => {
-        const keys = [...new Set(transport.peers.map((peer) => peer.pubkey))]
-          .filter((key) => key !== pubkey)
-          .sort();
-        if (
-          keys.join() !== this.contacts$.value.map((user) => user.pubkey).join()
-        )
-          this.contacts$.next(keys.map((key) => castUser(key, store)));
-      };
-      this.#subscriptions.add(transport.onChange(update));
-      update();
-      return;
-    }
-
+    const candidates$ = new BehaviorSubject<User[]>([]);
     const network = transport.network("contacts");
     const load = (relays: string[], filters: Filter) =>
       new Observable<NostrEvent>((observer) =>
@@ -60,6 +41,85 @@ export class ContactsService {
           return EMPTY;
         }),
       );
+    this.#subscriptions.add(() => candidates$.complete());
+    this.#subscriptions.add(
+      candidates$
+        .pipe(
+          switchMap((users) =>
+            users.length
+              ? combineLatest(
+                  users.map((user) =>
+                    store
+                      .timeline({
+                        kinds: [30443],
+                        authors: [user.pubkey],
+                        limit: 1,
+                      })
+                      .pipe(
+                        map((packages) => (packages.length ? user : undefined)),
+                      ),
+                  ),
+                ).pipe(
+                  map((users) => users.filter((user) => user !== undefined)),
+                )
+              : of([]),
+          ),
+        )
+        .subscribe((users) => this.contacts$.next(users)),
+    );
+    this.#subscriptions.add(
+      candidates$
+        .pipe(
+          switchMap((users) =>
+            merge(
+              ...users.map((user) =>
+                merge(
+                  load(
+                    transport instanceof DemoRelay
+                      ? transport.relays
+                      : LOOKUP_RELAYS,
+                    { kinds: [0, 10002], authors: [user.pubkey] },
+                  ),
+                  user.outboxes$.pipe(
+                    map((outboxes) =>
+                      transport instanceof DemoRelay
+                        ? transport.relays
+                        : [
+                            ...new Set([
+                              ...(outboxes ?? []),
+                              ...transport.relays,
+                            ]),
+                          ],
+                    ),
+                    distinctUntilChanged((a, b) => a.join() === b.join()),
+                    switchMap((relays) =>
+                      load(relays, {
+                        kinds: [30443],
+                        authors: [user.pubkey],
+                        limit: 1,
+                      }),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        )
+        .subscribe(),
+    );
+
+    if (transport instanceof DemoRelay) {
+      const update = () => {
+        const keys = [...new Set(transport.peers.map((peer) => peer.pubkey))]
+          .filter((key) => key !== pubkey)
+          .sort();
+        if (keys.join() !== candidates$.value.map((user) => user.pubkey).join())
+          candidates$.next(keys.map((key) => castUser(key, store)));
+      };
+      this.#subscriptions.add(transport.onChange(update));
+      update();
+      return;
+    }
 
     const account = castUser(pubkey, store);
     // Bootstrap NIP-65, then follow the account's declared write relays.
@@ -82,22 +142,9 @@ export class ContactsService {
     );
     this.#subscriptions.add(
       account.contacts$.subscribe({
-        next: (contacts) => this.contacts$.next(contacts ?? []),
+        next: (contacts) => candidates$.next(contacts ?? []),
         error: (cause: unknown) => this.error$.next(String(cause)),
       }),
-    );
-    this.#subscriptions.add(
-      this.contacts$
-        .pipe(
-          map((contacts) => contacts.map((user) => user.pubkey)),
-          distinctUntilChanged((a, b) => a.join() === b.join()),
-          switchMap((authors) =>
-            authors.length
-              ? load(LOOKUP_RELAYS, { kinds: [0], authors })
-              : EMPTY,
-          ),
-        )
-        .subscribe(),
     );
   }
 

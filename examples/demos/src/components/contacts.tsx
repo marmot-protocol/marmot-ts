@@ -23,7 +23,9 @@ export function Contacts() {
         ))}
       </ul>
       {!contacts.length && (
-        <p className="text-xs text-base-content/50">No contacts</p>
+        <p className="text-xs text-base-content/50">
+          No contacts with key packages
+        </p>
       )}
     </section>
   );

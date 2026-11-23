@@ -21,17 +21,42 @@ describe("shared contacts", () => {
     const first = new DemoRelay({ channel });
     const second = new DemoRelay({ channel });
     const alice = PrivateKeyAccount.generateNew().pubkey;
-    const bob = PrivateKeyAccount.generateNew().pubkey;
-    const carol = PrivateKeyAccount.generateNew().pubkey;
+    const bobAccount = PrivateKeyAccount.generateNew();
+    const carolAccount = PrivateKeyAccount.generateNew();
+    const bob = bobAccount.pubkey;
+    const carol = carolAccount.pubkey;
     const store = new EventStore();
     const contacts = new ContactsService(alice, first, store);
     try {
       first.setIdentity(alice);
       second.setIdentity(bob);
       await expect
+        .poll(() => first.peers.map((peer) => peer.pubkey))
+        .toEqual([bob]);
+      expect(contacts.contacts$.value).toEqual([]);
+      await second.network("test").publish(
+        second.relays,
+        await bobAccount.signer.signEvent({
+          kind: 30443,
+          created_at: 1,
+          content: "",
+          tags: [["d", "bob-package"]],
+        }),
+      );
+      await expect
         .poll(() => contacts.contacts$.value.map((user) => user.pubkey))
         .toEqual([bob]);
       second.setIdentity(carol);
+      await expect.poll(() => contacts.contacts$.value).toEqual([]);
+      await second.network("test").publish(
+        second.relays,
+        await carolAccount.signer.signEvent({
+          kind: 30443,
+          created_at: 1,
+          content: "",
+          tags: [["d", "carol-package"]],
+        }),
+      );
       await expect
         .poll(() => contacts.contacts$.value.map((user) => user.pubkey))
         .toEqual([carol]);
@@ -53,6 +78,7 @@ describe("shared contacts", () => {
   it("uses account outboxes for live follows and reacts to updated lists", async () => {
     const account = PrivateKeyAccount.generateNew();
     const friend = PrivateKeyAccount.generateNew();
+    const withoutPackage = PrivateKeyAccount.generateNew();
     const store = new EventStore();
     const subscriptions: {
       relays: string[];
@@ -126,7 +152,10 @@ describe("shared contacts", () => {
         kind: 3,
         created_at: 2,
         content: "",
-        tags: [["p", friend.pubkey]],
+        tags: [
+          ["p", friend.pubkey],
+          ["p", withoutPackage.pubkey],
+        ],
       });
       const followSub = subscriptions.find(
         (entry) =>
@@ -136,9 +165,83 @@ describe("shared contacts", () => {
       )!;
       followSub.observer.next?.(follows);
       await expect
+        .poll(() =>
+          subscriptions.some(
+            (entry) =>
+              !entry.closed &&
+              entry.filters.kinds?.includes(30443) &&
+              entry.filters.authors?.includes(friend.pubkey),
+          ),
+        )
+        .toBe(true);
+      expect(contacts.contacts$.value).toEqual([]);
+      const friendOutbox = "wss://friend.test/";
+      subscriptions
+        .find(
+          (entry) =>
+            !entry.closed &&
+            entry.filters.kinds?.includes(10002) &&
+            entry.filters.authors?.includes(friend.pubkey),
+        )!
+        .observer.next?.(
+          await friend.signer.signEvent({
+            kind: 10002,
+            created_at: 1,
+            content: "",
+            tags: [["r", friendOutbox, "write"]],
+          }),
+        );
+      await expect
+        .poll(() =>
+          subscriptions.some(
+            (entry) =>
+              !entry.closed &&
+              entry.filters.kinds?.includes(30443) &&
+              entry.relays.includes(friendOutbox),
+          ),
+        )
+        .toBe(true);
+      const packageSub = subscriptions.find(
+        (entry) =>
+          !entry.closed &&
+          entry.filters.kinds?.includes(30443) &&
+          entry.relays.includes(friendOutbox),
+      )!;
+      expect(packageSub.filters).toEqual({
+        kinds: [30443],
+        authors: [friend.pubkey],
+        limit: 1,
+      });
+      const keyPackage = await friend.signer.signEvent({
+        kind: 30443,
+        created_at: 2,
+        content: "",
+        tags: [["d", "first"]],
+      });
+      packageSub.observer.next?.(keyPackage);
+      await expect
         .poll(() => contacts.contacts$.value.map((user) => user.pubkey))
         .toEqual([friend.pubkey]);
       expect(contacts.contacts$.value[0].store).toBe(store);
+      const newerPackage = await friend.signer.signEvent({
+        kind: 30443,
+        created_at: 3,
+        content: "",
+        tags: [["d", "second"]],
+      });
+      packageSub.observer.next?.(newerPackage);
+      expect([
+        ...store.getByFilters({
+          kinds: [30443],
+          authors: [friend.pubkey],
+          limit: 1,
+        }),
+      ]).toEqual([newerPackage]);
+      // An older arrival must not displace the latest package.
+      packageSub.observer.next?.(keyPackage);
+      expect(contacts.contacts$.value.map((user) => user.pubkey)).toEqual([
+        friend.pubkey,
+      ]);
       followSub.observer.next?.(
         await account.signer.signEvent({
           kind: 3,
@@ -148,6 +251,9 @@ describe("shared contacts", () => {
         }),
       );
       await expect.poll(() => contacts.contacts$.value).toEqual([]);
+      expect(packageSub.closed).toBe(true);
+      packageSub.observer.next?.(newerPackage);
+      expect(contacts.contacts$.value).toEqual([]);
       contacts.close();
       expect(subscriptions.every((entry) => entry.closed)).toBe(true);
     } finally {

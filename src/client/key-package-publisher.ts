@@ -23,8 +23,26 @@ import {
   type SignatureKeyPair,
 } from "../core/key-package.js";
 import { logger } from "../utils/debug.js";
-import { NostrNetworkInterface } from "./nostr-interface.js";
-import { KeyPackagePublishError } from "./key-package-errors.js";
+import type {
+  NostrNetworkInterface,
+  PublishResponse,
+} from "./nostr-interface.js";
+
+/**
+ * No requested relay acknowledged a KeyPackage publication or deletion.
+ * Responses retain rejection/uncertainty details; the signed event is provided
+ * for inspection. This error does not imply that no relay observed the event.
+ */
+export class KeyPackagePublishError extends Error {
+  constructor(
+    readonly event: NostrEvent,
+    readonly relays: string[],
+    readonly responses: Record<string, PublishResponse>,
+  ) {
+    super("No requested relay acknowledged the key package event");
+    this.name = "KeyPackagePublishError";
+  }
+}
 
 /** Options for constructing a {@link KeyPackagePublisher}. */
 export type KeyPackagePublisherOptions = {

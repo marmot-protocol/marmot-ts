@@ -1,20 +1,15 @@
 import { EventStore } from "applesauce-core";
-import {
-  PRESENCE_TTL_MS,
-  type SyncMessage,
-  type TabIdentity,
-} from "./relay-protocol.js";
+import type { SyncMessage } from "./relay-protocol.js";
 import type {
   InspectorRequest,
   InspectorResponse,
   RelaySubscription,
+  RelayLogEntry,
 } from "./relay-inspector.js";
-import type { RelayLogEntry } from "./demo-relay.js";
 
 // One event store per named worker, shared by every connected demo tab.
 let events = new EventStore();
 const ports = new Set<MessagePort>();
-const identities = new Map<MessagePort, TabIdentity>();
 const connections = new Map<MessagePort, string>();
 const inspectors = new Set<MessagePort>();
 const subscriptions = new Map<MessagePort, Map<string, RelaySubscription>>();
@@ -28,7 +23,6 @@ const inspect = (port: MessagePort) =>
       startedAt,
       at: Date.now(),
       connections: [...connections.values()],
-      peers: [...identities.values()],
       events: [...events.getByFilters({})],
       log,
       subscriptions: [...subscriptions.values()].flatMap((subs) => [
@@ -39,24 +33,6 @@ const inspect = (port: MessagePort) =>
 const updateInspectors = () => {
   for (const port of inspectors) inspect(port);
 };
-const broadcastPeers = () => {
-  const message: SyncMessage = {
-    type: "peers",
-    peers: [...identities.values()],
-  };
-  for (const peer of ports) peer.postMessage(message);
-  updateInspectors();
-};
-setInterval(() => {
-  let changed = false;
-  for (const [port, identity] of identities) {
-    if (Date.now() - identity.at >= PRESENCE_TTL_MS) {
-      identities.delete(port);
-      changed = true;
-    }
-  }
-  if (changed) broadcastPeers();
-}, 20_000);
 const scope = globalThis as unknown as {
   onconnect: (event: MessageEvent) => void;
 };
@@ -83,11 +59,10 @@ scope.onconnect = ({ ports: [port] }) => {
     }
     if (data.type === "disconnect") {
       ports.delete(port);
-      identities.delete(port);
       connections.delete(port);
       subscriptions.delete(port);
       inspectors.delete(port);
-      broadcastPeers();
+      updateInspectors();
       port.close();
       return;
     }
@@ -97,10 +72,6 @@ scope.onconnect = ({ ports: [port] }) => {
         type: "snapshot",
         to: data.from,
         events: [...events.getByFilters({})],
-      } satisfies SyncMessage);
-      port.postMessage({
-        type: "peers",
-        peers: [...identities.values()],
       } satisfies SyncMessage);
       updateInspectors();
       return;
@@ -115,17 +86,6 @@ scope.onconnect = ({ ports: [port] }) => {
     }
     if (data.type === "log")
       log.push({ ...data.entry, tab: data.from, id: nextId++ });
-    if (data.type === "presence") {
-      if (data.pubkey)
-        identities.set(port, {
-          from: data.from,
-          pubkey: data.pubkey,
-          at: Date.now(),
-        });
-      else identities.delete(port);
-      broadcastPeers();
-      return;
-    }
     if (data.type === "event") {
       if (events.hasEvent(data.event.id)) return;
       if (!events.add(data.event)) return;

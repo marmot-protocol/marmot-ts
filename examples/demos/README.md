@@ -62,8 +62,9 @@ account$ + transport$ + clientId$ ──► client$ ──► key-package public
 account$ + transport$ ──► contacts$ (Users with reactive profiles)
 ```
 
-Transport works without an account. Changing mode replaces its connection and
-public-event cache. Changing the active account replaces the client and contacts,
+Transport works without an account. Changing mode replaces its connection.
+Contacts owns the profile/event cache and disposes it with discovery.
+Changing the active account replaces the client and contacts,
 but leaves the account-independent transport connected.
 
 The sidebar switches modes independently in each tab:
@@ -71,7 +72,8 @@ The sidebar switches modes independently in each tab:
 - **Tabs (local)** is the default. A named SharedWorker relay with an Applesauce
   EventStore shares events between local tabs, with BroadcastChannel as a fallback.
   No demo or contacts traffic goes to public relays. Contacts are the distinct active
-  identities of other local-mode tabs, excluding your own identity. Graceful departures
+  identities of other local-mode tabs with key packages, excluding your own identity.
+  Contacts manages presence over a separate BroadcastChannel, not the relay transport. Graceful departures
   disappear immediately; abruptly closed tabs expire after two minutes without a heartbeat.
 - **Live network** uses an Applesauce RelayPool. Demo events are published to real
   relays (`relay.damus.io` and `nos.lol` by default). Contacts come from the active
@@ -115,11 +117,15 @@ const invites = useAsyncLatest(
   `undefined` while logged out or replacing a client. Call APIs such as
   `client.groups.create()`, `client.groups.send()`, and `client.invites.markAsRead()`
   directly. Missing client API surface is a library finding, not a reason to add a wrapper.
-- `services/contacts.ts` exports `contacts$` (Applesauce `User[]`) and `error$`.
+- `services/contacts.ts` exports `contacts$` (Applesauce `User[]`), `peers$`
+  (all other local-mode tabs, even without key packages), and `error$`.
   Each User carries its own `profile$` and `outboxes$`; `profile$(pubkey)` also
   serves identities displayed outside the contact list. Profile loading stays here.
-- `services/transport.ts` exports `transport$`, `relays$`, `ready$`, `state$`,
-  `events$`, `log$`, and `peers$`, plus async pause/flush actions.
+- `services/transport.ts` exports only `transport$`, a bare `NostrNetworkInterface`.
+  Mode changes dispose the old implementation; client initialization passes the
+  interface directly to MarmotClient, without a transport wrapper or state facade.
+- `services/relays.ts` exports the mode-dependent `relays$` configuration used by
+  demo operations and key-package publication.
 - `services/key-packages.ts` owns sidebar publication state and async
   `publish()` / `rotate()` actions. It maintains packages and invite listening
   using the real client's APIs, without owning or wrapping the client.
@@ -147,7 +153,7 @@ Traffic and events use tables with aligned metadata columns; click **JSON** on a
 row to expand its full data, and use **Show more** for large lists. Tables scroll
 horizontally on narrow screens.
 
-**Reset relay data** clears stored events, traffic history, and queued publishes
+**Reset relay data** clears stored events and traffic history
 across connected tabs after confirmation. Active subscriptions, accounts, and
 demo groups remain. Pause running demos first if you want the relay to stay
 empty; they can publish again immediately after reset. This does not terminate
@@ -155,6 +161,7 @@ the worker or clear browser account storage.
 
 Inspection requires SharedWorker support; it does not inspect the
 BroadcastChannel fallback or live-network relays.
+There are no duplicate inline traffic panels or hold/flush controls.
 
 ## Simple chat
 

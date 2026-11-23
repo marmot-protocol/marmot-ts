@@ -17,7 +17,7 @@ import { account$ } from "../../services/accounts.js";
 import { client$ } from "../../services/client.js";
 import { contacts$, profile$ } from "../../services/contacts.js";
 import { mode$ } from "../../services/mode.js";
-import { relays$, lookupRelays$, ready$ } from "../../services/transport.js";
+import { relays$ } from "../../services/relays.js";
 import { useAsyncLatest } from "../../hooks/use-async-latest.js";
 
 export default function ClockDemo() {
@@ -67,7 +67,6 @@ function Host({ signal, adopt }: GroupActions) {
   const client = use$(client$)!;
   const account = use$(account$)!;
   const relays = use$(relays$) ?? [];
-  const transportReady = use$(ready$) ?? false;
   const [name, setName] = useState("Clock feed");
   const [group, setGroup] = useState<MarmotGroup>();
   const snapshot = useAsyncLatest(
@@ -142,9 +141,7 @@ function Host({ signal, adopt }: GroupActions) {
               value={name}
               onChange={(event) => setName(event.target.value)}
             />
-            <Action run={create} disabled={!transportReady}>
-              Start clock feed
-            </Action>
+            <Action run={create}>Start clock feed</Action>
           </div>
         ) : (
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -239,17 +236,12 @@ function InviteContacts({
   const mode = use$(mode$);
   const account = use$(account$)!;
   const transportRelays = use$(relays$) ?? [];
-  const lookupRelays = use$(lookupRelays$) ?? [];
   const users = use$(contacts$) ?? [];
   const snapshot = useAsyncLatest((signal) => group.watch({ signal }), [group]);
 
   async function invite(user: User) {
     let relays = transportRelays;
     if (mode === "live") {
-      await client.network.request(lookupRelays, {
-        kinds: [10002],
-        authors: [user.pubkey],
-      });
       const outboxes = await firstValueFrom(
         user.outboxes$.pipe(
           filter((relays) => relays !== undefined),

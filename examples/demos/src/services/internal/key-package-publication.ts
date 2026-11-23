@@ -4,7 +4,6 @@ import {
   type Unsubscribable,
 } from "@internet-privacy/marmot-ts/client";
 import { BehaviorSubject } from "rxjs";
-import type { DemoTransport } from "./transport.js";
 import { bytesToHex as hex } from "applesauce-core/helpers/event";
 
 export type SessionKeyState = {
@@ -28,7 +27,7 @@ export class KeyPackagePublication {
 
   constructor(
     readonly client: MarmotClient,
-    readonly transport: DemoTransport,
+    readonly relays: string[],
     readonly pubkey: string,
   ) {
     const clientId = client.keyPackages.clientId;
@@ -88,7 +87,6 @@ export class KeyPackagePublication {
       this.signal.throwIfAborted();
       this.state$.next({ ...this.state$.value, busy: true, error: undefined });
       try {
-        await this.transport.ready;
         this.signal.throwIfAborted();
         const packages = await this.#packages();
         const current = packages[0];
@@ -127,7 +125,7 @@ export class KeyPackagePublication {
         const pkg = reusable
           ? current
           : await this.client.keyPackages.create({
-              relays: this.transport.relays,
+              relays: this.relays,
             });
         this.signal.throwIfAborted();
         const stored = await this.client.keyPackages.get(
@@ -138,7 +136,7 @@ export class KeyPackagePublication {
         // Re-send the signed publication when the local worker was restarted.
         for (const event of stored.published) {
           const responses = await this.client.network.publish(
-            this.transport.relays,
+            this.relays,
             event,
           );
           if (!Object.values(responses).some((response) => response.ok))

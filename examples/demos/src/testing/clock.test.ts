@@ -43,7 +43,11 @@ it("advances the clock epoch, notifies a banned receiver, and keeps other receiv
         network: relay.network("you"),
         clientId: account.pubkey,
       });
-      const session = new KeyPackagePublication(client, relay, account.pubkey);
+      const session = new KeyPackagePublication(
+        client,
+        relay.relays,
+        account.pubkey,
+      );
       sessions.push(session);
       await session.start(true);
     }

@@ -9,7 +9,8 @@ import {
 } from "rxjs";
 import { client$ } from "./client.js";
 import { account$ } from "./accounts.js";
-import { transport$ } from "./transport.js";
+import { mode$ } from "./mode.js";
+import { relays$ } from "./relays.js";
 import { takeInitialKeyPackagePublication } from "./internal/development-identity.js";
 import {
   KeyPackagePublication,
@@ -20,22 +21,20 @@ export type { SessionKeyState } from "./internal/key-package-publication.js";
 
 /** Publication is a leaf of the real client, not its owner or a replacement for its API. */
 const publication$ = client$.pipe(
-  withLatestFrom(account$, transport$),
-  switchMap(([client, account, transport]) => {
-    if (!client || !account || !transport) return of(undefined);
+  withLatestFrom(account$, mode$, relays$),
+  switchMap(([client, account, mode, relays]) => {
+    if (!client || !account) return of(undefined);
     return new Observable<KeyPackagePublication>((subscriber) => {
       const publication = new KeyPackagePublication(
         client,
-        transport,
+        relays,
         account.pubkey,
       );
       const newlyCreated = takeInitialKeyPackagePublication(account);
       subscriber.next(publication);
-      void publication
-        .start(newlyCreated && transport.mode === "local")
-        .catch(() => {
-          // The publication's state stream carries the actionable error.
-        });
+      void publication.start(newlyCreated && mode === "local").catch(() => {
+        // The publication's state stream carries the actionable error.
+      });
       return () => publication.close();
     });
   }),

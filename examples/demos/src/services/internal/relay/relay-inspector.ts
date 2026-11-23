@@ -1,7 +1,16 @@
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Filter } from "applesauce-core/helpers/filter";
-import type { RelayLogEntry } from "./demo-relay.js";
-import type { TabIdentity } from "./relay-protocol.js";
+
+export type RelayLogEntry = {
+  id: number;
+  at: number;
+  actor: string;
+  tab?: string;
+  op: "publish" | "request" | "subscribe" | "unsubscribe";
+  event?: NostrEvent;
+  filters?: Filter[];
+  results?: number;
+};
 
 export type RelaySubscription = {
   id: string;
@@ -15,7 +24,6 @@ export type RelayState = {
   startedAt: number;
   at: number;
   connections: string[];
-  peers: TabIdentity[];
   events: NostrEvent[];
   log: RelayLogEntry[];
   subscriptions: RelaySubscription[];

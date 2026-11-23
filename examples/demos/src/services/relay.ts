@@ -14,7 +14,7 @@ import type {
   RelayState,
 } from "./internal/relay/relay-inspector.js";
 
-export type { RelayLogEntry } from "./internal/relay/demo-relay.js";
+export type { RelayLogEntry } from "./internal/relay/relay-inspector.js";
 export type { RelayState } from "./internal/relay/relay-inspector.js";
 
 const errors = new BehaviorSubject<string | undefined>(undefined);

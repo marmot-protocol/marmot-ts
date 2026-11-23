@@ -94,7 +94,7 @@ export function RelayView() {
               onClick={() => {
                 if (
                   !confirm(
-                    "Clear shared relay events, traffic, and queued publishes in ALL tabs? Active subscriptions and demo groups remain; running demos may publish new events immediately.",
+                    "Clear shared relay events and traffic in ALL tabs? Active subscriptions and demo groups remain; running demos may publish new events immediately.",
                   )
                 )
                   return;
@@ -202,9 +202,7 @@ export function RelayView() {
             <>
               {(state?.connections ?? []).filter(matches).map((id) => (
                 <div key={id} className="break-all font-mono text-xs">
-                  {id} ·{" "}
-                  {state?.peers.find((peer) => peer.from === id)?.pubkey ??
-                    "No account"}
+                  {id}
                 </div>
               ))}
               {!state?.connections.length && <p>No demo connections.</p>}

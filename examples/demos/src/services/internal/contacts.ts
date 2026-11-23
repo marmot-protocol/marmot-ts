@@ -2,6 +2,7 @@ import { EventStore } from "applesauce-core";
 import { castUser, type User } from "applesauce-common/casts";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import type { Filter } from "applesauce-core/helpers/filter";
+import type { NostrNetworkInterface } from "@internet-privacy/marmot-ts/client";
 import {
   BehaviorSubject,
   EMPTY,
@@ -16,19 +17,28 @@ import {
   switchMap,
   tap,
 } from "rxjs";
-import { DemoRelay } from "./relay/demo-relay.js";
-import { LOOKUP_RELAYS } from "./live-transport.js";
-import type { DemoTransport } from "./transport.js";
+import { LOOKUP_RELAYS, LIVE_RELAYS } from "./relays.js";
+import { DEMO_RELAY_URL } from "./relay/demo-relay.js";
+import type { TransportMode } from "../mode.js";
+import { peerTabs$, type PeerTab } from "./peer-tabs.js";
 
 /** One contacts list for the current account and transport session. */
 export class ContactsService {
   readonly contacts$ = new BehaviorSubject<User[]>([]);
   readonly error$ = new BehaviorSubject<string | undefined>(undefined);
+  readonly peers$ = new BehaviorSubject<PeerTab[]>([]);
+  readonly store = new EventStore();
   readonly #subscriptions = new Subscription();
 
-  constructor(pubkey: string, transport: DemoTransport, store: EventStore) {
+  constructor(
+    pubkey: string,
+    network: NostrNetworkInterface,
+    mode: TransportMode,
+  ) {
+    const store = this.store;
+    const local = mode === "local";
+    const relays = local ? [DEMO_RELAY_URL] : LIVE_RELAYS;
     const candidates$ = new BehaviorSubject<User[]>([]);
-    const network = transport.network("contacts");
     const load = (relays: string[], filters: Filter) =>
       new Observable<NostrEvent>((observer) =>
         network.subscription(relays, filters).subscribe(observer),
@@ -74,22 +84,15 @@ export class ContactsService {
             merge(
               ...users.map((user) =>
                 merge(
-                  load(
-                    transport instanceof DemoRelay
-                      ? transport.relays
-                      : LOOKUP_RELAYS,
-                    { kinds: [0, 10002], authors: [user.pubkey] },
-                  ),
+                  load(local ? relays : LOOKUP_RELAYS, {
+                    kinds: [0, 10002],
+                    authors: [user.pubkey],
+                  }),
                   user.outboxes$.pipe(
                     map((outboxes) =>
-                      transport instanceof DemoRelay
-                        ? transport.relays
-                        : [
-                            ...new Set([
-                              ...(outboxes ?? []),
-                              ...transport.relays,
-                            ]),
-                          ],
+                      local
+                        ? relays
+                        : [...new Set([...(outboxes ?? []), ...relays])],
                     ),
                     distinctUntilChanged((a, b) => a.join() === b.join()),
                     switchMap((relays) =>
@@ -108,16 +111,23 @@ export class ContactsService {
         .subscribe(),
     );
 
-    if (transport instanceof DemoRelay) {
-      const update = () => {
-        const keys = [...new Set(transport.peers.map((peer) => peer.pubkey))]
-          .filter((key) => key !== pubkey)
-          .sort();
-        if (keys.join() !== candidates$.value.map((user) => user.pubkey).join())
-          candidates$.next(keys.map((key) => castUser(key, store)));
-      };
-      this.#subscriptions.add(transport.onChange(update));
-      update();
+    if (local) {
+      this.#subscriptions.add(
+        peerTabs$(pubkey).subscribe({
+          next: (peers) => {
+            this.peers$.next(peers);
+            const keys = [...new Set(peers.map((peer) => peer.pubkey))]
+              .filter((key) => key !== pubkey)
+              .sort();
+            if (
+              keys.join() !==
+              candidates$.value.map((user) => user.pubkey).join()
+            )
+              candidates$.next(keys.map((key) => castUser(key, store)));
+          },
+          error: (cause: unknown) => this.error$.next(String(cause)),
+        }),
+      );
       return;
     }
 
@@ -132,7 +142,7 @@ export class ContactsService {
     this.#subscriptions.add(
       account.outboxes$
         .pipe(
-          map((relays) => (relays?.length ? relays : transport.relays)),
+          map((outboxes) => (outboxes?.length ? outboxes : relays)),
           distinctUntilChanged((a, b) => a.join() === b.join()),
           switchMap((relays) =>
             load(relays, { kinds: [3, 0], authors: [pubkey] }),
@@ -152,5 +162,7 @@ export class ContactsService {
     this.#subscriptions.unsubscribe();
     this.contacts$.complete();
     this.error$.complete();
+    this.peers$.complete();
+    this.store.dispose();
   }
 }

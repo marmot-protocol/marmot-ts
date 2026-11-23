@@ -11,6 +11,7 @@ import {
 import { account$ } from "./accounts.js";
 import { transport$ } from "./transport.js";
 import { clientId$ } from "./client-id.js";
+import { mode$ } from "./mode.js";
 import { sessionDatabase } from "./internal/session-database.js";
 
 /** The actual library client. No facade, decorated managers, or forwarded methods. */
@@ -19,7 +20,9 @@ export const client$: Observable<MarmotClient | undefined> = combineLatest([
   transport$,
   clientId$,
 ]).pipe(
-  switchMap(([account, transport, clientId]) => {
+  switchMap(([account, network, clientId]) => {
+    // The writable root is already updated when its new transport is emitted.
+    const mode = mode$.getValue();
     if (!account) return of(undefined);
     return new Observable<MarmotClient | undefined>((subscriber) => {
       let client: MarmotClient | undefined;
@@ -28,7 +31,7 @@ export const client$: Observable<MarmotClient | undefined> = combineLatest([
         for (const group of client?.groups.loaded ?? []) group.dispose();
         void client?.database.account.close();
       });
-      void sessionDatabase(account.pubkey, transport.mode, clientId)
+      void sessionDatabase(account.pubkey, mode, clientId)
         .then((database) => {
           if (subscriber.closed) {
             void database.account.close();
@@ -38,7 +41,7 @@ export const client$: Observable<MarmotClient | undefined> = combineLatest([
             signer: account.signer,
             database,
             clientId,
-            network: transport.network("you"),
+            network,
           });
           subscriber.next(client);
         })

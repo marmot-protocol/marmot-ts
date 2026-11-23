@@ -1,7 +1,7 @@
 import { MarmotClient, memoryDatabase } from "@internet-privacy/marmot-ts";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import type { IAccount } from "applesauce-accounts";
-import type { DemoTransport } from "../services/internal/transport.js";
+import type { DemoRelay } from "../services/internal/relay/demo-relay.js";
 
 /** A named demo participant: a Nostr account plus its own `MarmotClient`. */
 export type Actor = {
@@ -20,7 +20,7 @@ export type Actor = {
 export function createActor(
   name: string,
   account: IAccount,
-  relay: DemoTransport,
+  relay: DemoRelay,
   clientId: string,
 ): Actor {
   const client = new MarmotClient({
@@ -35,7 +35,7 @@ export function createActor(
 /** The logged-in user as a demo actor named "you". */
 export function createUserActor(
   account: IAccount,
-  relay: DemoTransport,
+  relay: DemoRelay,
   clientId: string,
 ): Actor {
   return createActor("you", account, relay, clientId);
@@ -44,7 +44,7 @@ export function createUserActor(
 /** A simulated peer with a throwaway key, for multi-party demos. */
 export function createPeerActor(
   name: string,
-  relay: DemoTransport,
+  relay: DemoRelay,
   clientId: string,
 ): Actor {
   return createActor(name, PrivateKeyAccount.generateNew(), relay, clientId);

@@ -23,6 +23,8 @@
 - `mode$`, `account$`, and `clientId$` are the roots. The account-independent `transport$` depends only on mode; the bare `client$` depends on account, transport, and the browser-wide client ID. Contacts depend on account and transport.
 - Keep the client ID in its dedicated localStorage-backed service, shared by all accounts. Rotating it replaces clients and selects fresh private-storage namespaces without automatically publishing key packages.
 - `client$` must emit the actual, unmodified `MarmotClient`. Do not decorate its managers, forward its methods, or mask missing library APIs.
+- `transport$` emits only the mode-selected `NostrNetworkInterface`; it owns creation and disposal, not profiles, peer presence, or UI diagnostics. Keep relay URL configuration in `services/relays.ts`.
+- Contacts owns its EventStore and local peer-tab presence channel. Use `/relay` for inspection; do not add duplicate inline diagnostics or transport pause/flush controls.
 - Keep profiles paired with the contact list through Applesauce User casts; do not create a separate profile service.
 - Public service modules export observable interfaces, async actions, and types. `mode$` is intentionally a writable BehaviorSubject; other shared subjects stay private.
 - Keep JSX in `components/`, pure helpers in `utils/`, and private implementations in `services/internal/`. Services must not depend on React.

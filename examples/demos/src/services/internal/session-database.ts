@@ -3,7 +3,7 @@ import {
   type KeyPackageRow,
   type MarmotDatabase,
 } from "@internet-privacy/marmot-ts/client";
-import type { TransportMode } from "./transport.js";
+import type { TransportMode } from "../mode.js";
 
 type SavedPackage = Omit<KeyPackageRow, "publicPackage" | "privatePackage"> & {
   publicPackage: number[];

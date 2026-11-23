@@ -1,9 +1,4 @@
 import { useState, type ReactNode } from "react";
-import { use$ } from "applesauce-react/hooks";
-import type { RelayLogEntry } from "../services/transport.js";
-import * as transport from "../services/transport.js";
-
-import { short } from "../utils/format.js";
 export { short, hex } from "../utils/format.js";
 
 export function Panel(props: {
@@ -74,95 +69,5 @@ export function Json(props: { value: unknown }) {
         2,
       )}
     </pre>
-  );
-}
-
-const KIND_NAMES: Record<number, string> = {
-  445: "group event",
-  1059: "gift wrap",
-  5: "deletion",
-  10002: "relay list",
-  10050: "inbox relays",
-  30443: "key package",
-  443: "key package (legacy)",
-};
-
-function describe(entry: RelayLogEntry): string {
-  if (entry.event) {
-    const name = KIND_NAMES[entry.event.kind] ?? "";
-    return `kind ${entry.event.kind} ${name} ${short(entry.event.id)}`;
-  }
-  const filters = (entry.filters ?? []).map((f) => JSON.stringify(f)).join(" ");
-  return entry.op === "request"
-    ? `${filters} → ${entry.results} event(s)`
-    : filters;
-}
-
-/** Live view of everything that crossed the demo relay. */
-export function RelayLog(props: { limit?: number }) {
-  const log = use$(transport.log$) ?? [];
-  const events = use$(transport.events$) ?? [];
-  const state = use$(transport.state$);
-  const entries = log.slice(-(props.limit ?? 50)).reverse();
-  return (
-    <Panel
-      title={`Relay traffic (${events.length} stored${
-        state?.shared ? `, shared across tabs, this tab ${state.tab}` : ""
-      })`}
-      actions={
-        state?.local ? (
-          <>
-            <label className="label text-xs">
-              <input
-                type="checkbox"
-                className="toggle toggle-xs"
-                checked={state.paused}
-                onChange={(e) => {
-                  void transport.setPaused(e.target.checked);
-                }}
-              />
-              hold publishes
-            </label>
-            {state.queued > 0 && (
-              <button
-                className="btn btn-xs btn-primary"
-                onClick={() => void transport.flush()}
-              >
-                deliver {state.queued} held
-              </button>
-            )}
-          </>
-        ) : undefined
-      }
-    >
-      <ol className="max-h-64 overflow-y-auto font-mono text-xs">
-        {entries.map((entry) => (
-          <li
-            key={entry.id}
-            className="grid grid-cols-[7rem_6rem_1fr] gap-2 border-b border-dashed border-base-300 py-0.5"
-          >
-            <span
-              className="font-semibold"
-              title={entry.tab ? `from tab ${entry.tab}` : undefined}
-            >
-              {entry.actor}
-              {entry.tab && (
-                <span className="font-normal text-base-content/50">
-                  @{entry.tab}
-                </span>
-              )}
-            </span>
-            <span
-              className={entry.op === "publish" ? "text-primary" : undefined}
-            >
-              {entry.op}
-            </span>
-            <span className="wrap-anywhere text-base-content/60">
-              {describe(entry)}
-            </span>
-          </li>
-        ))}
-      </ol>
-    </Panel>
   );
 }

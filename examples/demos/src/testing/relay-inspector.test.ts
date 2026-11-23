@@ -97,7 +97,7 @@ it("inspects historical traffic, events, subscriptions and resets every connecte
   expect(snapshot().events).toEqual([structuredClone(event)]);
 });
 
-it("clears demo caches and held publishes without dropping active observers", async () => {
+it("clears demo caches without dropping active observers", async () => {
   const ports: {
     onmessage?: (message: { data: SyncMessage }) => void;
     postMessage: ReturnType<typeof vi.fn>;
@@ -127,14 +127,8 @@ it("clears demo caches and held publishes without dropping active observers", as
     .subscribe({ next });
   try {
     await network.publish(relay.relays, event);
-    relay.paused = true;
-    await network.publish(relay.relays, event);
-    expect(relay.queue).toHaveLength(1);
     port.onmessage!({ data: { type: "reset" } });
     expect(relay.events).toEqual([]);
-    expect(relay.log).toEqual([]);
-    expect(relay.queue).toEqual([]);
-    relay.paused = false;
     await network.publish(relay.relays, event);
     expect(next).toHaveBeenCalledTimes(2);
     expect(port.postMessage).toHaveBeenCalledWith(

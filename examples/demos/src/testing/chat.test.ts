@@ -42,7 +42,11 @@ it("creates, invites, joins, and exchanges encrypted chat across tab transports"
         network: relay.network("you"),
         clientId: account.pubkey,
       });
-      const session = new KeyPackagePublication(client, relay, account.pubkey);
+      const session = new KeyPackagePublication(
+        client,
+        relay.relays,
+        account.pubkey,
+      );
       sessions.push(session);
       await session.start(true);
     }

@@ -1,6 +1,7 @@
 import type { IAccount } from "applesauce-accounts";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
-import type { DemoRelay } from "./relay/demo-relay.js";
+import type { NostrNetworkInterface } from "@internet-privacy/marmot-ts/client";
+import { DEMO_RELAY_URL } from "./relay/demo-relay.js";
 import { getDevelopmentName } from "../../utils/development-name.js";
 
 const newAccounts = new WeakSet<IAccount>();
@@ -43,12 +44,11 @@ export function takeInitialKeyPackagePublication(account: IAccount): boolean {
 
 export async function publishDevelopmentProfile(
   account: IAccount,
-  relay: DemoRelay,
+  network: NostrNetworkInterface,
   signal: AbortSignal,
 ) {
   const name = getDevelopmentName(account);
   if (!name) return;
-  await relay.ready;
   signal.throwIfAborted();
   const profile = await account.signer.signEvent({
     kind: 0,
@@ -57,5 +57,6 @@ export async function publishDevelopmentProfile(
     content: JSON.stringify({ name, display_name: name }),
   });
   signal.throwIfAborted();
-  await relay.network("identity").publish(relay.relays, profile);
+  await network.publish([DEMO_RELAY_URL], profile);
+  return profile;
 }

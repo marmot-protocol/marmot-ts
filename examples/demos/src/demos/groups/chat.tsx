@@ -9,7 +9,7 @@ import { Action, Panel, short } from "../../components/ui.js";
 import { account$ } from "../../services/accounts.js";
 import { client$ } from "../../services/client.js";
 import { contacts$, profile$ } from "../../services/contacts.js";
-import { relays$, ready$, state$ } from "../../services/transport.js";
+import { relays$ } from "../../services/relays.js";
 import { useAsyncLatest } from "../../hooks/use-async-latest.js";
 
 export default function ChatDemo() {
@@ -18,7 +18,6 @@ export default function ChatDemo() {
   useEffect(() => () => controller.abort(), [controller]);
   const signal = controller.signal;
   const relays = use$(relays$) ?? [];
-  const transportReady = use$(ready$) ?? false;
   const account = use$(account$)!;
   const invites = useAsyncLatest(
     (signal) => client.invites.watchUnread({ signal }),
@@ -59,7 +58,7 @@ export default function ChatDemo() {
             onChange={(event) => setName(event.target.value)}
           />
           <Action
-            disabled={!name.trim() || !transportReady}
+            disabled={!name.trim()}
             run={async () => {
               signal.throwIfAborted();
               const group = await client.groups.create(name.trim(), {
@@ -111,7 +110,6 @@ export default function ChatDemo() {
 function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
   const client = use$(client$)!;
   const relays = use$(relays$) ?? [];
-  const transport = use$(state$);
   const account = use$(account$)!;
   const contacts = use$(contacts$) ?? [];
   const snapshot = useAsyncLatest((signal) => group.watch({ signal }), [group]);
@@ -157,7 +155,7 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
           {short(group.idStr)}
         </code>
         <p className="text-sm">
-          {ready ? "Connected" : "Connecting…"} · {transport?.transport} ·{" "}
+          {ready ? "Connected" : "Connecting…"} ·{" "}
           {snapshot ? snapshot.members.length : "…"} members
         </p>
         <div className="flex flex-wrap gap-2 text-sm">

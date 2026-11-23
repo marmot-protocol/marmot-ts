@@ -5,29 +5,9 @@ import type {
 } from "@internet-privacy/marmot-ts/client";
 import type { NostrEvent } from "applesauce-core/helpers/event";
 import { matchFilters, type Filter } from "applesauce-core/helpers/filter";
-import {
-  PRESENCE_TTL_MS,
-  type SyncMessage,
-  type TabIdentity,
-} from "./relay-protocol.js";
-export type { SyncMessage, TabIdentity } from "./relay-protocol.js";
-
-/** One entry in the relay's traffic log, used by `<RelayLog>`. */
-export type RelayLogEntry = {
-  id: number;
-  at: number;
-  /** Which demo actor performed the operation. */
-  actor: string;
-  /** The tab that performed it, when it was not this one. */
-  tab?: string;
-  op: "publish" | "request" | "subscribe" | "unsubscribe";
-  /** Present for publishes. */
-  event?: NostrEvent;
-  /** Present for requests and subscriptions. */
-  filters?: Filter[];
-  /** Number of events returned by a request. */
-  results?: number;
-};
+import type { SyncMessage } from "./relay-protocol.js";
+import type { RelayLogEntry } from "./relay-inspector.js";
+export type { SyncMessage } from "./relay-protocol.js";
 
 export type DemoRelayOptions = {
   /**
@@ -53,64 +33,29 @@ const SYNC_TIMEOUT_MS = 150;
  * the others, and a newly opened tab first copies the relay's stored events.
  * Events are in memory only and disappear when the worker is terminated.
  * The mode-driven transport service owns its lifetime.
- *
- * Set `paused` to hold this tab's publishes in `queue` and release them with
- * `flush()`, which lets demos show what happens while traffic is delayed.
  */
 export class DemoRelay {
   readonly relays = [DEMO_RELAY_URL];
   readonly events: NostrEvent[] = [];
-  readonly log: RelayLogEntry[] = [];
-  readonly queue: NostrEvent[] = [];
-  paused = false;
 
   /** Short random label identifying this relay instance (usually: this tab). */
   readonly tab = Math.random().toString(16).slice(2, 6);
 
-  #nextId = 1;
   #ids = new Set<string>();
   #subs = new Set<{
     id: string;
     actor: string;
     filters: Filter[];
     next: (event: NostrEvent) => void;
+    complete: () => void;
   }>();
-  #listeners = new Set<() => void>();
-  #version = 0;
   #channelName: string | false;
   #channel?: BroadcastChannel;
   #worker?: SharedWorker;
   #ready: Promise<void> = Promise.resolve();
-  #identity?: string;
-  #peers = new Map<string, TabIdentity>();
-  #heartbeat?: ReturnType<typeof setInterval>;
+  #resolveReady?: () => void;
+  #syncTimer?: ReturnType<typeof setTimeout>;
   #disposed = false;
-
-  get peers(): TabIdentity[] {
-    return [...this.#peers.values()].filter(
-      (peer) =>
-        peer.from !== this.tab && Date.now() - peer.at < PRESENCE_TTL_MS,
-    );
-  }
-
-  setIdentity(pubkey?: string) {
-    this.#identity = pubkey;
-    this.#announce();
-    if (this.#heartbeat) clearInterval(this.#heartbeat);
-    if (pubkey) this.#heartbeat = setInterval(() => this.#announce(), 20_000);
-  }
-
-  #announce() {
-    this.#post({
-      type: "presence",
-      from: this.tab,
-      pubkey: this.#identity,
-      at: Date.now(),
-    });
-    for (const [id, peer] of this.#peers)
-      if (Date.now() - peer.at >= PRESENCE_TTL_MS) this.#peers.delete(id);
-    this.#changed();
-  }
 
   constructor(options: DemoRelayOptions = {}) {
     this.#channelName = options.channel ?? DEMO_RELAY_CHANNEL;
@@ -137,6 +82,7 @@ export class DemoRelay {
       this.#worker = worker;
       let synced!: () => void;
       this.#ready = new Promise((resolve) => (synced = resolve));
+      this.#resolveReady = synced;
       worker.port.onmessage = (message: MessageEvent<SyncMessage>) =>
         this.#receive(message.data, synced);
       worker.port.start();
@@ -149,16 +95,12 @@ export class DemoRelay {
     this.#channel = channel;
     let synced!: () => void;
     this.#ready = new Promise((resolve) => (synced = resolve));
+    this.#resolveReady = synced;
     channel.onmessage = (message: MessageEvent<SyncMessage>) =>
       this.#receive(message.data, synced);
     this.#post({ type: "hello", from: this.tab });
     // Nobody answering just means this is the first tab.
-    setTimeout(synced, SYNC_TIMEOUT_MS);
-  }
-
-  /** Whether this relay is shared with other tabs. */
-  get shared(): boolean {
-    return this.#worker !== undefined || this.#channel !== undefined;
+    this.#syncTimer = setTimeout(synced, SYNC_TIMEOUT_MS);
   }
 
   get transport(): string {
@@ -169,38 +111,24 @@ export class DemoRelay {
         : "local";
   }
 
-  /** Monotonic change counter, for `useSyncExternalStore`. */
-  get version(): number {
-    return this.#version;
-  }
-
-  onChange(listener: () => void): () => void {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
-  }
-
   /** Leave the shared channel; stored events stay. Reopen with `open()`. */
   close() {
     if (this.#disposed) return;
-    this.setIdentity(undefined);
     this.#disposed = true;
+    clearTimeout(this.#syncTimer);
+    // Wake pending reads so their disposal check can reject instead of hanging.
+    this.#resolveReady?.();
+    for (const sub of this.#subs) sub.complete();
     this.#subs.clear();
-    this.#peers.clear();
     this.#worker?.port.postMessage({ type: "disconnect" });
     this.#worker?.port.close();
     this.#worker = undefined;
     this.#channel?.close();
     this.#channel = undefined;
-    this.#listeners.clear();
   }
 
   #assertOpen() {
     if (this.#disposed) throw new Error("Transport closed");
-  }
-
-  #changed() {
-    this.#version++;
-    for (const listener of this.#listeners) listener();
   }
 
   #post(message: SyncMessage) {
@@ -212,7 +140,6 @@ export class DemoRelay {
     if (this.#disposed) return;
     switch (message.type) {
       case "hello":
-        if (this.#identity) this.#announce();
         // Any open tab may answer; duplicates are ignored on arrival.
         if (this.events.length > 0)
           this.#post({
@@ -223,50 +150,22 @@ export class DemoRelay {
         break;
       case "reset":
         this.events.length = 0;
-        this.log.length = 0;
-        this.queue.length = 0;
         this.#ids.clear();
-        this.#changed();
         break;
       case "snapshot":
         if (message.to !== this.tab) break;
         for (const event of message.events) this.#store(event);
-        this.#changed();
         synced();
         break;
       case "event":
-        if (this.#store(message.event)) this.#changed();
-        break;
-      case "presence":
-        if (message.pubkey)
-          this.#peers.set(message.from, {
-            from: message.from,
-            pubkey: message.pubkey,
-            at: message.at,
-          });
-        else this.#peers.delete(message.from);
-        this.#changed();
-        break;
-      case "peers":
-        this.#peers = new Map(message.peers.map((peer) => [peer.from, peer]));
-        this.#changed();
-        break;
-      case "log":
-        this.log.push({
-          ...message.entry,
-          id: this.#nextId++,
-          tab: message.from,
-        });
-        this.#changed();
+        this.#store(message.event);
         break;
     }
   }
 
   #record(entry: Omit<RelayLogEntry, "id" | "at" | "tab">) {
     const full = { ...entry, at: Date.now() };
-    this.log.push({ ...full, id: this.#nextId++ });
     this.#post({ type: "log", from: this.tab, entry: full });
-    this.#changed();
   }
 
   /** Store an event and notify local subscriptions. False if already known. */
@@ -284,13 +183,6 @@ export class DemoRelay {
     if (this.#store(event)) this.#post({ type: "event", event });
   }
 
-  /** Release every held publish in order. */
-  flush() {
-    this.#assertOpen();
-    for (const event of this.queue.splice(0)) this.#deliver(event);
-    this.#changed();
-  }
-
   /** Build the `NostrNetworkInterface` one actor hands to its `MarmotClient`. */
   network(actor: string): NostrNetworkInterface {
     this.#assertOpen();
@@ -298,9 +190,7 @@ export class DemoRelay {
       publish: async (relays, event) => {
         this.#assertOpen();
         this.#record({ actor, op: "publish", event });
-        if (this.paused) this.queue.push(event);
-        else this.#deliver(event);
-        this.#changed();
+        this.#deliver(event);
         const out: Record<string, PublishResponse> = {};
         for (const from of relays) out[from] = { from, ok: true };
         return out;
@@ -334,6 +224,7 @@ export class DemoRelay {
               actor,
               filters: list,
               next: (event: NostrEvent) => observer.next?.(event),
+              complete: () => observer.complete?.(),
             };
             // Events synced in from other tabs later arrive through `#store`.
             for (const event of this.events)

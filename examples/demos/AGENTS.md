@@ -7,7 +7,7 @@
 - Use concise labels, statuses, empty states, and actionable errors. Include explanatory text only when essential to using the demo safely or correctly.
 - Keep library calls easy to follow in the demo source; put longer explanations in the README or documentation instead.
 - Reuse the shared, mode-aware transport, account, and client infrastructure rather than creating per-demo services.
-- Default to local tabs mode. Never bridge local events, identities, or group state into live mode; switching modes must dispose and reset the demo session.
+- Default to local tabs mode. Switching modes must dispose and reset the demo session and replace its transport without copying relay events or automatically publishing local identities. Stored account data is shared across modes.
 - Persist the active account only in sessionStorage so reloads keep the tab's identity. New sessions generate a development identity and publish its randomly named kind-0 profile only to the local worker relay.
 - Offer a header **Copy code** button, not an inline source viewer.
 - Use the active account's shared Marmot client. The sidebar owns key-package publication; don't create a second client that cannot access those private bundles.
@@ -23,7 +23,7 @@
 
 - Import services directly from `src/services/*.ts`; do not add a React provider, context, service registry, or aggregate session/scope object.
 - `mode$`, `account$`, and `clientId$` are the roots. The account-independent `transport$` depends only on mode; the bare `client$` depends on account, transport, and the browser-wide client ID. Contacts depend on account and transport.
-- Keep the client ID in its dedicated localStorage-backed service, shared by all accounts. Rotating it replaces clients and selects fresh private-storage namespaces without automatically publishing key packages.
+- Keep the client ID in its dedicated localStorage-backed service, shared by all accounts. Rotating it replaces clients and changes the default key-package publication slot without automatically publishing. Databases are keyed only by account pubkey; client-ID and transport-mode changes reuse the same database and retain private packages, invites, groups, and history.
 - `client$` must emit the actual, unmodified `MarmotClient`. Do not decorate its managers, forward its methods, or mask missing library APIs.
 - `transport$` emits only the mode-selected `NostrNetworkInterface`; it owns creation and disposal, not profiles, peer presence, or UI diagnostics. Keep relay URL configuration in `services/relays.ts`.
 - Contacts owns its EventStore and local peer-tab presence channel. Use `/relay` for inspection; do not add duplicate inline diagnostics or transport pause/flush controls.

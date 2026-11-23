@@ -22,7 +22,7 @@ function restoreClientId(): string {
 
 const current = new BehaviorSubject(restoreClientId());
 
-/** One browser identity shared by all accounts; rotation starts a new storage namespace. */
+/** Default key-package publication slot shared by all accounts; not a storage identity. */
 export const clientId$ = current.pipe(distinctUntilChanged());
 
 export async function rotateClientId(): Promise<void> {
@@ -32,7 +32,7 @@ export async function rotateClientId(): Promise<void> {
   current.next(id);
 }
 
-// Other tabs must abandon the old identity as well.
+// Other tabs must use the new default publication slot as well.
 fromEvent<StorageEvent>(globalThis, "storage")
   .pipe(takeUntil(fromEvent(globalThis, "pagehide")))
   .subscribe((event) => {

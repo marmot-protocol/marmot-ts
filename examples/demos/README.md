@@ -34,14 +34,16 @@ active account.
 `src/services/client-id.ts` generates one Marmot `clientId` and saves it in
 localStorage, shared by all accounts and tabs. Each client uses the package's
 `indexedDBDatabase` adapter to persist key packages, invites, group state, and
-message history, separated by client ID, account, and local/live mode.
+message history in a database keyed only by account pubkey. Client-ID and
+local/live mode changes reuse the same database.
 
 The service's `rotateClientId()` action rotates this ID, rebuilds active clients across
-open tabs, and remounts their demos. Every account then uses a fresh database
-namespace, without automatically publishing. Saved logins and relay events are
-unchanged. Old databases remain in their previous IndexedDB namespaces, but are
-no longer loaded. Key packages from the earlier sessionStorage implementation
-are not migrated; publish a new key package after upgrading.
+open tabs, and remounts their demos. It changes the default key-package publication
+slot without automatically publishing or deleting existing private packages,
+invites, groups, or history. Saved logins and relay events are unchanged.
+Data from the earlier client-ID/mode-scoped databases and sessionStorage
+implementation is not migrated; those stores remain untouched. Publish a new
+key package after upgrading.
 
 The account switcher opens a login screen supporting a NIP-07
 extension, NIP-46 remote signers (bunker URI or `nostrconnect://` QR code), and
@@ -69,7 +71,7 @@ dependencies directly and owns its resource lifetime:
 
 ```text
 mode$ ──► transport$
-account$ + mode$ + clientId$ ──► sessionDatabase$
+account$ ──► sessionDatabase$
 sessionDatabase$ + account$ + transport$ + clientId$ ──► client$ ──► key-package publication
 account$ + transport$ ──► contacts$ (Users with reactive profiles)
 ```
@@ -94,9 +96,11 @@ The sidebar switches modes independently in each tab:
   their reactive profiles. Accounts without a relay list fall back to the default relays.
 
 Switching modes or accounts disposes the old client and contacts and remounts the
-demo. Local events, private key packages, and group state are never forwarded to
-the live network. NIP-46 login still contacts its explicitly selected signing relay,
-even when the demo transport is local.
+demo. Mode changes replace the transport but retain the account's database:
+private packages, invites, groups, and history are shared across modes. Relay
+events are not copied between transports. Operations in live mode can publish
+to public relays, so use development accounts. NIP-46 login still contacts its
+explicitly selected signing relay, even when the demo transport is local.
 
 ### Reactive services
 
@@ -124,9 +128,10 @@ const invites = useAsyncLatest(
   The sidebar calls `mode$.next("local" | "live")`.
 - `services/client-id.ts` exports the readonly `clientId$` and async
   `rotateClientId()` action. The shared ID persists in localStorage; rotation
-  starts fresh for all accounts and propagates to other open tabs.
+  changes the default publication slot for all accounts and propagates to other
+  open tabs without resetting stored data.
 - `services/session-database.ts` exports `sessionDatabase$`, which owns database
-  initialization and closing for the active account, mode, and client ID. It emits
+  initialization and closing for the active account pubkey. It emits
   `undefined` while logged out or opening a database.
 - `services/client.ts` exports `client$`. It emits
   `undefined` while logged out or replacing a client. Call APIs such as
@@ -216,8 +221,8 @@ Reloads restore the slot and private bundles without re-publishing; use **Publis
 again** if the local worker lost the publication. Old bundles remain available for delayed
 Welcomes until their replacement grace period (24 hours) or signed expiry, whichever
 comes first. Publishing and rotating after a package is consumed or expires are
-explicit sidebar actions, not timer or demo side effects. Local private material
-is never copied into live mode.
+explicit sidebar actions, not timer or demo side effects. Private material stays
+in the account's shared database when switching transport modes.
 
 The IndexedDB databases contain unencrypted MLS secrets and decrypted messages:
 use development accounts. Account and group data survive reloads and browser

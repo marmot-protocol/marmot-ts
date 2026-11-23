@@ -7,6 +7,7 @@ import { ServicesProvider, useDemoServices } from "./services.js";
 import type { TransportMode } from "./lib/transport.js";
 import { Contacts } from "./components/contacts.js";
 import { RelayView } from "./components/relay-view.js";
+import { getPageTitle } from "./lib/page-title.js";
 
 function useHashId() {
   const read = () => decodeURIComponent(location.hash.replace(/^#\/?/, ""));
@@ -22,6 +23,9 @@ function useHashId() {
 export function App() {
   const account = useActiveAccount();
   const [mode, setMode] = useState<TransportMode>("local");
+  useEffect(() => {
+    document.title = getPageTitle(location.pathname, account);
+  }, [account]);
   if (location.pathname.replace(/\/$/, "") === "/relay") return <RelayView />;
   // Every demo runs as the logged-in user, so nothing renders until login.
   if (!account) return <LoginView />;

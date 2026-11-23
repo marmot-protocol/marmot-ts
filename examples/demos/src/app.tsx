@@ -10,6 +10,7 @@ import { Contacts } from "./components/contacts.js";
 import { RelayView } from "./components/relay/relay-view.js";
 import { getPageTitle } from "./utils/page-title.js";
 import { clientId$ } from "./services/client-id.js";
+import { DatabaseInspector } from "./components/database/database-inspector.js";
 
 function useHashId() {
   const read = () => decodeURIComponent(location.hash.replace(/^#\/?/, ""));
@@ -81,6 +82,7 @@ function Sidebar({ active }: { active?: Demo }) {
       >
         Local relay inspector ↗
       </a>
+      <DatabaseInspector />
       <div className="px-4 pb-3">
         <select
           className="select select-sm w-full"

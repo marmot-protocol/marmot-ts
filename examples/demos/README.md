@@ -52,6 +52,17 @@ signer relay is `wss://bucket.coracle.social`.
 
 ## How demos work
 
+Use **Inspect database** in the sidebar to open a full-screen, read-only view of
+the active client's account and group tables. Refresh reads the current database;
+search and pagination operate on the loaded rows. Expand a row to inspect nested
+fields and binary values. Account, mode, and client-ID changes close the inspector.
+
+The inspector uses only `client.database` APIs, including optional table `all()`
+methods and `groups.list()`. Missing capabilities are shown as unavailable or
+limited discovery, not empty results. Reads across tables are not an atomic
+snapshot. Values may include private keys and decrypted messages; avoid sharing
+screenshots containing sensitive details.
+
 Services are ordinary ES modules under `src/services/`, with no React provider,
 context, service registry, or combined session object. Each service imports its
 dependencies directly and owns its resource lifetime:

@@ -1,6 +1,6 @@
 import type { IAccount } from "applesauce-accounts";
-import { getDevelopmentName } from "./development-identity.js";
-import { short } from "./ui.js";
+import { getDevelopmentName } from "./development-name.js";
+import { short } from "./format.js";
 
 export function getPageTitle(pathname: string, account?: IAccount): string {
   if (pathname.replace(/\/$/, "") === "/relay")

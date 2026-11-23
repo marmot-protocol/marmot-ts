@@ -1,15 +1,17 @@
 import { expect, it, vi } from "vitest";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import {
+  MarmotClient,
+  memoryDatabase,
   createApplicationMessageIntent,
   createChatRumor,
 } from "@internet-privacy/marmot-ts/client";
-import { DemoRelay } from "../../services/relay/demo-relay.js";
-import { SessionClient } from "../../lib/session-client.js";
+import { DemoRelay } from "../services/internal/relay/demo-relay.js";
+import { KeyPackagePublication } from "../services/internal/key-package-publication.js";
 
 it("creates, invites, joins, and exchanges encrypted chat across tab transports", async () => {
   // Run the actual relay worker with separate MessagePorts, just like browser tabs.
-  await import("../../services/relay/demo-relay.worker.js");
+  await import("../services/internal/relay/demo-relay.worker.js");
   const connect = (
     globalThis as unknown as {
       onconnect: (event: { ports: MessagePort[] }) => void;
@@ -29,22 +31,18 @@ it("creates, invites, joins, and exchanges encrypted chat across tab transports"
     },
   );
   const relays = [new DemoRelay(), new DemoRelay()];
-  const sessions: SessionClient[] = [];
+  const sessions: KeyPackagePublication[] = [];
   const controller = new AbortController();
   try {
     for (const relay of relays) {
-      const data = new Map<string, string>();
-      const session = await SessionClient.create(
-        PrivateKeyAccount.generateNew(),
-        "local",
-        relay,
-        {
-          getItem: (key) => data.get(key) ?? null,
-          setItem: (key, value) => {
-            data.set(key, value);
-          },
-        },
-      );
+      const account = PrivateKeyAccount.generateNew();
+      const client = new MarmotClient({
+        signer: account.signer,
+        database: memoryDatabase(),
+        network: relay.network("you"),
+        clientId: account.pubkey,
+      });
+      const session = new KeyPackagePublication(client, relay, account.pubkey);
       sessions.push(session);
       await session.start(true);
     }
@@ -120,7 +118,10 @@ it("creates, invites, joins, and exchanges encrypted chat across tab transports"
     ).toBe(true);
   } finally {
     controller.abort();
-    for (const session of sessions) session.close();
+    for (const session of sessions) {
+      session.close();
+      for (const group of session.client.groups.loaded) group.dispose();
+    }
     for (const relay of relays) relay.close();
     for (const port of ports) port.close();
     Reflect.deleteProperty(globalThis, "onconnect");

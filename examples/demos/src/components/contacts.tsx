@@ -1,12 +1,11 @@
 import { use$ } from "applesauce-react/hooks";
 import type { User } from "applesauce-common/casts";
-import { useContacts } from "../services.js";
-import { short } from "../lib/ui.js";
+import { contacts$, error$ } from "../services/contacts.js";
+import { short } from "./ui.js";
 
 export function Contacts() {
-  const service = useContacts();
-  const contacts = use$(service.contacts$) ?? [];
-  const error = use$(service.error$);
+  const contacts = use$(contacts$) ?? [];
+  const error = use$(error$);
   return (
     <section className="border-t border-base-300 p-4">
       <h2 className="mb-2 text-sm font-semibold">

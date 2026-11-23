@@ -9,13 +9,19 @@ import {
   type AnnotatedInvite,
   type MarmotGroup,
 } from "@internet-privacy/marmot-ts/client";
-import { filter, firstValueFrom, of, timeout } from "rxjs";
-import { LOOKUP_RELAYS } from "../../lib/live-transport.js";
-import { Action, Panel, short } from "../../lib/ui.js";
-import { useDemoServices } from "../../services.js";
+import { catchError, defer, filter, firstValueFrom, of, timeout } from "rxjs";
+import { evaluateKeyPackageForGroup } from "@internet-privacy/marmot-ts/core";
+import { Action, Panel, short } from "../../components/ui.js";
+import { account$ } from "../../services/accounts.js";
+import { client$ } from "../../services/client.js";
+import { contacts$, profile$ } from "../../services/contacts.js";
+import { mode$ } from "../../services/mode.js";
+import { relays$, lookupRelays$, ready$ } from "../../services/transport.js";
+import { publish } from "../../services/key-packages.js";
+import { useAsyncLatest } from "../../hooks/use-async-latest.js";
 
 export default function ClockDemo() {
-  const { client } = useDemoServices();
+  const client = use$(client$)!;
   const [mode, setMode] = useState<"host" | "receive">();
   const [controller] = useState(() => new AbortController());
   const owned = useRef(new Set<MarmotGroup>());
@@ -58,15 +64,15 @@ type GroupActions = {
 };
 
 function Host({ signal, adopt }: GroupActions) {
-  const { client, account$, transport } = useDemoServices();
+  const client = use$(client$)!;
   const account = use$(account$)!;
-  const relays = use$(transport.relays$) ?? [];
-  const transportReady = use$(transport.ready$) ?? false;
+  const relays = use$(relays$) ?? [];
+  const transportReady = use$(ready$) ?? false;
   const [name, setName] = useState("Clock feed");
   const [group, setGroup] = useState<MarmotGroup>();
-  const snapshot = use$(
-    () => (group ? client.groups.observe(group).state$ : of(undefined)),
-    [client, group],
+  const snapshot = useAsyncLatest(
+    (signal) => (group ? group.watch({ signal }) : emptySnapshot()),
+    [group],
   );
   const [running, setRunning] = useState(true);
   const [sent, setSent] = useState<Rumor[]>([]);
@@ -170,24 +176,23 @@ function InviteContacts({
   group: MarmotGroup;
   signal: AbortSignal;
 }) {
-  const { contacts, client, account$, transport, mode$, outboxes$ } =
-    useDemoServices();
+  const client = use$(client$)!;
   const mode = use$(mode$);
   const account = use$(account$)!;
-  const transportRelays = use$(transport.relays$) ?? [];
-  const users = use$(contacts.contacts$) ?? [];
-  const observed = client.groups.observe(group);
-  const snapshot = use$(observed.state$);
+  const transportRelays = use$(relays$) ?? [];
+  const lookupRelays = use$(lookupRelays$) ?? [];
+  const users = use$(contacts$) ?? [];
+  const snapshot = useAsyncLatest((signal) => group.watch({ signal }), [group]);
 
   async function invite(user: User) {
     let relays = transportRelays;
     if (mode === "live") {
-      await client.network.request(LOOKUP_RELAYS, {
+      await client.network.request(lookupRelays, {
         kinds: [10002],
         authors: [user.pubkey],
       });
       const outboxes = await firstValueFrom(
-        outboxes$(user.pubkey).pipe(
+        user.outboxes$.pipe(
           filter((relays) => relays !== undefined),
           timeout({ first: 1500, with: () => of([]) }),
         ),
@@ -206,14 +211,14 @@ function InviteContacts({
           keyPackageEvent: event,
           actorPubkey: account.pubkey,
         });
-        return true;
+        return evaluateKeyPackageForGroup(group.state, event).eligible;
       } catch {
         return false;
       }
     });
-    const candidates = (
-      await firstValueFrom(observed.eligibleKeyPackages$(valid))
-    ).sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
+    const candidates = valid.sort(
+      (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
+    );
     if (!candidates.length)
       throw new Error(
         "No compatible key package. Ask this contact to publish one.",
@@ -245,22 +250,25 @@ function InviteContacts({
 }
 
 function Receiver({ signal, adopt }: GroupActions) {
-  const { client, keyPublication } = useDemoServices();
-  const invites = use$(client.invites.state$) ?? [];
+  const client = use$(client$)!;
+  const invites = useAsyncLatest(
+    (signal) => client.watchInvites({ signal }),
+    [client],
+  );
   const [group, setGroup] = useState<MarmotGroup>();
-  const snapshot = use$(
-    () => (group ? client.groups.observe(group).state$ : of(undefined)),
-    [client, group],
+  const snapshot = useAsyncLatest(
+    (signal) => (group ? group.watch({ signal }) : emptySnapshot()),
+    [group],
   );
   const [error, setError] = useState<string>();
   const [needsUpdate, setNeedsUpdate] = useState(false);
   const messages =
-    use$(
-      () =>
+    useAsyncLatest(
+      (signal) =>
         group
-          ? client.groups.observe(group).history$({ kinds: [9], limit: 60 })
-          : of([]),
-      [client, group],
+          ? group.history.subscribe({ kinds: [9], limit: 60 }, { signal })
+          : emptyMessages(),
+      [group],
     ) ?? [];
 
   async function selfUpdate(group: MarmotGroup) {
@@ -289,7 +297,7 @@ function Receiver({ signal, adopt }: GroupActions) {
       if (!signal.aborted)
         setError(cause instanceof Error ? cause.message : String(cause));
     }
-    void keyPublication.publish().catch(() => {});
+    void publish().catch(() => {});
   }
 
   return (
@@ -300,7 +308,7 @@ function Receiver({ signal, adopt }: GroupActions) {
         ) : (
           <>
             <ul className="space-y-2">
-              {invites.map((invite) => (
+              {invites?.map((invite) => (
                 <Invite
                   key={invite.invite.id}
                   invite={invite}
@@ -308,7 +316,8 @@ function Receiver({ signal, adopt }: GroupActions) {
                 />
               ))}
             </ul>
-            {!invites.length && (
+            {invites === undefined && <p>Loading invites…</p>}
+            {invites?.length === 0 && (
               <p className="text-base-content/50">Waiting for an invite…</p>
             )}
           </>
@@ -334,9 +343,12 @@ function Invite({
   invite: AnnotatedInvite;
   accept: () => Promise<void>;
 }) {
-  const { client } = useDemoServices();
+  const client = use$(client$)!;
   const preview = use$(
-    () => client.invites.preview$(invite.invite),
+    () =>
+      defer(() => client.previewWelcome(invite.invite)).pipe(
+        catchError(() => of(undefined)),
+      ),
     [client, invite.invite],
   );
   return (
@@ -353,9 +365,16 @@ function Invite({
 }
 
 function Identity({ pubkey }: { pubkey: string }) {
-  const { profile$ } = useDemoServices();
   const profile = use$(() => profile$(pubkey), [pubkey, profile$]);
   return <span title={pubkey}>{profile?.displayName || short(pubkey)}</span>;
+}
+
+async function* emptySnapshot(): AsyncGenerator<undefined> {
+  yield undefined;
+}
+
+async function* emptyMessages(): AsyncGenerator<Rumor[]> {
+  yield [];
 }
 
 function Clock({

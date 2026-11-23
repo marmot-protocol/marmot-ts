@@ -1,7 +1,7 @@
 import type { DemoTransport } from "./transport.js";
-import { DemoRelay } from "../services/relay/demo-relay.js";
+import { DemoRelay } from "./relay/demo-relay.js";
 import { defer, map, of, shareReplay, startWith, takeUntil } from "rxjs";
-import { aborted$, stateObservable } from "./observable.js";
+import { aborted$, stateObservable } from "../../utils/observable.js";
 
 /** Copy mutable relay arrays so previous emissions remain stable snapshots. */
 export function reactiveTransport(
@@ -54,12 +54,14 @@ export function reactiveTransport(
       sameItems,
     ),
     setPaused(paused: boolean) {
+      lifetime.throwIfAborted();
       if (transport instanceof DemoRelay) {
         transport.paused = paused;
         transport.flush();
       }
     },
     flush() {
+      lifetime.throwIfAborted();
       if (transport instanceof DemoRelay) transport.flush();
     },
   } as const;

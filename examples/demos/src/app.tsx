@@ -1,14 +1,14 @@
 import { useEffect, useState, type ComponentType } from "react";
 import { use$ } from "applesauce-react/hooks";
-import { useActiveAccount } from "./accounts.js";
+import { account$ } from "./services/accounts.js";
 import { AccountBadge } from "./components/account-badge.js";
 import { LoginView } from "./components/login-view.js";
 import { categories, demos, type Demo } from "./demos.js";
-import { ServicesProvider, useDemoServices } from "./services.js";
-import type { TransportMode } from "./lib/transport.js";
+import { client$, error$ } from "./services/client.js";
+import { mode$, type TransportMode } from "./services/mode.js";
 import { Contacts } from "./components/contacts.js";
-import { RelayView } from "./services/relay/relay-view.js";
-import { getPageTitle } from "./lib/page-title.js";
+import { RelayView } from "./components/relay/relay-view.js";
+import { getPageTitle } from "./utils/page-title.js";
 
 function useHashId() {
   const read = () => decodeURIComponent(location.hash.replace(/^#\/?/, ""));
@@ -22,29 +22,40 @@ function useHashId() {
 }
 
 export function App() {
-  const account = useActiveAccount();
-  const [mode, setMode] = useState<TransportMode>("local");
+  const inspector = location.pathname.replace(/\/$/, "") === "/relay";
+  useEffect(() => {
+    if (inspector) document.title = "Relay inspector · marmot-ts demos";
+  }, [inspector]);
+  return inspector ? <RelayView /> : <DemoApp />;
+}
+
+function DemoApp() {
+  const account = use$(account$);
+  const mode = use$(mode$);
+  const client = use$(client$);
+  const error = use$(error$);
   useEffect(() => {
     document.title = getPageTitle(location.pathname, account);
   }, [account]);
-  if (location.pathname.replace(/\/$/, "") === "/relay") return <RelayView />;
   // Every demo runs as the logged-in user, so nothing renders until login.
   if (!account) return <LoginView />;
-  // Switching accounts remounts the demos with the new signer.
-  return (
-    <ServicesProvider key={`${account.id}:${mode}`} mode={mode}>
-      <DemoShell setMode={setMode} />
-    </ServicesProvider>
-  );
+  if (error)
+    return (
+      <p role="alert" className="p-4 text-error">
+        {error}
+      </p>
+    );
+  if (!client) return <span className="loading loading-spinner m-4" />;
+  return <DemoShell key={`${account.id}:${mode}`} />;
 }
 
-function DemoShell({ setMode }: { setMode: (mode: TransportMode) => void }) {
+function DemoShell() {
   const id = useHashId();
   const demo = demos.find((d) => d.id === id) ?? demos[0];
 
   return (
     <div className="grid min-h-screen grid-cols-[15rem_minmax(0,1fr)] bg-base-200">
-      <Sidebar active={demo} setMode={setMode} />
+      <Sidebar active={demo} />
       <main className="min-w-0 p-6">
         {demo ? (
           <DemoView key={demo.id} demo={demo} />
@@ -62,14 +73,7 @@ function DemoShell({ setMode }: { setMode: (mode: TransportMode) => void }) {
   );
 }
 
-function Sidebar({
-  active,
-  setMode,
-}: {
-  active?: Demo;
-  setMode: (mode: TransportMode) => void;
-}) {
-  const { mode$ } = useDemoServices();
+function Sidebar({ active }: { active?: Demo }) {
   const mode = use$(mode$);
   return (
     <nav className="sticky top-0 flex h-screen flex-col border-r border-base-300 bg-base-100">
@@ -87,7 +91,7 @@ function Sidebar({
           className="select select-sm w-full"
           aria-label="Nostr transport"
           value={mode}
-          onChange={(event) => setMode(event.target.value as TransportMode)}
+          onChange={(event) => mode$.next(event.target.value as TransportMode)}
         >
           <option value="local">Tabs (local)</option>
           <option value="live">Live network</option>

@@ -1,67 +1,27 @@
-import { useEffect, useState } from "react";
-import { DEMO_RELAY_CHANNEL } from "./demo-relay.js";
-import type { InspectorResponse, RelayState } from "./relay-inspector.js";
-import { Json } from "../../lib/ui.js";
+import { useState } from "react";
+import { use$ } from "applesauce-react/hooks";
+import {
+  channel$,
+  state$,
+  error$,
+  healthy$,
+  receivedAt$,
+  resetting$,
+  resetRelay,
+} from "../../services/relay.js";
+import { Json } from "../ui.js";
 import { EventsTable, TrafficTable } from "./relay-tables.js";
 
 export function RelayView() {
-  const [worker, setWorker] = useState<SharedWorker>();
-  const [state, setState] = useState<RelayState>();
-  const [error, setError] = useState<string>();
-  const [now, setNow] = useState(Date.now());
-  const [receivedAt, setReceivedAt] = useState(0);
+  const channel = use$(channel$);
+  const state = use$(state$);
+  const error = use$(error$);
+  const healthy = use$(healthy$);
+  const receivedAt = use$(receivedAt$);
+  const resetting = use$(resetting$);
   const [tab, setTab] = useState("Traffic");
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(100);
-  const [resetting, setResetting] = useState(false);
-
-  useEffect(() => {
-    if (typeof SharedWorker === "undefined") {
-      setError(
-        "SharedWorker is unavailable. Open this view in a browser with SharedWorker support.",
-      );
-      return;
-    }
-    let relay: SharedWorker;
-    try {
-      relay = new SharedWorker(
-        new URL("./demo-relay.worker.ts", import.meta.url),
-        { type: "module", name: DEMO_RELAY_CHANNEL },
-      );
-    } catch (cause) {
-      setError(String(cause));
-      return;
-    }
-    relay.onerror = () =>
-      setError("Relay worker failed. Reload this view to reconnect.");
-    relay.port.onmessage = ({ data }: MessageEvent<InspectorResponse>) => {
-      if (data.type !== "relay-state") return;
-      setState(data.state);
-      setReceivedAt(Date.now());
-      setError(undefined);
-      setResetting(false);
-    };
-    relay.port.start();
-    const inspect = () => {
-      setNow(Date.now());
-      relay.port.postMessage({ type: "inspect" });
-    };
-    inspect();
-    const timer = setInterval(inspect, 2000);
-    setWorker(relay);
-    const disconnect = () => {
-      relay.port.postMessage({ type: "disconnect" });
-      relay.port.close();
-    };
-    addEventListener("pagehide", disconnect);
-    return () => {
-      clearInterval(timer);
-      removeEventListener("pagehide", disconnect);
-      disconnect();
-    };
-  }, []);
-
-  const healthy = !!state && now - receivedAt < 6000 && !error;
   const matches = (value: unknown) =>
     JSON.stringify(value).toLowerCase().includes(search.toLowerCase());
   const events = (state?.events ?? []).filter(matches);
@@ -138,8 +98,7 @@ export function RelayView() {
                   )
                 )
                   return;
-                setResetting(true);
-                worker?.port.postMessage({ type: "reset" });
+                void resetRelay();
               }}
             >
               {resetting ? "Resetting…" : "Reset relay data"}
@@ -171,7 +130,7 @@ export function RelayView() {
           ))}
         </dl>
         <p className="text-xs text-base-content/60">
-          {DEMO_RELAY_CHANNEL} · Started{" "}
+          {channel} · Started{" "}
           {state ? new Date(state.startedAt).toLocaleString() : "—"}
           {" · "}Last response{" "}
           {receivedAt ? new Date(receivedAt).toLocaleTimeString() : "—"}

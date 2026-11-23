@@ -1,12 +1,10 @@
-import type { IAccount } from "applesauce-accounts";
 import {
   MarmotClient,
   type ListedKeyPackage,
   type Unsubscribable,
 } from "@internet-privacy/marmot-ts/client";
 import { BehaviorSubject } from "rxjs";
-import { sessionDatabase } from "./session-database.js";
-import type { DemoTransport, TransportMode } from "./transport.js";
+import type { DemoTransport } from "./transport.js";
 import { bytesToHex as hex } from "applesauce-core/helpers/event";
 
 export type SessionKeyState = {
@@ -17,7 +15,7 @@ export type SessionKeyState = {
 };
 
 /** The sidebar and every demo share the same account's private key packages. */
-export class SessionClient {
+export class KeyPackagePublication {
   readonly state$ = new BehaviorSubject<SessionKeyState>({
     busy: false,
     enabled: false,
@@ -26,53 +24,23 @@ export class SessionClient {
   #inbox?: Unsubscribable;
   #timer?: ReturnType<typeof setInterval>;
   #retirement?: ReturnType<typeof setTimeout>;
+  readonly #controller = new AbortController();
+  readonly clientId: string;
 
-  private constructor(
+  constructor(
     readonly client: MarmotClient,
     readonly transport: DemoTransport,
-    readonly clientId: string,
     readonly pubkey: string,
-    private readonly controller: AbortController,
   ) {
+    const clientId = client.keyPackages.clientId;
+    if (!clientId)
+      throw new Error("The demo client requires a key-package slot");
+    this.clientId = clientId;
     client.invites.on("error", this.#error);
   }
 
-  static async create(
-    account: IAccount,
-    mode: TransportMode,
-    transport: DemoTransport,
-    storage?: Pick<Storage, "getItem" | "setItem">,
-  ): Promise<SessionClient> {
-    const { database, clientId } = await sessionDatabase(
-      account.pubkey,
-      mode,
-      storage,
-    );
-    const controller = new AbortController();
-    const network = transport.network("you");
-    const client = new MarmotClient({
-      signer: account.signer,
-      network: {
-        ...network,
-        publish: (relays, event) => {
-          controller.signal.throwIfAborted();
-          return network.publish(relays, event);
-        },
-      },
-      database,
-      clientId,
-    });
-    return new SessionClient(
-      client,
-      transport,
-      clientId,
-      account.pubkey,
-      controller,
-    );
-  }
-
   get signal() {
-    return this.controller.signal;
+    return this.#controller.signal;
   }
 
   #error = (cause: unknown) => {
@@ -238,13 +206,11 @@ export class SessionClient {
 
   close() {
     if (this.signal.aborted) return;
-    this.controller.abort();
+    this.#controller.abort();
     clearInterval(this.#timer);
     clearTimeout(this.#retirement);
     this.#inbox?.unsubscribe();
     this.client.invites.off("error", this.#error);
-    for (const group of this.client.groups.loaded) group.dispose();
-    void this.client.database.account.close();
     this.state$.complete();
   }
 }

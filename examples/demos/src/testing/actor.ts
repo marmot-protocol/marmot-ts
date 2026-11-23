@@ -1,7 +1,7 @@
 import { MarmotClient, memoryDatabase } from "@internet-privacy/marmot-ts";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import type { IAccount } from "applesauce-accounts";
-import type { DemoTransport } from "./transport.js";
+import type { DemoTransport } from "../services/internal/transport.js";
 
 /** A named demo participant: a Nostr account plus its own `MarmotClient`. */
 export type Actor = {

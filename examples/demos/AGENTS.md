@@ -17,6 +17,15 @@
 - Keep commands as ordinary async library calls from intentional user actions. Await their results and report actionable errors.
 - Read changing library state through its public watchers, not service internals, `.value`, or manually synchronized snapshots.
 
+## Service Dependencies
+
+- Import services directly from `src/services/*.ts`; do not add a React provider, context, service registry, or aggregate session/scope object.
+- `mode$` and `account$` are the roots. The account-independent `transport$` depends only on mode; the bare `client$` and contacts depend on the active account and transport.
+- `client$` must emit the actual, unmodified `MarmotClient`. Do not decorate its managers, forward its methods, or mask missing library APIs.
+- Keep profiles paired with the contact list through Applesauce User casts; do not create a separate profile service.
+- Public service modules export observable interfaces, async actions, and types. `mode$` is intentionally a writable BehaviorSubject; other shared subjects stay private.
+- Keep JSX in `components/`, pure helpers in `utils/`, and private implementations in `services/internal/`. Services must not depend on React.
+
 ## Latest-State Async Watchers
 
 - Use `useAsyncLatest` from `src/hooks/use-async-latest.ts` for latest-state async iterables. Keep the public watcher call visible: `useAsyncLatest((signal) => client.watchInvites({ signal }), [client])`.

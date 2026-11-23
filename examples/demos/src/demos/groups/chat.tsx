@@ -5,16 +5,25 @@ import {
   createChatRumor,
 } from "@internet-privacy/marmot-ts/client";
 import { use$ } from "applesauce-react/hooks";
-import { Action, Panel, short } from "../../lib/ui.js";
-import { useContacts, useDemoServices, useTransport } from "../../services.js";
+import { Action, Panel, short } from "../../components/ui.js";
+import { account$ } from "../../services/accounts.js";
+import { client$ } from "../../services/client.js";
+import { contacts$, profile$ } from "../../services/contacts.js";
+import { relays$, ready$, state$ } from "../../services/transport.js";
+import { useAsyncLatest } from "../../hooks/use-async-latest.js";
 
 export default function ChatDemo() {
-  const { client, account$, signal } = useDemoServices();
-  const relay = useTransport();
-  const relays = use$(relay.relays$) ?? [];
-  const transportReady = use$(relay.ready$) ?? false;
+  const client = use$(client$)!;
+  const [controller] = useState(() => new AbortController());
+  useEffect(() => () => controller.abort(), [controller]);
+  const signal = controller.signal;
+  const relays = use$(relays$) ?? [];
+  const transportReady = use$(ready$) ?? false;
   const account = use$(account$)!;
-  const invites = use$(client.invites.unread$);
+  const invites = useAsyncLatest(
+    (signal) => client.invites.watchUnread({ signal }),
+    [client],
+  );
   const [mode, setMode] = useState("create");
   const [name, setName] = useState("Chat group");
   const [active, setActive] = useState<{
@@ -38,7 +47,7 @@ export default function ChatDemo() {
           aria-pressed={mode === "join"}
           onClick={() => setMode("join")}
         >
-          Join invite ({invites?.length ?? 0})
+          Join invite ({invites ? invites.length : "…"})
         </button>
       </div>
       {mode === "create" ? (
@@ -65,7 +74,8 @@ export default function ChatDemo() {
         </div>
       ) : (
         <>
-          {!invites?.length && (
+          {invites === undefined && <p>Loading invites…</p>}
+          {invites?.length === 0 && (
             <p>
               No invites yet. Publish a key package in the sidebar to receive
               invites.
@@ -99,17 +109,15 @@ export default function ChatDemo() {
 }
 
 function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
-  const { client, account$ } = useDemoServices();
-  const relay = useTransport();
-  const relays = use$(relay.relays$) ?? [];
-  const transport = use$(relay.state$);
+  const client = use$(client$)!;
+  const relays = use$(relays$) ?? [];
+  const transport = use$(state$);
   const account = use$(account$)!;
-  const contacts = use$(useContacts().contacts$) ?? [];
-  const observed = client.groups.observe(group);
-  const snapshot = use$(observed.state$);
-  const messages = use$(
-    () => observed.history$({ kinds: [9], limit: 100 }),
-    [observed],
+  const contacts = use$(contacts$) ?? [];
+  const snapshot = useAsyncLatest((signal) => group.watch({ signal }), [group]);
+  const messages = useAsyncLatest(
+    (signal) => group.history.subscribe({ kinds: [9], limit: 100 }, { signal }),
+    [group],
   );
   const [recipient, setRecipient] = useState("");
   const [text, setText] = useState("");
@@ -150,7 +158,7 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
         </code>
         <p className="text-sm">
           {ready ? "Connected" : "Connecting…"} · {transport?.transport} ·{" "}
-          {snapshot?.members.length ?? 0} members
+          {snapshot ? snapshot.members.length : "…"} members
         </p>
         <div className="flex flex-wrap gap-2 text-sm">
           {snapshot?.members.map((pubkey) => (
@@ -222,7 +230,8 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
               </li>
             ))}
         </ol>
-        {!messages?.length && <p>No messages yet.</p>}
+        {messages === undefined && <p>Loading messages…</p>}
+        {messages?.length === 0 && <p>No messages yet.</p>}
         <div className="flex gap-2">
           <input
             className="input input-sm flex-1"
@@ -253,7 +262,6 @@ function Chat({ group, inviteId }: { group: MarmotGroup; inviteId?: string }) {
 }
 
 function useName(pubkey: string) {
-  const { profile$ } = useDemoServices();
   const profile = use$(() => profile$(pubkey), [pubkey, profile$]);
   return profile?.displayName || short(pubkey);
 }

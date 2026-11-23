@@ -1,6 +1,7 @@
 import type { IAccount } from "applesauce-accounts";
 import { PrivateKeyAccount } from "applesauce-accounts/accounts";
-import type { DemoRelay } from "../services/relay/demo-relay.js";
+import type { DemoRelay } from "./relay/demo-relay.js";
+import { getDevelopmentName } from "../../utils/development-name.js";
 
 const ADJECTIVES = [
   "Amber",
@@ -30,16 +31,6 @@ export function createDevelopmentAccount(): PrivateKeyAccount {
     developmentName: `${ADJECTIVES[random[0] % ADJECTIVES.length]} ${ANIMALS[random[1] % ANIMALS.length]} ${random[2] % 10_000}`,
   };
   return account;
-}
-
-export function getDevelopmentName(account: IAccount): string | undefined {
-  const metadata = account.metadata;
-  return metadata &&
-    typeof metadata === "object" &&
-    "developmentName" in metadata &&
-    typeof metadata.developmentName === "string"
-    ? metadata.developmentName
-    : undefined;
 }
 
 export async function publishDevelopmentProfile(

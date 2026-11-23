@@ -3,9 +3,9 @@ import { PrivateKeyAccount } from "applesauce-accounts/accounts";
 import type {
   InspectorResponse,
   RelaySubscription,
-} from "./relay-inspector.js";
-import type { SyncMessage } from "./relay-protocol.js";
-import { DemoRelay } from "./demo-relay.js";
+} from "../services/internal/relay/relay-inspector.js";
+import type { SyncMessage } from "../services/internal/relay/relay-protocol.js";
+import { DemoRelay } from "../services/internal/relay/demo-relay.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -16,7 +16,7 @@ afterEach(() => {
 it("inspects historical traffic, events, subscriptions and resets every connected tab", async () => {
   vi.useFakeTimers();
   vi.resetModules();
-  await import("./demo-relay.worker.js");
+  await import("../services/internal/relay/demo-relay.worker.js");
   const connect = (
     globalThis as unknown as {
       onconnect: (event: { ports: MessagePort[] }) => void;

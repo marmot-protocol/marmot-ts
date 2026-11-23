@@ -5,8 +5,11 @@ import {
   createApplicationMessageIntent,
   createChatRumor,
 } from "@internet-privacy/marmot-ts/client";
-import { createPeerActor } from "../../lib/actor.js";
-import { DemoRelay, type SyncMessage } from "./demo-relay.js";
+import { createPeerActor } from "./actor.js";
+import {
+  DemoRelay,
+  type SyncMessage,
+} from "../services/internal/relay/demo-relay.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -103,7 +106,7 @@ describe("clock demo relay", () => {
 
   it("shares cached events and live traffic between worker ports", async () => {
     vi.resetModules();
-    await import("./demo-relay.worker.js");
+    await import("../services/internal/relay/demo-relay.worker.js");
     const connect = (
       globalThis as unknown as {
         onconnect: (event: { ports: MessagePort[] }) => void;

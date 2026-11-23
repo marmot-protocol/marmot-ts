@@ -40,28 +40,3 @@ export function stateObservable<T>(
     shareReplay({ bufferSize: 1, refCount: true }),
   );
 }
-
-/** Unlike from(asyncIterable), unsubscribe aborts a pending next() immediately. */
-export function watchObservable<T>(
-  start: (signal: AbortSignal) => AsyncIterable<T>,
-  lifetime: AbortSignal,
-): Observable<T> {
-  return new Observable<T>((subscriber) => {
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        for await (const value of start(controller.signal)) {
-          if (subscriber.closed) break;
-          subscriber.next(value);
-        }
-        subscriber.complete();
-      } catch (cause) {
-        if (!controller.signal.aborted) subscriber.error(cause);
-      }
-    })();
-    return () => controller.abort();
-  }).pipe(
-    takeUntil(aborted$(lifetime)),
-    shareReplay({ bufferSize: 1, refCount: true }),
-  );
-}

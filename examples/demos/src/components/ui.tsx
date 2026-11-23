@@ -1,11 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { use$ } from "applesauce-react/hooks";
-import type { RelayLogEntry } from "../services/relay/demo-relay.js";
-import type { ReactiveTransport } from "./reactive-transport.js";
+import type { RelayLogEntry } from "../services/transport.js";
+import * as transport from "../services/transport.js";
 
-/** Shorten a hex id or pubkey for display. */
-export const short = (hex: string, n = 8) =>
-  hex.length > n * 2 ? `${hex.slice(0, n)}…${hex.slice(-4)}` : hex;
+import { short } from "../utils/format.js";
+export { short, hex } from "../utils/format.js";
 
 export function Panel(props: {
   title: ReactNode;
@@ -100,11 +99,10 @@ function describe(entry: RelayLogEntry): string {
 }
 
 /** Live view of everything that crossed the demo relay. */
-export function RelayLog(props: { relay: ReactiveTransport; limit?: number }) {
-  const relay = props.relay;
-  const log = use$(relay.log$) ?? [];
-  const events = use$(relay.events$) ?? [];
-  const state = use$(relay.state$);
+export function RelayLog(props: { limit?: number }) {
+  const log = use$(transport.log$) ?? [];
+  const events = use$(transport.events$) ?? [];
+  const state = use$(transport.state$);
   const entries = log.slice(-(props.limit ?? 50)).reverse();
   return (
     <Panel
@@ -120,7 +118,7 @@ export function RelayLog(props: { relay: ReactiveTransport; limit?: number }) {
                 className="toggle toggle-xs"
                 checked={state.paused}
                 onChange={(e) => {
-                  relay.setPaused(e.target.checked);
+                  void transport.setPaused(e.target.checked);
                 }}
               />
               hold publishes
@@ -128,7 +126,7 @@ export function RelayLog(props: { relay: ReactiveTransport; limit?: number }) {
             {state.queued > 0 && (
               <button
                 className="btn btn-xs btn-primary"
-                onClick={() => relay.flush()}
+                onClick={() => void transport.flush()}
               >
                 deliver {state.queued} held
               </button>
@@ -168,7 +166,3 @@ export function RelayLog(props: { relay: ReactiveTransport; limit?: number }) {
     </Panel>
   );
 }
-
-/** Lowercase hex for a byte array. */
-export const hex = (bytes: Uint8Array) =>
-  Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");

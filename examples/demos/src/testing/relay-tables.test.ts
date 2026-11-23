@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { NostrEvent } from "applesauce-core/helpers/event";
-import { EventsTable, TrafficTable } from "./relay-tables.js";
+import { EventsTable, TrafficTable } from "../components/relay/relay-tables.js";
 
 const event: NostrEvent = {
   id: "a".repeat(64),

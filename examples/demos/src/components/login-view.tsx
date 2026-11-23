@@ -6,9 +6,15 @@ import {
 } from "applesauce-accounts/accounts";
 import { ExtensionMissingError, NostrConnectSigner } from "applesauce-signers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { accounts, login, useAccounts } from "../accounts.js";
-import { short } from "../lib/ui.js";
-import { createDevelopmentAccount } from "../lib/development-identity.js";
+import {
+  accounts$,
+  login,
+  selectAccount,
+  forgetAccount,
+  loginDevelopmentAccount,
+} from "../services/accounts.js";
+import { short } from "./ui.js";
+import { use$ } from "applesauce-react/hooks";
 
 const DEFAULT_QR_RELAY = "wss://bucket.coracle.social";
 const QR_TIMEOUT_MS = 120_000;
@@ -20,7 +26,7 @@ type Method = "extension" | "bunker" | "key" | "qr";
  * encryption (to open gift-wrapped invites); every method here supports both.
  */
 export function LoginView() {
-  const saved = useAccounts();
+  const saved = use$(accounts$) ?? [];
   const [busy, setBusy] = useState<Method | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [bunkerUri, setBunkerUri] = useState("");
@@ -82,7 +88,7 @@ export function LoginView() {
       const pubkey = await signer.getPublicKey();
       // The signer now belongs to the account; don't close it.
       stopQr(false);
-      login(new NostrConnectAccount(pubkey, signer));
+      await login(new NostrConnectAccount(pubkey, signer));
     });
 
   const disabled = busy !== null && busy !== "qr";
@@ -113,13 +119,17 @@ export function LoginView() {
                     </div>
                     <button
                       className="btn btn-xs btn-primary"
-                      onClick={() => accounts.setActive(account)}
+                      onClick={() =>
+                        void attempt("key", () => selectAccount(account.id))
+                      }
                     >
                       use
                     </button>
                     <button
                       className="btn btn-xs btn-ghost"
-                      onClick={() => accounts.removeAccount(account)}
+                      onClick={() =>
+                        void attempt("key", () => forgetAccount(account.id))
+                      }
                     >
                       forget
                     </button>
@@ -198,7 +208,7 @@ export function LoginView() {
                   const signer = await NostrConnectSigner.fromBunkerURI(
                     bunkerUri.trim(),
                   );
-                  login(
+                  await login(
                     new NostrConnectAccount(
                       await signer.getPublicKey(),
                       signer,
@@ -234,7 +244,7 @@ export function LoginView() {
               onSubmit={(e) => {
                 e.preventDefault();
                 void attempt("key", async () => {
-                  login(PrivateKeyAccount.fromKey(secretKey.trim()));
+                  await login(PrivateKeyAccount.fromKey(secretKey.trim()));
                   setSecretKey("");
                 });
               }}
@@ -257,9 +267,7 @@ export function LoginView() {
             <button
               className="btn btn-outline"
               disabled={disabled}
-              onClick={() =>
-                attempt("key", async () => login(createDevelopmentAccount()))
-              }
+              onClick={() => attempt("key", loginDevelopmentAccount)}
             >
               Generate a new key
             </button>

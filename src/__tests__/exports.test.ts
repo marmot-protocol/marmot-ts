@@ -26,6 +26,7 @@ import * as coreExports from "../core/index.js";
 import * as engineExports from "../engine/index.js";
 import * as utilsExports from "../utils/index.js";
 import * as auditExports from "../audit/index.js";
+import * as extraExports from "../extra/index.js";
 import * as extraAuditNodeExports from "../extra/audit/node.js";
 import * as extraAuditBrowserExports from "../extra/audit/browser.js";
 
@@ -288,6 +289,7 @@ const PUBLIC_NAMESPACES: Record<string, Record<string, unknown>> = {
   "./core": coreExports,
   "./engine": engineExports,
   "./audit": auditExports,
+  "./extra": extraExports,
   "./extra/audit/node": extraAuditNodeExports,
   "./extra/audit/browser": extraAuditBrowserExports,
   "./utils": utilsExports,
@@ -300,6 +302,7 @@ const REPRESENTATIVE_EXPORTS: Record<string, string> = {
   "./core": "createSimpleGroup",
   "./engine": "MarmotGroupEngine",
   "./audit": "noopAuditSink",
+  "./extra": "sqliteDatabase",
   "./extra/audit/node": "NodeJsonlAuditRecorder",
   "./extra/audit/browser": "AutoBrowserAuditWriter",
   "./utils": "normalizeRelayUrl",
@@ -361,6 +364,7 @@ describe("exports", () => {
       "./core",
       "./engine",
       "./audit",
+      "./extra",
       "./extra/audit/node",
       "./extra/audit/browser",
       "./utils",
@@ -435,7 +439,7 @@ describe("exports", () => {
       for (const name of internals)
         expect(namespace, `${entrypoint}: ${name}`).not.toHaveProperty(name);
   });
-  it("keeps private type-only contracts absent from all nine compiler export surfaces", () => {
+  it("keeps private type-only contracts absent from all ten compiler export surfaces", () => {
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const config = ts.readConfigFile(
       `${root}tsconfig.build.json`,
@@ -1394,6 +1398,17 @@ describe("./engine exports", () => {
   });
 });
 
+describe("./extra exports", () => {
+  it("should export the expected members", () => {
+    expect(Object.keys(extraExports).sort()).toMatchInlineSnapshot(`
+      [
+        "indexedDBDatabase",
+        "sqliteDatabase",
+      ]
+    `);
+  });
+});
+
 describe("./utils exports", () => {
   it("should export the expected members", () => {
     expect(Object.keys(utilsExports).sort()).toMatchInlineSnapshot(`
@@ -1775,7 +1790,7 @@ describe("legacy 0xf2f1 account-identity-proof export guard (D-02)", () => {
 
     // Negative control: current, legitimate `0x8009` names and values must not trip the
     // guard. The five erased historical proof types are checked separately in the
-    // compiler-symbol denylist across all nine manifest code entrypoints.
+    // compiler-symbol denylist across all ten manifest code entrypoints.
     expect(
       findLegacyExportViolations({
         ACCOUNT_IDENTITY_PROOF_COMPONENT_ID: 0x8009,

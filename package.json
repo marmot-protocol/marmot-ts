@@ -89,6 +89,11 @@
       "import": "./dist/audit/index.js",
       "default": "./dist/audit/index.js"
     },
+    "./extra": {
+      "types": "./dist/extra/index.d.ts",
+      "import": "./dist/extra/index.js",
+      "default": "./dist/extra/index.js"
+    },
     "./extra/audit/node": {
       "types": "./dist/extra/audit/node.d.ts",
       "import": "./dist/extra/audit/node.js",
@@ -145,6 +150,7 @@
     "@types/debug": "^4.1.13",
     "@types/node": "^24.13.2",
     "applesauce-accounts": "^7.0.2",
+    "fake-indexeddb": "^6.2.8",
     "prettier": "^3.9.3",
     "rimraf": "~6.0.1",
     "ts-mls": "workspace:*",

@@ -96,6 +96,29 @@ the worker or clear browser account storage.
 Inspection requires SharedWorker support; it does not inspect the
 BroadcastChannel fallback or live-network relays.
 
+## Simple chat
+
+Open **Groups → Simple chat** (`#/groups/chat`) in two independent tabs, keeping
+both in **Tabs (local)** mode with different accounts.
+
+1. In the first tab, choose **Create group**, enter a name, and click **Create**.
+2. Select the other tab's contact and click **Invite**. Local development accounts
+   publish their key packages automatically; live accounts must opt in from the sidebar.
+3. In the second tab, choose **Join invite** and click **Join** beside the inviter.
+4. Send messages from either tab. The group displays its members and latest 100
+   decrypted messages; `/relay` shows the encrypted Nostr traffic.
+
+`src/demos/groups/chat.tsx` keeps creation, invitation, joining, connection,
+post-join leaf rotation, sending, and history subscriptions inline. It reuses the
+session client for key packages and invite listening, with no simulated peers.
+The creator can invite more contacts into the same group. Invites look up key
+packages on the selected transport's relays, so participants should use the same
+transport mode. Live mode publishes to real relays.
+
+Group state is in memory: reloading or resetting does not restore the chat.
+Navigating away disconnects the chat without leaving the group; create a fresh
+group for a fresh run.
+
 ## Clock group
 
 Open **Groups → Clock group** (`#/groups/clock`), enter a group name, and click

@@ -6,7 +6,13 @@ import type { ComponentType } from "react";
  * Adding a demo means creating the file and adding it here.
  */
 export const categories: { label: string; demos: DemoEntry[] }[] = [
-  { label: "Groups", demos: [{ id: "groups/clock", title: "Clock group" }] },
+  {
+    label: "Groups",
+    demos: [
+      { id: "groups/chat", title: "Simple chat" },
+      { id: "groups/clock", title: "Clock group" },
+    ],
+  },
 ];
 
 export type DemoEntry = { id: string; title: string };

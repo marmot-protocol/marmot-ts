@@ -1,0 +1,13 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes:
+    light --default,
+    dark --prefersdark;
+}
+
+@layer base {
+  code,
+  pre {
+    @apply font-mono text-xs;
+  }
+}

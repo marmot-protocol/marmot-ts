@@ -1,0 +1,36 @@
+{
+  "name": "marmot-demos",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Focused, single-file browser demos of the marmot-ts client",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@internet-privacy/marmot-ts": "workspace:*",
+    "@libs/qrcode": "npm:@jsr/libs__qrcode@^3.1.0",
+    "applesauce-accounts": "^7.0.2",
+    "applesauce-common": "^7.0.0",
+    "applesauce-core": "^7.0.3",
+    "applesauce-react": "^7.0.0",
+    "applesauce-relay": "^7.0.0",
+    "applesauce-signers": "^7.0.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "daisyui": "^5.8.2",
+    "tailwindcss": "^4.3.5",
+    "typescript": "~6.0.3",
+    "vite": "^7.3.6"
+  }
+}

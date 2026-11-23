@@ -19,6 +19,7 @@
     "test": "vitest",
     "typecheck:tests": "tsc -p tsconfig.tests.json",
     "conformance": "node conformance/run.mjs",
+    "demos": "pnpm --filter marmot-demos dev",
     "docs": "vitepress dev",
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",

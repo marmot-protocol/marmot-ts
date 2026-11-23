@@ -73,8 +73,17 @@ function Host({ signal, adopt }: GroupActions) {
     (signal) => (group ? group.watch({ signal }) : emptySnapshot()),
     [group],
   );
+  const sent = useAsyncLatest(
+    (signal) =>
+      group
+        ? group.history.subscribe(
+            { kinds: [9], authors: [account.pubkey], limit: 30 },
+            { signal },
+          )
+        : emptyMessages(),
+    [group, account.pubkey],
+  );
   const [running, setRunning] = useState(true);
-  const [sent, setSent] = useState<Rumor[]>([]);
   const [error, setError] = useState<string>();
   const sending = useRef(false);
 
@@ -113,8 +122,6 @@ function Host({ signal, adopt }: GroupActions) {
           )
         )
           throw new Error("No relay accepted the clock tick");
-        if (!signal.aborted)
-          setSent((recent) => [rumor, ...recent].slice(0, 30));
       } catch (cause) {
         if (!stopped && !signal.aborted) {
           setError(cause instanceof Error ? cause.message : String(cause));
@@ -197,7 +204,7 @@ function Members({
   }
 
   return (
-    <Panel title={`Members (${snapshot?.members.length ?? 0})`}>
+    <Panel title={`Members (${snapshot ? snapshot.members.length : "…"})`}>
       <ul>
         {snapshot?.members.map((pubkey) => (
           <li
@@ -314,14 +321,13 @@ function Receiver({ signal, adopt }: GroupActions) {
   const [error, setError] = useState<string>();
   const [needsUpdate, setNeedsUpdate] = useState(false);
   const removed = snapshot?.status === "removed";
-  const messages =
-    useAsyncLatest(
-      (signal) =>
-        group
-          ? group.history.subscribe({ kinds: [9], limit: 60 }, { signal })
-          : emptyMessages(),
-      [group],
-    ) ?? [];
+  const messages = useAsyncLatest(
+    (signal) =>
+      group
+        ? group.history.subscribe({ kinds: [9], limit: 60 }, { signal })
+        : emptyMessages(),
+    [group],
+  );
 
   async function selfUpdate(group: MarmotGroup) {
     await group.selfUpdate();
@@ -437,10 +443,10 @@ function Clock({
   messages,
   direction,
 }: {
-  messages: Rumor[];
+  messages: Rumor[] | undefined;
   direction: "Sent" | "Received";
 }) {
-  const recent = messages
+  const recent = (messages ?? [])
     .filter(
       (message) =>
         /^\d{4}-\d{2}-\d{2}T/.test(message.content) &&
@@ -460,6 +466,8 @@ function Clock({
         </time>
         <div className="mt-2 text-sm text-base-content/50">UTC</div>
       </div>
+      {messages === undefined && <p>Loading times…</p>}
+      {messages !== undefined && recent.length === 0 && <p>No ticks yet.</p>}
       <ol className="max-h-64 overflow-auto font-mono text-sm">
         {recent.map((message) => (
           <li key={message.id} className="border-t border-base-300 py-1">

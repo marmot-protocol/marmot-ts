@@ -20,7 +20,7 @@ export default function ChatDemo() {
   const relays = use$(relays$) ?? [];
   const account = use$(account$)!;
   const invites = useAsyncLatest(
-    (signal) => client.invites.watchUnread({ signal }),
+    (signal) => client.watchInvites({ signal }),
     [client],
   );
   const [mode, setMode] = useState("create");
@@ -80,7 +80,7 @@ export default function ChatDemo() {
               invites.
             </p>
           )}
-          {invites?.map((invite) => (
+          {invites?.map(({ invite, joinable }) => (
             <div key={invite.id} className="flex flex-wrap items-center gap-2">
               <span>
                 From <Name pubkey={invite.pubkey} />
@@ -89,7 +89,9 @@ export default function ChatDemo() {
                 {short(invite.id)}
               </code>
               <Action
+                disabled={!joinable}
                 run={async () => {
+                  signal.throwIfAborted();
                   const { group } = await client.joinGroupFromWelcome({
                     welcomeRumor: invite,
                   });
@@ -97,7 +99,7 @@ export default function ChatDemo() {
                     setActive({ group, inviteId: invite.id });
                 }}
               >
-                Join
+                {joinable ? "Join" : "Key unavailable"}
               </Action>
             </div>
           ))}

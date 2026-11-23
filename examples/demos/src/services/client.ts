@@ -27,17 +27,15 @@ export const client$: Observable<MarmotClient | undefined> = combineLatest([
     errors.next(undefined);
     if (!account) return of(undefined);
     return new Observable<MarmotClient | undefined>((subscriber) => {
-      const controller = new AbortController();
       let client: MarmotClient | undefined;
       subscriber.next(undefined);
       subscriber.add(() => {
-        controller.abort();
         for (const group of client?.groups.loaded ?? []) group.dispose();
         void client?.database.account.close();
       });
       void sessionDatabase(account.pubkey, transport.mode, clientId)
         .then((database) => {
-          if (controller.signal.aborted) {
+          if (subscriber.closed) {
             void database.account.close();
             return;
           }
@@ -50,7 +48,7 @@ export const client$: Observable<MarmotClient | undefined> = combineLatest([
           subscriber.next(client);
         })
         .catch((cause: unknown) => {
-          if (!controller.signal.aborted)
+          if (!subscriber.closed)
             errors.next(cause instanceof Error ? cause.message : String(cause));
         });
     });

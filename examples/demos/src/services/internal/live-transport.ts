@@ -56,13 +56,14 @@ export class LiveTransport implements DemoTransport {
   }
 
   network(actor: string): NostrNetworkInterface {
+    this.#assertOpen();
     return {
       publish: async (relays, event) => {
         this.#assertOpen();
         this.#record({ actor, op: "publish", event });
         const responses = await this.pool.publish(relays, event);
-        if (!this.#disposed && responses.some((response) => response.ok))
-          this.store.add(event);
+        this.#assertOpen();
+        if (responses.some((response) => response.ok)) this.store.add(event);
         return Object.fromEntries(
           responses.map((response) => [response.from, response]),
         );
@@ -86,38 +87,43 @@ export class LiveTransport implements DemoTransport {
         });
         return events;
       },
-      subscription: (relays, filters) => ({
-        subscribe: (observer) => {
-          this.#assertOpen();
-          const list = Array.isArray(filters) ? filters : [filters];
-          this.#record({ actor, op: "subscribe", filters: list });
-          const sub = this.pool
-            .subscription(relays, list)
-            .pipe(
-              takeUntil(this.#closed),
-              tap((event) => {
-                this.store.add(event);
-              }),
-            )
-            .subscribe(observer);
-          return {
-            unsubscribe: () => {
-              sub.unsubscribe();
-              this.#record({ actor, op: "unsubscribe", filters: list });
-            },
-          };
-        },
-      }),
+      subscription: (relays, filters) => {
+        this.#assertOpen();
+        return {
+          subscribe: (observer) => {
+            this.#assertOpen();
+            const list = Array.isArray(filters) ? filters : [filters];
+            this.#record({ actor, op: "subscribe", filters: list });
+            const sub = this.pool
+              .subscription(relays, list)
+              .pipe(
+                takeUntil(this.#closed),
+                tap((event) => {
+                  this.store.add(event);
+                }),
+              )
+              .subscribe(observer);
+            return {
+              unsubscribe: () => {
+                sub.unsubscribe();
+                this.#record({ actor, op: "unsubscribe", filters: list });
+              },
+            };
+          },
+        };
+      },
       getUserInboxRelays: async (pubkey) => {
         const network = this.network(actor);
         await network.request(LOOKUP_RELAYS, {
           kinds: [10050],
           authors: [pubkey],
         });
-        return await castUser(pubkey, this.store).directMessageRelays$.$first(
-          1000,
-          this.relays,
-        );
+        const relays = await castUser(
+          pubkey,
+          this.store,
+        ).directMessageRelays$.$first(1000, this.relays);
+        this.#assertOpen();
+        return relays;
       },
     };
   }

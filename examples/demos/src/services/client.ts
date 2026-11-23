@@ -39,18 +39,11 @@ export const client$: Observable<MarmotClient | undefined> = combineLatest([
             void database.account.close();
             return;
           }
-          const network = transport.network("you");
           client = new MarmotClient({
             signer: account.signer,
             database,
             clientId,
-            network: {
-              ...network,
-              publish: (relays, event) => {
-                controller.signal.throwIfAborted();
-                return network.publish(relays, event);
-              },
-            },
+            network: transport.network("you"),
           });
           subscriber.next(client);
         })

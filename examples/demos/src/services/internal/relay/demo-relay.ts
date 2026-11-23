@@ -52,7 +52,7 @@ const SYNC_TIMEOUT_MS = 150;
  * the demo app share one relay: publishes in one tab reach subscriptions in
  * the others, and a newly opened tab first copies the relay's stored events.
  * Events are in memory only and disappear when the worker is terminated.
- * The app's services provider owns its lifetime.
+ * The mode-driven transport service owns its lifetime.
  *
  * Set `paused` to hold this tab's publishes in `queue` and release them with
  * `flush()`, which lets demos show what happens while traffic is delayed.
@@ -84,6 +84,7 @@ export class DemoRelay {
   #identity?: string;
   #peers = new Map<string, TabIdentity>();
   #heartbeat?: ReturnType<typeof setInterval>;
+  #disposed = false;
 
   get peers(): TabIdentity[] {
     return [...this.#peers.values()].filter(
@@ -126,6 +127,7 @@ export class DemoRelay {
    * Called by the constructor; only needed again after `close()`.
    */
   open() {
+    this.#disposed = false;
     if (this.#channel || this.#worker || this.#channelName === false) return;
     if (typeof SharedWorker !== "undefined") {
       const worker = new SharedWorker(
@@ -179,13 +181,21 @@ export class DemoRelay {
 
   /** Leave the shared channel; stored events stay. Reopen with `open()`. */
   close() {
+    if (this.#disposed) return;
     this.setIdentity(undefined);
+    this.#disposed = true;
+    this.#subs.clear();
     this.#peers.clear();
     this.#worker?.port.postMessage({ type: "disconnect" });
     this.#worker?.port.close();
     this.#worker = undefined;
     this.#channel?.close();
     this.#channel = undefined;
+    this.#listeners.clear();
+  }
+
+  #assertOpen() {
+    if (this.#disposed) throw new Error("Transport closed");
   }
 
   #changed() {
@@ -199,6 +209,7 @@ export class DemoRelay {
   }
 
   #receive(message: SyncMessage, synced: () => void) {
+    if (this.#disposed) return;
     switch (message.type) {
       case "hello":
         if (this.#identity) this.#announce();
@@ -275,14 +286,17 @@ export class DemoRelay {
 
   /** Release every held publish in order. */
   flush() {
+    this.#assertOpen();
     for (const event of this.queue.splice(0)) this.#deliver(event);
     this.#changed();
   }
 
   /** Build the `NostrNetworkInterface` one actor hands to its `MarmotClient`. */
   network(actor: string): NostrNetworkInterface {
+    this.#assertOpen();
     return {
       publish: async (relays, event) => {
+        this.#assertOpen();
         this.#record({ actor, op: "publish", event });
         if (this.paused) this.queue.push(event);
         else this.#deliver(event);
@@ -293,8 +307,10 @@ export class DemoRelay {
       },
 
       request: async (_relays, filters) => {
+        this.#assertOpen();
         // Don't answer before other tabs have shared what they already store.
         await this.ready;
+        this.#assertOpen();
         const list = Array.isArray(filters) ? filters : [filters];
         const results = this.events.filter((e) => matchFilters(list, e));
         this.#record({
@@ -307,9 +323,11 @@ export class DemoRelay {
       },
 
       subscription: (_relays, filters): Subscribable<NostrEvent> => {
+        this.#assertOpen();
         const list = Array.isArray(filters) ? filters : [filters];
         return {
           subscribe: (observer) => {
+            this.#assertOpen();
             this.#record({ actor, op: "subscribe", filters: list });
             const sub = {
               id: crypto.randomUUID(),
@@ -345,7 +363,10 @@ export class DemoRelay {
       },
 
       // Every actor's inbox is the single demo relay.
-      getUserInboxRelays: async () => [DEMO_RELAY_URL],
+      getUserInboxRelays: async () => {
+        this.#assertOpen();
+        return [DEMO_RELAY_URL];
+      },
     };
   }
 }

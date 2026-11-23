@@ -47,7 +47,11 @@ Check MDK before implementing convergence, recovery, or wire encoding; record de
 
 ## Contributions and Agent Workflow
 
-Start development on the current branch; creating a new feature branch is not required. Never commit on `master`; switch to a non-`master` branch before committing if needed. Use focused conventional commits (`fix:`, `feat:`, `docs:`, `chore:`) after relevant checks pass. PRs should explain behavior, link related issues, and report validation.
+- `next` is the fast-iteration branch: work and commit directly on it, stacking coherent changes without creating a feature branch for each task. Multiple agents may work on `next` concurrently; coordinate overlapping edits, stage only your own changes, and preserve other agents' in-progress work.
+- `master` represents the current working state of the library. When starting a feature from `master`, create a feature branch before making changes. Merge that feature branch back into `master` only after confirming the feature works and its behavior and implementation are satisfactory. Never commit feature work directly on `master`.
+- On other branches, start development on the current branch; creating another feature branch is not required.
+
+Use focused conventional commits (`fix:`, `feat:`, `docs:`, `chore:`) after relevant checks pass. PRs should explain behavior, link related issues, and report validation.
 
 Commit each significant, coherent change after its relevant checks pass, without waiting for the user to request a commit. Stage only your own changes; preserve unrelated or concurrent work. Report the commit hashes and validation results, including any checks blocked by unrelated changes. Do not push unless requested.
 

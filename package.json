@@ -118,8 +118,8 @@
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@scure/base": "^2.2.0",
-    "applesauce-common": "^7.0.0",
-    "applesauce-core": "^7.0.3",
+    "applesauce-common": "^7.1",
+    "applesauce-core": "^7.1",
     "debug": "^4.4.3",
     "eventemitter3": "^5.0.4"
   },

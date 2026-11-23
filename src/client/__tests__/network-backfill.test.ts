@@ -12,8 +12,7 @@ import type {
 import { fakeVerifyEvent } from "../verify.js";
 import {
   readBackfillCursor,
-  backfillCursorKey,
-  encodeBackfillCursor,
+  updateBackfillRecord,
 } from "../storage/backfill-cursor.js";
 
 const A = "wss://a.test";
@@ -171,10 +170,9 @@ describe("transport backfill", () => {
     });
     const events = await network.request([A], { kinds: [445] });
     const newest = events[0]!.created_at;
-    await group.session.meta.set(
-      backfillCursorKey(B),
-      encodeBackfillCursor(newest - 50),
-    );
+    await updateBackfillRecord(group.session.database, B, {
+      cursor: newest - 50,
+    });
     network.backfill = vi.fn(async ([relay]): Promise<BackfillResult> =>
       relay === A
         ? complete(A, events)
@@ -187,16 +185,16 @@ describe("transport backfill", () => {
     const ingest = vi.spyOn(group, "ingest");
     ingest.mockImplementation(async function* (...args) {
       expect(
-        await readBackfillCursor(group.session.meta, A, newest),
+        await readBackfillCursor(group.session.database, A, newest),
       ).toBeUndefined();
       yield* original(...args);
     });
     (await manager.connect(group.id)).unsubscribe();
     expect(ingest).toHaveBeenCalled();
-    expect(await readBackfillCursor(group.session.meta, A, newest)).toBe(
+    expect(await readBackfillCursor(group.session.database, A, newest)).toBe(
       newest,
     );
-    expect(await readBackfillCursor(group.session.meta, B, newest)).toBe(
+    expect(await readBackfillCursor(group.session.database, B, newest)).toBe(
       newest - 50,
     );
 
@@ -238,7 +236,7 @@ describe("transport backfill", () => {
     (await manager.connect(group.id)).unsubscribe();
     expect(
       await readBackfillCursor(
-        group.session.meta,
+        group.session.database,
         A,
         Math.floor(Date.now() / 1000),
       ),

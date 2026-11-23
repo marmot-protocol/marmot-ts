@@ -82,8 +82,10 @@ the same named SharedWorker and keeps it alive.
 
 The view shows worker health (checked every two seconds), demo connections,
 active subscription IDs and filters, stored event JSON, and traffic history
-including activity before the inspector opened. Search filters the selected view;
-expand a traffic entry or event for full JSON, and use **Show more** for large lists.
+including activity before the inspector opened. Search filters the selected view.
+Traffic and events use tables with aligned metadata columns; click **JSON** on a
+row to expand its full data, and use **Show more** for large lists. Tables scroll
+horizontally on narrow screens.
 
 **Reset relay data** clears stored events, traffic history, and queued publishes
 across connected tabs after confirmation. Active subscriptions, accounts, and

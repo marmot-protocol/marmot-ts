@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { DEMO_RELAY_CHANNEL } from "../lib/demo-relay.js";
 import type { InspectorResponse, RelayState } from "../lib/relay-inspector.js";
-import { Json, Panel, short } from "../lib/ui.js";
+import { Json } from "../lib/ui.js";
+import { EventsTable, TrafficTable } from "./relay-tables.js";
 
 export function RelayView() {
   const [worker, setWorker] = useState<SharedWorker>();
@@ -68,8 +69,8 @@ export function RelayView() {
   const subscriptions = (state?.subscriptions ?? []).filter(matches);
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-base-200">
-      <aside className="flex w-40 shrink-0 flex-col overflow-y-auto border-r border-base-300 bg-base-100 sm:w-56">
+    <div className="flex h-dvh overflow-hidden bg-base-100">
+      <aside className="flex w-36 shrink-0 flex-col overflow-y-auto sm:w-48">
         <a className="px-4 py-5 font-semibold" href="/relay">
           Local relay
         </a>
@@ -88,10 +89,10 @@ export function RelayView() {
                   id={`relay-tab-${name.toLowerCase()}`}
                   aria-controls="relay-content"
                   aria-selected={tab === name}
-                  className={`rounded-field px-3 py-2 text-left text-sm ${
+                  className={`px-3 py-2 text-left text-sm ${
                     tab === name
-                      ? "bg-primary text-primary-content"
-                      : "hover:bg-base-200"
+                      ? "font-semibold text-primary"
+                      : "text-base-content/60 hover:text-base-content"
                   }`}
                   onClick={() => {
                     setTab(name);
@@ -120,14 +121,15 @@ export function RelayView() {
             <h1 className="text-xl font-semibold">Local relay inspector</h1>
             <span
               role="status"
-              className={`badge ${healthy ? "badge-success" : "badge-warning"}`}
+              className={`text-xs font-medium ${healthy ? "text-success" : "text-warning"}`}
             >
+              <span aria-hidden="true">● </span>
               {healthy ? "Running" : state ? "Unresponsive" : "Connecting"}
             </span>
           </div>
           <div className="flex gap-2">
             <button
-              className="btn btn-sm btn-error btn-outline"
+              className="btn btn-sm btn-ghost text-error"
               disabled={!healthy || resetting}
               onClick={() => {
                 if (
@@ -145,16 +147,16 @@ export function RelayView() {
           </div>
         </header>
         {error && (
-          <p role="alert" className="alert alert-error">
+          <p role="alert" className="text-sm text-error">
             {error}
           </p>
         )}
         {!healthy && !error && (
-          <p className="alert alert-warning">
+          <p className="text-sm text-warning">
             Waiting for a worker response. Reload if the relay does not respond.
           </p>
         )}
-        <div className="stats stats-vertical w-full bg-base-100 shadow-sm lg:stats-horizontal">
+        <dl className="flex flex-wrap gap-x-8 gap-y-3">
           {[
             ["Transport", "SharedWorker"],
             ["Demo connections", state?.connections.length ?? 0],
@@ -162,12 +164,12 @@ export function RelayView() {
             ["Subscriptions", state?.subscriptions.length ?? 0],
             ["Traffic entries", state?.log.length ?? 0],
           ].map(([label, value]) => (
-            <div className="stat" key={label}>
-              <div className="stat-title">{label}</div>
-              <div className="stat-value text-xl">{value}</div>
+            <div key={label}>
+              <dt className="text-xs text-base-content/60">{label}</dt>
+              <dd className="text-lg font-medium tabular-nums">{value}</dd>
             </div>
           ))}
-        </div>
+        </dl>
         <p className="text-xs text-base-content/60">
           {DEMO_RELAY_CHANNEL} · Started{" "}
           {state ? new Date(state.startedAt).toLocaleString() : "—"}
@@ -176,6 +178,7 @@ export function RelayView() {
           {" · "}This inspector keeps the relay alive.
         </p>
         <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">{tab}</h2>
           <input
             aria-label="Filter relay data"
             className="input input-sm w-full max-w-md"
@@ -187,27 +190,11 @@ export function RelayView() {
             }}
           />
         </div>
-        <Panel title={tab}>
+        <section aria-label={tab} className="min-w-0 space-y-2">
           {tab === "Traffic" && (
             <>
               <p className="text-xs">{traffic.length} matching entries</p>
-              {traffic.slice(0, limit).map((entry) => (
-                <details
-                  key={entry.id}
-                  className="border-b border-base-300 py-2"
-                >
-                  <summary className="cursor-pointer break-all font-mono text-xs">
-                    {new Date(entry.at).toLocaleTimeString()} · {entry.actor}@
-                    {entry.tab} · {entry.op}
-                    {entry.event &&
-                      ` · kind ${entry.event.kind} · ${short(entry.event.id)}`}
-                    {entry.results !== undefined &&
-                      ` · ${entry.results} results`}
-                  </summary>
-                  <Json value={entry} />
-                </details>
-              ))}
-              {!traffic.length && <p>No traffic.</p>}
+              <TrafficTable entries={traffic.slice(0, limit)} />
               {traffic.length > limit && (
                 <button
                   className="btn btn-sm"
@@ -221,7 +208,7 @@ export function RelayView() {
           {tab === "Subscriptions" && (
             <>
               {subscriptions.map((sub) => (
-                <div key={sub.id} className="border-b border-base-300 py-2">
+                <div key={sub.id} className="py-2">
                   <p className="break-all font-mono text-xs">
                     {sub.actor}@{sub.tab} · {sub.id} ·{" "}
                     {new Date(sub.at).toLocaleTimeString()}
@@ -241,20 +228,7 @@ export function RelayView() {
                   .byteLength.toLocaleString()}{" "}
                 bytes total JSON
               </p>
-              {events.slice(0, limit).map((event) => (
-                <details
-                  key={event.id}
-                  className="border-b border-base-300 py-2"
-                >
-                  <summary className="cursor-pointer break-all font-mono text-xs">
-                    kind {event.kind} · {short(event.id)} · author{" "}
-                    {short(event.pubkey)} ·{" "}
-                    {new Date(event.created_at * 1000).toLocaleString()}
-                  </summary>
-                  <Json value={event} />
-                </details>
-              ))}
-              {!events.length && <p>No stored events.</p>}
+              <EventsTable events={events.slice(0, limit)} />
               {events.length > limit && (
                 <button
                   className="btn btn-sm"
@@ -277,7 +251,7 @@ export function RelayView() {
               {!state?.connections.length && <p>No demo connections.</p>}
             </>
           )}
-        </Panel>
+        </section>
       </main>
     </div>
   );
